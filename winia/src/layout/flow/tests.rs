@@ -1032,6 +1032,7 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
         composer.compose(|ctx| {
             FlowRow::new()
                 .max_items_in_row(columns.get())
+                .animate_placement(true)
                 .build(ctx, |ctx| {
                     ctx.keyed_range("animated-flow", 3, |ctx, _| {
                         let key = ctx.next_key();
@@ -1048,10 +1049,12 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
     frame(&mut composer);
 
     let nodes = composer.arena_nodes();
+    eprintln!("DBG nodes={} children={:?}", nodes.len(), nodes.iter().map(|n| (n.children.len(), n.position, n.slot_key, n.placement_anim.is_some())).collect::<Vec<_>>());
     let flow = nodes
         .iter()
         .position(|n| n.children.len() == 3)
         .expect("the flow node owns three children");
+    eprintln!("DBG flow={flow} kids={:?}", nodes[flow].children.iter().map(|&c| (nodes[c].position, nodes[c].slot_key, nodes[c].placement_anim.as_ref().map(|s| s.peek()))).collect::<Vec<_>>());
     let moved = nodes[flow]
         .children
         .iter()
@@ -1059,6 +1062,52 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
         .map(|state| state.peek())
         .find(|offset| *offset != Offset::ZERO);
     assert!(moved.is_some(), "a child moved from row one to row two and must carry an offset");
+    crate::animation::clear_all_animations();
+}
+
+/// The transposed Flow also attaches the placement animation when its keyed child changes column.
+#[test]
+fn flow_column_attaches_the_placement_animation_to_a_moved_child() {
+    use crate::unit::Offset;
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let per_column = crate::State::new(3usize);
+    let mut composer = Composer::new();
+    let mut frame = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            FlowColumn::new()
+                .max_items_in_column(per_column.get())
+                .animate_placement(true)
+                .build(ctx, |ctx| {
+                    ctx.keyed_range("animated-column", 3, |ctx, _| {
+                        let key = ctx.next_key();
+                        ctx.start_leaf(key, Modifier::new().size(40.0, 20.0).animate_item());
+                        ctx.end_node();
+                    });
+                });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+    };
+
+    frame(&mut composer);
+    per_column.set(2);
+    frame(&mut composer);
+
+    let nodes = composer.arena_nodes();
+    let column = nodes
+        .iter()
+        .position(|n| n.children.len() == 3)
+        .expect("the column node owns three children");
+    let moved = nodes[column]
+        .children
+        .iter()
+        .filter_map(|&c| nodes[c].placement_anim.as_ref())
+        .map(|state| state.peek())
+        .find(|offset| *offset != Offset::ZERO);
+    assert!(moved.is_some(), "a child moved from column three to column two and must carry an offset");
     crate::animation::clear_all_animations();
 }
 

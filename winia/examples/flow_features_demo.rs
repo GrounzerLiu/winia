@@ -58,6 +58,7 @@ fn flow_features(ctx: &mut ComposeCtx) {
                 .main_spacing(8.0)
                 .cross_spacing(8.0)
                 .max_items_in_row(columns.get())
+                .animate_placement(true)
                 .modifier(
                     Modifier::new()
                         .fill_max_width()

@@ -87,8 +87,11 @@ fn flow_features_demo_animates_a_reflow() {
     // The placement spring is registered in the animation table; this is the observable proof
     // that the card did not simply snap to its new slot.
     let running = app.animations();
+    let placement = running.iter().any(|line| {
+        line.contains("components=2") && line.contains("spring") && line.contains("target=0.000")
+    });
     assert!(
-        !running.is_empty(),
-        "the reflow should leave a placement animation running: {running:?}"
+        placement,
+        "the reflow should leave a two-component placement spring: {running:?}"
     );
 }

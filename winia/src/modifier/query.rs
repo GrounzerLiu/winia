@@ -283,7 +283,8 @@ impl Modifier {
         })
     }
 
-    /// Whether the lazy layout should animate this item's placement.
+    /// Whether this item carries the placement-animation marker (`Modifier::animate_item`).
+    /// Lazy layouts honor it directly; a Flow must also enable `animate_placement(true)`.
     pub fn has_animate_item(&self) -> bool {
         self.elements.iter().any(|el| matches!(el, ModifierElement::AnimateItem))
     }

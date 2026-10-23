@@ -614,9 +614,11 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self
     }
 
-    /// Compose's `LazyItemScope.animateItem()`: place this on the item's root. When the lazy list
-    /// reorders its data, the item springs from the slot it used to occupy to the new one (keyed by
-    /// the item key). Outside a lazy list the marker does nothing.
+    /// Compose's `LazyItemScope.animateItem()`: place this on the item's root. A lazy list springs
+    /// the item from its old slot to the new one when the data reorders (keyed by the item key).
+    /// FlowRow/FlowColumn also honor it, but only when the container opts in with
+    /// `FlowRow::animate_placement(true)` / `FlowColumn::animate_placement(true)`. Elsewhere the
+    /// marker is inert.
     pub fn animate_item(self) -> Self {
         self.push(ModifierElement::AnimateItem)
     }

@@ -30,7 +30,10 @@ struct PlacementState {
 /// A cloneable table of per-child placement animation states.
 #[derive(Clone, Default)]
 pub(crate) struct PlacementAnimations {
-    inner: Arc<Mutex<PlacementState>>,
+    /// Shared across clones, allocated only when a Flow actually enables placement animation; a
+    /// default table costs no Mutex. The Arc around OnceLock is load-bearing: a clone must see
+    /// the same initialized state, otherwise every frame would start from an empty table.
+    inner: Arc<std::sync::OnceLock<Arc<Mutex<PlacementState>>>>,
 }
 
 impl std::fmt::Debug for PlacementAnimations {
@@ -48,6 +51,11 @@ fn subtree_has_animate_item(nodes: &[LayoutNode], index: usize) -> bool {
 }
 
 impl PlacementAnimations {
+    fn state(&self) -> &Arc<Mutex<PlacementState>> {
+        self.inner
+            .get_or_init(|| Arc::new(Mutex::new(PlacementState::default())))
+    }
+
     /// Record the new placements and turn every moved child into a spring from its old visual
     /// position to its new one.
     ///
@@ -59,7 +67,7 @@ impl PlacementAnimations {
         children: &[usize],
         placements: &[Placement],
     ) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state().lock().unwrap_or_else(|e| e.into_inner());
         state.frame += 1;
         let frame = state.frame;
 

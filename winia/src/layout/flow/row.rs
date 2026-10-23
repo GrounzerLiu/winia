@@ -12,6 +12,10 @@ use crate::runtime::composer::ComposeCtx;
 use super::{measure::measure_flow, placement::PlacementAnimations, FlowOverflow};
 
 /// The FlowRow measure policy: a horizontal main axis that wraps when a line is too wide.
+///
+/// Non-exhaustive: construct it with [`FlowRowLayout::new`] and the chainable setters, so new
+/// internal animation state does not become part of a caller's struct literal.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct FlowRowLayout {
     /// Main-axis arrangement of the items inside each line (Compose `horizontalArrangement`).
@@ -34,8 +38,9 @@ pub struct FlowRowLayout {
     pub overflow: FlowOverflow,
     /// Direction used to mirror the final placements.
     pub direction: LayoutDirection,
-    /// Per-child offset states for `animate_item` placement animations.
-    pub(crate) placement_animations: PlacementAnimations,
+    /// Per-child offset states for `animate_item` placement animations; `None` disables the
+    /// scan and keeps the default Flow free of animation bookkeeping.
+    pub(crate) placement_animations: Option<PlacementAnimations>,
 }
 
 impl FlowRowLayout {
@@ -51,7 +56,7 @@ impl FlowRowLayout {
             max_lines: usize::MAX,
             overflow: FlowOverflow::Clip,
             direction: LayoutDirection::Ltr,
-            placement_animations: PlacementAnimations::default(),
+            placement_animations: None,
         }
     }
 
@@ -74,7 +79,7 @@ impl FlowRowLayout {
     /// Sets the layout direction used for mirroring.
     pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
 
-    pub(crate) fn placement_animations(mut self, animations: PlacementAnimations) -> Self {
+    pub(crate) fn placement_animations(mut self, animations: Option<PlacementAnimations>) -> Self {
         self.placement_animations = animations;
         self
     }
@@ -114,7 +119,9 @@ impl MeasurePolicy for FlowRowLayout {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
         }
-        self.placement_animations.place(nodes, children, placements);
+        if let Some(animations) = &self.placement_animations {
+            animations.place(nodes, children, placements);
+        }
     }
 
     fn min_intrinsic_width(
@@ -202,9 +209,9 @@ impl MeasurePolicy for FlowRowLayout {
 /// per-line cap (unlimited by default), `max_lines` the row cap (Clip mode; Visible bypasses it),
 /// and `overflow` chooses between Compose's Clip (drop items past the cross-axis budget) and
 /// Visible (keep painting them). Children may carry `layout_weight` /
-/// `layout_weight_fill`; line breaking uses their natural size. A child root marked with
-/// `Modifier::animate_item()` gets a two-dimensional paint spring when a reflow moves it; use
-/// `ctx.key` / `ctx.keyed_range` so its identity survives the move. There is no overflow-indicator
+/// `layout_weight_fill`; line breaking uses their natural size. With `animate_placement(true)`, a
+/// child root marked with `Modifier::animate_item()` gets a two-dimensional paint spring when a
+/// reflow moves it; use `ctx.key` / `ctx.keyed_range` so its identity survives the move. There is no overflow-indicator
 /// API yet; see the `layout::flow` module docs.
 pub struct FlowRow {
     modifier: Modifier,
@@ -216,6 +223,8 @@ pub struct FlowRow {
     max_items_in_row: usize,
     max_lines: usize,
     overflow: FlowOverflow,
+    /// Whether a change in placement should spring instead of jumping.
+    animate_placement: bool,
 }
 
 impl FlowRow {
@@ -231,6 +240,7 @@ impl FlowRow {
             max_items_in_row: usize::MAX,
             max_lines: usize::MAX,
             overflow: FlowOverflow::Clip,
+            animate_placement: false,
         }
     }
 
@@ -253,6 +263,9 @@ impl FlowRow {
     pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
     /// Selects the overflow policy.
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    /// Enables placement springs for children marked with `Modifier::animate_item()`.
+    /// Defaults to `false`, which keeps the common Flow path free of animation bookkeeping.
+    pub fn animate_placement(mut self, animate: bool) -> Self { self.animate_placement = animate; self }
 
     /// Composes the row and its children.
     ///
@@ -270,9 +283,15 @@ impl FlowRow {
         ctx.changed(&self.max_items_in_row);
         ctx.changed(&self.max_lines);
         ctx.changed(&self.overflow);
+        ctx.changed(&self.animate_placement);
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
-        let placement_animations = ctx.remember(|| PlacementAnimations::default()).peek();
+        // Registered unconditionally so toggling the flag cannot shift later remember slots;
+        // the table itself stays allocation-free until the flag is on.
+        let placement_table = ctx
+            .remember_at_key(ctx.position_key(0x666c6f77), || PlacementAnimations::default())
+            .peek();
+        let placement_animations = self.animate_placement.then_some(placement_table);
         build_container(
             ctx,
             self.modifier,

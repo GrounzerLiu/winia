@@ -76,10 +76,11 @@ FlowColumn::new()
   when the axis is unbounded. `layout_weight_fill(weight, false)` treats that share as a maximum.
 - **Container size**: main = widest visible line (wrap) or the constraint (fill); cross = the
   visible line heights plus the gaps.
-- **Placement animation**: put `Modifier::animate_item()` on a child's root. Flow keeps the child's
-  stable slot key, records its previous position, and paints a two-dimensional offset that springs
-  back to zero after a reflow. Use `ctx.key` / `ctx.keyed_range` for the identity to survive a
-  reorder; size changes and fade-in/out are not animated yet.
+- **Placement animation**: enable `FlowRow::animate_placement(true)` / `FlowColumn::animate_placement(true)`
+  and put `Modifier::animate_item()` on a child's root. Flow keeps the child's stable slot key,
+  records its previous position, and paints a two-dimensional offset that springs back to zero
+  after a reflow. Use `ctx.key` / `ctx.keyed_range` for the identity to survive a reorder; size
+  changes and fade-in/out are not animated yet.
 - **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
 - **Composition**: the builders are deliberately not macros (a `State.get()` at the content's
   top level must bubble to the parent), and every parameter is declared with `ctx.changed`.
@@ -119,8 +120,9 @@ cargo run -p winia --example flow_features_demo
 cargo test -p winia --lib layout::flow
 ```
 
-The animated card toggles `max_items_in_row` between 3 and 2. Its children carry
-`Modifier::animate_item()`, so the 3x2 -> 2x3 reflow springs each card from its old slot.
+The animated card toggles `max_items_in_row` between 3 and 2. It enables
+`animate_placement(true)` and its children carry `Modifier::animate_item()`, so the 3x2 -> 2x3
+reflow springs each card from its old slot.
 
 The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
 `Visible` overflow, weight sharing, `fillMaxRowHeight` / `fillMaxColumnWidth`, intrinsic queries,
