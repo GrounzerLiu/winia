@@ -790,7 +790,7 @@ mod tests {
     /// driven from the same tick loop: it must track the scalar spring, and it must not be that tween.
     #[test]
     fn the_default_spec_moves_the_size_the_way_a_spring_does() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, clock) = crate::animation::tests::serial_clock();
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
         let mut recompose = |composer: &mut Composer| {
@@ -832,10 +832,12 @@ mod tests {
             "both animatables are running"
         );
         for _ in 0..2_000 {
+            // Drive both the container and the reference springs from the frozen test clock. Real
+            // sleeps made the comparison depend on scheduler jitter and the 1.0 px tolerance.
+            clock.advance(std::time::Duration::from_millis(2));
             if !crate::animation::update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(2));
             recompose(&mut composer);
             let box_w = container_width(&composer);
             max_spring_gap = max_spring_gap.max((box_w - spring_ref.peek()).abs());

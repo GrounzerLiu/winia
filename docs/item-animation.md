@@ -56,6 +56,9 @@ new item and the old one exits.
 - A measure epoch and the draw-layer visual epoch invalidate the cached exit picture, so a ghost
   does not show stale text, a stale child, or a stale `Visual<T>` paint value. A custom draw node
   that reads state without routing it through `Visual<T>` is not tracked by the epoch.
+- While an outer item's exit picture is being recorded, nested item paint channels are suppressed;
+  a nested Flow/Lazy animation is therefore captured at its layout position. This is a rare visual
+  fidelity limitation, not a functional bug.
 
 ## Demo
 
