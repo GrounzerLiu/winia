@@ -122,6 +122,12 @@ impl MeasurePolicy for FlowRowLayout {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
             nodes[c].item_paint = None;
+            if placements[i].size == Size::ZERO {
+                // Cross-axis Clip dropped this line: its placement is (0,0)/zero. Do not let the
+                // item host record that as a real slot; otherwise a later resize animates the card
+                // from the parent's origin into view.
+                continue;
+            }
             let Some(spec) = nodes[c].modifier.animate_item_spec() else {
                 continue;
             };

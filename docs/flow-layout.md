@@ -79,8 +79,10 @@ FlowColumn::new()
 - **Item animation**: put `Modifier::animate_item(...)` on a child's root. Flow keeps the child's
   stable slot key and paints the placement offset and opacity from the shared item host; the
   marker carries placement, fade-in and fade-out curves (`ItemAnimationSpec`). Use `ctx.key` /
-  `ctx.keyed_range` for the identity to survive a reorder. `AnimatedSize` remains the container
-  size animation; item size changes are not part of this contract.
+  `ctx.keyed_range` for the identity to survive a reorder. An item dropped by the cross-axis
+  `Clip` is not recorded as an animation origin; when it becomes visible it appears at its real
+  slot (fading in if configured), never from the parent's origin. `AnimatedSize` remains the
+  container size animation; item size changes are not part of this contract.
 - **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
 - **Composition**: the builders are deliberately not macros (a `State.get()` at the content's
   top level must bubble to the parent), and every parameter is declared with `ctx.changed`.

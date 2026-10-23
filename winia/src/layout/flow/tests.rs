@@ -1016,6 +1016,54 @@ fn flow_column_declares_its_parameters_for_skip() {
     assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
 }
 
+/// A line dropped by the cross-axis Clip has a zero placement; it must not enter the item host as a
+/// real slot at (0,0), or a later resize animates it from the parent origin.
+#[test]
+fn flow_row_clipped_items_do_not_become_animation_origins() {
+    use crate::layout::item_animation::ItemAnimationHost;
+
+    let host = ItemAnimationHost::default();
+    let policy = FlowRowLayout::new()
+        .max_lines(1)
+        .item_animations(host.clone());
+    let mut nodes: Vec<LayoutNode> = (0..4)
+        .map(|_| LayoutNode::leaf(Modifier::new().size(30.0, 30.0).animate_item()))
+        .collect();
+    let children: Vec<usize> = (0..4).collect();
+
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    policy.place(&mut nodes, &children, &placements);
+    assert!(
+        nodes[3].item_paint.is_none(),
+        "a clipped item must not be recorded at the zero placement"
+    );
+
+    let policy = FlowRowLayout::new()
+        .max_lines(2)
+        .item_animations(host);
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 100.0),
+    );
+    policy.place(&mut nodes, &children, &placements);
+    let paint = nodes[3]
+        .item_paint
+        .as_ref()
+        .expect("the now-visible item is painted");
+    assert_eq!(
+        paint.offset.peek(),
+        Offset::ZERO,
+        "a newly visible item must not animate from the origin"
+    );
+}
+
 /// The Flow builder must hand its placement table to the policy: a keyed child that moves between
 /// two layouts gets a non-zero paint offset, not only a new final position.
 #[test]
