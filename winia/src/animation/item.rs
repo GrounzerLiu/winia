@@ -9,16 +9,17 @@ use crate::animation::{AnimationSpec, RepeatMode, SpringSpec};
 
 /// Placement and fade curves for one item.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ItemAnimationSpec {
     /// How the paint offset travels from the old slot to the new one. `None` disables movement
     /// (useful for an item that only fades). `Decay` is unsupported; finite `Repeatable` is allowed.
-    pub placement: Option<AnimationSpec>,
+    pub(crate) placement: Option<AnimationSpec>,
     /// Fade-in applied when the key first appears after the host's first layout. `Decay` is unsupported.
-    pub fade_in: Option<AnimationSpec>,
+    pub(crate) fade_in: Option<AnimationSpec>,
     /// Fade-out curve for a removed key. The host captures the item's last rendered frame and the
     /// exit layer consumes this curve after the item leaves the layout tree. `Decay` is unsupported;
     /// the channel needs a defined end edge so the exit picture can be dropped.
-    pub fade_out: Option<AnimationSpec>,
+    pub(crate) fade_out: Option<AnimationSpec>,
 }
 
 impl Default for ItemAnimationSpec {
@@ -65,6 +66,13 @@ impl ItemAnimationSpec {
 
     /// The default placement spring with no fades.
     pub fn new() -> Self { Self::default() }
+
+    /// The configured placement curve, if any.
+    pub fn placement_spec(&self) -> Option<&AnimationSpec> { self.placement.as_ref() }
+    /// The configured fade-in curve, if any.
+    pub fn fade_in_spec(&self) -> Option<&AnimationSpec> { self.fade_in.as_ref() }
+    /// The configured fade-out curve, if any.
+    pub fn fade_out_spec(&self) -> Option<&AnimationSpec> { self.fade_out.as_ref() }
 
     /// Sets the placement curve.
     pub fn placement(mut self, spec: impl Into<AnimationSpec>) -> Self {

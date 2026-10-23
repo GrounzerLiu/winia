@@ -1102,7 +1102,7 @@ fn flow_row_clipped_live_item_does_not_ghost() {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .pictures
-        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
 
     let clipped = FlowRowLayout::new().max_lines(1).item_animations(host.clone());
     let (_, placements) = clipped.measure(
@@ -1276,7 +1276,7 @@ fn removing_the_marker_does_not_ghost_a_live_item() {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .pictures
-        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
 
     nodes[0].modifier = Modifier::new().size(40.0, 20.0);
     let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);

@@ -32,6 +32,8 @@ pub(crate) struct ItemPaint {
     pub(crate) key: u64,
     /// The item's measure epoch when its paint was attached; invalidates stale pictures.
     pub(crate) content_epoch: u64,
+    /// The global draw-layer epoch; captures paint-only changes that never re-measure.
+    pub(crate) paint_epoch: u64,
     /// The fade-out curve; `None` means the item is not captured for an exit.
     pub(crate) fade_out: Option<crate::animation::AnimationSpec>,
     /// Shared picture/exits store for the container's host.
@@ -50,6 +52,7 @@ pub(crate) struct CapturedItem {
     pub(crate) position: Offset,
     pub(crate) size: Size,
     pub(crate) content_epoch: u64,
+    pub(crate) paint_epoch: u64,
 }
 
 /// A removed item still playing its fade-out.
@@ -106,6 +109,23 @@ impl Default for ItemAnimationHost {
 impl std::fmt::Debug for ItemAnimationHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ItemAnimationHost")
+    }
+}
+
+impl Drop for HostState {
+    fn drop(&mut self) {
+        for item in self.items.values() {
+            crate::animation::cancel_animation(&item.offset);
+            crate::animation::cancel_animation(&item.alpha);
+        }
+    }
+}
+
+impl Drop for ExitStore {
+    fn drop(&mut self) {
+        for exit in self.exits.values() {
+            crate::animation::cancel_animation(&exit.alpha);
+        }
     }
 }
 
@@ -188,7 +208,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pictures
-            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
         host.retire(7);
         assert!(
             host.store.lock().unwrap_or_else(|e| e.into_inner()).pictures.is_empty(),
@@ -243,7 +263,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pictures
-            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
 
         host.begin_frame();
         host.finish_frame(None);
@@ -268,14 +288,19 @@ mod tests {
         }
         host.finish_frame(None);
         host.begin_frame();
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
         let live: HashSet<u64> = (1..=300u64).collect();
         host.finish_frame(Some(&live));
         let state = host.inner.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
-            state.items.len() <= MAX_OFFSCREEN_STATES,
+            state.items.len() <= MAX_OFFSCREEN_STATES + 1,
             "offscreen state grew to {} (bound {})",
             state.items.len(),
             MAX_OFFSCREEN_STATES
+        );
+        assert!(
+            state.items.contains_key(&1),
+            "a visible key must not be evicted by the off-screen bound"
         );
     }
 
@@ -431,6 +456,7 @@ impl ItemAnimationHost {
             alpha: item.alpha.clone(),
             key,
             content_epoch: nodes[child].content_epoch,
+            paint_epoch: crate::runtime::state::visual_epoch(),
             fade_out: spec.fade_out.clone(),
             exit_store: self.store.clone(),
         });
@@ -470,11 +496,13 @@ impl ItemAnimationHost {
                 kept.push((key, item));
             } else if live_keys.is_some_and(|keys| keys.contains(&key)) {
                 // The data still owns this key; it is only outside the Lazy window. Cancel its
-                // channels and retain only a bounded recent set, so a long scroll cannot grow the
-                // host without limit.
-                crate::animation::cancel_animation(&item.offset);
-                crate::animation::cancel_animation(&item.alpha);
-                item.offscreen = true;
+                // channels once and retain only a bounded recent set, so a long scroll cannot grow
+                // the host without limit.
+                if !item.offscreen {
+                    crate::animation::cancel_animation(&item.offset);
+                    crate::animation::cancel_animation(&item.alpha);
+                    item.offscreen = true;
+                }
                 offscreen.push((key, item));
             } else if item.fade_out.is_some() {
                 left.push((key, item));

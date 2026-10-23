@@ -696,3 +696,15 @@
         let stamped = a.raw.inner.signal.last_write_version.load(Ordering::Relaxed);
         assert!(stamped > 0 && stamped <= global_version(), "and the stamp is a real version");
     }
+
+    #[test]
+    fn a_visual_write_bumps_the_paint_epoch() {
+        let state = State::new(1.0f32);
+        let visual = state.into_visual();
+        let before = visual_epoch();
+        visual.set(2.0);
+        assert!(
+            visual_epoch() > before,
+            "a draw-layer write must invalidate the item exit-picture cache"
+        );
+    }

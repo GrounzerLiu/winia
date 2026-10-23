@@ -53,9 +53,9 @@ new item and the old one exits.
   because it has no target value. A finite `Repeatable` is allowed only when its last iteration
   ends at the target (`Restart`, or `Reverse` with an odd count); a Spring must have a positive
   rest threshold. This is what lets an exit picture be cleaned up when its fade completes.
-- A measure epoch invalidates the cached exit picture when the item is re-measured, so a ghost does
-  not show stale text or a stale child. Paint-only changes that do not re-measure the item are not
-  tracked by this epoch.
+- A measure epoch and the draw-layer visual epoch invalidate the cached exit picture, so a ghost
+  does not show stale text, a stale child, or a stale `Visual<T>` paint value. A custom draw node
+  that reads state without routing it through `Visual<T>` is not tracked by the epoch.
 
 ## Demo
 
@@ -65,3 +65,10 @@ cargo run -p winia --example item_animation_demo
 
 The demo adds and removes cards: a new card fades in, the removed card keeps its captured frame
 while it fades out, and the container height follows through `AnimatedSize`.
+
+## Input during a placement animation
+
+Placement is a paint offset, not a layout move. Hit testing and pointer input use the item's final
+slot while it is still visually travelling; this matches the graphics-layer placement model rather
+than making the hit target follow the painted offset. Tests and components should not assume the
+visual box is interactive during the animation.

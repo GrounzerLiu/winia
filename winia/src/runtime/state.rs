@@ -521,7 +521,10 @@ impl<T: 'static> RawState<T> {
     /// drives repaint via `request_redraw`; values are consumed via `peek`.
     pub(crate) fn set_visual(&self, value: T) {
         *self.inner.value.write() = value;
+        VISUAL_EPOCH.fetch_add(1, Ordering::Relaxed);
     }
+
+
 
     /// Write-back write: no dedup, no notify, no wake. For measure/layout
     /// write-back and cross-frame staging; the next frame reads the value.
@@ -788,6 +791,14 @@ pub(crate) struct StateInner<T> {
 // Internal routing IDs are 64-bit; the public animation compatibility ID
 // remains a separate u32 sequence until that API is migrated.
 static NEXT_STATE_ID: AtomicU64 = AtomicU64::new(1);
+/// Incremented by draw-layer writes (`Visual<T>`). The item exit-picture cache uses it to
+/// invalidate a ghost after a paint-only change that never measures a node.
+static VISUAL_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// The current paint-only change epoch (see `RawState::set_visual`).
+pub(crate) fn visual_epoch() -> u64 {
+    VISUAL_EPOCH.load(Ordering::Relaxed)
+}
 static NEXT_PUBLIC_STATE_ID: AtomicU32 = AtomicU32::new(1);
 
 // ── Write batches and the global version ──

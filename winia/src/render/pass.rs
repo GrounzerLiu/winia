@@ -35,6 +35,7 @@ fn capture_item(
         if let Some(old) = store.pictures.get_mut(&paint.key) {
             if old.size == crate::unit::Size::new(content.width, content.height)
                 && old.content_epoch == paint.content_epoch
+                && old.paint_epoch == paint.paint_epoch
             {
                 // The picture excludes the item paint (offset/alpha), so a moving or fading item can
                 // reuse it; only its visual position needs updating.
@@ -74,6 +75,7 @@ fn capture_item(
                     position: captured_position,
                     size: crate::unit::Size::new(content.width, content.height),
                     content_epoch: paint.content_epoch,
+                    paint_epoch: paint.paint_epoch,
                 },
             );
     }

@@ -761,3 +761,42 @@
             "clip 应在变换前裁掉旋转后的角落：unclipped={unclipped} clipped={clipped}"
         );
     }
+
+    /// The item alpha layer is in parameter space and its CTM already carries the placement
+    /// translation. Passing bounds+offset shifts the layer by 2*offset and clips the moving fade.
+    #[test]
+    fn an_item_fade_layer_follows_its_placement_offset() {
+        use crate::graphics::{Color, Shape};
+        use crate::layout::node::LayoutNode;
+        use crate::modifier::Modifier;
+        use crate::runtime::state::State;
+        use crate::unit::{Offset, Size};
+        use std::sync::{Arc, Mutex};
+
+        let mut node = LayoutNode::leaf(
+            Modifier::new()
+                .size(20.0, 20.0)
+                .background(Color::RED, Shape::Rectangle),
+        );
+        node.measured_size = Size::new(20.0, 20.0);
+        node.item_paint = Some(crate::layout::item_animation::ItemPaint {
+            offset: State::new(Offset::new(0.0, 40.0)),
+            alpha: State::new(0.5),
+            key: 7,
+            content_epoch: 0,
+            paint_epoch: 0,
+            fade_out: None,
+            exit_store: Arc::new(Mutex::new(crate::layout::item_animation::ExitStore::default())),
+        });
+        let nodes = vec![node];
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).expect("surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        render(&nodes, 0, surface.canvas());
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let p = px[50 * 100 + 10];
+        assert!(
+            p[0] < 250 || p[1] < 250 || p[2] < 250,
+            "the item must paint at its offset y=50, not be clipped by the alpha layer: {p:?}"
+        );
+    }
