@@ -114,6 +114,15 @@ impl AppState {
                     debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
                     debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
                 }
+                debug::DebugEvent::SetLayoutDirection(direction) => {
+                    crate::layout::direction::set_debug_direction(direction);
+                    pw.composer.mark_content_dirty();
+                    for layer in &mut pw.overlay.layers {
+                        layer.composer.mark_content_dirty();
+                    }
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    handled = true;
+                }
                 debug::DebugEvent::Text { value } => {
                     // Typed text follows the same routing as IME commit: character by character
                     // through the focused overlay, then the focused main-tree node. This is the

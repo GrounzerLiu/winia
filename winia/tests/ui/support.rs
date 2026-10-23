@@ -14,6 +14,7 @@
 //! 每进程独立管道（测试天然并行隔离）。
 //!
 //! 注意：UI 测试需要图形环境（真实窗口）。
+use winia::layout::LayoutDirection;
 use winia::unit::Size;
 
 use std::io::Write;
@@ -1031,6 +1032,22 @@ impl UiTest {
     /// the main window. This changes input routing only; tree queries still return every window.
     pub fn select_window(&mut self, window_id: u64) {
         self.send(&format!("target {window_id}"));
+    }
+
+    /// Override the ambient layout direction for the next composition (debug-server only).
+    pub fn set_layout_direction(&mut self, direction: LayoutDirection) {
+        let value = match direction {
+            LayoutDirection::Ltr => "ltr",
+            LayoutDirection::Rtl => "rtl",
+        };
+        self.send(&format!("dir {value}"));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// Restore the direction provided by the theme/composition locals.
+    pub fn clear_layout_direction(&mut self) {
+        self.send("dir auto");
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     /// Type a text value through the debug Text event (not one 'k' per character).

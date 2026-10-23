@@ -5,7 +5,10 @@
 //! cleared for the upcoming refactor; the dispatcher remains so the harness and the one-binary
 //! build model stay in place.
 
-const SCENARIOS: &[(&str, fn())] = &[];
+#[path = "../../examples/flow_features_demo.rs"]
+mod flow_features;
+
+const SCENARIOS: &[(&str, fn())] = &[("flow_features", flow_features::main)];
 
 fn main() {
     let scenario = std::env::args().nth(1).unwrap_or_default();

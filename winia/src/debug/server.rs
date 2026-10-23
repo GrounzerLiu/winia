@@ -701,6 +701,14 @@ pub fn start_stdin_channel() {
                 "target" if parts.len() >= 2 => {
                     target_window = parts[1].parse().unwrap_or(0);
                 }
+                "dir" if parts.len() >= 2 => {
+                    let direction = match parts[1] {
+                        "ltr" => Some(crate::layout::LayoutDirection::Ltr),
+                        "rtl" => Some(crate::layout::LayoutDirection::Rtl),
+                        _ => None,
+                    };
+                    queue_event_for_window(target_window, DebugEvent::SetLayoutDirection(direction));
+                }
                 "s" if parts.len() >= 2 => {
                     // s dy (one argument) or s dx dy (two arguments — horizontal wheel / tests).
                     let (dx, dy) = if parts.len() >= 3 {

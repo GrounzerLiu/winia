@@ -48,4 +48,6 @@ pub enum DebugEvent {
     PointerMove { x: f32, y: f32 },
     /// Simulate a pointer release.
     PointerUp { x: f32, y: f32 },
+    /// Test-only ambient layout direction override; `None` restores the composition local.
+    SetLayoutDirection(Option<crate::layout::LayoutDirection>),
 }

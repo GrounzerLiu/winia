@@ -6,7 +6,8 @@
 > Implementation: `winia/src/layout/flow.rs` is the facade; the algorithm lives in
 > `winia/src/layout/flow/measure.rs`, the two policies/builders in `flow/row.rs` and
 > `flow/column.rs`, and the tests in `flow/tests.rs`.
-> Demo: `winia/examples/flow_demo.rs`.
+> Demo: `winia/examples/flow_features_demo.rs` (also compiled into the UI fixture as the
+> `flow_features` scenario).
 
 ## 1. API
 
@@ -109,7 +110,7 @@ FlowColumn::new()
 ## 4. Running and tests
 
 ```bash
-cargo run -p winia --example flow_demo
+cargo run -p winia --example flow_features_demo
 cargo test -p winia --lib layout::flow
 ```
 

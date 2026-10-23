@@ -38,6 +38,7 @@ cargo test --features debug-server
 | `focus_next` | Advance focus through the real Tab traversal | — |
 | `request_focus <node-id>` | Focus a node by tree id | — |
 | `target <window-id>` | Target subsequent inputs at that window (default 0) | — |
+| `dir ltr\|rtl\|auto` | Test-only ambient layout-direction override (`auto` restores) | — |
 | `s <dy>` / `s <dx> <dy>` | Scroll | `ok scroll` |
 | `w <w> <h>` | Window resize in logical px (goes through the real `request_surface_size` → `SurfaceResized` path) | — |
 | `t` | Tree JSON (**single line**, stdout prefix `TREE:`) | `TREE:[{window,root},…]` |
