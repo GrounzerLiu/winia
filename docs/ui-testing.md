@@ -88,6 +88,8 @@ carry none of it — `crate::debug` is a set of no-op stubs there.
   `expect_focused` / `expect_only_focused`、`expect_window_count` / `expect_overlay_count`、
   `expect_no_overlay_text`、`expect_semantics_name` / `expect_semantics_role`、
   `expect_no_animations` / `wait_animations_idle`、`expect_pixel_at_logical`、`save_png`、`trace`。
+- 所有等待默认使用 `DEFAULT_WAIT`（5 秒）；用 `set_default_timeout` / `with_timeout` 改全局默认，
+  或调用对应的 `*_timeout` / `*_within` 变体只改一次。
 - 通用等待：`wait_for_tag`、`wait_until`、`expect_eventually`。
 
 `tests/ui_support.rs` includes this module outside a fixture, so the support crate is compiled

@@ -28,6 +28,10 @@ use serde_json::Value;
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_ATTEMPTS: u32 = 3;
 
+/// Default deadline for public wait/assert helpers. Callers can override it globally with
+/// `set_default_timeout` or use the explicit `_timeout` variant for one call.
+pub const DEFAULT_WAIT: Duration = Duration::from_secs(5);
+
 /// Serial lock for the whole suite: `launch` clears leftover fixtures with `taskkill`, which would
 /// kill a fixture another test had just started, and several fixture windows at once interfere
 /// (focus, input). Serial execution is fine — 25 cases run in ~60 s.
@@ -42,6 +46,8 @@ pub struct UiTest {
     /// 串行锁 guard（整个测试生命周期持有——防互杀/窗口干扰）
     _serial: std::sync::MutexGuard<'static, ()>,
     tree: Value,
+    /// Deadline used by the no-timeout wait/assert helpers.
+    default_timeout: Duration,
     /// 窗口尺寸（根节点 size）
     pub width: f32,
     pub height: f32,
@@ -194,7 +200,16 @@ impl UiTest {
                 Ok(tree) => {
                     // 解析窗口尺寸（根节点 size）
                     let (width, height) = tree_size(&tree);
-                    return Self { child, child_stdin, stdout_rx: rx, _serial, tree, width, height };
+                    return Self {
+                        child,
+                        child_stdin,
+                        stdout_rx: rx,
+                        _serial,
+                        tree,
+                        default_timeout: DEFAULT_WAIT,
+                        width,
+                        height,
+                    };
                 }
                 Err(why) => {
                     let _ = child.kill();
@@ -218,6 +233,17 @@ impl UiTest {
     /// The failure reason comes back as `Err` so `launch` can retry: a loaded machine needs far longer
     /// than a fresh one for its first frame (measured 2.4-6x slower under load), and one extra process
     /// spawn is much cheaper than a red suite.
+    /// Change the deadline used by every no-timeout wait helper in this test.
+    pub fn set_default_timeout(&mut self, timeout: Duration) {
+        self.default_timeout = timeout;
+    }
+
+    /// Builder form of [`Self::set_default_timeout`].
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.default_timeout = timeout;
+        self
+    }
+
     fn wait_for_first_frame(
         child: &mut Child,
         child_stdin: &mut std::process::ChildStdin,
@@ -349,7 +375,7 @@ impl UiTest {
     /// request_surface_size → SurfaceResized 事件通路）
     pub fn resize(&mut self, w: f32, h: f32) {
         self.send(&format!("w {} {}", w as i32, h as i32));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + self.default_timeout;
         loop {
             self.refresh();
             if (self.width - w).abs() < 1.0 && (self.height - h).abs() < 1.0 {
@@ -550,7 +576,15 @@ impl UiTest {
     /// `None` means NO pixel could be read at all (an unreachable or broken capture path): a caller must
     /// not read that as "the pixel is black", which is what a sentinel like `-1.0` invited. `Some` carries
     /// the luma that satisfied `pred`, or the last one seen when it never did.
-    pub fn wait_centre_luma(&mut self, timeout: Duration, pred: impl Fn(f32) -> bool) -> Option<f32> {
+    pub fn wait_centre_luma(&mut self, pred: impl Fn(f32) -> bool) -> Option<f32> {
+        self.wait_centre_luma_timeout(self.default_timeout, pred)
+    }
+
+    pub fn wait_centre_luma_timeout(
+        &mut self,
+        timeout: Duration,
+        pred: impl Fn(f32) -> bool,
+    ) -> Option<f32> {
         let deadline = Instant::now() + timeout;
         let mut last: Option<f32> = None;
         loop {
@@ -638,6 +672,15 @@ impl UiTest {
         &mut self,
         x: f32,
         y: f32,
+        pred: impl Fn(f32) -> bool,
+    ) -> Option<f32> {
+        self.wait_pixel_luma_timeout(x, y, self.default_timeout, pred)
+    }
+
+    pub fn wait_pixel_luma_timeout(
+        &mut self,
+        x: f32,
+        y: f32,
         timeout: Duration,
         pred: impl Fn(f32) -> bool,
     ) -> Option<f32> {
@@ -698,7 +741,7 @@ impl UiTest {
 
     /// 断言 popup 条目中出现 `text`（带重试）
     pub fn expect_overlay_text(&mut self, text: &str) {
-        self.expect_overlay_text_timeout(text, Duration::from_secs(5));
+        self.expect_overlay_text_timeout(text, self.default_timeout);
     }
 
     /// 断言 popup 条目中出现 `text`（带超时）——与 `expect_text_timeout` 同语义，但只看弹层。
@@ -812,7 +855,11 @@ impl UiTest {
     ///
     /// A key event is processed on the app's next frame, so checking immediately after `key(...)` races it —
     /// which is how a focus test passed alone and failed under the full suite's parallel load.
-    pub fn wait_until_focus(&mut self, tag: &str, timeout: Duration) -> bool {
+    pub fn wait_until_focus(&mut self, tag: &str) -> bool {
+        self.wait_until_focus_timeout(tag, self.default_timeout)
+    }
+
+    pub fn wait_until_focus_timeout(&mut self, tag: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
             if self.tag_is_focused(tag) {
@@ -826,7 +873,11 @@ impl UiTest {
     }
 
     /// [`Self::wait_until_focus`] for a tag inside the popup entries.
-    pub fn wait_until_overlay_focus(&mut self, tag: &str, timeout: Duration) -> bool {
+    pub fn wait_until_overlay_focus(&mut self, tag: &str) -> bool {
+        self.wait_until_overlay_focus_timeout(tag, self.default_timeout)
+    }
+
+    pub fn wait_until_overlay_focus_timeout(&mut self, tag: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
             if self.overlay_tag_is_focused(tag) {
@@ -867,7 +918,7 @@ impl UiTest {
 
     /// 断言树中出现 `text`（带重试——等待异步重组/动画）
     pub fn expect_text(&mut self, text: &str) {
-        self.expect_text_timeout(text, Duration::from_secs(5));
+        self.expect_text_timeout(text, self.default_timeout);
     }
 
     pub fn expect_text_timeout(&mut self, text: &str, timeout: Duration) {
@@ -891,6 +942,16 @@ impl UiTest {
     /// 点击并在 timeout 内轮询 `until`（树最新状态）；点击丢失（debug 渲染断——
     /// RedrawRequested 偶发不来，树不刷新）时自动重试点击，最多 3 次。
     pub fn click_until(
+        &mut self,
+        x: f32,
+        y: f32,
+        until: impl FnMut(&serde_json::Value) -> bool,
+    ) {
+        let timeout = self.default_timeout;
+        self.click_until_timeout(x, y, timeout, until);
+    }
+
+    pub fn click_until_timeout(
         &mut self,
         x: f32,
         y: f32,
@@ -922,7 +983,12 @@ impl UiTest {
     /// A loaded machine drops key events the way it drops clicks (see `click_until`), and a focus
     /// hand-off lands on a LATER frame than the value change that triggered it — so a test that sends
     /// an arrow right after a press can be talking to a window that has nothing focused yet.
-    pub fn key_until(&mut self, key: &str, expect: &str, timeout: Duration) {
+    pub fn key_until(&mut self, key: &str, expect: &str) {
+        let timeout = self.default_timeout;
+        self.key_until_timeout(key, expect, timeout);
+    }
+
+    pub fn key_until_timeout(&mut self, key: &str, expect: &str, timeout: Duration) {
         for attempt in 0..3 {
             self.send(&format!("k {key}"));
             let deadline = Instant::now() + timeout;
@@ -1048,7 +1114,11 @@ impl UiTest {
     }
 
     /// Wait until 'tag' exists in the main tree, returning its current rect.
-    pub fn wait_for_tag(&mut self, tag: &str, timeout: Duration) -> Option<(f32, f32, f32, f32)> {
+    pub fn wait_for_tag(&mut self, tag: &str) -> Option<(f32, f32, f32, f32)> {
+        self.wait_for_tag_timeout(tag, self.default_timeout)
+    }
+
+    pub fn wait_for_tag_timeout(&mut self, tag: &str, timeout: Duration) -> Option<(f32, f32, f32, f32)> {
         let deadline = Instant::now() + timeout;
         loop {
             self.refresh();
@@ -1064,7 +1134,7 @@ impl UiTest {
 
     /// Assert that a tag exists now; returns its rect.
     pub fn expect_tag(&mut self, tag: &str) -> (f32, f32, f32, f32) {
-        self.wait_for_tag(tag, Duration::from_secs(5))
+        self.wait_for_tag(tag)
             .unwrap_or_else(|| panic!("tag {tag} never appeared; texts: {:?}", self.all_texts()))
     }
 
@@ -1210,7 +1280,11 @@ impl UiTest {
         assert!(animations.is_empty(), "expected no animations, got: {animations:?}");
     }
 
-    pub fn wait_animations_idle(&mut self, timeout: Duration) -> bool {
+    pub fn wait_animations_idle(&mut self) -> bool {
+        self.wait_animations_idle_timeout(self.default_timeout)
+    }
+
+    pub fn wait_animations_idle_timeout(&mut self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
             if self.animations().is_empty() {
@@ -1269,7 +1343,14 @@ impl UiTest {
     }
 
     /// Poll a caller condition until it holds or the timeout expires.
-    pub fn wait_until<F>(&mut self, timeout: Duration, mut condition: F) -> bool
+    pub fn wait_until<F>(&mut self, condition: F) -> bool
+    where
+        F: FnMut(&mut Self) -> bool,
+    {
+        self.wait_until_timeout(self.default_timeout, condition)
+    }
+
+    pub fn wait_until_timeout<F>(&mut self, timeout: Duration, mut condition: F) -> bool
     where
         F: FnMut(&mut Self) -> bool,
     {
@@ -1286,11 +1367,18 @@ impl UiTest {
     }
 
     /// wait_until with a panic carrying the description on timeout.
-    pub fn expect_eventually<F>(&mut self, description: &str, timeout: Duration, condition: F)
+    pub fn expect_eventually<F>(&mut self, description: &str, condition: F)
     where
         F: FnMut(&mut Self) -> bool,
     {
-        assert!(self.wait_until(timeout, condition), "timed out waiting for {description}");
+        self.expect_eventually_timeout(description, self.default_timeout, condition);
+    }
+
+    pub fn expect_eventually_timeout<F>(&mut self, description: &str, timeout: Duration, condition: F)
+    where
+        F: FnMut(&mut Self) -> bool,
+    {
+        assert!(self.wait_until_timeout(timeout, condition), "timed out waiting for {description}");
     }
 
 }
