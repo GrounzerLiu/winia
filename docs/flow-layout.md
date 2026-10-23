@@ -87,10 +87,11 @@ FlowColumn::new()
   when its share narrows can be clipped differently from Compose, whose first measurement decides
   the clip. The version that is actually laid out is used here.
 - Weight is supported per line: `layout_weight(weight)` fills its share (default `fill = true`),
-  `layout_weight_fill(weight, false)` uses the share as a maximum. Line breaking is computed
-  from the children's natural sizes before the shares are allocated, whereas Compose uses the
-  weighted intrinsic measurement; a heavily weighted child can therefore choose a different
-  line than Compose's intrinsic pass would.
+  `layout_weight_fill(weight, false)` uses the share as a maximum. Intrinsic queries keep using
+  the child's intrinsic size even when it carries a weight; weight is a measure-time allocation,
+  matching Compose's weighted IntrinsicMeasurable path. Line breaking is computed from the
+  children's natural sizes before the shares are allocated, so a heavily weighted child can
+  choose a different line than Compose's intrinsic pass would.
 - No overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`). `max_lines`
   and the `Clip` / `Visible` modes are implemented; the indicator variants are not.
 - Intrinsic queries are implemented: max main is the longest line sum, min main is a binary

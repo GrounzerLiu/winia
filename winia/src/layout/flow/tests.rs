@@ -1089,6 +1089,30 @@ fn flow_row_zero_max_lines_intrinsics_are_empty() {
     }
 }
 
+/// Weight is a measure-time allocation; intrinsic queries keep using the child's intrinsic size,
+/// matching Compose's weighted IntrinsicMeasurable path.
+#[test]
+fn flow_row_intrinsics_ignore_weight_distribution() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0).layout_weight(3.0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0).layout_weight(1.0)),
+    ];
+    nodes[0].children = vec![1, 2];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new())];
+    assert_eq!(
+        intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+        80.0
+    );
+    assert_eq!(
+        intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 100.0),
+        40.0,
+        "with enough height the flow can wrap, so min width is one item"
+    );
+}
+
 /// max_items(0) is the empty flow for every intrinsic query too.
 #[test]
 fn flow_row_zero_max_items_intrinsics_are_empty() {
