@@ -450,6 +450,23 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// Compose `count` children under stable `(prefix, index)` keys.
+    ///
+    /// This is the loop form of [`Self::key`], for the common case where a list is generated
+    /// from an index range. The prefix identifies the list and the index identifies the item, so
+    /// inserting or reordering items keeps each child's remembered slots instead of assigning them
+    /// by position.
+    pub fn keyed_range(
+        &mut self,
+        prefix: impl std::hash::Hash + Clone,
+        count: usize,
+        mut content: impl FnMut(&mut Self, usize),
+    ) {
+        for index in 0..count {
+            self.key((prefix.clone(), index), |ctx| content(ctx, index));
+        }
+    }
+
 
     /// 参数比较（对标 Compose `$composer.changed(param)`）。
     ///

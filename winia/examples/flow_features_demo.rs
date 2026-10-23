@@ -52,26 +52,24 @@ fn flow_features(ctx: &mut ComposeCtx) {
                         .padding(8.0),
                 )
                 .build(ctx, |ctx| {
-                    for n in 0..7 {
-                        ctx.key(("wrap", n), |ctx| {
-                            block(
-                                ctx,
-                                match n {
-                                    0 => "wrap-0",
-                                    1 => "wrap-1",
-                                    2 => "wrap-2",
-                                    3 => "wrap-3",
-                                    4 => "wrap-4",
-                                    5 => "wrap-5",
-                                    _ => "wrap-6",
-                                },
-                                56.0,
-                                28.0,
-                                Color::from_argb(255, 100, 160, 220),
-                                &format!("W{n}"),
-                            );
-                        });
-                    }
+                    ctx.keyed_range("wrap", 7, |ctx, n| {
+                        block(
+                            ctx,
+                            match n {
+                                0 => "wrap-0",
+                                1 => "wrap-1",
+                                2 => "wrap-2",
+                                3 => "wrap-3",
+                                4 => "wrap-4",
+                                5 => "wrap-5",
+                                _ => "wrap-6",
+                            },
+                            56.0,
+                            28.0,
+                            Color::from_argb(255, 100, 160, 220),
+                            &format!("W{n}"),
+                        );
+                    });
                 });
 
             Text::new("FlowRow — max_lines(1), Clip vs Visible")
@@ -91,23 +89,21 @@ fn flow_features(ctx: &mut ComposeCtx) {
                         .padding(8.0),
                 )
                 .build(ctx, |ctx| {
-                    for n in 0..4 {
-                        ctx.key(("clip", n), |ctx| {
-                            block(
-                                ctx,
-                                match n {
-                                    0 => "clip-0",
-                                    1 => "clip-1",
-                                    2 => "clip-2",
-                                    _ => "clip-3",
-                                },
-                                64.0,
-                                24.0,
-                                Color::from_argb(255, 220, 120, 60),
-                                &format!("C{n}"),
-                            );
-                        });
-                    }
+                    ctx.keyed_range("clip", 4, |ctx, n| {
+                        block(
+                            ctx,
+                            match n {
+                                0 => "clip-0",
+                                1 => "clip-1",
+                                2 => "clip-2",
+                                _ => "clip-3",
+                            },
+                            64.0,
+                            24.0,
+                            Color::from_argb(255, 220, 120, 60),
+                            &format!("C{n}"),
+                        );
+                    });
                 });
 
             FlowRow::new()
@@ -123,23 +119,21 @@ fn flow_features(ctx: &mut ComposeCtx) {
                         .padding(8.0),
                 )
                 .build(ctx, |ctx| {
-                    for n in 0..4 {
-                        ctx.key(("visible", n), |ctx| {
-                            block(
-                                ctx,
-                                match n {
-                                    0 => "visible-0",
-                                    1 => "visible-1",
-                                    2 => "visible-2",
-                                    _ => "visible-3",
-                                },
-                                64.0,
-                                24.0,
-                                Color::from_argb(255, 160, 100, 200),
-                                &format!("V{n}"),
-                            );
-                        });
-                    }
+                    ctx.keyed_range("visible", 4, |ctx, n| {
+                        block(
+                            ctx,
+                            match n {
+                                0 => "visible-0",
+                                1 => "visible-1",
+                                2 => "visible-2",
+                                _ => "visible-3",
+                            },
+                            64.0,
+                            24.0,
+                            Color::from_argb(255, 160, 100, 200),
+                            &format!("V{n}"),
+                        );
+                    });
                 });
 
             Text::new("FlowRow — cross arrangement Center")
@@ -160,23 +154,21 @@ fn flow_features(ctx: &mut ComposeCtx) {
                         .padding(8.0),
                 )
                 .build(ctx, |ctx| {
-                    for n in 0..4 {
-                        ctx.key(("cross", n), |ctx| {
-                            block(
-                                ctx,
-                                match n {
-                                    0 => "cross-0",
-                                    1 => "cross-1",
-                                    2 => "cross-2",
-                                    _ => "cross-3",
-                                },
-                                80.0,
-                                20.0,
-                                Color::from_argb(255, 100, 200, 160),
-                                &format!("X{n}"),
-                            );
-                        });
-                    }
+                    ctx.keyed_range("cross", 4, |ctx, n| {
+                        block(
+                            ctx,
+                            match n {
+                                0 => "cross-0",
+                                1 => "cross-1",
+                                2 => "cross-2",
+                                _ => "cross-3",
+                            },
+                            80.0,
+                            20.0,
+                            Color::from_argb(255, 100, 200, 160),
+                            &format!("X{n}"),
+                        );
+                    });
                 });
 
             Text::new("FlowRow — weight + fillMaxRowHeight")
@@ -260,22 +252,20 @@ fn flow_features(ctx: &mut ComposeCtx) {
                                 .padding(8.0),
                         )
                         .build(ctx, |ctx| {
-                            for n in 0..3 {
-                                ctx.key(("intrinsic", n), |ctx| {
-                                    block(
-                                        ctx,
-                                        match n {
-                                            0 => "intrinsic-0",
-                                            1 => "intrinsic-1",
-                                            _ => "intrinsic-2",
-                                        },
-                                        56.0,
-                                        24.0,
-                                        Color::from_argb(255, 100, 200, 160),
-                                        &format!("I{n}"),
-                                    );
-                                });
-                            }
+                            ctx.keyed_range("intrinsic", 3, |ctx, n| {
+                                block(
+                                    ctx,
+                                    match n {
+                                        0 => "intrinsic-0",
+                                        1 => "intrinsic-1",
+                                        _ => "intrinsic-2",
+                                    },
+                                    56.0,
+                                    24.0,
+                                    Color::from_argb(255, 100, 200, 160),
+                                    &format!("I{n}"),
+                                );
+                            });
                         });
                 });
 

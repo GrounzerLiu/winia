@@ -3776,6 +3776,43 @@ fn a_keyed_sibling_that_moves_keeps_its_slots() {
     assert_eq!(created.get(), 2, "…and back");
 }
 
+/// `keyed_range` is the loop form of `ctx.key`: the same prefix/index pair keeps each child's slots
+/// across frames instead of assigning them by position.
+#[test]
+fn keyed_range_keeps_each_indexed_child_s_slots() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 400.0);
+    let created = std::cell::Cell::new(0u32);
+
+    let mut frame = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            ctx.keyed_range("range", 3, |ctx, index| {
+                let key = ctx.next_key();
+                match ctx.start_restartable_group(
+                    key,
+                    Modifier::new(),
+                    crate::layout::box_layout::BoxLayout::new(),
+                ) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        let _ = ctx.remember(|| {
+                            assert!(index < 3);
+                            created.set(created.get() + 1);
+                        });
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+        });
+        composer.layout(constraints);
+    };
+
+    frame(&mut composer);
+    assert_eq!(created.get(), 3, "one slot for each index");
+    frame(&mut composer);
+    assert_eq!(created.get(), 3, "the same prefix/index pairs keep their slots");
+}
+
 /// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is
 /// not equivalent to "every slot in the tree".
 ///
