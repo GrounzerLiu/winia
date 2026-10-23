@@ -45,7 +45,7 @@ FlowColumn::new()
 
 - **Wrapping** (Compose `getWrapInfo`): never wrap at the start of a line; wrap past
   `max_items`; wrap when the remaining main-axis space cannot fit the next item. An
-  unbounded main axis never wraps.
+  unbounded main axis never wraps. `max_items(0)` and `max_lines(0)` produce an empty flow.
 - **Child measurement**: every child is measured with the incoming main-axis maximum and a
   main-axis minimum of 0, exactly like Compose's `measureConstraints` (`FlowLayout.kt:1224-1231`).
   A text child therefore wraps at the flow's width instead of reporting its unwrapped width.
@@ -93,8 +93,6 @@ FlowColumn::new()
   line than Compose's intrinsic pass would.
 - No overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`). `max_lines`
   and the `Clip` / `Visible` modes are implemented; the indicator variants are not.
-- `max_items_in_row(0)` / `max_items_in_column(0)` is treated as one item per line (defensive
-  v1 rule); Compose returns an empty flow. `max_lines(0)` does return an empty flow.
 - Intrinsic queries are implemented: max main is the longest line sum, min main is a binary
   search for the narrowest axis that fits the cross budget and shows every item allowed by
   max_items/max_lines, and cross intrinsics use the same line/max-items/max-lines rules.

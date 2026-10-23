@@ -55,7 +55,7 @@ fn max_main_without_wrapping(
     max_items: usize,
     max_lines: usize,
 ) -> f32 {
-    if children.is_empty() || max_lines == 0 {
+    if children.is_empty() || max_lines == 0 || max_items == 0 {
         return 0.0;
     }
     let query = main_query(horizontal, false);
@@ -91,7 +91,7 @@ fn cross_size(
     max_items: usize,
     clip: bool,
 ) -> (f32, usize) {
-    if main_sizes.is_empty() || max_rows == 0 {
+    if main_sizes.is_empty() || max_rows == 0 || max_items == 0 {
         return (0.0, 0);
     }
     let cap = max_items.max(1);
@@ -162,7 +162,7 @@ fn min_main_intrinsic(
     max_items: usize,
     overflow: FlowOverflow,
 ) -> f32 {
-    if children.is_empty() || max_rows == 0 {
+    if children.is_empty() || max_rows == 0 || max_items == 0 {
         return 0.0;
     }
     let (main_sizes, cross_sizes) = child_sizes(ctx, children, horizontal, true, cross_available);

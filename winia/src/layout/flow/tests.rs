@@ -740,8 +740,7 @@ fn flow_row_max_items_applies_when_unbounded() {
 }
 
 #[test]
-fn flow_row_max_items_zero_means_one_per_line() {
-    // max_items = 0 is clamped to 1 (one item per line, a defensive rule).
+fn flow_row_max_items_zero_is_empty() {
     let policy = FlowRowLayout::new().max_items_in_row(0);
     let mut nodes = vec![make_leaf(10.0, 20.0), make_leaf(10.0, 20.0)];
     let children: Vec<usize> = (0..nodes.len()).collect();
@@ -751,8 +750,23 @@ fn flow_row_max_items_zero_means_one_per_line() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.height, 40.0, "two lines");
-    assert_eq!(placements[1].position, Offset::new(0.0, 20.0));
+    assert_eq!(size, Size::ZERO);
+    assert!(placements.iter().all(|p| p.size == Size::ZERO));
+}
+
+#[test]
+fn flow_column_max_items_zero_is_empty() {
+    let policy = FlowColumnLayout::new().max_items_in_column(0);
+    let mut nodes = vec![make_leaf(10.0, 20.0), make_leaf(10.0, 20.0)];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 100.0),
+    );
+    assert_eq!(size, Size::ZERO);
+    assert!(placements.iter().all(|p| p.size == Size::ZERO));
 }
 
 #[test]
@@ -1065,6 +1079,26 @@ fn flow_row_zero_max_lines_intrinsics_are_empty() {
     ];
     nodes[0].children = vec![1];
     let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_lines(0))];
+    for query in [
+        IntrinsicQuery::MinWidth,
+        IntrinsicQuery::MaxWidth,
+        IntrinsicQuery::MinHeight,
+        IntrinsicQuery::MaxHeight,
+    ] {
+        assert_eq!(intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0), 0.0);
+    }
+}
+
+/// max_items(0) is the empty flow for every intrinsic query too.
+#[test]
+fn flow_row_zero_max_items_intrinsics_are_empty() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
+    ];
+    nodes[0].children = vec![1];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_items_in_row(0))];
     for query in [
         IntrinsicQuery::MinWidth,
         IntrinsicQuery::MaxWidth,

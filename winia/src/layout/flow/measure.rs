@@ -36,7 +36,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         );
     }
 
-    if max_lines == 0 {
+    if max_lines == 0 || max_items_in_main_axis == 0 {
         return (
             Size::ZERO,
             vec![Placement { size: Size::ZERO, position: Offset::new(0.0, 0.0) }; n],
@@ -66,8 +66,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     let mut lines: Vec<(usize, usize)> = Vec::new();
     let mut line_start = 0usize;
     let mut line_main = 0.0f32; // main-axis space used by the current line, spacing included
-    // v1 keeps max_items == 0 as "one item per line"; Compose folds it into the empty-flow
-    // return. max_lines == 0 is the empty flow above. Documented in docs/flow-layout.md.
+    // max_items == 0 is the empty flow above; every remaining case has a positive cap.
     let max_items = max_items_in_main_axis.max(1);
     for i in 0..n {
         let item_main = A::main_size(child_sizes[i]);
