@@ -31,15 +31,16 @@ fn capture_item(
     let visual = paint.offset.peek();
     let captured_position = crate::unit::Offset::new(x + visual.x, y + visual.y);
     {
-        let store = paint.exit_store.lock().unwrap_or_else(|e| e.into_inner());
-        if store.pictures.get(&paint.key).is_some_and(|old| {
-            old.position == captured_position
-                && old.size == crate::unit::Size::new(content.width, content.height)
+        let mut store = paint.exit_store.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(old) = store.pictures.get_mut(&paint.key) {
+            if old.size == crate::unit::Size::new(content.width, content.height)
                 && old.content_epoch == paint.content_epoch
-                && visual == crate::unit::Offset::ZERO
-                && paint.alpha.peek() >= 0.999
-        }) {
-            return;
+            {
+                // The picture excludes the item paint (offset/alpha), so a moving or fading item can
+                // reuse it; only its visual position needs updating.
+                old.position = captured_position;
+                return;
+            }
         }
     }
     CAPTURING_ITEM.with(|c| c.set(true));
@@ -134,15 +135,9 @@ impl<'a> ItemCanvasGuard<'a> {
         let alpha = paint.alpha.peek().clamp(0.0, 1.0);
         let layer = alpha < 0.999;
         if layer {
-            // The canvas is already offset by the placement translation; the layer hint must cover
-            // where the item is actually painted, not only its final box, or a moving fade clips.
-            let visual_bounds = Rect::new(
-                bounds.left() + offset.x,
-                bounds.top() + offset.y,
-                bounds.right() + offset.x,
-                bounds.bottom() + offset.y,
-            );
-            canvas.save_layer_alpha_f(Some(visual_bounds), alpha);
+            // Bounds are in the current local space. The CTM already has `translate(offset)`; do
+            // not add the offset again or Skia's parameter-space bounds move the layer twice.
+            canvas.save_layer_alpha_f(Some(bounds), alpha);
         }
         Self { canvas, active: true, layer }
     }

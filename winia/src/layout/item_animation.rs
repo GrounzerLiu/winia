@@ -66,7 +66,6 @@ pub(crate) struct ExitedItem {
 pub(crate) struct ExitStore {
     pub(crate) pictures: HashMap<u64, CapturedItem>,
     pub(crate) exits: HashMap<u64, ExitedItem>,
-    pub(crate) next_exit_order: u64,
 }
 
 struct ItemState {
@@ -74,6 +73,9 @@ struct ItemState {
     alpha: crate::runtime::state::State<f32>,
     last_position: Offset,
     last_frame: u64,
+    /// The order this item had in its last placement pass; used to draw simultaneous exits in
+    /// layout order rather than HashMap order.
+    order: u64,
     offscreen: bool,
     fade_out: Option<crate::animation::AnimationSpec>,
 }
@@ -82,6 +84,7 @@ struct ItemState {
 struct HostState {
     frame: u64,
     items: HashMap<u64, ItemState>,
+    next_place_order: u64,
 }
 
 /// A cloneable host shared by a container and its measure policy.
@@ -191,6 +194,20 @@ mod tests {
             host.store.lock().unwrap_or_else(|e| e.into_inner()).pictures.is_empty(),
             "retire must remove the cached exit picture"
         );
+    }
+
+    #[test]
+    fn an_unsupported_public_channel_is_dropped_without_losing_the_item() {
+        let host = ItemAnimationHost::default();
+        let mut spec = ItemAnimationSpec::new();
+        spec.fade_out = Some(crate::animation::AnimationSpec::Decay(
+            crate::animation::DecaySpec::new(4.2, 0.1),
+        ));
+        let mut nodes = vec![leaf()];
+        host.begin_frame();
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        let paint = nodes[0].item_paint.as_ref().expect("the valid placement is kept");
+        assert!(paint.fade_out.is_none(), "the unsupported fade is dropped");
     }
 
     #[test]
@@ -319,23 +336,23 @@ impl ItemAnimationHost {
         position: Offset,
         spec: &ItemAnimationSpec,
     ) -> bool {
+        let sanitized = if spec.is_valid() { None } else { Some(spec.sanitized()) };
+        let spec = sanitized.as_ref().unwrap_or(spec);
         if spec.is_inert() {
-            self.retire(key);
-            return false;
-        }
-        if !spec.is_valid() {
-            debug_assert!(false, "item animation spec must not contain a non-terminating channel");
             self.retire(key);
             return false;
         }
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let frame = state.frame;
+        let order = state.next_place_order;
+        state.next_place_order += 1;
         let is_new = !state.items.contains_key(&key);
         let item = state.items.entry(key).or_insert_with(|| ItemState {
             offset: crate::runtime::state::State::new(Offset::ZERO),
             alpha: crate::runtime::state::State::new(1.0),
             last_position: position,
             last_frame: frame,
+            order,
             offscreen: false,
             fade_out: spec.fade_out.clone(),
         });
@@ -407,6 +424,7 @@ impl ItemAnimationHost {
 
         item.last_position = position;
         item.last_frame = frame;
+        item.order = order;
         item.fade_out = spec.fade_out.clone();
         nodes[child].item_paint = Some(ItemPaint {
             offset: item.offset.clone(),
@@ -488,8 +506,6 @@ impl ItemAnimationHost {
             crate::animation::cancel_animation(&item.offset);
             crate::animation::cancel_animation(&item.alpha);
             if let Some(captured) = store.pictures.remove(&key) {
-                let order = store.next_exit_order;
-                store.next_exit_order += 1;
                 let alpha = crate::runtime::state::State::new(start_alpha);
                 crate::animation::push_animatable(
                     alpha.clone(),
@@ -502,7 +518,7 @@ impl ItemAnimationHost {
                         picture: captured.picture,
                         position: captured.position,
                         alpha,
-                        order,
+                        order: item.order,
                     },
                 );
             }

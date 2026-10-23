@@ -123,12 +123,6 @@ impl MeasurePolicy for FlowRowLayout {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
             nodes[c].item_paint = None;
-            if placements[i].size == Size::ZERO {
-                // Cross-axis Clip dropped this line: its placement is (0,0)/zero. Do not let the
-                // item host record that as a real slot; otherwise a later resize animates the card
-                // from the parent's origin into view.
-                continue;
-            }
             let key = if nodes[c].slot_key != 0 {
                 nodes[c].slot_key
             } else {
@@ -136,6 +130,13 @@ impl MeasurePolicy for FlowRowLayout {
             };
             if !seen.insert(key) {
                 debug_assert!(false, "Flow item key {key} is used by more than one child");
+                continue;
+            }
+            if placements[i].size == Size::ZERO {
+                // Cross-axis Clip dropped this line, but the child is still live. Retire its
+                // channels without an exit: finish_frame must not turn a visible-again card into a
+                // ghost. (The zero placement also must not become a (0,0) animation origin.)
+                self.item_animations.retire(key);
                 continue;
             }
             let Some(spec) = nodes[c].modifier.animate_item_spec() else {

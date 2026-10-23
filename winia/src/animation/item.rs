@@ -11,13 +11,13 @@ use crate::animation::{AnimationSpec, SpringSpec};
 #[derive(Clone, Debug)]
 pub struct ItemAnimationSpec {
     /// How the paint offset travels from the old slot to the new one. `None` disables movement
-    /// (useful for an item that only fades). Must terminate: `Repeatable` and `Decay` are rejected.
+    /// (useful for an item that only fades). `Decay` is unsupported; finite `Repeatable` is allowed.
     pub placement: Option<AnimationSpec>,
-    /// Fade-in applied when the key first appears after the host's first layout. Must terminate.
+    /// Fade-in applied when the key first appears after the host's first layout. `Decay` is unsupported.
     pub fade_in: Option<AnimationSpec>,
     /// Fade-out curve for a removed key. The host captures the item's last rendered frame and the
-    /// exit layer consumes this curve after the item leaves the layout tree. Must terminate: an
-    /// endless curve would keep the exit picture alive forever.
+    /// exit layer consumes this curve after the item leaves the layout tree. `Decay` is unsupported;
+    /// the channel needs a defined end edge so the exit picture can be dropped.
     pub fade_out: Option<AnimationSpec>,
 }
 
@@ -33,20 +33,30 @@ impl Default for ItemAnimationSpec {
 
 fn usable_channel(spec: &AnimationSpec) -> bool {
     match spec {
-        // An item alpha/offset must settle; a looping or friction-only curve never reports the
-        // "animation finished" edge the host uses to drop an exit picture.
-        AnimationSpec::Repeatable(_) | AnimationSpec::Decay(_) => false,
+        // Decay has no target value, so it cannot drive an item channel to a defined end. A finite
+        // Repeatable is allowed: its iteration count gives it a real end edge.
+        AnimationSpec::Decay(_) => false,
         AnimationSpec::Spring(spring) => spring.threshold > 0.0,
         _ => true,
     }
 }
 
 impl ItemAnimationSpec {
-    /// True when every configured channel is terminating and can be driven by the item host.
+    /// True when every configured channel can be driven by the item host.
     pub(crate) fn is_valid(&self) -> bool {
         self.placement.as_ref().is_none_or(usable_channel)
             && self.fade_in.as_ref().is_none_or(usable_channel)
             && self.fade_out.as_ref().is_none_or(usable_channel)
+    }
+
+    /// Drop unsupported channels while keeping the valid ones. Public fields let a caller bypass the
+    /// builder assertions; the layout should not lose a valid placement because one fade is unsupported.
+    pub(crate) fn sanitized(&self) -> Self {
+        Self {
+            placement: self.placement.clone().filter(usable_channel),
+            fade_in: self.fade_in.clone().filter(usable_channel),
+            fade_out: self.fade_out.clone().filter(usable_channel),
+        }
     }
 
     /// The default placement spring with no fades.
@@ -95,9 +105,15 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "item fade_out must settle")]
-    fn a_repeating_item_fade_is_rejected() {
-        let _ = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(
+    fn a_decaying_item_fade_is_rejected() {
+        let _ = ItemAnimationSpec::new().fade_out(crate::animation::DecaySpec::new(4.2, 0.1));
+    }
+
+    #[test]
+    fn a_finite_repeatable_item_fade_is_allowed() {
+        let spec = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Restart, TweenSpec::default()),
         ));
+        assert!(spec.is_valid());
     }
 }

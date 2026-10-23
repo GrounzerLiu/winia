@@ -1064,6 +1064,61 @@ fn flow_row_clipped_items_do_not_become_animation_origins() {
     );
 }
 
+/// A live child dropped by the cross-axis Clip must not be promoted to an exit ghost using the
+/// picture it had while it was still visible.
+#[test]
+fn flow_row_clipped_live_item_does_not_ghost() {
+    use crate::layout::item_animation::{CapturedItem, ItemAnimationHost};
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let spec = crate::animation::item::ItemAnimationSpec::new()
+        .fade_out(crate::animation::TweenSpec::default());
+    let host = ItemAnimationHost::default();
+    let mut nodes: Vec<LayoutNode> = (0..4)
+        .map(|_| LayoutNode::leaf(Modifier::new().size(30.0, 30.0).animate_item_with(spec.clone())))
+        .collect();
+    let children: Vec<usize> = (0..4).collect();
+
+    let visible = FlowRowLayout::new().max_lines(2).item_animations(host.clone());
+    let (_, placements) = visible.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 100.0),
+    );
+    visible.place(&mut nodes, &children, &placements);
+    let key = if nodes[3].slot_key != 0 { nodes[3].slot_key } else { nodes[3].id };
+    let picture = {
+        let mut recorder = skia_safe::PictureRecorder::new();
+        {
+            let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
+        }
+        recorder.finish_recording_as_picture(None).expect("a picture")
+    };
+    host.store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pictures
+        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+
+    let clipped = FlowRowLayout::new().max_lines(1).item_animations(host.clone());
+    let (_, placements) = clipped.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    clipped.place(&mut nodes, &children, &placements);
+    let store = host.store().lock().unwrap_or_else(|e| e.into_inner());
+    assert!(nodes[3].item_paint.is_none(), "the clipped item has no paint");
+    assert!(store.exits.is_empty(), "a live clipped item must not ghost out");
+    assert!(store.pictures.is_empty(), "its old picture must not survive");
+    crate::animation::clear_all_animations();
+}
+
 /// The Flow builder must hand its placement table to the policy: a keyed child that moves between
 /// two layouts gets a non-zero paint offset, not only a new final position.
 #[test]

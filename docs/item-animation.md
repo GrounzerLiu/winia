@@ -49,11 +49,12 @@ new item and the old one exits.
   dropped as soon as the item leaves the composed window.
 - Removing `animate_item` or passing an inert spec retires the item's channels without drawing a
   ghost: the child is still live, only its animation was removed.
-- Item timing channels must terminate. `Repeatable` and `Decay` are rejected for placement and
-  fades; a Spring must have a positive rest threshold. This is what lets an exit picture be
-  cleaned up when its fade completes.
-- A measure epoch invalidates the cached exit picture when the item's content changes, so a ghost
-  does not show stale text or a stale child.
+- Item timing channels must have a defined end edge. `Decay` is unsupported for placement and
+  fades because it has no target value; a finite `Repeatable` is allowed, and a Spring must have a
+  positive rest threshold. This is what lets an exit picture be cleaned up when its fade completes.
+- A measure epoch invalidates the cached exit picture when the item is re-measured, so a ghost does
+  not show stale text or a stale child. Paint-only changes that do not re-measure the item are not
+  tracked by this epoch.
 
 ## Demo
 
