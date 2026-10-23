@@ -227,7 +227,10 @@ keep compiling; code that names the old types needs the carrier form, and `Tint`
 
 `#[composable]` injects a statement key into every statement that calls `ctx`, so a component normally
 needs no key of its own. **MUST** use `ctx.key(id, |ctx| ...)` only when state has to survive a
-branch that changes how many slots are consumed before it:
+branch that changes how many slots are consumed before it. For generated children, prefer the
+loop forms: `ctx.keyed_range(prefix, count, |ctx, index| ...)` for an index range and
+`ctx.keyed_for_each(items, |item| key(item), |ctx, item| ...)` for an arbitrary iterator. Their
+keys identify the item, not its current position, so a reorder preserves the child's slots.
 
 ```rust
 if expanded {

@@ -460,10 +460,28 @@ impl<'a> ComposeCtx<'a> {
         &mut self,
         prefix: impl std::hash::Hash + Clone,
         count: usize,
-        mut content: impl FnMut(&mut Self, usize),
+        content: impl FnMut(&mut Self, usize),
     ) {
-        for index in 0..count {
-            self.key((prefix.clone(), index), |ctx| content(ctx, index));
+        self.keyed_for_each(0..count, move |index| (prefix.clone(), *index), content);
+    }
+
+    /// Compose an iterator under keys supplied by `key`.
+    ///
+    /// This is the general form of [`Self::keyed_range`] for lists that are not an index range.
+    /// `key` is evaluated once per item and should identify the ITEM, not its current position;
+    /// that is what makes reordering preserve the child's remembered slots. The iterator is
+    /// consumed in order, so a `Vec` can be reversed between frames without changing the keys.
+    pub fn keyed_for_each<T, K>(
+        &mut self,
+        items: impl IntoIterator<Item = T>,
+        mut key: impl FnMut(&T) -> K,
+        mut content: impl FnMut(&mut Self, T),
+    ) where
+        K: std::hash::Hash,
+    {
+        for item in items {
+            let item_key = key(&item);
+            self.key(item_key, |ctx| content(ctx, item));
         }
     }
 

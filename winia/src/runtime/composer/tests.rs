@@ -3813,6 +3813,54 @@ fn keyed_range_keeps_each_indexed_child_s_slots() {
     assert_eq!(created.get(), 3, "the same prefix/index pairs keep their slots");
 }
 
+/// The generic iterator form keys by item identity; reversing the iterator must not recreate
+/// the children.
+#[test]
+fn keyed_for_each_keeps_item_identity_when_the_order_changes() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 400.0);
+    let reversed = State::new(false);
+    let flag = reversed.clone();
+    let created = std::cell::Cell::new(0u32);
+
+    let mut frame = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let mut items = vec![("a", 1), ("b", 2)];
+            if flag.get() {
+                items.reverse();
+            }
+            ctx.keyed_for_each(
+                items,
+                |item| item.0,
+                |ctx, item| {
+                    let key = ctx.next_key();
+                    match ctx.start_restartable_group(
+                        key,
+                        Modifier::new(),
+                        crate::layout::box_layout::BoxLayout::new(),
+                    ) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let _ = ctx.remember(|| {
+                                assert!(item.1 > 0);
+                                created.set(created.get() + 1);
+                            });
+                        }
+                    }
+                    ctx.end_restartable_group();
+                },
+            );
+        });
+        composer.layout(constraints);
+    };
+
+    frame(&mut composer);
+    assert_eq!(created.get(), 2, "one slot for each item");
+    reversed.set(true);
+    frame(&mut composer);
+    assert_eq!(created.get(), 2, "the reversed items keep their keys");
+}
+
 /// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is
 /// not equivalent to "every slot in the tree".
 ///
