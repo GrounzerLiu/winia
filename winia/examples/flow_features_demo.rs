@@ -54,42 +54,44 @@ fn flow_features(ctx: &mut ComposeCtx) {
                     }
                 })
                 .build(ctx, |ctx| Text::new("toggle columns").build(ctx));
-            AnimatedSize::default().build(ctx, |ctx| {
-                FlowRow::new()
-                    .main_spacing(8.0)
-                    .cross_spacing(8.0)
-                    .max_items_in_row(columns.get())
-                    .animate_placement(true)
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_width()
-                            .test_tag("flow-animated")
-                            .background(
-                                Color::from_argb(20, 50, 100, 200),
-                                Shape::rounded(8.0),
-                            )
-                            .padding(8.0),
-                    )
-                    .build(ctx, |ctx| {
-                        ctx.keyed_range("animated", 6, |ctx, n| {
-                            block(
-                                ctx,
-                                match n {
-                                    0 => "animated-0",
-                                    1 => "animated-1",
-                                    2 => "animated-2",
-                                    3 => "animated-3",
-                                    4 => "animated-4",
-                                    _ => "animated-5",
-                                },
-                                70.0,
-                                44.0,
-                                Color::from_argb(255, 220, 160, 100),
-                                &format!("A{n}"),
-                            );
+            AnimatedSize::default()
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .test_tag("animated-box")
+                        .background(
+                            Color::from_argb(20, 50, 100, 200),
+                            Shape::rounded(8.0),
+                        )
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    FlowRow::new()
+                        .main_spacing(8.0)
+                        .cross_spacing(8.0)
+                        .max_items_in_row(columns.get())
+                        .animate_placement(true)
+                        .modifier(Modifier::new().fill_max_width().test_tag("flow-animated"))
+                        .build(ctx, |ctx| {
+                            ctx.keyed_range("animated", 6, |ctx, n| {
+                                block(
+                                    ctx,
+                                    match n {
+                                        0 => "animated-0",
+                                        1 => "animated-1",
+                                        2 => "animated-2",
+                                        3 => "animated-3",
+                                        4 => "animated-4",
+                                        _ => "animated-5",
+                                    },
+                                    70.0,
+                                    44.0,
+                                    Color::from_argb(255, 220, 160, 100),
+                                    &format!("A{n}"),
+                                );
+                            });
                         });
-                    });
-            });
+                });
 
             Text::new("FlowRow — wraps and caps items")
                 .font_size(16.0)

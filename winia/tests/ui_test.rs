@@ -94,4 +94,27 @@ fn flow_features_demo_animates_a_reflow() {
         placement,
         "the reflow should leave a two-component placement spring: {running:?}"
     );
+
+    app.expect_eventually_timeout("the box settles on the two-column height", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("animated-box")
+            .is_some_and(|r| (r.3 - 164.0).abs() < 1.0)
+    });
+    let grown = app.expect_tag("animated-box");
+    assert!((grown.3 - 164.0).abs() < 1.0, "the two-column box grows: {grown:?}");
+
+    // Shrinking must animate too: the box is still taller than the three-column size right after
+    // the toggle, then settles on it. A snap would report 112 immediately.
+    app.click_tag("toggle-columns");
+    app.expect_text("3 columns");
+    let shrinking = app.expect_tag("animated-box");
+    assert!(
+        shrinking.3 > 112.5,
+        "the box must spring down instead of snapping: {shrinking:?}"
+    );
+    app.expect_eventually_timeout("the box settles on the three-column height", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("animated-box")
+            .is_some_and(|r| (r.3 - 112.0).abs() < 1.0)
+    });
 }
