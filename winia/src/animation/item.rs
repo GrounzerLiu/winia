@@ -5,7 +5,7 @@
 //! `ItemAnimationHost` owns the per-key states. Keeping the spec on the item means a lazy list and a
 //! Flow share one marker and one runtime instead of growing a second switch on each container.
 
-use crate::animation::{AnimationSpec, SpringSpec};
+use crate::animation::{AnimationSpec, RepeatMode, SpringSpec};
 
 /// Placement and fade curves for one item.
 #[derive(Clone, Debug)]
@@ -34,8 +34,12 @@ impl Default for ItemAnimationSpec {
 fn usable_channel(spec: &AnimationSpec) -> bool {
     match spec {
         // Decay has no target value, so it cannot drive an item channel to a defined end. A finite
-        // Repeatable is allowed: its iteration count gives it a real end edge.
+        // Repeatable is allowed only when its final iteration ends at the target: Restart always
+        // does, Reverse does only for an odd iteration count.
         AnimationSpec::Decay(_) => false,
+        AnimationSpec::Repeatable(repeat) => {
+            repeat.mode == RepeatMode::Restart || repeat.iterations % 2 == 1
+        }
         AnimationSpec::Spring(spring) => spring.threshold > 0.0,
         _ => true,
     }
@@ -115,5 +119,13 @@ mod tests {
             RepeatableSpec::new(2, RepeatMode::Restart, TweenSpec::default()),
         ));
         assert!(spec.is_valid());
+    }
+
+    #[test]
+    #[should_panic(expected = "item fade_out must settle")]
+    fn an_even_reverse_repeatable_does_not_reach_the_target() {
+        let _ = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(
+            RepeatableSpec::new(2, RepeatMode::Reverse, TweenSpec::default()),
+        ));
     }
 }
