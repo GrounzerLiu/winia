@@ -13,6 +13,7 @@ Three layers, Compose-shaped, but push-based: there are no coroutines and no sus
 | Layer | What it is | Where |
 | --- | --- | --- |
 | High | `animate_float_as_state`, `animate_value_as_state`, `animate_int/dp/offset/size/color_as_state`, and the `_with_done` variants (`finishedListener`) | `ComposeCtx` (`runtime/composer.rs`) |
+| High | `animate_content_size(spec)` — Compose `Modifier.animateContentSize` as a composition-owned modifier helper; the box springs toward the content size | `ComposeCtx`; see `docs/animate-content-size.md` |
 | Middle | `update_transition`, `remember_infinite_transition`, `remember_animatable` | `animation.rs` |
 | Engine | `Motion<T>` + the global registry; the public handle is `Animatable<T>` | `animation.rs` |
 

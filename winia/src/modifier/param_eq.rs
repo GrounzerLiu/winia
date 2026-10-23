@@ -194,6 +194,14 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (NestedScroll { .. }, NestedScroll { .. }) => true,
         (AnimateItem, AnimateItem) => true,
         (
+            AnimateContentSize { value: av, target: at, spec: as_ },
+            AnimateContentSize { value: bv, target: bt, spec: bs },
+        ) => {
+            av.state_id() == bv.state_id()
+                && at.state_id() == bt.state_id()
+                && format!("{as_:?}") == format!("{bs:?}")
+        }
+        (
             InnerShadow { shape: as_, color: ac, blur: ab, offset_x: ax, offset_y: ay },
             InnerShadow { shape: bs, color: bc, blur: bb, offset_x: bx, offset_y: by },
         ) => as_.same_parameter(bs) && ac == bc && ab == bb && ax == bx && ay == by,

@@ -614,6 +614,30 @@ impl<'a> ComposeCtx<'a> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
+    /// Compose's `Modifier.animateContentSize`, as a composition-owned modifier helper.
+    ///
+    /// Apply it to the node whose measured size should spring toward the size its content
+    /// measured. The animation State cannot live in a pure `Modifier`, so this method creates the
+    /// two handles during composition and returns the modifier to attach.
+    pub fn animate_content_size(
+        &mut self,
+        spec: impl Into<crate::animation::AnimationSpec>,
+    ) -> crate::modifier::Modifier {
+        // `next_remember_key` is the stable statement key; using it explicitly lets two calls in
+        // one group keep separate state while remaining stable across recomposition. The target
+        // uses a mixed sibling key so it can never collide with another call's value slot.
+        let key = self.next_remember_key();
+        let value: crate::runtime::state::State<crate::unit::Size> =
+            self.remember_at_key(key, || crate::unit::Size::ZERO);
+        let target: crate::runtime::state::Backchannel<Option<crate::unit::Size>> =
+            self.remember_backchannel_at_key(crate::runtime::composer::mix_key(key, 1), || {
+                crate::runtime::state::Backchannel::new(None)
+            });
+        crate::modifier::Modifier::new()
+            .animate_content_size(value, target, spec.into())
+            .clip(crate::graphics::Shape::Rectangle)
+    }
+
     /// `animateFloatAsState(targetValue, animationSpec, label, finishedListener)` — the completion
     /// callback Compose's overload carries, fired once when a motion this call registered finishes.
     ///

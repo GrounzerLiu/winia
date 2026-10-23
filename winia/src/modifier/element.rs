@@ -606,6 +606,14 @@ pub(crate) enum ModifierElement {
     /// Compose's `LazyItemScope.animateItem()`: a marker the lazy list reads. The list springs the
     /// item from its previous slot to the new one when the data reorders. Inert outside a lazy list.
     AnimateItem,
+    /// `ctx.animate_content_size(...)`: the node's measured size springs toward the size its
+    /// content measured. The handles live in the composition, because a pure Modifier cannot own
+    /// the animation State.
+    AnimateContentSize {
+        value: crate::runtime::state::State<crate::unit::Size>,
+        target: crate::runtime::state::Backchannel<Option<crate::unit::Size>>,
+        spec: crate::animation::AnimationSpec,
+    },
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// Compose's inner shadow: a rim drawn inside the shape, above the content.
