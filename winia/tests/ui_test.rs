@@ -126,26 +126,38 @@ fn item_animation_demo_fades_added_and_removed_items() {
     let mut app = UiTest::launch("item_animation");
     app.expect_text("Item animation");
 
-    app.click_tag("add-item");
+    let zero_before = app.expect_tag("item-0");
+    app.click_tag("add-head");
+    app.refresh();
     let added = app.animations();
     assert!(
         added.iter().any(|line| line.contains("tween(300ms)")),
-        "the new item should fade in with its own curve: {added:?}"
+        "the head item should fade in with its own curve: {added:?}"
+    );
+    let inserted = app.expect_tag("item-4");
+    let zero_after = app.expect_tag("item-0");
+    assert!(
+        inserted.0 <= zero_before.0 && zero_after.0 > zero_before.0,
+        "the new card must take the first slot and push the old first right: inserted {inserted:?}, old first {zero_before:?}, moved first {zero_after:?}"
     );
 
     let last = app.expect_tag("item-3");
     let ghost_point = (last.0 + last.2 / 2.0, last.1 + last.3 / 2.0);
-    app.click_tag("remove-item");
+    app.click_tag("item-3");
     let removed = app.animations();
     let pixel = app
         .pixel_at_logical(ghost_point.0, ghost_point.1)
         .expect("the frame should be readable after removing an item");
     assert!(
         pixel.2.saturating_sub(pixel.0) > 8,
-        "the removed item should still be painted as a fading ghost: {pixel:?}"
+        "the tapped card should still be painted as a fading ghost: {pixel:?}"
     );
     assert!(
-        removed.iter().any(|line| line.contains("tween(500ms)")),
-        "the removed item should keep fading out: {removed:?}"
+        removed.iter().any(|line| line.contains("tween(2000ms)")),
+        "the tapped card should keep fading out: {removed:?}"
     );
+    app.expect_eventually_timeout("the tapped card is removed", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("item-3").is_none()
+    });
 }
