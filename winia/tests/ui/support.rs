@@ -349,7 +349,17 @@ impl UiTest {
     /// request_surface_size → SurfaceResized 事件通路）
     pub fn resize(&mut self, w: f32, h: f32) {
         self.send(&format!("w {} {}", w as i32, h as i32));
-        std::thread::sleep(Duration::from_millis(250));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            self.refresh();
+            if (self.width - w).abs() < 1.0 && (self.height - h).abs() < 1.0 {
+                return;
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Compose+layout rounds of each frame the app rendered since the last [`Self::clear_frame_passes`],
@@ -425,6 +435,9 @@ impl UiTest {
                 .unwrap_or(false);
             if has_window {
                 self.tree = t.clone();
+                let (w, h) = tree_size(&t);
+                self.width = w;
+                self.height = h;
                 return Some(t);
             }
         }
@@ -947,6 +960,409 @@ impl UiTest {
         let n = count_nodes(&self.tree);
         assert_eq!(n, count, "节点数不符");
     }
+
+    /// Select the window that subsequent injected input targets ('target <id>'). The default is 0,
+    /// the main window. This changes input routing only; tree queries still return every window.
+    pub fn select_window(&mut self, window_id: u64) {
+        self.send(&format!("target {window_id}"));
+    }
+
+    /// Type a text value through the debug Text event (not one 'k' per character).
+    pub fn type_text(&mut self, text: &str) {
+        self.send(&format!("text {text}"));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// Move focus to the next focusable node through the real Tab traversal rule.
+    pub fn focus_next(&mut self) {
+        self.send("focus_next");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// Focus a node by its tree id.
+    pub fn request_focus(&mut self, node_id: u64) {
+        self.send(&format!("request_focus {node_id}"));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// The tree id of the first node carrying 'tag', if it is currently in the tree.
+    pub fn tag_node_id(&mut self, tag: &str) -> Option<u64> {
+        self.refresh();
+        find_node_tag_id(&self.tree, tag)
+    }
+
+    /// Hover (pointer move with no button) at scene coordinates.
+    pub fn move_to(&mut self, x: f32, y: f32) {
+        self.send(&format!("m {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    pub fn hover(&mut self, x: f32, y: f32) {
+        self.move_to(x, y);
+    }
+
+    pub fn press(&mut self, x: f32, y: f32) {
+        self.send(&format!("d {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(40));
+    }
+
+    pub fn release(&mut self, x: f32, y: f32) {
+        self.send(&format!("u {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(80));
+    }
+
+    /// Press, hold without moving, then release.
+    pub fn long_press(&mut self, x: f32, y: f32, hold: Duration) {
+        self.press(x, y);
+        std::thread::sleep(hold);
+        self.release(x, y);
+    }
+
+    /// Two taps inside the framework's 300 ms double-tap window.
+    pub fn double_tap(&mut self, x: f32, y: f32) {
+        self.tap(x, y);
+        std::thread::sleep(Duration::from_millis(60));
+        self.tap(x, y);
+    }
+
+    /// The stdin 'swipe' command: down, evenly spaced moves, up. The stdin form queues all moves
+    /// synchronously; use drag/fling_inside when the gesture needs timing.
+    pub fn swipe(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, steps: usize) {
+        self.send(&format!(
+            "swipe {} {} {} {} {}",
+            x1 as i32, y1 as i32, x2 as i32, y2 as i32, steps
+        ));
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    pub fn tap_tag(&mut self, tag: &str) {
+        let (x, y, w, h) = self.expect_tag(tag);
+        self.tap(x + w / 2.0, y + h / 2.0);
+    }
+
+    pub fn drag_tag(&mut self, tag: &str, dx: f32, dy: f32) {
+        let (x, y, w, h) = self.expect_tag(tag);
+        let cx = x + w / 2.0;
+        let cy = y + h / 2.0;
+        self.drag(cx, cy, cx + dx, cy + dy);
+    }
+
+    /// Wait until 'tag' exists in the main tree, returning its current rect.
+    pub fn wait_for_tag(&mut self, tag: &str, timeout: Duration) -> Option<(f32, f32, f32, f32)> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            self.refresh();
+            if let Some(rect) = self.find_tag(tag) {
+                return Some(rect);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Assert that a tag exists now; returns its rect.
+    pub fn expect_tag(&mut self, tag: &str) -> (f32, f32, f32, f32) {
+        self.wait_for_tag(tag, Duration::from_secs(5))
+            .unwrap_or_else(|| panic!("tag {tag} never appeared; texts: {:?}", self.all_texts()))
+    }
+
+    pub fn expect_no_tag(&mut self, tag: &str) {
+        self.refresh();
+        assert!(
+            self.find_tag(tag).is_none(),
+            "tag {tag} should be absent, rect: {:?}",
+            self.find_tag(tag)
+        );
+    }
+
+    /// Assert a tag's rect with a per-component tolerance.
+    pub fn expect_tag_rect(
+        &mut self,
+        tag: &str,
+        expected: (f32, f32, f32, f32),
+        tolerance: f32,
+    ) {
+        let actual = self.expect_tag(tag);
+        let fields = [("x", actual.0, expected.0), ("y", actual.1, expected.1), ("w", actual.2, expected.2), ("h", actual.3, expected.3)];
+        for (name, got, want) in fields {
+            assert!(
+                (got - want).abs() <= tolerance,
+                "tag {tag} {name}: expected {want} +/-{tolerance}, got {got} (rect {actual:?})"
+            );
+        }
+    }
+
+    pub fn expect_tag_size(&mut self, tag: &str, expected: (f32, f32), tolerance: f32) {
+        let actual = self.expect_tag(tag);
+        assert!(
+            (actual.2 - expected.0).abs() <= tolerance && (actual.3 - expected.1).abs() <= tolerance,
+            "tag {tag} size: expected {expected:?} +/-{tolerance}, got ({}, {})",
+            actual.2, actual.3
+        );
+    }
+
+    pub fn expect_tag_position(&mut self, tag: &str, expected: (f32, f32), tolerance: f32) {
+        let actual = self.expect_tag(tag);
+        assert!(
+            (actual.0 - expected.0).abs() <= tolerance && (actual.1 - expected.1).abs() <= tolerance,
+            "tag {tag} position: expected {expected:?} +/-{tolerance}, got ({}, {})",
+            actual.0, actual.1
+        );
+    }
+
+    /// Exact text match on the text(...) modifier, rather than expect_text's substring test.
+    pub fn expect_text_exact(&mut self, text: &str) {
+        self.refresh();
+        let needle = format!("text({text})");
+        let all = self.all_texts();
+        assert!(
+            all.iter().any(|m| m.split('|').any(|part| part.trim() == needle)),
+            "exact text {text} not found; current modifiers: {}",
+            all.join(" | ")
+        );
+    }
+
+    pub fn expect_text_count(&mut self, text: &str, count: usize) {
+        self.refresh();
+        let needle = format!("text({text})");
+        let actual = self
+            .all_texts()
+            .iter()
+            .flat_map(|m| m.split('|'))
+            .filter(|part| part.trim() == needle)
+            .count();
+        assert_eq!(actual, count, "text {text} count");
+    }
+
+    pub fn expect_no_overlay_text(&mut self, text: &str) {
+        self.refresh();
+        let all = self.overlay_texts();
+        assert!(
+            !all.iter().any(|t| t.contains(text)),
+            "popup entries should not show {text}; got: {}",
+            all.join(" | ")
+        );
+    }
+
+    pub fn expect_focused(&mut self, tag: &str) {
+        let focused = self.focused_tags();
+        assert!(focused.iter().any(|t| t == tag), "expected {tag} focused, focused: {focused:?}");
+    }
+
+    pub fn expect_only_focused(&mut self, tag: &str) {
+        let focused = self.focused_tags();
+        assert_eq!(focused, vec![tag.to_string()], "expected only {tag} focused, focused: {focused:?}");
+    }
+
+    pub fn expect_window_count(&mut self, count: usize) {
+        self.refresh();
+        assert_eq!(self.window_count(), count);
+    }
+
+    pub fn expect_overlay_count(&mut self, count: usize) {
+        self.refresh();
+        assert_eq!(self.overlay_count(), count);
+    }
+
+    /// Typed view of the semantics snapshot (main tree plus every overlay entry).
+    pub fn semantics_entries(&mut self) -> Vec<SemanticsEntry> {
+        let Some(snapshot) = self.semantics() else { return Vec::new() };
+        let mut out = Vec::new();
+        if let Some(main) = snapshot.get("main") {
+            collect_semantics(main, &mut out);
+        }
+        if let Some(overlays) = snapshot.get("overlays").and_then(|v| v.as_array()) {
+            for overlay in overlays {
+                if let Some(tree) = overlay.get("tree") {
+                    collect_semantics(tree, &mut out);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn find_semantics(&mut self, name: &str) -> Option<SemanticsEntry> {
+        self.semantics_entries().into_iter().find(|n| n.name.as_deref() == Some(name))
+    }
+
+    pub fn expect_semantics_name(&mut self, name: &str) {
+        let entries = self.semantics_entries();
+        assert!(
+            entries.iter().any(|n| n.name.as_deref() == Some(name)),
+            "semantics name {name} not found; names: {:?}",
+            entries.iter().filter_map(|n| n.name.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    pub fn expect_semantics_role(&mut self, name: &str, role: &str) {
+        let entries = self.semantics_entries();
+        assert!(
+            entries.iter().any(|n| n.name.as_deref() == Some(name) && n.role.as_deref() == Some(role)),
+            "semantics {name} does not have role {role}; entries: {:?}",
+            entries.iter().map(|n| (&n.name, &n.role)).collect::<Vec<_>>()
+        );
+    }
+
+    pub fn expect_no_animations(&mut self) {
+        let animations = self.animations();
+        assert!(animations.is_empty(), "expected no animations, got: {animations:?}");
+    }
+
+    pub fn wait_animations_idle(&mut self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.animations().is_empty() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Assert one logical pixel's colour with a per-channel tolerance.
+    pub fn expect_pixel_at_logical(
+        &mut self,
+        x: f32,
+        y: f32,
+        expected: (u8, u8, u8),
+        tolerance: u8,
+    ) {
+        let actual = self
+            .pixel_at_logical(x, y)
+            .unwrap_or_else(|| panic!("no pixel at logical ({x}, {y})"));
+        let close = |a: u8, b: u8| a.abs_diff(b) <= tolerance;
+        assert!(
+            close(actual.0, expected.0) && close(actual.1, expected.1) && close(actual.2, expected.2),
+            "pixel at ({x}, {y}): expected {expected:?} +/-{tolerance}, got {actual:?}"
+        );
+    }
+
+    /// Capture the current frame to a PNG and return its physical size.
+    pub fn save_png(&mut self, path: &str) -> Option<(u32, u32)> {
+        self.send("r");
+        std::thread::sleep(Duration::from_millis(150));
+        self.send(&format!("save {path}"));
+        let line = self.read_prefixed_line("SAVED:", Duration::from_secs(3))?;
+        let body = line.strip_prefix("SAVED:")?.trim();
+        if body.starts_with("error") {
+            return None;
+        }
+        let size = body.split_whitespace().last()?;
+        let (w, h) = size.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }
+
+    /// The last n animation-trace records as parsed JSON objects (trj).
+    pub fn trace(&mut self, n: usize) -> Vec<Value> {
+        self.send(&format!("trj {n}"));
+        let Some(line) = self.read_prefixed_line("TRACE_JSON:", Duration::from_secs(2)) else {
+            return Vec::new();
+        };
+        line.strip_prefix("TRACE_JSON:")
+            .and_then(|body| serde_json::from_str::<Value>(body).ok())
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+    }
+
+    /// Poll a caller condition until it holds or the timeout expires.
+    pub fn wait_until<F>(&mut self, timeout: Duration, mut condition: F) -> bool
+    where
+        F: FnMut(&mut Self) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if condition(self) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// wait_until with a panic carrying the description on timeout.
+    pub fn expect_eventually<F>(&mut self, description: &str, timeout: Duration, condition: F)
+    where
+        F: FnMut(&mut Self) -> bool,
+    {
+        assert!(self.wait_until(timeout, condition), "timed out waiting for {description}");
+    }
+
+}
+
+/// One semantics node, flattened from the debug semantics JSON.
+#[derive(Debug, Clone)]
+pub struct SemanticsEntry {
+    pub id: u64,
+    pub role: Option<String>,
+    pub name: Option<String>,
+    pub state: Value,
+    pub bounds: (f32, f32, f32, f32),
+    pub focused: bool,
+    pub clickable: bool,
+    pub actions: Vec<String>,
+}
+
+fn collect_semantics(value: &Value, out: &mut Vec<SemanticsEntry>) {
+    if let Some(arr) = value.as_array() {
+        for child in arr {
+            collect_semantics(child, out);
+        }
+        return;
+    }
+    let bounds = value.get("bounds").and_then(|v| v.as_array());
+    let (x, y, w, h) = match bounds {
+        Some(v) if v.len() >= 4 => (
+            v[0].as_f64().unwrap_or(0.0) as f32,
+            v[1].as_f64().unwrap_or(0.0) as f32,
+            v[2].as_f64().unwrap_or(0.0) as f32,
+            v[3].as_f64().unwrap_or(0.0) as f32,
+        ),
+        _ => (0.0, 0.0, 0.0, 0.0),
+    };
+    out.push(SemanticsEntry {
+        id: value.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+        role: value.get("role").and_then(|v| v.as_str()).map(str::to_string),
+        name: value.get("name").and_then(|v| v.as_str()).map(str::to_string),
+        state: value.get("state").cloned().unwrap_or(Value::Null),
+        bounds: (x, y, w, h),
+        focused: value.get("focused").and_then(|v| v.as_bool()).unwrap_or(false),
+        clickable: value.get("clickable").and_then(|v| v.as_bool()).unwrap_or(false),
+        actions: value
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+    });
+    if let Some(children) = value.get("children") {
+        collect_semantics(children, out);
+    }
+}
+
+fn find_node_tag_id(tree: &Value, tag: &str) -> Option<u64> {
+    fn walk(n: &Value, tag: &str) -> Option<u64> {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().find_map(|child| walk(child, tag));
+        }
+        if n.get("tag").and_then(|v| v.as_str()) == Some(tag) {
+            return n.get("id").and_then(|v| v.as_u64());
+        }
+        n.get("children")
+            .and_then(|v| v.as_array())
+            .and_then(|children| children.iter().find_map(|child| walk(child, tag)))
+    }
+    let mut found = None;
+    for_each_window(tree, |_, root| {
+        if found.is_none() {
+            found = walk(root, tag);
+        }
+    });
+    found
 }
 
     /// 写 `t` 命令并读 TREE: 响应（跳过污染行——demo 可能向 stdout 打印日志）。

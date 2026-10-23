@@ -34,12 +34,17 @@ cargo test --features debug-server
 | `c x y` | Click (hit test + on_click) | `ok click` |
 | `d x y` / `m x y` / `u` | Press / move / release (drag selection) | `ok …` |
 | `k <key>` | Keyboard event | `ok key` |
+| `text <value>` | Text/IME commit event for the focused field | — |
+| `focus_next` | Advance focus through the real Tab traversal | — |
+| `request_focus <node-id>` | Focus a node by tree id | — |
+| `target <window-id>` | Target subsequent inputs at that window (default 0) | — |
 | `s <dy>` / `s <dx> <dy>` | Scroll | `ok scroll` |
 | `w <w> <h>` | Window resize in logical px (goes through the real `request_surface_size` → `SurfaceResized` path) | — |
 | `t` | Tree JSON (**single line**, stdout prefix `TREE:`) | `TREE:[{window,root},…]` |
 | `sem` | Semantics tree of the last rendered frame (stdout prefix `SEMANTICS:`) | `SEMANTICS:{…}` |
 | `px <x> <y>` | One pixel of the last captured frame (stdout prefix `PIXEL:`) | `PIXEL:x y rgba` |
 | `tr [n]` | Last n animation-trace records (NDJSON; empty without the `anim-trace` feature) | `TRACE:…` |
+| `trj [n]` | Last n animation-trace records as one JSON array | `TRACE_JSON:[…]` |
 | `fp` | Compose+layout rounds of each frame rendered since the last `fpc`, oldest first (stdout prefix `FRAME_PASSES:`) | `FRAME_PASSES:frames=2 multi=1 passes=2,1` |
 | `fpc` | Forget the recorded frames, so the next reading starts at the input under test | — |
 | `save <path>` | Write the last captured frame (send `r` first) to a PNG | `SAVED:<path> 630x780` |
@@ -67,15 +72,26 @@ carry none of it — `crate::debug` is a set of no-op stubs there.
   RedrawRequested 不来（window_event 不调用）→ 事件卡队列（历史教训：子窗口打开后
   第二次点击失效）。
 
-### UiTest 封装（`tests/ui/mod.rs`）
+### UiTest 封装（`tests/ui/support.rs`）
 
 - `launch("counter")`：spawn exe（**先 taskkill 同名残留**——测试中断的孤儿进程防累积）、
   等待首帧树（20s 超时，带诊断）。
 - **串行锁**：所有 UI 测试共用 `TEST_SERIAL` Mutex——taskkill 清理会误杀并行测试刚启动的
   进程（历史教训：第一版并行 + taskkill = 连环互杀全挂）。
 - `Drop`：发 `q` 优雅关闭 → 3s 限时等待 → 超时 kill（测试失败也保证无残留窗口）。
-- 查询：`tree()`（t 命令）、`find(label)`（找节点绝对坐标）、`all_texts()`（全部 mod 文本）。
-- 断言：`expect_text` / `expect_text_timeout`（轮询 5s——异步重组）、`expect_no_text`。
+- 查询：`tree()`（t 命令）、`find(label)`、`find_tag`、`tag_node_id`、`all_texts`。
+- 输入：`click` / `tap` / `drag` / `fling_inside` / `swipe`、`scroll`、`resize`、`key`、
+  `type_text`、`focus_next`、`request_focus`、`select_window`、`hover`、`long_press`、`double_tap`、
+  `tap_tag`、`drag_tag`。
+- 断言：`expect_text` / `expect_text_timeout` / `expect_text_exact` / `expect_no_text`、
+  `expect_tag` / `expect_no_tag` / `expect_tag_rect` / `expect_tag_size` / `expect_tag_position`、
+  `expect_focused` / `expect_only_focused`、`expect_window_count` / `expect_overlay_count`、
+  `expect_no_overlay_text`、`expect_semantics_name` / `expect_semantics_role`、
+  `expect_no_animations` / `wait_animations_idle`、`expect_pixel_at_logical`、`save_png`、`trace`。
+- 通用等待：`wait_for_tag`、`wait_until`、`expect_eventually`。
+
+`tests/ui_support.rs` includes this module outside a fixture, so the support crate is compiled
+and its parser unit tests run even while the UI scenarios are being rebuilt.
 - **Popup content** has its own three entry points, because the main-tree lookups deliberately
   skip popup entries (`expect_no_text` and friends are about the main window):
   `find_tag_in_overlay(tag)` — in WINDOW coordinates, since a popup's tree is in its own

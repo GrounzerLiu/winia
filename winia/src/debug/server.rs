@@ -658,6 +658,7 @@ pub fn start_stdin_channel() {
     thread::spawn(|| {
         let stdin = io::stdin();
         eprintln!("[DevTools] stdin ready — try: echo 'c 190 130'");
+        let mut target_window: u64 = 0;
         for line in stdin.lock().lines() {
             if is_shutdown() { break; }
             let line = match line { Ok(l) => l, Err(_) => break };
@@ -667,24 +668,39 @@ pub fn start_stdin_channel() {
                 "c" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::Click { x, y });
+                    queue_event_for_window(target_window, DebugEvent::Click { x, y });
                 }
                 "d" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::PointerDown { x, y });
+                    queue_event_for_window(target_window, DebugEvent::PointerDown { x, y });
                 }
                 "m" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::PointerMove { x, y });
+                    queue_event_for_window(target_window, DebugEvent::PointerMove { x, y });
                 }
                 "u" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::PointerUp { x, y });
+                    queue_event_for_window(target_window, DebugEvent::PointerUp { x, y });
                 }
-                "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
+                "k" if parts.len() >= 2 => {
+                    queue_event_for_window(target_window, DebugEvent::Key { key: parts[1..].join(" ") });
+                }
+                "text" if parts.len() >= 2 => {
+                    queue_event_for_window(target_window, DebugEvent::Text { value: parts[1..].join(" ") });
+                }
+                "focus_next" => {
+                    queue_event_for_window(target_window, DebugEvent::FocusNext);
+                }
+                "request_focus" if parts.len() >= 2 => {
+                    let id: u64 = parts[1].parse().unwrap_or(0);
+                    queue_event_for_window(target_window, DebugEvent::RequestFocus { id });
+                }
+                "target" if parts.len() >= 2 => {
+                    target_window = parts[1].parse().unwrap_or(0);
+                }
                 "s" if parts.len() >= 2 => {
                     // s dy (one argument) or s dx dy (two arguments — horizontal wheel / tests).
                     let (dx, dy) = if parts.len() >= 3 {
@@ -692,16 +708,16 @@ pub fn start_stdin_channel() {
                     } else {
                         (0.0, parts[1].parse().unwrap_or(0.0))
                     };
-                    queue_event(DebugEvent::Scroll { dx, dy });
+                    queue_event_for_window(target_window, DebugEvent::Scroll { dx, dy });
                 }
                 // w <width> <height>: simulate a window resize (logical pixels — drives adaptive components).
                 "w" if parts.len() >= 3 => {
                     let w: f32 = parts[1].parse().unwrap_or(0.0);
                     let h: f32 = parts[2].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::Resize { w, h });
+                    queue_event_for_window(target_window, DebugEvent::Resize { w, h });
                 }
                 // Screenshot target is selected by the app's parent window.
-                "r" => { request_screenshot(0); wake(); }
+                "r" => { request_screenshot(target_window); wake(); }
                 "t" => {
                     // Tree responses go to stdout with the TREE: prefix (UI tests read the pipe;
                     // other demo output can pollute stdout, so tests filter by prefix). Always
@@ -712,8 +728,7 @@ pub fn start_stdin_channel() {
                 // sem: the SEMANTICS tree of the last rendered frame — role/name/state per element,
                 // what a screen reader would be told. Same prefix convention as TREE:.
                 "sem" => {
-                    let id = legacy_target().unwrap_or(0);
-                    println!("SEMANTICS:{}", semantics_json(id));
+                    println!("SEMANTICS:{}", semantics_json(target_window));
                 }
                 // px <x> <y>: one pixel of the last captured frame, as TEXT. The binary `p` frame only
                 // travels over the WebSocket; this line form is what the UI-test harness (stdin/stdout)
@@ -729,6 +744,16 @@ pub fn start_stdin_channel() {
                 "tr" => {
                     let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
                     println!("TRACE:{}", crate::debug::animation::recent_lines(n).join("\n"));
+                }
+                // trj <n>: the same records as ONE JSON array, so a line-oriented test client can
+                // read them without guessing where the NDJSON block ends.
+                "trj" => {
+                    let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
+                    let records: Vec<serde_json::Value> = crate::debug::animation::recent_lines(n)
+                        .iter()
+                        .filter_map(|line| serde_json::from_str(line).ok())
+                        .collect();
+                    println!("TRACE_JSON:{}", serde_json::to_string(&records).unwrap_or_else(|_| "[]".into()));
                 }
                 // save <path>: write the last CAPTURED frame (see `r`) to a PNG. The other pixel routes
                 // hand colour values to a client (`px` one at a time, `p` over the WebSocket); this is the
@@ -763,14 +788,14 @@ pub fn start_stdin_channel() {
                     let x2: f32 = parts[3].parse().unwrap_or(0.0);
                     let y2: f32 = parts[4].parse().unwrap_or(0.0);
                     let steps: usize = parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
-                    queue_event(DebugEvent::PointerDown { x: x1, y: y1 });
+                    queue_event_for_window(target_window, DebugEvent::PointerDown { x: x1, y: y1 });
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
                         let x = x1 + (x2 - x1) * t;
                         let y = y1 + (y2 - y1) * t;
-                        queue_event(DebugEvent::PointerMove { x, y });
+                        queue_event_for_window(target_window, DebugEvent::PointerMove { x, y });
                     }
-                    queue_event(DebugEvent::PointerUp { x: x2, y: y2 });
+                    queue_event_for_window(target_window, DebugEvent::PointerUp { x: x2, y: y2 });
                     wake();
                 }
                 "q" => { force_shutdown(); break; }

@@ -114,6 +114,27 @@ impl AppState {
                     debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
                     debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
                 }
+                debug::DebugEvent::Text { value } => {
+                    // Typed text follows the same routing as IME commit: character by character
+                    // through the focused overlay, then the focused main-tree node. This is the
+                    // protocol entry for text fields without synthesising one `k` per character.
+                    for ch in value.chars() {
+                        let ke = crate::input::KbEvent {
+                            key: winit::keyboard::Key::Character(ch.to_string().into()),
+                            event_type: crate::input::KbEventType::KeyDown,
+                            is_alt_pressed: pw.modifiers.alt_key(),
+                            is_ctrl_pressed: pw.modifiers.control_key(),
+                            is_shift_pressed: pw.modifiers.shift_key(),
+                            is_meta_pressed: pw.modifiers.meta_key(),
+                            repeat: false,
+                        };
+                        if !dispatch_key_to_overlay(pw, &ke) && !focus_scope_is_open(pw) {
+                            dispatch_key_to_focus(pw, &ke);
+                        }
+                    }
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    handled = true;
+                }
                 debug::DebugEvent::Key { key } => {
                     if key == "Escape" {
                         // The same helper the real key path calls — see `PerWindow::escape_key`.
@@ -345,7 +366,6 @@ impl AppState {
                     }
                     handled = true;
                 }
-                _ => {}
             }
         }
         if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
