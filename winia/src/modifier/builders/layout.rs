@@ -388,6 +388,36 @@ impl Modifier {
         self.align_by(crate::layout::AlignmentLine::FIRST_BASELINE)
     }
 
+    /// Fill this child to the tallest item in its FlowRow (Compose's
+    /// `FlowRowScope.fillMaxRowHeight`) — only the flow row reads this element.
+    pub fn fill_max_row_height(self) -> Self {
+        self.fill_max_row_height_fraction(1.0)
+    }
+
+    /// The fraction form of [`Modifier::fill_max_row_height`], between 0 and 1.
+    pub fn fill_max_row_height_fraction(self, fraction: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&fraction),
+            "fill_max_row_height fraction must be in 0..=1 (got {fraction})"
+        );
+        self.push(ModifierElement::FillMaxRowHeight { fraction })
+    }
+
+    /// Fill this child to the widest item in its FlowColumn (Compose's
+    /// `FlowColumnScope.fillMaxColumnWidth`) — only the flow column reads this element.
+    pub fn fill_max_column_width(self) -> Self {
+        self.fill_max_column_width_fraction(1.0)
+    }
+
+    /// The fraction form of [`Modifier::fill_max_column_width`], between 0 and 1.
+    pub fn fill_max_column_width_fraction(self, fraction: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&fraction),
+            "fill_max_column_width fraction must be in 0..=1 (got {fraction})"
+        );
+        self.push(ModifierElement::FillMaxColumnWidth { fraction })
+    }
+
     /// Report an alignment line for this node: the line sits `f(measured size)` from the node's top
     /// (a horizontal line) or start (a vertical one).
     ///

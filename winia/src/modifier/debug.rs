@@ -48,6 +48,12 @@ impl Debug for ModifierElement {
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
+            Self::FillMaxRowHeight { fraction } => {
+                f.debug_struct("FillMaxRowHeight").field("fraction", fraction).finish()
+            }
+            Self::FillMaxColumnWidth { fraction } => {
+                f.debug_struct("FillMaxColumnWidth").field("fraction", fraction).finish()
+            }
             Self::AlignmentLineValue { line, .. } => {
                 f.debug_struct("AlignmentLineValue").field("line", line).finish()
             }

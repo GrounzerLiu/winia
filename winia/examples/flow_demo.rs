@@ -264,6 +264,76 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                         });
                 });
 
+            Text::new("■ FlowRow — fillMaxRowHeight")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .main_spacing(8.0)
+                .modifier(
+                    Modifier::new()
+                        .width(240.0)
+                        .height(80.0)
+                        .background(Color::from_argb(20, 100, 50, 100), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(40.0, 40.0)
+                                .background(Color::from_argb(255, 100, 160, 220), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("tall").font_size(12.0).build(ctx);
+                        });
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(40.0, 20.0)
+                                .fill_max_row_height()
+                                .background(Color::from_argb(255, 220, 160, 100), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("fill").font_size(12.0).build(ctx);
+                        });
+                });
+
+            Text::new("■ FlowColumn — fillMaxColumnWidth")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowColumn::new()
+                .main_spacing(8.0)
+                .modifier(
+                    Modifier::new()
+                        .width(200.0)
+                        .height(120.0)
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(40.0, 30.0)
+                                .background(Color::from_argb(255, 120, 80, 160), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("wide").font_size(12.0).build(ctx);
+                        });
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(20.0, 30.0)
+                                .fill_max_column_width()
+                                .background(Color::from_argb(255, 100, 200, 160), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("fill").font_size(12.0).build(ctx);
+                        });
+                });
+
             Text::new("■ FlowRow — max 3 per row")
                 .font_size(16.0)
                 .build(ctx);

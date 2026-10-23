@@ -15,6 +15,9 @@ use super::node::*;
 /// The six questions both container families ask live in [`Axis`]; this adds what only the flex
 /// algorithm needs.
 pub(crate) trait FlexAxis: super::axis::Axis {
+    /// Whether this axis is horizontal; used where a generic flow helper must choose the row vs
+    /// column fill element without a second boolean parameter.
+    const HORIZONTAL: bool;
     // ── 约束构造 ──
     fn constrain_main(c: &Constraints, v: f32) -> f32;
     fn constrain_cross(c: &Constraints, v: f32) -> f32;
@@ -47,6 +50,17 @@ pub(crate) trait FlexAxis: super::axis::Axis {
     ///   rounding would mean moving the whole lay-out to integers, against winia's float model.
     fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints;
 
+    /// A child measured to fill a flow line's cross extent: fix the cross axis to `cross`, leave
+    /// the main axis loose within the parent's budget.
+    fn with_fixed_cross(c: &Constraints, cross: f32) -> Constraints;
+
+    /// A weighted child's share with the cross axis fixed to the fill fraction.
+    fn build_phase2_with_cross(
+        allocated: f32,
+        fill_main: bool,
+        cross: f32,
+    ) -> Constraints;
+
     // ── 值构造 ──
     // `size` / `point` are on `Axis`.
 
@@ -59,6 +73,7 @@ pub(crate) trait FlexAxis: super::axis::Axis {
 // ── 实现：垂直主轴 (Column) ──
 
 impl FlexAxis for super::axis::VerticalAxis {
+    const HORIZONTAL: bool = false;
     #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
     #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
 
@@ -85,6 +100,30 @@ impl FlexAxis for super::axis::VerticalAxis {
     }
 
     #[inline]
+    fn with_fixed_cross(c: &Constraints, cross: f32) -> Constraints {
+        Constraints {
+            min_width: cross,
+            max_width: cross,
+            min_height: 0.0,
+            max_height: c.max_height,
+        }
+    }
+
+    #[inline]
+    fn build_phase2_with_cross(
+        allocated: f32,
+        fill_main: bool,
+        cross: f32,
+    ) -> Constraints {
+        Constraints {
+            min_width: cross,
+            max_width: cross,
+            min_height: if fill_main { allocated } else { 0.0 },
+            max_height: allocated,
+        }
+    }
+
+    #[inline]
     fn rtl_container_width(_measured_main: f32, cross_size: f32) -> f32 {
         cross_size
     }
@@ -93,6 +132,7 @@ impl FlexAxis for super::axis::VerticalAxis {
 // ── 实现：水平主轴 (Row) ──
 
 impl FlexAxis for super::axis::HorizontalAxis {
+    const HORIZONTAL: bool = true;
     #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
     #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
 
@@ -114,6 +154,30 @@ impl FlexAxis for super::axis::HorizontalAxis {
             max_width: allocated,
             min_height: if stretch_cross { c.min_height } else { 0.0 },
             max_height: c.max_height,
+        }
+    }
+
+    #[inline]
+    fn with_fixed_cross(c: &Constraints, cross: f32) -> Constraints {
+        Constraints {
+            min_width: 0.0,
+            max_width: c.max_width,
+            min_height: cross,
+            max_height: cross,
+        }
+    }
+
+    #[inline]
+    fn build_phase2_with_cross(
+        allocated: f32,
+        fill_main: bool,
+        cross: f32,
+    ) -> Constraints {
+        Constraints {
+            min_width: if fill_main { allocated } else { 0.0 },
+            max_width: allocated,
+            min_height: cross,
+            max_height: cross,
         }
     }
 

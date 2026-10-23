@@ -348,6 +348,12 @@ pub(crate) enum ModifierElement {
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },
+    /// FlowRowScope's `fillMaxRowHeight`: fill this child to a fraction of the tallest item in its
+    /// flow row. Only the flow row reads it.
+    FillMaxRowHeight { fraction: f32 },
+    /// FlowColumnScope's `fillMaxColumnWidth`: fill this child to a fraction of the widest item in
+    /// its flow column. Only the flow column reads it.
+    FillMaxColumnWidth { fraction: f32 },
     /// A line a node reports, computed from its measured size — see
     /// [`Modifier::alignment_line`]. Compose's `layout(alignmentLines = …)` in modifier form.
     AlignmentLineValue {

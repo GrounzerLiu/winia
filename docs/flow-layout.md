@@ -24,6 +24,13 @@ FlowRow::new()
     .modifier(Modifier)
     .build(ctx, |ctx| { /* children */ });
 
+// Child-level line fill (FlowRowScope.fillMaxRowHeight / FlowColumnScope.fillMaxColumnWidth).
+FlowRow::new().build(ctx, |ctx| {
+    Text::new("short")
+        .modifier(Modifier::new().fill_max_row_height())
+        .build(ctx);
+});
+
 // Flowing column: same parameters, transposed.
 FlowColumn::new()
     .main_spacing(8.0)
@@ -43,6 +50,10 @@ FlowColumn::new()
   A text child therefore wraps at the flow's width instead of reporting its unwrapped width.
 - **Line sizes**: the main axis is the raw content extent (clamped only at the container);
   the cross axis is the tallest item that actually fits in the line.
+- **Cross-axis fill**: `Modifier::fill_max_row_height()` (FlowRow) and
+  `fill_max_column_width()` (FlowColumn) measure the child against a fraction of the line's natural
+  cross extent; the `_fraction` forms accept 0..=1. Weighted children keep their weight
+  allocation and are cross-filled as well (Compose's weight branch applies the fraction too).
 - **Cross-axis clipping** (`FlowOverflow::Clip`, the default): items are added to a line one
   at a time. The first item whose cross size exceeds the remaining cross space stops the flow;
   items already accepted, including the shorter items before it on the same line, stay placed.
@@ -68,6 +79,9 @@ FlowColumn::new()
 
 ## 3. Differences from Compose
 
+- A fill fraction on the tallest child does not shrink the line: winia keeps the natural line
+  cross as the fill target, whereas Compose recomputes the line from the filled sizes. The
+  positions of the other children are unaffected; only the enclosing line height differs.
 - Clip decisions are made after weight shares are applied, so a weighted child that grows taller
   when its share narrows can be clipped differently from Compose, whose first measurement decides
   the clip. The version that is actually laid out is used here.
@@ -100,8 +114,9 @@ cargo test -p winia --lib layout::flow
 ```
 
 The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
-`Visible` overflow, weight sharing, intrinsic queries, spacing and in-line centring, cross
-arrangement (Center/SpaceBetween/RTL), RTL mirroring, column wrapping, fill-tight
+`Visible` overflow, weight sharing, `fillMaxRowHeight` / `fillMaxColumnWidth`, intrinsic queries,
+spacing and in-line centring, cross arrangement (Center/SpaceBetween/RTL), RTL mirroring,
+column wrapping, fill-tight
 containers, child measurement against the container width, cross-axis item clipping (including
 a tall item after short ones), a first line that cannot fit, cross spacing in the cut-off, and
 the two composition paths.

@@ -450,6 +450,22 @@ impl Modifier {
         None
     }
 
+    /// The FlowRow fill fraction on this child, if any (Compose's `fillMaxRowHeight`).
+    pub fn get_fill_max_row_height(&self) -> Option<f32> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::FillMaxRowHeight { fraction } => Some(*fraction),
+            _ => None,
+        })
+    }
+
+    /// The FlowColumn fill fraction on this child, if any (Compose's `fillMaxColumnWidth`).
+    pub fn get_fill_max_column_width(&self) -> Option<f32> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::FillMaxColumnWidth { fraction } => Some(*fraction),
+            _ => None,
+        })
+    }
+
     /// Every `paddingFrom` on this modifier, in chain order — one entry per element, because
     /// `padding_from_baseline(top, bottom)` is two of them and both are in force (Compose chains the
     /// same way, `foundation/layout/AlignmentLine.kt:144`).

@@ -368,6 +368,88 @@ fn flow_row_zero_max_lines_is_empty() {
     assert!(placements.iter().all(|p| p.size == Size::ZERO));
 }
 
+/// fillMaxRowHeight stretches a short child to the tallest item in its row.
+#[test]
+fn flow_row_fill_max_row_height_fills_the_line() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(30.0, 40.0),
+        LayoutNode::leaf(Modifier::new().size(30.0, 10.0).fill_max_row_height()),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = FlowRowLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 40.0);
+    assert_eq!(placements[1].size.height, 40.0);
+}
+
+/// Weight and fill compose: the child keeps its weight share and also fills the line cross.
+#[test]
+fn flow_row_weight_and_fill_compose() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(30.0, 40.0),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(30.0, 10.0)
+                .layout_weight(1.0)
+                .fill_max_row_height(),
+        ),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = FlowRowLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 40.0);
+    assert_eq!(placements[1].size, Size::new(70.0, 40.0));
+}
+
+/// The fraction form takes a share of the line's tallest item.
+#[test]
+fn flow_row_fill_max_row_height_fraction() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(30.0, 40.0),
+        LayoutNode::leaf(
+            Modifier::new().size(30.0, 10.0).fill_max_row_height_fraction(0.5),
+        ),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (_, placements) = FlowRowLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(placements[1].size.height, 20.0);
+}
+
+/// FlowColumn uses the column-width variant, transposed onto the horizontal cross axis.
+#[test]
+fn flow_column_fill_max_column_width_fills_the_column() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(40.0, 30.0),
+        LayoutNode::leaf(Modifier::new().size(20.0, 30.0).fill_max_column_width()),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = FlowColumnLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(size.width, 40.0);
+    assert_eq!(placements[1].size.width, 40.0);
+}
+
 /// Cross-axis clipping is per item, not per line: two 20px items fit a 35px cross axis even when a
 /// third item in the same line is 40px tall. Compose keeps the two short items and drops the tall
 /// one; a line-granular guard would drop the whole line.

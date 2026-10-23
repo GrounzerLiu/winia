@@ -83,6 +83,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (AlignBy { line: a }, AlignBy { line: b }) => a == b,
+        (FillMaxRowHeight { fraction: a }, FillMaxRowHeight { fraction: b }) => a == b,
+        (FillMaxColumnWidth { fraction: a }, FillMaxColumnWidth { fraction: b }) => a == b,
         (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
         (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
             ar == br && am == bm

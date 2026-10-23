@@ -112,11 +112,13 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         let mut total_weight = 0.0f32;
         let mut natural_main = 0.0f32;
         let mut fixed_main = 0.0f32;
+        let mut line_cross_natural = 0.0f32;
         for i in s..e {
             if i > s {
                 natural_main += main_spacing;
             }
             natural_main += A::main_size(child_sizes[i]);
+            line_cross_natural = line_cross_natural.max(A::cross_size(child_sizes[i]));
             match weights[i] {
                 Some(w) => total_weight += w,
                 None => fixed_main += A::main_size(child_sizes[i]),
@@ -135,8 +137,22 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         for i in s..e {
             let Some(w) = weights[i] else { continue };
             let allocated = available * w / total_weight;
-            let cc = A::build_phase2(constraints, allocated, fills[i], false);
-            let (size, _) = measure_node(nodes, policies, children[i], cc);
+            let child = children[i];
+            let fill_fraction = if A::HORIZONTAL {
+                nodes[child].modifier.get_fill_max_row_height()
+            } else {
+                nodes[child].modifier.get_fill_max_column_width()
+            };
+            let cc = if let Some(fraction) = fill_fraction {
+                A::build_phase2_with_cross(
+                    allocated,
+                    fills[i],
+                    line_cross_natural * fraction,
+                )
+            } else {
+                A::build_phase2(constraints, allocated, fills[i], false)
+            };
+            let (size, _) = measure_node(nodes, policies, child, cc);
             child_sizes[i] = size;
         }
     }
@@ -179,6 +195,33 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         }
         if end == s {
             break;
+        }
+        // FlowRowScope.fillMaxRowHeight / FlowColumnScope.fillMaxColumnWidth: the child is
+        // measured against a cross size that is a fraction of the line's natural cross extent.
+        // The line cross itself was just computed from the natural sizes, so the fill cannot grow
+        // the line; it can change the child's main size, which is recomputed below. A weighted
+        // child keeps the allocation from the weight pass (Compose's weight branch likewise does
+        // not apply the fill fraction).
+        for i in s..end {
+            let child = children[i];
+            if nodes[child]
+                .modifier
+                .get_layout_weight()
+                .is_some_and(|w| w > 0.0)
+            {
+                continue;
+            }
+            let fraction = if A::HORIZONTAL {
+                nodes[child].modifier.get_fill_max_row_height()
+            } else {
+                nodes[child].modifier.get_fill_max_column_width()
+            };
+            let Some(fraction) = fraction else { continue };
+            let target_cross = line_cross * fraction;
+            let base = A::build_phase1(constraints, main_limit);
+            let cc = A::with_fixed_cross(&base, target_cross);
+            let (size, _) = measure_node(nodes, policies, child, cc);
+            child_sizes[i] = size;
         }
         let mut main = 0.0f32;
         let mut line_before = 0.0f32;
