@@ -14,6 +14,7 @@ pub mod interpolator;
 pub mod item;
 pub mod visibility;
 
+pub use item::ItemAnimationSpec;
 pub use visibility::{
     ChannelValues, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };

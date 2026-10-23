@@ -289,6 +289,16 @@ impl Modifier {
         self.animate_item_spec().is_some()
     }
 
+    /// The container's item-animation host, when this modifier belongs to an item-aware layout.
+    pub(crate) fn item_animation_host(
+        &self,
+    ) -> Option<&crate::layout::item_animation::ItemAnimationHost> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::ItemAnimationHost(host) => Some(host),
+            _ => None,
+        })
+    }
+
     /// The item placement/fade contract attached with `Modifier::animate_item`.
     pub(crate) fn animate_item_spec(
         &self,

@@ -33,17 +33,16 @@ glow), the pull is capped at 120 logical px, and containers with `reverseLayout`
 ## `Modifier::animate_item()`
 
 Place this on a lazy item's root. The lazy list keys each item (`items_from`'s key function) and
-remembers, per key, the main-axis slot it occupied on the previous frame. When the data reorders and
-the key moves, the item is painted at its OLD slot and springs to the new one; the item's wrapper
-node carries the animation, so the whole item moves. An item that was not placed on the previous
-frame resets instead of springing from a stale slot.
+remembers, per key, the rectangle it occupied on the previous frame. When the data reorders and the
+key moves, the item is painted at its OLD position and animates to the new one; the item's wrapper
+node carries the animation, so the whole item moves. An item outside the composed window is kept as
+an off-screen state, not treated as removed; returning to the window does not replay a fade-in.
 
 The same marker is honored by `FlowRow` / `FlowColumn` directly: a keyed flow child whose slot
 moves gets its old position as a two-dimensional paint offset, plus the fade channels in its
 `ItemAnimationSpec`. Flow uses the child's stable slot key, so pair it with `ctx.key` /
 `ctx.keyed_range` when items can reorder.
 
-Deliberate scope: PLACEMENT only. Compose's `animateItem` also fades items in and out; winia has no
-exit-node mechanism for a removed lazy item, and a Flow reflow does not animate the cell size, so
-appearance/disappearance and size changes are not animated. Outside a lazy list or flow layout the
-marker is inert.
+Scope: placement, fade-in and fade-out. Size is separate: wrap the item in `AnimatedSize` when its
+cell should grow or shrink smoothly. The exit picture is captured while the item is rendered and
+drawn by the owning container, so it follows that container's clip and scroll translation.

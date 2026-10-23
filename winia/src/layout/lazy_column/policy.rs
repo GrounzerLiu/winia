@@ -354,9 +354,9 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             let position = nodes[c].position;
             self.state
                 .item_animations
-                .place(nodes, c, key, position, placements[i].size, &spec);
+                .place(nodes, c, key, position, &spec);
         }
-        self.state.item_animations.finish_frame();
+        self.state.item_animations.finish_frame(Some(&self.keys));
     }
 }
 

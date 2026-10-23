@@ -22,9 +22,10 @@ honors it.
 - **Placement**: the item keeps its last position by key; a reflow turns the difference into a paint
   offset that travels to zero with the placement curve.
 - **Fade-in**: a key first seen after the host's first layout starts at alpha 0 and animates to 1.
-- **Fade-out**: before a key leaves the tree, the renderer captures its last frame as a Skia
-  picture; the exit layer draws that picture while the fade-out curve runs. This is why removal does
-  not depend on the layout node surviving.
+- **Fade-out**: while a key is rendered, the renderer captures its frame as a Skia picture and
+  refreshes it when the item moves or fades; after removal the owning container draws that picture
+  while the fade-out curve runs. This is why removal does not depend on the layout node surviving,
+  and why the ghost follows the container's scroll clip and translation.
 - **Size** is not part of the item contract. Use `AnimatedSize` around the item or the container;
   Compose splits `animateItem` from `animateContentSize` for the same reason.
 

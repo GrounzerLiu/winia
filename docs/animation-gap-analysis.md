@@ -127,7 +127,7 @@
 | Low-level | `Animatable` velocity continuation | ✅ done (P2-9) |
 | Low-level | `with_frame_nanos` frame clock | ✅ done (P3-12) |
 | Modifier | `animate_content_size` | ✅ done as `AnimatedSize` container (P1-5) |
-| Modifier | `animate_item` (list add/remove/move) | ❌ missing (attempted `exp/animate-item`, dropped — measure-lerp feel was wrong; needs lookahead or layer-shift approach) |
+| Modifier | `animate_item` (list add/remove/move) | ✅ done via `ItemAnimationSpec` + shared `ItemAnimationHost` (placement, fade-in, exit picture); size remains `AnimatedSize` |
 | graphics_layer | shadow/clip/shape/blur | ✅ base wired (Skia ShadowUtils; advanced Compose parity open) |
 | Gestures | fling/settle linkage | ❌ missing |
 

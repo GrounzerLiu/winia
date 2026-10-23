@@ -606,6 +606,9 @@ pub(crate) enum ModifierElement {
     /// The item's placement/fade contract. Lazy lists and flow layouts read it; the renderer applies
     /// the host's paint channels. Inert outside an item-aware layout.
     AnimateItem(crate::animation::item::ItemAnimationSpec),
+    /// The container's item-animation host. The renderer draws its exit pictures inside this
+    /// container's scroll clip/translate, so a ghost cannot land outside the viewport.
+    ItemAnimationHost(crate::layout::item_animation::ItemAnimationHost),
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// Compose's inner shadow: a rim drawn inside the shape, above the content.

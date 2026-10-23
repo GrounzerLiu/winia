@@ -85,6 +85,14 @@ FlowColumn::new()
 - **Composition**: the builders are deliberately not macros (a `State.get()` at the content's
   top level must bubble to the parent), and every parameter is declared with `ctx.changed`.
 
+### Migrating from `animate_placement`
+
+`FlowRow/FlowColumn::animate_placement(bool)` and the container-level `placement_spec` are gone:
+the contract now lives on the child (`Modifier::animate_item` / `animate_item_with`), and the
+container honors any marked child automatically. Replace
+`.animate_placement(true)` with nothing, and move the curve from the container to the child's
+`ItemAnimationSpec`.
+
 ## 3. Differences from Compose
 
 - A fill fraction on the tallest child does not shrink the line: winia keeps the natural line

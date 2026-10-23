@@ -69,6 +69,15 @@ impl Modifier {
         self
     }
 
+    /// Attach the container's item-animation host so the renderer can draw its exit pictures
+    /// inside the container's own scroll clip and translate.
+    pub(crate) fn with_item_animation_host(
+        self,
+        host: crate::layout::item_animation::ItemAnimationHost,
+    ) -> Self {
+        self.push(ModifierElement::ItemAnimationHost(host))
+    }
+
     /// 合并另一个 Modifier 链的所有元素（追加到末尾）。
     ///
     /// 等价于 Compose 的 `Modifier.then(other)`，用于叠加两个独立的 Modifier 链。

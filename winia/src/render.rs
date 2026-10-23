@@ -21,7 +21,6 @@ use std::cell::RefCell;
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
     render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false, false);
-    pass::render_exits(canvas);
 }
 
 /// Draw one node as a **transition-layer root** at an explicit absolute

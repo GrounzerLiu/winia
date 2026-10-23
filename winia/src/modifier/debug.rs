@@ -125,6 +125,7 @@ impl Debug for ModifierElement {
                 .field("fade_in", &spec.fade_in)
                 .field("fade_out", &spec.fade_out)
                 .finish(),
+            Self::ItemAnimationHost(_) => f.write_str("ItemAnimationHost"),
             Self::InnerShadow { shape, color, blur, .. } => f
                 .debug_struct("InnerShadow")
                 .field("shape", shape)

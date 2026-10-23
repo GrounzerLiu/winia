@@ -1123,7 +1123,7 @@ fn item_animation_starts_from_the_previous_slot() {
     let spec = crate::animation::item::ItemAnimationSpec::default();
 
     animations.begin_frame();
-    animations.place(&mut nodes, 0, 1, Offset::new(0.0, 0.0), Size::new(20.0, 10.0), &spec);
+    animations.place(&mut nodes, 0, 1, Offset::new(0.0, 0.0), &spec);
     let offset = nodes[0]
         .item_paint
         .as_ref()
@@ -1133,7 +1133,7 @@ fn item_animation_starts_from_the_previous_slot() {
     assert_eq!(offset, Offset::ZERO, "the first placement has nowhere to come from");
 
     animations.begin_frame();
-    animations.place(&mut nodes, 0, 1, Offset::new(30.0, 20.0), Size::new(20.0, 10.0), &spec);
+    animations.place(&mut nodes, 0, 1, Offset::new(30.0, 20.0), &spec);
     let offset = nodes[0].item_paint.as_ref().unwrap().offset.peek();
     assert!(
         (offset.x + 30.0).abs() < 0.1 && (offset.y + 20.0).abs() < 0.1,

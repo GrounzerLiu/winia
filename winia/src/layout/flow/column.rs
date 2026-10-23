@@ -122,7 +122,7 @@ impl MeasurePolicy for FlowColumnLayout {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
             nodes[c].item_paint = None;
-            let Some(spec) = crate::layout::item_animation::subtree_item_spec(nodes, c) else {
+            let Some(spec) = nodes[c].modifier.animate_item_spec() else {
                 continue;
             };
             let key = if nodes[c].slot_key != 0 {
@@ -132,9 +132,9 @@ impl MeasurePolicy for FlowColumnLayout {
             };
             let position = nodes[c].position;
             self.item_animations
-                .place(nodes, c, key, position, placements[i].size, &spec);
+                .place(nodes, c, key, position, &spec);
         }
-        self.item_animations.finish_frame();
+        self.item_animations.finish_frame(None);
     }
 
     fn min_intrinsic_width(
@@ -296,9 +296,12 @@ impl FlowColumn {
                 crate::layout::item_animation::ItemAnimationHost::default()
             })
             .peek();
+        let modifier = self
+            .modifier
+            .then(Modifier::new().with_item_animation_host(item_animations.clone()));
         build_container(
             ctx,
-            self.modifier,
+            modifier,
             FlowColumnLayout::new()
                 .arrangement(self.arrangement)
                 .alignment(self.alignment)

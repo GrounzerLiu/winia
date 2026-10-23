@@ -28,6 +28,19 @@ fn capture_item(
     if content.width <= 0.0 || content.height <= 0.0 {
         return;
     }
+    let visual = paint.offset.peek();
+    let captured_position = crate::unit::Offset::new(x + visual.x, y + visual.y);
+    {
+        let store = paint.exit_store.lock().unwrap_or_else(|e| e.into_inner());
+        if store.pictures.get(&paint.key).is_some_and(|old| {
+            old.position == captured_position
+                && old.size == crate::unit::Size::new(content.width, content.height)
+                && visual == crate::unit::Offset::ZERO
+                && paint.alpha.peek() >= 0.999
+        }) {
+            return;
+        }
+    }
     CAPTURING_ITEM.with(|c| c.set(true));
     let mut recorder = skia_safe::PictureRecorder::new();
     let bounds = Rect::new(0.0, 0.0, content.width, content.height);
@@ -56,7 +69,7 @@ fn capture_item(
                 paint.key,
                 crate::layout::item_animation::CapturedItem {
                     picture,
-                    position: crate::unit::Offset::new(x, y),
+                    position: captured_position,
                     size: crate::unit::Size::new(content.width, content.height),
                 },
             );
@@ -65,28 +78,66 @@ fn capture_item(
 
 /// Draw the retained exit pictures after the live tree. Each store owns its own exits, so two
 /// lists cannot steal each other's ghosts.
-pub(crate) fn render_exits(canvas: &Canvas) {
-    for store in crate::layout::item_animation::exit_stores() {
-        let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-        let mut finished = Vec::new();
-        for (key, exit) in store.exits.iter() {
-            let alpha = exit.alpha.peek().clamp(0.0, 1.0);
-            if alpha > 0.001 {
-                canvas.save();
-                canvas.translate((exit.position.x, exit.position.y));
-                let mut paint = Paint::default();
-                paint.set_alpha_f(alpha);
-                canvas.draw_picture(&exit.picture, None, Some(&paint));
-                canvas.restore();
-            }
-            if alpha <= 0.001
-                && !crate::animation::has_animation_for_state(exit.alpha.state_id())
-            {
-                finished.push(*key);
-            }
+fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAnimationHost) {
+    let mut store = host.store().lock().unwrap_or_else(|e| e.into_inner());
+    let mut finished = Vec::new();
+    for (key, exit) in store.exits.iter() {
+        let alpha = exit.alpha.peek().clamp(0.0, 1.0);
+        if alpha > 0.001 {
+            canvas.save();
+            canvas.translate((exit.position.x, exit.position.y));
+            let mut paint = Paint::default();
+            paint.set_alpha_f(alpha);
+            canvas.draw_picture(&exit.picture, None, Some(&paint));
+            canvas.restore();
         }
-        for key in finished {
-            store.exits.remove(&key);
+        if alpha <= 0.001
+            && !crate::animation::has_animation_for_state(exit.alpha.state_id())
+        {
+            finished.push(*key);
+        }
+    }
+    for key in finished {
+        store.exits.remove(&key);
+    }
+}
+
+/// The item translate/opacity scope, restored by Drop so a flight early-return cannot leak canvas
+/// state into the rest of the frame.
+struct ItemCanvasGuard<'a> {
+    canvas: &'a Canvas,
+    active: bool,
+    layer: bool,
+}
+
+impl<'a> ItemCanvasGuard<'a> {
+    fn new(
+        canvas: &'a Canvas,
+        paint: Option<&crate::layout::item_animation::ItemPaint>,
+        bounds: Rect,
+    ) -> Self {
+        let Some(paint) = paint else {
+            return Self { canvas, active: false, layer: false };
+        };
+        canvas.save();
+        let offset = paint.offset.peek();
+        canvas.translate((offset.x, offset.y));
+        let alpha = paint.alpha.peek().clamp(0.0, 1.0);
+        let layer = alpha < 0.999;
+        if layer {
+            canvas.save_layer_alpha_f(Some(bounds), alpha);
+        }
+        Self { canvas, active: true, layer }
+    }
+}
+
+impl Drop for ItemCanvasGuard<'_> {
+    fn drop(&mut self) {
+        if self.layer {
+            self.canvas.restore();
+        }
+        if self.active {
+            self.canvas.restore();
         }
     }
 }
@@ -126,27 +177,20 @@ pub(super) fn render_pass1(
 
     // Item animation (Compose's `animateItem`): the item is painted where it WAS, and the offset
     // travels to 0 as the layout settles; the alpha layer covers the whole item for enter/exit fade.
-    let item_paint = node.item_paint.clone();
+    let item_host = node.modifier.item_animation_host().cloned();
+    let item_paint = if CAPTURING_ITEM.with(|c| c.get()) {
+        None
+    } else {
+        node.item_paint.clone()
+    };
     if let Some(paint) = &item_paint {
         capture_item(nodes, root_idx, idx, x, y, paint);
     }
-    let mut item_alpha_layer = false;
-    if item_paint.is_some() {
-        canvas.save();
-        if let Some(paint) = &item_paint {
-            let offset = paint.offset.peek();
-            canvas.translate((offset.x, offset.y));
-            let alpha = paint.alpha.peek().clamp(0.0, 1.0);
-            if alpha < 0.999 {
-                let mut layer_paint = Paint::default();
-                layer_paint.set_alpha((alpha * 255.0).round() as u8);
-                canvas.save_layer(
-                    &skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint),
-                );
-                item_alpha_layer = true;
-            }
-        }
-    }
+    let _item_canvas = ItemCanvasGuard::new(
+        canvas,
+        item_paint.as_ref(),
+        Rect::new(x, y, x + w, y + h),
+    );
 
     let rect = Rect::new(x, y, x + w, y + h);
 
@@ -1003,6 +1047,14 @@ pub(super) fn render_pass1(
         }
     }
 
+    // Item exit ghosts belong to this container: drawing them here keeps the container's scroll
+    // clip and translate (Lazy) and avoids the process-global store painting into other windows.
+    if let Some(host) = &item_host {
+        if !CAPTURING_ITEM.with(|c| c.get()) {
+            draw_host_exits(canvas, host);
+        }
+    }
+
     // Inner shadow: painted ABOVE the content (Compose's appearance draws it after the shape fill
     // and its children) and clipped to the shape.
     for el in node.modifier.elements() {
@@ -1070,12 +1122,6 @@ pub(super) fn render_pass1(
         canvas.restore();
     }
     if tf_saved {
-        canvas.restore();
-    }
-    if item_alpha_layer {
-        canvas.restore();
-    }
-    if item_paint.is_some() {
         canvas.restore();
     }
 }

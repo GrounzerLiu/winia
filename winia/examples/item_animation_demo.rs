@@ -29,7 +29,7 @@ fn item(ctx: &mut ComposeCtx, n: usize) {
             Modifier::new()
                 .size(88.0, 64.0)
                 .animate_item_with(item_spec())
-                .test_tag("item")
+                .test_tag(format!("item-{n}"))
                 .background(
                     Color::from_argb(255, 92, 126, 196),
                     Shape::rounded(10.0),

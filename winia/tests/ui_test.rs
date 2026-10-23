@@ -133,8 +133,17 @@ fn item_animation_demo_fades_added_and_removed_items() {
         "the new item should fade in with its own curve: {added:?}"
     );
 
+    let last = app.expect_tag("item-3");
+    let ghost_point = (last.0 + last.2 / 2.0, last.1 + last.3 / 2.0);
     app.click_tag("remove-item");
     let removed = app.animations();
+    let pixel = app
+        .pixel_at_logical(ghost_point.0, ghost_point.1)
+        .expect("the frame should be readable after removing an item");
+    assert!(
+        pixel.2.saturating_sub(pixel.0) > 8,
+        "the removed item should still be painted as a fading ghost: {pixel:?}"
+    );
     assert!(
         removed.iter().any(|line| line.contains("tween(500ms)")),
         "the removed item should keep fading out: {removed:?}"

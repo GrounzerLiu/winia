@@ -803,7 +803,9 @@ impl<A: LazyAxis> LazyList<A> {
         let m = base
             .lazy_scroll(content_height.clone())
             .lazy_scroll_reverse(self.reverse);
-        let m = m.then(self.modifier);
+        let m = m
+            .then(self.modifier)
+            .then(Modifier::new().with_item_animation_host(state.item_animations.clone()));
         // 注册顺序（policy 移动进 group 后不可再读——先取出）
         let child_globals = policy.globals.clone();
         // ⚠ item 子节点必须在 start_restartable_group **之后**注册（挂到
