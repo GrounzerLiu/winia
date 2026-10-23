@@ -1016,6 +1016,90 @@ fn flow_column_declares_its_parameters_for_skip() {
     assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
 }
 
+/// The Flow builder must hand its placement table to the policy: a keyed child that moves between
+/// two layouts gets a non-zero paint offset, not only a new final position.
+#[test]
+fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
+    use crate::unit::Offset;
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let columns = crate::State::new(3usize);
+    let mut composer = Composer::new();
+    let mut frame = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            FlowRow::new()
+                .max_items_in_row(columns.get())
+                .build(ctx, |ctx| {
+                    ctx.keyed_range("animated-flow", 3, |ctx, _| {
+                        let key = ctx.next_key();
+                        ctx.start_leaf(key, Modifier::new().size(40.0, 20.0).animate_item());
+                        ctx.end_node();
+                    });
+                });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+    };
+
+    frame(&mut composer);
+    columns.set(2);
+    frame(&mut composer);
+
+    let nodes = composer.arena_nodes();
+    let flow = nodes
+        .iter()
+        .position(|n| n.children.len() == 3)
+        .expect("the flow node owns three children");
+    let moved = nodes[flow]
+        .children
+        .iter()
+        .filter_map(|&c| nodes[c].placement_anim.as_ref())
+        .map(|state| state.peek())
+        .find(|offset| *offset != Offset::ZERO);
+    assert!(moved.is_some(), "a child moved from row one to row two and must carry an offset");
+    crate::animation::clear_all_animations();
+}
+
+/// A moved keyed child gets a paint offset from its previous slot; the first placement starts at
+/// zero, and a subsequent layout change springs the offset back to zero.
+#[test]
+fn placement_animation_starts_from_the_previous_slot() {
+    use super::placement::PlacementAnimations;
+    use crate::unit::Offset;
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let mut nodes = vec![LayoutNode::leaf(Modifier::new().animate_item())];
+    let animations = PlacementAnimations::default();
+    let first = [Placement {
+        position: Offset::new(0.0, 0.0),
+        size: Size::new(20.0, 10.0),
+    }];
+    animations.place(&mut nodes, &[0], &first);
+    let offset = nodes[0]
+        .placement_anim
+        .as_ref()
+        .expect("the marker creates an offset state")
+        .peek();
+    assert_eq!(offset, Offset::ZERO, "the first placement has nowhere to come from");
+
+    let second = [Placement {
+        position: Offset::new(30.0, 20.0),
+        size: Size::new(20.0, 10.0),
+    }];
+    animations.place(&mut nodes, &[0], &second);
+    let offset = nodes[0].placement_anim.as_ref().unwrap().peek();
+    assert!(
+        (offset.x + 30.0).abs() < 0.1 && (offset.y + 20.0).abs() < 0.1,
+        "the old slot is the opposite of the new position: {offset:?}"
+    );
+    crate::animation::clear_all_animations();
+}
+
 /// FlowRow end to end: a content closure with four fixed leaves and a 100-wide container wraps.
 #[test]
 fn flow_row_composes_and_wraps() {

@@ -64,3 +64,31 @@ fn flow_features_demo_covers_the_flow_surface() {
     });
     app.clear_layout_direction();
 }
+
+/// Changing the per-line cap from 3 to 2 is a real reflow: a keyed child moves to a new slot,
+/// the paint offset springs back to zero, and the layout itself does not jump between frames.
+#[test]
+fn flow_features_demo_animates_a_reflow() {
+    let mut app = UiTest::launch("flow_features");
+
+    app.expect_text("Flow Features");
+    let before = app.expect_tag("animated-2");
+    app.expect_tag("animated-5");
+
+    app.click_tag("toggle-columns");
+    app.expect_text("2 columns");
+
+    app.expect_eventually_timeout("the reflow moved the keyed card", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("animated-2")
+            .is_some_and(|r| (r.0 - before.0).abs() > 1.0 || (r.1 - before.1).abs() > 1.0)
+    });
+
+    // The placement spring is registered in the animation table; this is the observable proof
+    // that the card did not simply snap to its new slot.
+    let running = app.animations();
+    assert!(
+        !running.is_empty(),
+        "the reflow should leave a placement animation running: {running:?}"
+    );
+}

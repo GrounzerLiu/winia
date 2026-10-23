@@ -42,8 +42,13 @@ pub(super) fn render_pass1(
     // Lazy item placement animation (Compose's `animateItem`): the item is painted where it WAS, and
     // the offset springs to 0 as the layout settles. Applied around everything the node paints.
     let item_anim = node.item_anim.clone();
-    if item_anim.is_some() {
+    let placement_anim = node.placement_anim.clone();
+    if item_anim.is_some() || placement_anim.is_some() {
         canvas.save();
+    }
+    if let Some(offset) = &placement_anim {
+        let offset = offset.peek();
+        canvas.translate((offset.x, offset.y));
     }
     if let Some((offset, vertical)) = &item_anim {
         let offset = offset.peek();
@@ -978,7 +983,7 @@ pub(super) fn render_pass1(
     if tf_saved {
         canvas.restore();
     }
-    if item_anim.is_some() {
+    if item_anim.is_some() || placement_anim.is_some() {
         canvas.restore();
     }
 }

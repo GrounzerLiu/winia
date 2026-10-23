@@ -35,6 +35,7 @@ pub enum FlowOverflow {
 mod column;
 mod intrinsic;
 mod measure;
+mod placement;
 mod row;
 
 pub use column::{FlowColumn, FlowColumnLayout};

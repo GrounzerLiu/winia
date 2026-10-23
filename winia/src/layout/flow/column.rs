@@ -9,7 +9,7 @@ use crate::unit::Size;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 
-use super::{measure::measure_flow, FlowOverflow};
+use super::{measure::measure_flow, placement::PlacementAnimations, FlowOverflow};
 
 /// The FlowColumn measure policy: a vertical main axis that wraps when a column is too tall.
 #[derive(Debug, Clone)]
@@ -34,6 +34,8 @@ pub struct FlowColumnLayout {
     pub overflow: FlowOverflow,
     /// Direction used to mirror the final placements.
     pub direction: LayoutDirection,
+    /// Per-child offset states for `animate_item` placement animations.
+    pub(crate) placement_animations: PlacementAnimations,
 }
 
 impl FlowColumnLayout {
@@ -49,6 +51,7 @@ impl FlowColumnLayout {
             max_lines: usize::MAX,
             overflow: FlowOverflow::Clip,
             direction: LayoutDirection::Ltr,
+            placement_animations: PlacementAnimations::default(),
         }
     }
 
@@ -70,6 +73,11 @@ impl FlowColumnLayout {
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
     /// Sets the layout direction used for mirroring.
     pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
+
+    pub(crate) fn placement_animations(mut self, animations: PlacementAnimations) -> Self {
+        self.placement_animations = animations;
+        self
+    }
 }
 
 impl Default for FlowColumnLayout {
@@ -106,6 +114,7 @@ impl MeasurePolicy for FlowColumnLayout {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
         }
+        self.placement_animations.place(nodes, children, placements);
     }
 
     fn min_intrinsic_width(
@@ -192,7 +201,9 @@ impl MeasurePolicy for FlowColumnLayout {
 /// `cross_arrangement` the distribution of free cross space, `max_items_in_column` the per-column
 /// cap, `max_lines` the column cap (Clip mode; Visible bypasses it), and `overflow` selects Clip
 /// or Visible. Children may carry `layout_weight` / `layout_weight_fill`; line breaking uses
-/// their natural size. There is no overflow-indicator API yet; see the `layout::flow` module docs.
+/// their natural size. A child root marked with `Modifier::animate_item()` gets a two-dimensional
+/// paint spring when a reflow moves it; use `ctx.key` / `ctx.keyed_range` so its identity survives
+/// the move. There is no overflow-indicator API yet; see the `layout::flow` module docs.
 pub struct FlowColumn {
     modifier: Modifier,
     arrangement: Arrangement,
@@ -258,6 +269,7 @@ impl FlowColumn {
         ctx.changed(&self.overflow);
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
+        let placement_animations = ctx.remember(|| PlacementAnimations::default()).peek();
         build_container(
             ctx,
             self.modifier,
@@ -270,6 +282,7 @@ impl FlowColumn {
                 .max_items_in_column(self.max_items_in_column)
                 .max_lines(self.max_lines)
                 .overflow(self.overflow)
+                .placement_animations(placement_animations)
                 .direction(dir),
             content,
         );

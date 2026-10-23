@@ -38,6 +38,11 @@ the key moves, the item is painted at its OLD slot and springs to the new one; t
 node carries the animation, so the whole item moves. An item that was not placed on the previous
 frame resets instead of springing from a stale slot.
 
+The same marker is now honored by `FlowRow` / `FlowColumn`: a keyed flow child whose slot moves gets
+its old position as a two-dimensional paint offset and springs back to the new position. Flow uses
+the child's stable slot key, so pair it with `ctx.key` / `ctx.keyed_range` when items can reorder.
+
 Deliberate scope: PLACEMENT only. Compose's `animateItem` also fades items in and out; winia has no
-exit-node mechanism for a removed lazy item, so appearance/disappearance are not animated. The marker
-is inert outside a lazy list.
+exit-node mechanism for a removed lazy item, and a Flow reflow does not animate the cell size, so
+appearance/disappearance and size changes are not animated. Outside a lazy list or flow layout the
+marker is inert.

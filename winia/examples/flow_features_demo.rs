@@ -15,6 +15,7 @@ fn block(ctx: &mut ComposeCtx, tag: &'static str, w: f32, h: f32, color: Color, 
         .modifier(
             Modifier::new()
                 .size(w, h)
+                .animate_item()
                 .test_tag(tag)
                 .background(color, Shape::rounded(6.0)),
         )
@@ -26,6 +27,7 @@ fn block(ctx: &mut ComposeCtx, tag: &'static str, w: f32, h: f32, color: Color, 
 #[composable]
 fn flow_features(ctx: &mut ComposeCtx) {
     let scroll = ctx.remember(|| ScrollState::new()).get();
+    let columns = ctx.remember(|| 3usize);
 
     Column::new()
         .modifier(
@@ -36,6 +38,53 @@ fn flow_features(ctx: &mut ComposeCtx) {
         )
         .spacing(16.0)
         .build(ctx, |ctx| {
+            Text::new("FlowRow — animated reflow (3 x 2 <-> 2 x 3)")
+                .font_size(16.0)
+                .build(ctx);
+            Text::new(format!("{} columns — the cards spring to their new slots", columns.get()))
+                .font_size(12.0)
+                .build(ctx);
+            Button::new()
+                .modifier(Modifier::new().test_tag("toggle-columns"))
+                .on_click({
+                    let columns = columns.clone();
+                    move || {
+                        let next = if columns.get() == 3 { 2 } else { 3 };
+                        columns.set(next);
+                    }
+                })
+                .build(ctx, |ctx| Text::new("toggle columns").build(ctx));
+            FlowRow::new()
+                .main_spacing(8.0)
+                .cross_spacing(8.0)
+                .max_items_in_row(columns.get())
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .test_tag("flow-animated")
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    ctx.keyed_range("animated", 6, |ctx, n| {
+                        block(
+                            ctx,
+                            match n {
+                                0 => "animated-0",
+                                1 => "animated-1",
+                                2 => "animated-2",
+                                3 => "animated-3",
+                                4 => "animated-4",
+                                _ => "animated-5",
+                            },
+                            70.0,
+                            44.0,
+                            Color::from_argb(255, 220, 160, 100),
+                            &format!("A{n}"),
+                        );
+                    });
+                });
+
             Text::new("FlowRow — wraps and caps items")
                 .font_size(16.0)
                 .build(ctx);
