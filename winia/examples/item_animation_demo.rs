@@ -59,6 +59,7 @@ pub fn main() {
                 .build(ctx, |ctx| {
                     let items = ctx.remember(|| (0u64..4).collect::<Vec<u64>>());
                     let next_id = ctx.remember(|| 4u64);
+                    let scroll = ctx.remember(|| ScrollState::new()).get();
                     Column::new()
                         .modifier(Modifier::new().fill_max_size().padding(24.0))
                         .spacing(16.0)
@@ -112,27 +113,43 @@ pub fn main() {
                                         })
                                         .build(ctx, |ctx| Text::new("remove tail").build(ctx));
                                 });
-                            AnimatedSize::default()
+                            // Keep the controls fixed: only the card region scrolls. The weight
+                            // takes the remaining height; the scroll gives Flow an unbounded cross
+                            // axis so every row is placed.
+                            Column::new()
                                 .modifier(
-                                    Modifier::new().fill_max_width().test_tag("items-box"),
+                                    Modifier::new()
+                                        .fill_max_width()
+                                        .layout_weight(1.0)
+                                        .vertical_scroll(scroll),
                                 )
                                 .build(ctx, |ctx| {
-                                    FlowRow::new()
-                                        .main_spacing(8.0)
-                                        .cross_spacing(8.0)
-                                        .max_items_in_row(3)
+                                    AnimatedSize::default()
                                         .modifier(
                                             Modifier::new()
                                                 .fill_max_width()
-                                                .test_tag("items-flow"),
+                                                .test_tag("items-box"),
                                         )
                                         .build(ctx, |ctx| {
-                                            let current = items.get();
-                                            for id in current {
-                                                // Slot key 0 is the "no explicit key" sentinel; item ids
-                                                // start at 0, so shift the composition key.
-                                                ctx.key(id + 1, |ctx| item(ctx, &items, id));
-                                            }
+                                            FlowRow::new()
+                                                .main_spacing(8.0)
+                                                .cross_spacing(8.0)
+                                                .max_items_in_row(3)
+                                                .modifier(
+                                                    Modifier::new()
+                                                        .fill_max_width()
+                                                        .test_tag("items-flow"),
+                                                )
+                                                .build(ctx, |ctx| {
+                                                    let current = items.get();
+                                                    for id in current {
+                                                        // Slot key 0 is the "no explicit key" sentinel;
+                                                        // item ids start at 0, so shift the composition key.
+                                                        ctx.key(id + 1, |ctx| {
+                                                            item(ctx, &items, id)
+                                                        });
+                                                    }
+                                                });
                                         });
                                 });
                         });
