@@ -90,9 +90,9 @@ fn cross_size(
     max_rows: usize,
     max_items: usize,
     clip: bool,
-) -> f32 {
+) -> (f32, usize) {
     if main_sizes.is_empty() || max_rows == 0 {
-        return 0.0;
+        return (0.0, 0);
     }
     let cap = max_items.max(1);
     let row_cap = if clip { max_rows } else { usize::MAX };
@@ -101,6 +101,7 @@ fn cross_size(
     let mut remaining = main_available;
     let mut count = 0usize;
     let mut rows = 1usize;
+    let mut shown = 0usize;
     for i in 0..main_sizes.len() {
         let need = if count > 0 { main_spacing + main_sizes[i] } else { main_sizes[i] };
         let wrap = count > 0 && (count >= cap || remaining < need);
@@ -117,8 +118,9 @@ fn cross_size(
         remaining -= need;
         line_cross = line_cross.max(cross_sizes[i]);
         count += 1;
+        shown += 1;
     }
-    total + line_cross
+    (total + line_cross, shown)
 }
 
 fn cross_intrinsic(
@@ -144,6 +146,7 @@ fn cross_intrinsic(
         max_items,
         overflow != FlowOverflow::Visible,
     )
+    .0
 }
 
 /// Minimum main-axis size that keeps the flow within `cross_available`.
@@ -166,15 +169,22 @@ fn min_main_intrinsic(
     let low = main_sizes.iter().fold(0.0f32, |a, &b| a.max(b));
     let high = main_sizes.iter().sum::<f32>()
         + main_spacing * (children.len() as f32 - 1.0).max(0.0);
-    if cross_available >= f32::MAX {
-        return low;
-    }
+    // Compose requires the min intrinsic width to show every item the max_lines/max_items cap
+    // allows; a width that merely fits the cross budget while silently dropping items is not the
+    // minimum usable width. When either cap is unlimited, the requirement is all children.
+    let max_items_that_can_be_shown = if max_rows != usize::MAX && max_items != usize::MAX {
+        max_rows
+            .saturating_mul(max_items.max(1))
+            .min(children.len())
+    } else {
+        children.len()
+    };
     let clip = overflow != FlowOverflow::Visible;
     let mut lo = low;
     let mut hi = high;
     for _ in 0..24 {
         let mid = (lo + hi) / 2.0;
-        let used = cross_size(
+        let (used, shown) = cross_size(
             &main_sizes,
             &cross_sizes,
             mid,
@@ -184,7 +194,7 @@ fn min_main_intrinsic(
             max_items,
             clip,
         );
-        if used > cross_available {
+        if used > cross_available || shown < max_items_that_can_be_shown {
             lo = mid;
         } else {
             hi = mid;

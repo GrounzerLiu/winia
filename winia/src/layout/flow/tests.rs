@@ -925,6 +925,36 @@ fn flow_column_composes_and_wraps() {
     assert_eq!(xs, vec![0.0, 0.0, 0.0, 20.0], "the first three stay in the first column, the fourth wraps (xs={xs:?})");
 }
 
+/// minIntrinsicWidth must show every item the caps allow, not merely fit the cross budget.
+#[test]
+fn flow_row_min_intrinsic_width_requires_the_capped_items() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
+    for _ in 0..5 {
+        nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
+    }
+    nodes[0].children = (1..=5).collect();
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(
+        FlowRowLayout::new().max_items_in_row(2).max_lines(1),
+    )];
+    let width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 20.0);
+    assert_eq!(width, 80.0, "two items per the one-row cap must fit");
+}
+
+/// With only max_lines set, minIntrinsicWidth must leave every child visible on that line.
+#[test]
+fn flow_row_min_intrinsic_width_requires_all_items_on_one_line() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
+    for _ in 0..3 {
+        nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
+    }
+    nodes[0].children = (1..=3).collect();
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_lines(1))];
+    let width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 20.0);
+    assert_eq!(width, 120.0, "all three items must be shown on the single line");
+}
+
 /// Intrinsic line breaking must charge main_spacing; otherwise it reports one row where measure
 /// makes two (and a min width that the real layout cannot use).
 #[test]

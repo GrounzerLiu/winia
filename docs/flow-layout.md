@@ -81,8 +81,8 @@ FlowColumn::new()
 - `max_items_in_row(0)` / `max_items_in_column(0)` is treated as one item per line (defensive
   v1 rule); Compose returns an empty flow. `max_lines(0)` does return an empty flow.
 - Intrinsic queries are implemented: max main is the longest line sum, min main is a binary
-  search for the narrowest axis that fits the cross budget, and cross intrinsics use the same
-  line/max-items/max-lines rules as measurement.
+  search for the narrowest axis that fits the cross budget and shows every item allowed by
+  max_items/max_lines, and cross intrinsics use the same line/max-items/max-lines rules.
 - `cross_arrangement` distributes the free cross space between lines; `cross_spacing` remains
   the fixed gap added before the arrangement's share. A single line with `SpaceBetween` is
   centred by the shared `compute_spacing` helper (the legacy flex convention); Compose starts
