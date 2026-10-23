@@ -18,7 +18,7 @@ fn item_spec() -> ItemAnimationSpec {
             EaseOutCubic::new(),
         ))
         .fade_out(TweenSpec::new(
-            std::time::Duration::from_millis(2000),
+            std::time::Duration::from_millis(300),
             EaseOutCubic::new(),
         ))
 }
