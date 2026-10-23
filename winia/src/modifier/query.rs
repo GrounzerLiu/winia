@@ -283,10 +283,20 @@ impl Modifier {
         })
     }
 
-    /// Whether this item carries the placement-animation marker (`Modifier::animate_item`).
-    /// Lazy layouts honor it directly; a Flow must also enable `animate_placement(true)`.
+    /// Whether this item carries the animation contract (`Modifier::animate_item`).
+    /// Item-aware layouts (lazy lists and flows) honor it directly.
     pub fn has_animate_item(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::AnimateItem))
+        self.animate_item_spec().is_some()
+    }
+
+    /// The item placement/fade contract attached with `Modifier::animate_item`.
+    pub(crate) fn animate_item_spec(
+        &self,
+    ) -> Option<crate::animation::item::ItemAnimationSpec> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::AnimateItem(spec) => Some(spec.clone()),
+            _ => None,
+        })
     }
 
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {

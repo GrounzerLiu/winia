@@ -119,7 +119,12 @@ impl Debug for ModifierElement {
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
-            Self::AnimateItem => f.write_str("AnimateItem"),
+            Self::AnimateItem(spec) => f
+                .debug_struct("AnimateItem")
+                .field("placement", &spec.placement)
+                .field("fade_in", &spec.fade_in)
+                .field("fade_out", &spec.fade_out)
+                .finish(),
             Self::InnerShadow { shape, color, blur, .. } => f
                 .debug_struct("InnerShadow")
                 .field("shape", shape)

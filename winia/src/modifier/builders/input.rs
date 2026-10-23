@@ -614,13 +614,19 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self
     }
 
-    /// Compose's `LazyItemScope.animateItem()`: place this on the item's root. A lazy list springs
-    /// the item from its old slot to the new one when the data reorders (keyed by the item key).
-    /// FlowRow/FlowColumn also honor it, but only when the container opts in with
-    /// `FlowRow::animate_placement(true)` / `FlowColumn::animate_placement(true)`. Elsewhere the
+    /// Compose's `LazyItemScope.animateItem()`: place this on the item's root. Lazy lists and
+    /// FlowRow/FlowColumn read the contract directly; no container switch is needed. Elsewhere the
     /// marker is inert.
     pub fn animate_item(self) -> Self {
-        self.push(ModifierElement::AnimateItem)
+        self.animate_item_with(crate::animation::item::ItemAnimationSpec::default())
+    }
+
+    /// The same marker with an explicit placement/fade contract.
+    pub fn animate_item_with(
+        self,
+        spec: crate::animation::item::ItemAnimationSpec,
+    ) -> Self {
+        self.push(ModifierElement::AnimateItem(spec))
     }
 
     /// 绑定嵌套滚动连接。连接会在 descendant scrollable 的 pre/post 阶段被调度。

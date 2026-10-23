@@ -87,33 +87,6 @@ impl LazyAxis for crate::layout::axis::HorizontalAxis {
     }
 }
 
-/// Per-item placement animations, keyed by the item key. Shared by every layout of the list.
-#[derive(Debug, Default)]
-pub(crate) struct ItemAnimations {
-    /// Incremented once per `place`; an item seen on the PREVIOUS frame animates its move, an item
-    /// that was away resets instead of springing from a stale slot.
-    pub frame: u64,
-    pub items: std::collections::HashMap<u64, ItemAnimation>,
-}
-
-/// One animated item's current paint offset and the slot it occupied last frame.
-#[derive(Debug)]
-pub(crate) struct ItemAnimation {
-    pub offset: crate::runtime::state::State<f32>,
-    pub last_main: f32,
-    pub last_frame: u64,
-}
-
-/// How many placement passes a key survives after it leaves the window before its animation state
-/// is dropped. The map is keyed by item key, so a feed of ever-new keys would otherwise grow without
-/// bound; an item that comes back after this window starts from a fresh slot anyway.
-const ITEM_ANIMATION_RETENTION_FRAMES: u64 = 240;
-
-fn retain_recent_items(anims: &mut ItemAnimations, frame: u64) {
-    anims
-        .items
-        .retain(|_, item| frame.saturating_sub(item.last_frame) <= ITEM_ANIMATION_RETENTION_FRAMES);
-}
 
 mod interval;
 mod list;

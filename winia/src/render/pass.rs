@@ -6,6 +6,91 @@ use super::text_field::*;
 
 // ── 渲染遍历（含 BackdropBlur 即时处理）──
 
+thread_local! {
+    static CAPTURING_ITEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Record one item subtree into its exit picture before the normal draw. The recording call is
+/// guarded so the recursive render cannot capture itself again.
+fn capture_item(
+    nodes: &[LayoutNode],
+    root_idx: usize,
+    idx: usize,
+    x: f32,
+    y: f32,
+    paint: &crate::layout::item_animation::ItemPaint,
+) {
+    if paint.fade_out.is_none() || CAPTURING_ITEM.with(|c| c.get()) {
+        return;
+    }
+    let node = &nodes[idx];
+    let content = node.content_box();
+    if content.width <= 0.0 || content.height <= 0.0 {
+        return;
+    }
+    CAPTURING_ITEM.with(|c| c.set(true));
+    let mut recorder = skia_safe::PictureRecorder::new();
+    let bounds = Rect::new(0.0, 0.0, content.width, content.height);
+    {
+        let canvas = recorder.begin_recording(bounds, false);
+        canvas.translate((-x, -y));
+        render_pass1(
+            nodes,
+            root_idx,
+            idx,
+            canvas,
+            x - node.position.x,
+            y - node.position.y,
+            true,
+            true,
+        );
+    }
+    let picture = recorder.finish_recording_as_picture(None);
+    CAPTURING_ITEM.with(|c| c.set(false));
+    if let Some(picture) = picture {
+        paint.exit_store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pictures
+            .insert(
+                paint.key,
+                crate::layout::item_animation::CapturedItem {
+                    picture,
+                    position: crate::unit::Offset::new(x, y),
+                    size: crate::unit::Size::new(content.width, content.height),
+                },
+            );
+    }
+}
+
+/// Draw the retained exit pictures after the live tree. Each store owns its own exits, so two
+/// lists cannot steal each other's ghosts.
+pub(crate) fn render_exits(canvas: &Canvas) {
+    for store in crate::layout::item_animation::exit_stores() {
+        let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut finished = Vec::new();
+        for (key, exit) in store.exits.iter() {
+            let alpha = exit.alpha.peek().clamp(0.0, 1.0);
+            if alpha > 0.001 {
+                canvas.save();
+                canvas.translate((exit.position.x, exit.position.y));
+                let mut paint = Paint::default();
+                paint.set_alpha_f(alpha);
+                canvas.draw_picture(&exit.picture, None, Some(&paint));
+                canvas.restore();
+            }
+            if alpha <= 0.001
+                && !crate::animation::has_animation_for_state(exit.alpha.state_id())
+            {
+                finished.push(*key);
+            }
+        }
+        for key in finished {
+            store.exits.remove(&key);
+        }
+    }
+}
+
 pub(super) fn render_pass1(
     nodes: &[LayoutNode],
     root_idx: usize,
@@ -39,23 +124,27 @@ pub(super) fn render_pass1(
     let h = content_box.height;
     if w <= 0.0 || h <= 0.0 { return; }
 
-    // Lazy item placement animation (Compose's `animateItem`): the item is painted where it WAS, and
-    // the offset springs to 0 as the layout settles. Applied around everything the node paints.
-    let item_anim = node.item_anim.clone();
-    let placement_anim = node.placement_anim.clone();
-    if item_anim.is_some() || placement_anim.is_some() {
+    // Item animation (Compose's `animateItem`): the item is painted where it WAS, and the offset
+    // travels to 0 as the layout settles; the alpha layer covers the whole item for enter/exit fade.
+    let item_paint = node.item_paint.clone();
+    if let Some(paint) = &item_paint {
+        capture_item(nodes, root_idx, idx, x, y, paint);
+    }
+    let mut item_alpha_layer = false;
+    if item_paint.is_some() {
         canvas.save();
-    }
-    if let Some(offset) = &placement_anim {
-        let offset = offset.peek();
-        canvas.translate((offset.x, offset.y));
-    }
-    if let Some((offset, vertical)) = &item_anim {
-        let offset = offset.peek();
-        if *vertical {
-            canvas.translate((0.0, offset));
-        } else {
-            canvas.translate((offset, 0.0));
+        if let Some(paint) = &item_paint {
+            let offset = paint.offset.peek();
+            canvas.translate((offset.x, offset.y));
+            let alpha = paint.alpha.peek().clamp(0.0, 1.0);
+            if alpha < 0.999 {
+                let mut layer_paint = Paint::default();
+                layer_paint.set_alpha((alpha * 255.0).round() as u8);
+                canvas.save_layer(
+                    &skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint),
+                );
+                item_alpha_layer = true;
+            }
         }
     }
 
@@ -983,7 +1072,10 @@ pub(super) fn render_pass1(
     if tf_saved {
         canvas.restore();
     }
-    if item_anim.is_some() || placement_anim.is_some() {
+    if item_alpha_layer {
+        canvas.restore();
+    }
+    if item_paint.is_some() {
         canvas.restore();
     }
 }

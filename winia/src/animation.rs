@@ -11,6 +11,7 @@
 //! - Frame driving is updated in `AboutToWait` in `app.rs`
 
 pub mod interpolator;
+pub mod item;
 pub mod visibility;
 
 pub use visibility::{

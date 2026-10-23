@@ -603,9 +603,9 @@ pub(crate) enum ModifierElement {
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
     LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
-    /// Compose's `LazyItemScope.animateItem()`: a marker the lazy list reads. The list springs the
-    /// item from its previous slot to the new one when the data reorders. Inert outside a lazy list.
-    AnimateItem,
+    /// The item's placement/fade contract. Lazy lists and flow layouts read it; the renderer applies
+    /// the host's paint channels. Inert outside an item-aware layout.
+    AnimateItem(crate::animation::item::ItemAnimationSpec),
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// Compose's inner shadow: a rim drawn inside the shape, above the content.

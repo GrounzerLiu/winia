@@ -184,6 +184,7 @@ branch needs a group of its own (`ctx.start_scope`, or a child composable).
 | `update_transition(target, spec, label)` | a state machine whose pairs animate; `animate_float/color/dp/size/offset/value`, `create_child_transition` |
 | `remember_infinite_transition()` | `animate_float/animate_color/animate_float_preserving`; auto-disposed with its slot |
 | `AnimatedVisibility` / `AnimatedContent` / `Crossfade` / `AnimatedSize` | the container family, each in `components/` with its own tests |
+| `Modifier::animate_item(ItemAnimationSpec)` | the shared item contract for Lazy and Flow: placement, fade-in and fade-out, keyed by the item; see `docs/item-animation.md` |
 | `TimedAnimation` | a spec evaluated at an arbitrary time, with nothing registered — the hand-off / "what would 137 ms look like" query |
 
 ## 11. The frame clock

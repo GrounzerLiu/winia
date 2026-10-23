@@ -22,6 +22,8 @@ pub mod adaptive;
 pub mod subcompose;
 pub mod node;
 pub mod relocation;
+
+pub(crate) mod item_animation;
 pub(crate) mod flex;
 pub(crate) mod column;
 mod row;

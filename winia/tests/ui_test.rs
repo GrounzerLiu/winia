@@ -118,3 +118,25 @@ fn flow_features_demo_animates_a_reflow() {
             .is_some_and(|r| (r.3 - 112.0).abs() < 1.0)
     });
 }
+
+/// The dedicated item-animation demo exercises both directions of the shared item host: an added
+/// key fades in, and a removed key keeps its captured picture while it fades out.
+#[test]
+fn item_animation_demo_fades_added_and_removed_items() {
+    let mut app = UiTest::launch("item_animation");
+    app.expect_text("Item animation");
+
+    app.click_tag("add-item");
+    let added = app.animations();
+    assert!(
+        added.iter().any(|line| line.contains("tween(300ms)")),
+        "the new item should fade in with its own curve: {added:?}"
+    );
+
+    app.click_tag("remove-item");
+    let removed = app.animations();
+    assert!(
+        removed.iter().any(|line| line.contains("tween(500ms)")),
+        "the removed item should keep fading out: {removed:?}"
+    );
+}

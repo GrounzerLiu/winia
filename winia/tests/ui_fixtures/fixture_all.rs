@@ -7,8 +7,13 @@
 
 #[path = "../../examples/flow_features_demo.rs"]
 mod flow_features;
+#[path = "../../examples/item_animation_demo.rs"]
+mod item_animation;
 
-const SCENARIOS: &[(&str, fn())] = &[("flow_features", flow_features::main)];
+const SCENARIOS: &[(&str, fn())] = &[
+    ("flow_features", flow_features::main),
+    ("item_animation", item_animation::main),
+];
 
 fn main() {
     let scenario = std::env::args().nth(1).unwrap_or_default();

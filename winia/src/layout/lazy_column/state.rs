@@ -54,8 +54,8 @@ pub struct LazyListState {
     /// The in-flight wheel page target, shared by every ScrollState assembled for this list.
     /// Recomposition must not erase it while the spring is still moving.
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
-    /// Per-item placement animations (keyed by item key), shared with the measure policy.
-    pub(crate) item_animations: std::sync::Arc<std::sync::Mutex<ItemAnimations>>,
+    /// Per-item placement/fade animations (keyed by item key), shared with the measure policy.
+    pub(crate) item_animations: crate::layout::item_animation::ItemAnimationHost,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::runtime::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -74,7 +74,7 @@ impl LazyListState {
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            item_animations: std::sync::Arc::new(std::sync::Mutex::new(ItemAnimations::default())),
+            item_animations: crate::layout::item_animation::ItemAnimationHost::default(),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),

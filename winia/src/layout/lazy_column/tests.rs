@@ -2016,28 +2016,6 @@
     }
 
     #[test]
-    fn item_animations_forget_keys_that_have_been_gone_for_a_while() {
-        let mut anims = ItemAnimations::default();
-        anims.frame = 10_000;
-        for (key, last_frame) in [(1u64, 9_999u64), (2u64, 100u64)] {
-            anims.items.insert(
-                key,
-                ItemAnimation {
-                    offset: crate::runtime::state::State::new(0.0),
-                    last_main: 0.0,
-                    last_frame,
-                },
-            );
-        }
-        retain_recent_items(&mut anims, 10_000);
-        assert!(anims.items.contains_key(&1), "a just-seen item keeps its animation");
-        assert!(
-            !anims.items.contains_key(&2),
-            "a key that left long ago is dropped instead of growing the map forever"
-        );
-    }
-
-    #[test]
     fn animate_item_springs_a_shifted_item_from_its_old_slot() {
         let (_guard, clock) = crate::animation::tests::serial_clock();
         crate::animation::clear_all_animations();
@@ -2076,8 +2054,8 @@
             composer
                 .arena_nodes()
                 .iter()
-                .filter_map(|n| n.item_anim.as_ref())
-                .all(|(offset, _)| offset.peek().abs() < 0.5),
+                .filter_map(|n| n.item_paint.as_ref())
+                .all(|paint| paint.offset.peek().y.abs() < 0.5),
             "nothing has moved yet, so nothing animates"
         );
 
@@ -2090,7 +2068,7 @@
         let shifted: Vec<f32> = composer
             .arena_nodes()
             .iter()
-            .filter_map(|n| n.item_anim.as_ref().map(|(offset, _)| offset.peek()))
+            .filter_map(|n| n.item_paint.as_ref().map(|paint| paint.offset.peek().y))
             .filter(|value| value.abs() > 0.5)
             .collect();
         assert!(
@@ -2111,8 +2089,8 @@
             composer
                 .arena_nodes()
                 .iter()
-                .filter_map(|n| n.item_anim.as_ref())
-                .all(|(offset, _)| offset.peek().abs() < 0.5),
+                .filter_map(|n| n.item_paint.as_ref())
+                .all(|paint| paint.offset.peek().y.abs() < 0.5),
             "the placement spring settles on the new slot"
         );
         crate::animation::clear_all_animations();

@@ -192,7 +192,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
-        (AnimateItem, AnimateItem) => true,
+        (AnimateItem(as_), AnimateItem(bs)) => format!("{as_:?}") == format!("{bs:?}"),
         (
             InnerShadow { shape: as_, color: ac, blur: ab, offset_x: ax, offset_y: ay },
             InnerShadow { shape: bs, color: bc, blur: bb, offset_x: bx, offset_y: by },

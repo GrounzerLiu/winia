@@ -1032,7 +1032,6 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
         composer.compose(|ctx| {
             FlowRow::new()
                 .max_items_in_row(columns.get())
-                .animate_placement(true)
                 .build(ctx, |ctx| {
                     ctx.keyed_range("animated-flow", 3, |ctx, _| {
                         let key = ctx.next_key();
@@ -1049,17 +1048,15 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
     frame(&mut composer);
 
     let nodes = composer.arena_nodes();
-    eprintln!("DBG nodes={} children={:?}", nodes.len(), nodes.iter().map(|n| (n.children.len(), n.position, n.slot_key, n.placement_anim.is_some())).collect::<Vec<_>>());
     let flow = nodes
         .iter()
         .position(|n| n.children.len() == 3)
         .expect("the flow node owns three children");
-    eprintln!("DBG flow={flow} kids={:?}", nodes[flow].children.iter().map(|&c| (nodes[c].position, nodes[c].slot_key, nodes[c].placement_anim.as_ref().map(|s| s.peek()))).collect::<Vec<_>>());
     let moved = nodes[flow]
         .children
         .iter()
-        .filter_map(|&c| nodes[c].placement_anim.as_ref())
-        .map(|state| state.peek())
+        .filter_map(|&c| nodes[c].item_paint.as_ref())
+        .map(|paint| paint.offset.peek())
         .find(|offset| *offset != Offset::ZERO);
     assert!(moved.is_some(), "a child moved from row one to row two and must carry an offset");
     crate::animation::clear_all_animations();
@@ -1080,7 +1077,6 @@ fn flow_column_attaches_the_placement_animation_to_a_moved_child() {
         composer.compose(|ctx| {
             FlowColumn::new()
                 .max_items_in_column(per_column.get())
-                .animate_placement(true)
                 .build(ctx, |ctx| {
                     ctx.keyed_range("animated-column", 3, |ctx, _| {
                         let key = ctx.next_key();
@@ -1104,8 +1100,8 @@ fn flow_column_attaches_the_placement_animation_to_a_moved_child() {
     let moved = nodes[column]
         .children
         .iter()
-        .filter_map(|&c| nodes[c].placement_anim.as_ref())
-        .map(|state| state.peek())
+        .filter_map(|&c| nodes[c].item_paint.as_ref())
+        .map(|paint| paint.offset.peek())
         .find(|offset| *offset != Offset::ZERO);
     assert!(moved.is_some(), "a child moved from column three to column two and must carry an offset");
     crate::animation::clear_all_animations();
@@ -1114,8 +1110,8 @@ fn flow_column_attaches_the_placement_animation_to_a_moved_child() {
 /// A moved keyed child gets a paint offset from its previous slot; the first placement starts at
 /// zero, and a subsequent layout change springs the offset back to zero.
 #[test]
-fn placement_animation_starts_from_the_previous_slot() {
-    use super::placement::PlacementAnimations;
+fn item_animation_starts_from_the_previous_slot() {
+    use crate::layout::item_animation::ItemAnimationHost;
     use crate::unit::Offset;
 
     let _guard = crate::animation::tests::TEST_SERIAL
@@ -1123,28 +1119,22 @@ fn placement_animation_starts_from_the_previous_slot() {
         .unwrap_or_else(|e| e.into_inner());
     crate::animation::clear_all_animations();
     let mut nodes = vec![LayoutNode::leaf(Modifier::new().animate_item())];
-    let animations = PlacementAnimations::default();
-    let spec = crate::animation::AnimationSpec::Spring(
-        crate::animation::SpringSpec::default(),
-    );
-    let first = [Placement {
-        position: Offset::new(0.0, 0.0),
-        size: Size::new(20.0, 10.0),
-    }];
-    animations.place(&mut nodes, &[0], &first, &spec);
+    let animations = ItemAnimationHost::default();
+    let spec = crate::animation::item::ItemAnimationSpec::default();
+
+    animations.begin_frame();
+    animations.place(&mut nodes, 0, 1, Offset::new(0.0, 0.0), Size::new(20.0, 10.0), &spec);
     let offset = nodes[0]
-        .placement_anim
+        .item_paint
         .as_ref()
         .expect("the marker creates an offset state")
+        .offset
         .peek();
     assert_eq!(offset, Offset::ZERO, "the first placement has nowhere to come from");
 
-    let second = [Placement {
-        position: Offset::new(30.0, 20.0),
-        size: Size::new(20.0, 10.0),
-    }];
-    animations.place(&mut nodes, &[0], &second, &spec);
-    let offset = nodes[0].placement_anim.as_ref().unwrap().peek();
+    animations.begin_frame();
+    animations.place(&mut nodes, 0, 1, Offset::new(30.0, 20.0), Size::new(20.0, 10.0), &spec);
+    let offset = nodes[0].item_paint.as_ref().unwrap().offset.peek();
     assert!(
         (offset.x + 30.0).abs() < 0.1 && (offset.y + 20.0).abs() < 0.1,
         "the old slot is the opposite of the new position: {offset:?}"
@@ -1167,14 +1157,19 @@ fn flow_row_placement_uses_the_configured_spec() {
         composer.compose(|ctx| {
             FlowRow::new()
                 .max_items_in_row(columns.get())
-                .animate_placement_spec(crate::animation::TweenSpec::new(
-                    std::time::Duration::from_millis(321),
-                    crate::animation::interpolator::Linear::new(),
-                ))
                 .build(ctx, |ctx| {
                     ctx.keyed_range("custom-curve", 3, |ctx, _| {
                         let key = ctx.next_key();
-                        ctx.start_leaf(key, Modifier::new().size(40.0, 20.0).animate_item());
+                        let spec = crate::animation::item::ItemAnimationSpec::new().placement(
+                            crate::animation::TweenSpec::new(
+                                std::time::Duration::from_millis(321),
+                                crate::animation::interpolator::Linear::new(),
+                            ),
+                        );
+                        ctx.start_leaf(
+                            key,
+                            Modifier::new().size(40.0, 20.0).animate_item_with(spec),
+                        );
                         ctx.end_node();
                     });
                 });
@@ -1197,9 +1192,9 @@ fn flow_row_placement_uses_the_configured_spec() {
             .iter()
             .any(|n| n.children.iter().any(|&c| {
                 composer.arena_nodes()[c]
-                    .placement_anim
+                    .item_paint
                     .as_ref()
-                    .is_some_and(|s| s.peek() != Offset::ZERO)
+                    .is_some_and(|paint| paint.offset.peek() != Offset::ZERO)
             })),
         "the moved child must still carry a non-zero paint offset"
     );

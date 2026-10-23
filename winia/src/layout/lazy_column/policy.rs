@@ -339,72 +339,24 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
-        /// Whether any node in this item's subtree asks for placement animation (`animateItem`).
-        fn subtree_has_animate_item(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> bool {
-            if nodes[idx].modifier.has_animate_item() {
-                return true;
-            }
-            nodes[idx]
-                .children
-                .iter()
-                .any(|&c| subtree_has_animate_item(nodes, c))
-        }
-        // Placement animations (Compose's `animateItem`): an item whose key occupied a different
-        // main-axis slot on the PREVIOUS frame starts at the old slot and springs to the new one.
-        // Items that were away (not placed last frame) reset instead of springing from a stale slot.
-        // The map is keyed by the item key, so the animation survives the node recycling the lazy
-        // window does.
-        let mut anims = self
-            .state
-            .item_animations
-            .lock()
-            .expect("lazy item animations");
-        anims.frame += 1;
-        let frame = anims.frame;
+        self.state.item_animations.begin_frame();
         for (i, &c) in children.iter().enumerate() {
-            // The marker sits on the item's ROOT content, and the lazy list registers a wrapper
-            // group node per item — so the animation belongs to the wrapper and the marker is looked
-            // for in its subtree.
-            let animate = subtree_has_animate_item(nodes, c);
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
-            nodes[c].item_anim = None;
-            if !animate {
+            nodes[c].item_paint = None;
+            // The marker sits on the item's ROOT content; the lazy list registers a wrapper group
+            // node per item, so the animation belongs to the wrapper and the marker is in its subtree.
+            let Some(spec) = crate::layout::item_animation::subtree_item_spec(nodes, c) else {
                 continue;
-            }
+            };
             let global = self.globals.get(i).copied().unwrap_or(i);
             let key = self.keys.get(global).copied().unwrap_or(global as u64);
-            let main = A::main_size(crate::unit::Size::new(
-                nodes[c].position.x,
-                nodes[c].position.y,
-            ));
-            let item = anims.items.entry(key).or_insert_with(|| ItemAnimation {
-                offset: crate::runtime::state::State::new(0.0),
-                last_main: main,
-                last_frame: frame,
-            });
-            if item.last_frame + 1 == frame {
-                let delta = item.last_main - main;
-                if delta.abs() > 0.5 {
-                    crate::animation::cancel_animation(&item.offset);
-                    item.offset.set(delta);
-                    crate::animation::push_animatable_restart(
-                        item.offset.clone(),
-                        0.0,
-                        crate::animation::AnimationSpec::Spring(
-                            crate::animation::SpringSpec::default(),
-                        ),
-                    );
-                }
-            } else {
-                // Away for a frame (or new): no stale spring.
-                item.offset.set(0.0);
-            }
-            item.last_main = main;
-            item.last_frame = frame;
-            nodes[c].item_anim = Some((item.offset.clone(), A::VERTICAL));
+            let position = nodes[c].position;
+            self.state
+                .item_animations
+                .place(nodes, c, key, position, placements[i].size, &spec);
         }
-        retain_recent_items(&mut anims, frame);
+        self.state.item_animations.finish_frame();
     }
 }
 
