@@ -79,8 +79,10 @@ FlowColumn::new()
 - **Placement animation**: enable `FlowRow::animate_placement(true)` / `FlowColumn::animate_placement(true)`
   and put `Modifier::animate_item()` on a child's root. Flow keeps the child's stable slot key,
   records its previous position, and paints a two-dimensional offset that springs back to zero
-  after a reflow. Use `ctx.key` / `ctx.keyed_range` for the identity to survive a reorder; size
-  changes and fade-in/out are not animated yet.
+  after a reflow. The default curve is a spring; `placement_spec(spec)` (or
+  `animate_placement_spec(spec)`) accepts a tween, keyframes, snap, or a tuned spring. Use
+  `ctx.key` / `ctx.keyed_range` for the identity to survive a reorder; size changes and fade-in/out
+  are not animated yet.
 - **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
 - **Composition**: the builders are deliberately not macros (a `State.get()` at the content's
   top level must bubble to the parent), and every parameter is declared with `ctx.changed`.

@@ -66,6 +66,7 @@ impl PlacementAnimations {
         nodes: &mut [LayoutNode],
         children: &[usize],
         placements: &[Placement],
+        spec: &crate::animation::AnimationSpec,
     ) {
         let mut state = self.state().lock().unwrap_or_else(|e| e.into_inner());
         state.frame += 1;
@@ -99,9 +100,7 @@ impl PlacementAnimations {
                 crate::animation::push_animatable_restart(
                     entry.offset.clone(),
                     Offset::ZERO,
-                    crate::animation::AnimationSpec::Spring(
-                        crate::animation::SpringSpec::default(),
-                    ),
+                    spec.clone(),
                 );
             } else if entry.last_frame + 1 != frame {
                 // Away for a frame (or new): do not spring from a stale visual position.

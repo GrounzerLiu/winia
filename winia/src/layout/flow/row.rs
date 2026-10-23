@@ -9,6 +9,7 @@ use crate::unit::Size;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 
+use crate::animation::AnimationSpec;
 use super::{measure::measure_flow, placement::PlacementAnimations, FlowOverflow};
 
 /// The FlowRow measure policy: a horizontal main axis that wraps when a line is too wide.
@@ -41,6 +42,8 @@ pub struct FlowRowLayout {
     /// Per-child offset states for `animate_item` placement animations; `None` disables the
     /// scan and keeps the default Flow free of animation bookkeeping.
     pub(crate) placement_animations: Option<PlacementAnimations>,
+    /// Animation driving a moved child's paint offset.
+    pub(crate) placement_spec: AnimationSpec,
 }
 
 impl FlowRowLayout {
@@ -57,6 +60,7 @@ impl FlowRowLayout {
             overflow: FlowOverflow::Clip,
             direction: LayoutDirection::Ltr,
             placement_animations: None,
+            placement_spec: AnimationSpec::Spring(crate::animation::SpringSpec::default()),
         }
     }
 
@@ -81,6 +85,11 @@ impl FlowRowLayout {
 
     pub(crate) fn placement_animations(mut self, animations: Option<PlacementAnimations>) -> Self {
         self.placement_animations = animations;
+        self
+    }
+
+    pub(crate) fn placement_spec(mut self, spec: AnimationSpec) -> Self {
+        self.placement_spec = spec;
         self
     }
 }
@@ -120,7 +129,7 @@ impl MeasurePolicy for FlowRowLayout {
             nodes[c].measured_size = placements[i].size;
         }
         if let Some(animations) = &self.placement_animations {
-            animations.place(nodes, children, placements);
+            animations.place(nodes, children, placements, &self.placement_spec);
         }
     }
 
@@ -225,6 +234,8 @@ pub struct FlowRow {
     overflow: FlowOverflow,
     /// Whether a change in placement should spring instead of jumping.
     animate_placement: bool,
+    /// Curve used by a moved child's paint offset. Defaults to a spring.
+    placement_spec: AnimationSpec,
 }
 
 impl FlowRow {
@@ -241,6 +252,7 @@ impl FlowRow {
             max_lines: usize::MAX,
             overflow: FlowOverflow::Clip,
             animate_placement: false,
+            placement_spec: AnimationSpec::Spring(crate::animation::SpringSpec::default()),
         }
     }
 
@@ -267,6 +279,20 @@ impl FlowRow {
     /// Defaults to `false`, which keeps the common Flow path free of animation bookkeeping.
     pub fn animate_placement(mut self, animate: bool) -> Self { self.animate_placement = animate; self }
 
+    /// Sets the curve for placement changes. `animate_placement(true)` keeps the default spring;
+    /// this method accepts a tween, keyframes, snap, or a tuned spring.
+    pub fn placement_spec(mut self, spec: impl Into<AnimationSpec>) -> Self {
+        self.placement_spec = spec.into();
+        self
+    }
+
+    /// Enables placement animation with a custom curve in one call.
+    pub fn animate_placement_spec(mut self, spec: impl Into<AnimationSpec>) -> Self {
+        self.placement_spec = spec.into();
+        self.animate_placement = true;
+        self
+    }
+
     /// Composes the row and its children.
     ///
     /// The content closure is deliberately not wrapped in a component scope (like `Row` and
@@ -284,6 +310,9 @@ impl FlowRow {
         ctx.changed(&self.max_lines);
         ctx.changed(&self.overflow);
         ctx.changed(&self.animate_placement);
+        // AnimationSpec has no PartialEq (its interpolators are trait objects), so the group
+        // compares a stable debug token instead of silently ignoring a curve change.
+        ctx.changed(&format!("{:?}", self.placement_spec));
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         // Registered unconditionally so toggling the flag cannot shift later remember slots;
@@ -305,6 +334,7 @@ impl FlowRow {
                 .max_lines(self.max_lines)
                 .overflow(self.overflow)
                 .placement_animations(placement_animations)
+                .placement_spec(self.placement_spec)
                 .direction(dir),
             content,
         );

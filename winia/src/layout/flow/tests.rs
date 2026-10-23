@@ -1124,11 +1124,14 @@ fn placement_animation_starts_from_the_previous_slot() {
     crate::animation::clear_all_animations();
     let mut nodes = vec![LayoutNode::leaf(Modifier::new().animate_item())];
     let animations = PlacementAnimations::default();
+    let spec = crate::animation::AnimationSpec::Spring(
+        crate::animation::SpringSpec::default(),
+    );
     let first = [Placement {
         position: Offset::new(0.0, 0.0),
         size: Size::new(20.0, 10.0),
     }];
-    animations.place(&mut nodes, &[0], &first);
+    animations.place(&mut nodes, &[0], &first, &spec);
     let offset = nodes[0]
         .placement_anim
         .as_ref()
@@ -1140,11 +1143,65 @@ fn placement_animation_starts_from_the_previous_slot() {
         position: Offset::new(30.0, 20.0),
         size: Size::new(20.0, 10.0),
     }];
-    animations.place(&mut nodes, &[0], &second);
+    animations.place(&mut nodes, &[0], &second, &spec);
     let offset = nodes[0].placement_anim.as_ref().unwrap().peek();
     assert!(
         (offset.x + 30.0).abs() < 0.1 && (offset.y + 20.0).abs() < 0.1,
         "the old slot is the opposite of the new position: {offset:?}"
+    );
+    crate::animation::clear_all_animations();
+}
+
+/// A Flow placement animation can use a curve other than the built-in spring.
+#[test]
+fn flow_row_placement_uses_the_configured_spec() {
+    use crate::unit::Offset;
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let columns = crate::State::new(3usize);
+    let mut composer = Composer::new();
+    let mut frame = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            FlowRow::new()
+                .max_items_in_row(columns.get())
+                .animate_placement_spec(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(321),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .build(ctx, |ctx| {
+                    ctx.keyed_range("custom-curve", 3, |ctx, _| {
+                        let key = ctx.next_key();
+                        ctx.start_leaf(key, Modifier::new().size(40.0, 20.0).animate_item());
+                        ctx.end_node();
+                    });
+                });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+    };
+
+    frame(&mut composer);
+    columns.set(2);
+    frame(&mut composer);
+
+    let report = crate::animation::active_animations_report();
+    assert!(
+        report.iter().any(|line| line.contains("tween")),
+        "the configured tween must drive the placement offset: {report:?}"
+    );
+    assert!(
+        composer
+            .arena_nodes()
+            .iter()
+            .any(|n| n.children.iter().any(|&c| {
+                composer.arena_nodes()[c]
+                    .placement_anim
+                    .as_ref()
+                    .is_some_and(|s| s.peek() != Offset::ZERO)
+            })),
+        "the moved child must still carry a non-zero paint offset"
     );
     crate::animation::clear_all_animations();
 }

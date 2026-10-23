@@ -71,6 +71,11 @@ fn flow_features(ctx: &mut ComposeCtx) {
                         .cross_spacing(8.0)
                         .max_items_in_row(columns.get())
                         .animate_placement(true)
+                        .placement_spec(winia::animation::SpringSpec {
+                            damping_ratio: 0.82,
+                            stiffness: 320.0,
+                            ..Default::default()
+                        })
                         .modifier(Modifier::new().fill_max_width().test_tag("flow-animated"))
                         .build(ctx, |ctx| {
                             ctx.keyed_range("animated", 6, |ctx, n| {
