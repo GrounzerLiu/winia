@@ -152,49 +152,10 @@ pub(crate) fn measure_node(
     let displaced = crate::layout::subcompose::swap_measuring_node(Some(idx));
     let sub_before = crate::layout::subcompose::subcomposition_count();
     let out = measure_node_inner(nodes, policies, idx, constraints);
-    let out = apply_animated_content_size(nodes, idx, out, constraints);
     crate::layout::subcompose::swap_measuring_node(displaced);
     // Remember whether this node's policy composed anything, so the next frame does not fold it.
     nodes[idx].subcomposed = crate::layout::subcompose::subcomposition_count() > sub_before;
     out
-}
-
-/// Wrap a node's measured box in the composition-owned `animate_content_size` spring.
-///
-/// The content has already been measured at its new size. The animation changes only the box the
-/// PARENT sees (and the node's own `measured_size`); child placements stay where the layout put
-/// them, which is why the helper modifier also clips the node to its animated bounds.
-fn apply_animated_content_size(
-    nodes: &mut Vec<LayoutNode>,
-    idx: usize,
-    out: (Size, Vec<Placement>),
-    constraints: Constraints,
-) -> (Size, Vec<Placement>) {
-    let Some((value, target, spec)) = nodes[idx].modifier.animated_content_size() else {
-        return out;
-    };
-    let target_size = out.0;
-    let previous = target.peek();
-    if previous != Some(target_size) {
-        target.set(Some(target_size));
-        if previous.is_none() {
-            value.set(target_size);
-        } else {
-            crate::animation::push_animatable(value.clone(), target_size, spec);
-        }
-    }
-    // `measure_node_inner` has restored its own measurement context by now; the layout dependency
-    // must belong to THIS node, or the animation tick never dirties it.
-    let previous_key = crate::runtime::composer::active_slot_key();
-    crate::runtime::composer::set_active_slot_key(nodes[idx].slot_key);
-    let animated = value.get();
-    crate::runtime::composer::set_active_slot_key(previous_key);
-    let size = Size::new(
-        constraints.constrain_width(animated.width),
-        constraints.constrain_height(animated.height),
-    );
-    nodes[idx].measured_size = size;
-    (size, out.1)
 }
 
 pub(crate) fn measure_node_inner(

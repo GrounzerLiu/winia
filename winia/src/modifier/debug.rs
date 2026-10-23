@@ -120,7 +120,6 @@ impl Debug for ModifierElement {
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
             Self::AnimateItem => f.write_str("AnimateItem"),
-            Self::AnimateContentSize { .. } => f.write_str("AnimateContentSize"),
             Self::InnerShadow { shape, color, blur, .. } => f
                 .debug_struct("InnerShadow")
                 .field("shape", shape)

@@ -289,22 +289,6 @@ impl Modifier {
         self.elements.iter().any(|el| matches!(el, ModifierElement::AnimateItem))
     }
 
-    /// The composition-owned handles attached by `ComposeCtx::animate_content_size`.
-    pub(crate) fn animated_content_size(
-        &self,
-    ) -> Option<(
-        crate::runtime::state::State<crate::unit::Size>,
-        crate::runtime::state::Backchannel<Option<crate::unit::Size>>,
-        crate::animation::AnimationSpec,
-    )> {
-        self.elements.iter().find_map(|el| match el {
-            ModifierElement::AnimateContentSize { value, target, spec } => {
-                Some((value.clone(), target.clone(), spec.clone()))
-            }
-            _ => None,
-        })
-    }
-
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::VerticalScroll { state } = el {

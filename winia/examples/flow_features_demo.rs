@@ -54,24 +54,17 @@ fn flow_features(ctx: &mut ComposeCtx) {
                     }
                 })
                 .build(ctx, |ctx| Text::new("toggle columns").build(ctx));
-            let animated_box =
-                ctx.animate_content_size(winia::animation::SpringSpec::default());
             FlowRow::new()
                 .main_spacing(8.0)
                 .cross_spacing(8.0)
                 .max_items_in_row(columns.get())
                 .animate_placement(true)
                 .modifier(
-                    animated_box.then(
-                        Modifier::new()
-                            .fill_max_width()
-                            .test_tag("flow-animated")
-                            .background(
-                                Color::from_argb(20, 50, 100, 200),
-                                Shape::rounded(8.0),
-                            )
-                            .padding(8.0),
-                    ),
+                    Modifier::new()
+                        .fill_max_width()
+                        .test_tag("flow-animated")
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
+                        .padding(8.0),
                 )
                 .build(ctx, |ctx| {
                     ctx.keyed_range("animated", 6, |ctx, n| {

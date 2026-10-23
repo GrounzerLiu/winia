@@ -69,16 +69,6 @@ impl Modifier {
         self
     }
 
-    /// Attach the composition-owned handles for `ComposeCtx::animate_content_size`.
-    pub(crate) fn animate_content_size(
-        self,
-        value: crate::runtime::state::State<crate::unit::Size>,
-        target: crate::runtime::state::Backchannel<Option<crate::unit::Size>>,
-        spec: crate::animation::AnimationSpec,
-    ) -> Self {
-        self.push(ModifierElement::AnimateContentSize { value, target, spec })
-    }
-
     /// 合并另一个 Modifier 链的所有元素（追加到末尾）。
     ///
     /// 等价于 Compose 的 `Modifier.then(other)`，用于叠加两个独立的 Modifier 链。

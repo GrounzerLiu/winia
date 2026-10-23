@@ -3861,59 +3861,6 @@ fn keyed_for_each_keeps_item_identity_when_the_order_changes() {
     assert_eq!(created.get(), 2, "the reversed items keep their keys");
 }
 
-/// `ctx.animate_content_size` animates the node's reported box, not its content: the first frame
-/// snaps, a later target change starts from the old size, and the animation settles on the new one.
-#[test]
-fn animate_content_size_springs_the_reported_box() {
-    use std::time::Duration;
-
-    let (_guard, clock) = crate::animation::tests::serial_clock();
-    crate::animation::clear_all_animations();
-    let height = State::new(20.0f32);
-    let mut composer = Composer::new();
-    let mut frame = |composer: &mut Composer| {
-        let height = height.clone();
-        composer.compose(move |ctx| {
-            let animated = ctx.animate_content_size(crate::animation::AnimationSpec::Tween(
-                crate::animation::TweenSpec::new(
-                    Duration::from_millis(200),
-                    crate::animation::interpolator::Linear::new(),
-                ),
-            ));
-            ctx.changed(&height.get());
-            crate::layout::Column::new()
-                .modifier(animated)
-                .build(ctx, |ctx| {
-                    let content_height = height.get();
-                    let key = ctx.next_key();
-                    ctx.start_leaf(key, Modifier::new().size(50.0, content_height));
-                    ctx.end_node();
-                });
-        });
-        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
-
-    frame(&mut composer);
-    assert_eq!(composer.arena_nodes()[composer.layout_root_idx().unwrap()].measured_size.height, 20.0);
-
-    height.set(60.0);
-    frame(&mut composer);
-    let springing = composer.arena_nodes()[composer.layout_root_idx().unwrap()].measured_size.height;
-    assert!(
-        springing < 60.0 && springing >= 20.0,
-        "the new target must not snap on the frame that starts the animation: {springing}"
-    );
-
-    for _ in 0..20 {
-        clock.advance(Duration::from_millis(12));
-        crate::animation::update_animations();
-        frame(&mut composer);
-    }
-    let settled = composer.arena_nodes()[composer.layout_root_idx().unwrap()].measured_size.height;
-    assert!((settled - 60.0).abs() < 1.0, "the tween settles on the content height: {settled}");
-    crate::animation::clear_all_animations();
-}
-
 /// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is
 /// not equivalent to "every slot in the tree".
 ///

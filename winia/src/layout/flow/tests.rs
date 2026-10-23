@@ -1054,6 +1054,7 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
         .iter()
         .position(|n| n.children.len() == 3)
         .expect("the flow node owns three children");
+    eprintln!("DBG flow={flow} kids={:?}", nodes[flow].children.iter().map(|&c| (nodes[c].position, nodes[c].slot_key, nodes[c].placement_anim.as_ref().map(|s| s.peek()))).collect::<Vec<_>>());
     let moved = nodes[flow]
         .children
         .iter()
