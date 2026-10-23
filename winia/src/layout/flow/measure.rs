@@ -199,8 +199,8 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         // measured against a cross size that is a fraction of the line's natural cross extent.
         // The line cross itself was just computed from the natural sizes, so the fill cannot grow
         // the line; it can change the child's main size, which is recomputed below. A weighted
-        // child keeps the allocation from the weight pass (Compose's weight branch likewise does
-        // not apply the fill fraction).
+        // child already received its cross fill in the weight pass above, so it is skipped here
+        // instead of being re-measured against a different line height.
         for i in s..end {
             let child = children[i];
             if nodes[child]

@@ -949,6 +949,73 @@ use crate::modifier::Modifier;
 use crate::runtime::composer::Composer;
 use crate::theme::{ThemeColors, WiniaTheme};
 
+/// A changed FlowRow parameter must re-enter its restartable group; the state read happens in
+/// the caller, so only `ctx.changed` can carry the new spacing into the group.
+#[test]
+fn flow_row_declares_its_parameters_for_skip() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let spacing = crate::State::new(0.0f32);
+    let runs = Rc::new(Cell::new(0usize));
+    let mut composer = Composer::new();
+    let mut compose = |composer: &mut Composer| {
+        let runs = runs.clone();
+        let spacing = spacing.clone();
+        composer.compose(move |ctx| {
+            FlowRow::new()
+                .main_spacing(spacing.get())
+                .build(ctx, move |ctx| {
+                    runs.set(runs.get() + 1);
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                });
+        });
+    };
+
+    compose(&mut composer);
+    compose(&mut composer);
+    assert_eq!(runs.get(), 1, "an unchanged FlowRow skips its content");
+
+    spacing.set(8.0);
+    compose(&mut composer);
+    assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
+}
+
+/// The transposed builder declares its parameters too.
+#[test]
+fn flow_column_declares_its_parameters_for_skip() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let spacing = crate::State::new(0.0f32);
+    let runs = Rc::new(Cell::new(0usize));
+    let mut composer = Composer::new();
+    let mut compose = |composer: &mut Composer| {
+        let runs = runs.clone();
+        let spacing = spacing.clone();
+        composer.compose(move |ctx| {
+            FlowColumn::new()
+                .main_spacing(spacing.get())
+                .build(ctx, move |ctx| {
+                    runs.set(runs.get() + 1);
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                });
+        });
+    };
+
+    compose(&mut composer);
+    compose(&mut composer);
+    assert_eq!(runs.get(), 1, "an unchanged FlowColumn skips its content");
+
+    spacing.set(8.0);
+    compose(&mut composer);
+    assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
+}
+
 /// FlowRow end to end: a content closure with four fixed leaves and a 100-wide container wraps.
 #[test]
 fn flow_row_composes_and_wraps() {

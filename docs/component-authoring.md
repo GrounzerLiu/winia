@@ -520,7 +520,8 @@ Two rules cover most cases:
 | Fixture | `winia/tests/ui_fixtures/fixture_all.rs` (one bin, scenario by `argv[1]`) | a scenario the visual/behavioural suite can drive |
 | UI | `winia/tests/ui_test.rs` (`--features debug-server`) | clicks, key events, semantics tree, screenshots |
 
-**MUST** write the unit test against the arena, not against a rendering:
+**MUST** write the unit test against the arena, not against a rendering (a split module keeps
+the same rule in its `<module>/tests.rs`, as `layout/flow/tests.rs` does):
 
 ```rust
 let mut composer = Composer::new();
@@ -548,7 +549,10 @@ serialisation that only works if every animation-driving test takes it (see
 ## 12. Documentation
 
 Every NEW component ships `docs/<component>.md` with these sections, in this order (existing docs are
-converted when they are edited for another reason - 1 of 37 had all six when this was written):
+converted when they are edited for another reason - 1 of 37 had all six when this was written).
+Layout primitives (`Column`, `Row`, `Stack`, `FlowRow`, `FlowColumn`) are not components in this
+sense: their docs use the shorter Sources / API and semantics / Differences / Tests shape, of
+which `docs/flow-layout.md` is the model.
 
 1. **Sources** - the Compose files it mirrors (paths in `reference/`), so the next reader can diff
    behaviour instead of guessing.

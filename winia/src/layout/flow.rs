@@ -8,8 +8,9 @@
 //! `cross_arrangement` distributes the free cross space and `cross_spacing` adds a fixed gap
 //! between lines. A child may fill a fraction of its line's cross extent
 //! (`fill_max_row_height` / `fill_max_column_width`); weighted children keep their weight
-//! allocation and are cross-filled as well. Items past the cross-axis maximum follow Compose's default `Clip` overflow: they
-//! are measured but not placed.
+//! allocation and are cross-filled as well. Under Compose's default `Clip` overflow, items past
+//! the cross-axis maximum are measured but not placed; `Visible` keeps placing them outside the
+//! container.
 //!
 //! v1 scope (differences from Compose, documented in `docs/flow-layout.md`):
 //! - weight is supported within a line; line breaking still uses the child's natural size
