@@ -36,7 +36,24 @@ The host keys state by:
 - the Lazy item key from `items_from`;
 - the Flow child's stable `slot_key` (use `ctx.key` / `ctx.keyed_range`).
 
-Without a stable key, a reorder looks like a new item and the old one exits.
+Put the Lazy marker on the item's root content. A marker deeper in the subtree belongs to a nested
+Flow/Lazy item and is not used for the outer wrapper. Without a stable key, a reorder looks like a
+new item and the old one exits.
+
+## Lifecycle limits
+
+- A Lazy list keeps paint channels only for the composed window plus a bounded set of recently
+  off-screen keys. Scrolling far away and back may therefore treat an evicted item as a new item
+  (it can fade in again); this is what keeps a long virtualized list bounded.
+- Off-screen items do not keep exit pictures. A picture is captured while the item is rendered and
+  dropped as soon as the item leaves the composed window.
+- Removing `animate_item` or passing an inert spec retires the item's channels without drawing a
+  ghost: the child is still live, only its animation was removed.
+- Item timing channels must terminate. `Repeatable` and `Decay` are rejected for placement and
+  fades; a Spring must have a positive rest threshold. This is what lets an exit picture be
+  cleaned up when its fade completes.
+- A measure epoch invalidates the cached exit picture when the item's content changes, so a ghost
+  does not show stale text or a stale child.
 
 ## Demo
 

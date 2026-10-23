@@ -14,8 +14,12 @@ use crate::animation::item::ItemAnimationSpec;
 use crate::layout::node::LayoutNode;
 use crate::unit::{Offset, Size};
 use skia_safe::Picture;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+
+/// How many off-screen Lazy items may keep their paint channels so a scroll back does not replay
+/// an enter. A long virtualized list must not grow this without bound.
+const MAX_OFFSCREEN_STATES: usize = 256;
 
 /// What the renderer applies around one item subtree.
 #[derive(Clone)]
@@ -26,6 +30,8 @@ pub(crate) struct ItemPaint {
     pub(crate) alpha: crate::runtime::state::State<f32>,
     /// Stable item key, used by the exit picture store.
     pub(crate) key: u64,
+    /// The item's measure epoch when its paint was attached; invalidates stale pictures.
+    pub(crate) content_epoch: u64,
     /// The fade-out curve; `None` means the item is not captured for an exit.
     pub(crate) fade_out: Option<crate::animation::AnimationSpec>,
     /// Shared picture/exits store for the container's host.
@@ -43,6 +49,7 @@ pub(crate) struct CapturedItem {
     pub(crate) picture: Picture,
     pub(crate) position: Offset,
     pub(crate) size: Size,
+    pub(crate) content_epoch: u64,
 }
 
 /// A removed item still playing its fade-out.
@@ -50,6 +57,8 @@ pub(crate) struct ExitedItem {
     pub(crate) picture: Picture,
     pub(crate) position: Offset,
     pub(crate) alpha: crate::runtime::state::State<f32>,
+    /// Creation order, so overlapping ghosts paint in a stable order.
+    pub(crate) order: u64,
 }
 
 /// Pictures captured for live items plus exits currently on screen.
@@ -57,6 +66,7 @@ pub(crate) struct ExitedItem {
 pub(crate) struct ExitStore {
     pub(crate) pictures: HashMap<u64, CapturedItem>,
     pub(crate) exits: HashMap<u64, ExitedItem>,
+    pub(crate) next_exit_order: u64,
 }
 
 struct ItemState {
@@ -126,11 +136,12 @@ mod tests {
         host.begin_frame();
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
         host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec);
-        host.finish_frame(Some(&[1, 2]));
+        let live = HashSet::from([1u64, 2]);
+        host.finish_frame(Some(&live));
 
         host.begin_frame();
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
-        host.finish_frame(Some(&[1, 2]));
+        host.finish_frame(Some(&live));
         assert!(
             host.store.lock().unwrap_or_else(|e| e.into_inner()).exits.is_empty(),
             "scrolling key 2 out of the window must not start an exit"
@@ -138,10 +149,117 @@ mod tests {
 
         host.begin_frame();
         host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec);
-        host.finish_frame(Some(&[1, 2]));
+        host.finish_frame(Some(&live));
         let paint = nodes[1].item_paint.as_ref().expect("the returned item is painted");
         assert_eq!(paint.alpha.peek(), 1.0, "a window return must not replay a fade-in");
         assert_eq!(paint.offset.peek(), Offset::ZERO, "a window return must not spring");
+    }
+
+    #[test]
+    fn retire_drops_state_without_creating_an_exit() {
+        let host = ItemAnimationHost::default();
+        let spec = ItemAnimationSpec::new()
+            .fade_out(crate::animation::TweenSpec::default());
+        let mut nodes = vec![leaf()];
+        host.begin_frame();
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        assert_eq!(host.inner.lock().unwrap_or_else(|e| e.into_inner()).items.len(), 1);
+
+        host.retire(7);
+        let state = host.inner.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(state.items.is_empty(), "retire must drop the live state");
+        drop(state);
+        let store = host.store.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(store.exits.is_empty(), "retire must not create a ghost");
+        assert!(store.pictures.is_empty(), "retire must drop the picture");
+        drop(store);
+
+        let picture = {
+            let mut recorder = skia_safe::PictureRecorder::new();
+            {
+                let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
+            }
+            recorder.finish_recording_as_picture(None).expect("a picture")
+        };
+        host.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pictures
+            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+        host.retire(7);
+        assert!(
+            host.store.lock().unwrap_or_else(|e| e.into_inner()).pictures.is_empty(),
+            "retire must remove the cached exit picture"
+        );
+    }
+
+    #[test]
+    fn an_exit_starts_at_the_current_alpha() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let host = ItemAnimationHost::default();
+        let spec = ItemAnimationSpec::new()
+            .fade_in(crate::animation::TweenSpec::default())
+            .fade_out(crate::animation::TweenSpec::default());
+        let mut nodes = vec![leaf()];
+        host.begin_frame();
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        host.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .items
+            .get_mut(&7)
+            .expect("the item state")
+            .alpha
+            .set(0.25);
+
+        let picture = {
+            let mut recorder = skia_safe::PictureRecorder::new();
+            {
+                let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
+            }
+            recorder.finish_recording_as_picture(None).expect("a picture")
+        };
+        host.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pictures
+            .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+
+        host.begin_frame();
+        host.finish_frame(None);
+        let state = host.store.lock().unwrap_or_else(|e| e.into_inner());
+        let exit = state.exits.get(&7).expect("the removed item becomes an exit");
+        assert!(
+            (exit.alpha.peek() - 0.25).abs() < 0.001,
+            "the ghost must start at the live alpha, not 1: {}",
+            exit.alpha.peek()
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn offscreen_states_are_bounded() {
+        let host = ItemAnimationHost::default();
+        let spec = ItemAnimationSpec::new();
+        let mut nodes = vec![leaf()];
+        host.begin_frame();
+        for key in 1..=300u64 {
+            host.place(&mut nodes, 0, key, Offset::ZERO, &spec);
+        }
+        host.finish_frame(None);
+        host.begin_frame();
+        let live: HashSet<u64> = (1..=300u64).collect();
+        host.finish_frame(Some(&live));
+        let state = host.inner.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            state.items.len() <= MAX_OFFSCREEN_STATES,
+            "offscreen state grew to {} (bound {})",
+            state.items.len(),
+            MAX_OFFSCREEN_STATES
+        );
     }
 
     #[test]
@@ -168,9 +286,9 @@ mod tests {
     }
 }
 
-/// The first `animate_item` declaration in this subtree. The marker may sit on the item root or on
-/// one of its descendants; the outer item is what moves, so the first declaration wins.
-pub(crate) fn subtree_item_spec(
+/// The marker for a Lazy item wrapper. The item's root content is the wrapper's direct child;
+/// markers deeper in the content belong to nested Flow/Lazy containers, not to the outer item.
+pub(crate) fn wrapper_item_spec(
     nodes: &[LayoutNode],
     index: usize,
 ) -> Option<ItemAnimationSpec> {
@@ -180,7 +298,7 @@ pub(crate) fn subtree_item_spec(
     nodes[index]
         .children
         .iter()
-        .find_map(|&child| subtree_item_spec(nodes, child))
+        .find_map(|&child| nodes[child].modifier.animate_item_spec())
 }
 
 impl ItemAnimationHost {
@@ -202,6 +320,12 @@ impl ItemAnimationHost {
         spec: &ItemAnimationSpec,
     ) -> bool {
         if spec.is_inert() {
+            self.retire(key);
+            return false;
+        }
+        if !spec.is_valid() {
+            debug_assert!(false, "item animation spec must not contain a non-terminating channel");
+            self.retire(key);
             return false;
         }
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -226,13 +350,18 @@ impl ItemAnimationHost {
         }
 
         if item.offscreen {
-            // The key was only outside the Lazy window. Returning must not replay an enter.
+            // The key was only outside the Lazy window. Returning must not replay an enter, and the
+            // old enter/move motions must not keep writing into the reset channels.
+            crate::animation::cancel_animation(&item.offset);
+            crate::animation::cancel_animation(&item.alpha);
             item.offset.set(Offset::ZERO);
             item.alpha.set(1.0);
             item.offscreen = false;
         } else if is_new || item.last_frame + 1 != frame {
             // First appearance, or an item that was away for at least a frame: start at the new
             // slot, never from a stale visual position.
+            crate::animation::cancel_animation(&item.offset);
+            crate::animation::cancel_animation(&item.alpha);
             item.offset.set(Offset::ZERO);
             if is_new && frame > 1 {
                 if let Some(fade) = &spec.fade_in {
@@ -260,9 +389,20 @@ impl ItemAnimationHost {
                         placement.clone(),
                     );
                 } else {
+                    crate::animation::cancel_animation(&item.offset);
                     item.offset.set(Offset::ZERO);
                 }
+            } else if spec.placement.is_none() {
+                crate::animation::cancel_animation(&item.offset);
+                item.offset.set(Offset::ZERO);
             }
+        }
+
+        if !is_new && spec.fade_in.is_none() && item.alpha.peek() < 0.999 {
+            // The caller removed the fade-in while it was running; do not let the old tween keep
+            // writing into the live item's alpha.
+            crate::animation::cancel_animation(&item.alpha);
+            item.alpha.set(1.0);
         }
 
         item.last_position = position;
@@ -272,34 +412,71 @@ impl ItemAnimationHost {
             offset: item.offset.clone(),
             alpha: item.alpha.clone(),
             key,
+            content_epoch: nodes[child].content_epoch,
             fade_out: spec.fade_out.clone(),
             exit_store: self.store.clone(),
         });
         true
     }
 
+    /// A live child no longer carries an active marker. Drop its channels, pictures and any exit
+    /// without drawing a ghost: the item is still in the tree, only its animation was removed.
+    pub(crate) fn retire(&self, key: u64) {
+        let removed = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .items
+            .remove(&key);
+        if let Some(item) = removed {
+            crate::animation::cancel_animation(&item.offset);
+            crate::animation::cancel_animation(&item.alpha);
+        }
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(exit) = store.exits.remove(&key) {
+            crate::animation::cancel_animation(&exit.alpha);
+        }
+        store.pictures.remove(&key);
+    }
+
     /// Drop states that have been absent for long enough, and promote just-left items to the exit
     /// layer when their picture from the previous render is available.
-    pub(crate) fn finish_frame(&self, live_keys: Option<&[u64]>) {
+    pub(crate) fn finish_frame(&self, live_keys: Option<&HashSet<u64>>) {
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let frame = state.frame;
         let mut kept: Vec<(u64, ItemState)> = Vec::new();
+        let mut offscreen: Vec<(u64, ItemState)> = Vec::new();
         let mut left: Vec<(u64, ItemState)> = Vec::new();
         for (key, mut item) in state.items.drain() {
             if item.last_frame == frame {
                 kept.push((key, item));
             } else if live_keys.is_some_and(|keys| keys.contains(&key)) {
-                // The data still owns this key; it is only outside the Lazy window. Keep it so a
-                // scroll back does not replay a fade-in or spring from an off-screen slot.
+                // The data still owns this key; it is only outside the Lazy window. Cancel its
+                // channels and retain only a bounded recent set, so a long scroll cannot grow the
+                // host without limit.
+                crate::animation::cancel_animation(&item.offset);
+                crate::animation::cancel_animation(&item.alpha);
                 item.offscreen = true;
-                kept.push((key, item));
+                offscreen.push((key, item));
             } else if item.fade_out.is_some() {
                 left.push((key, item));
+            } else {
+                crate::animation::cancel_animation(&item.offset);
+                crate::animation::cancel_animation(&item.alpha);
             }
         }
+        if offscreen.len() > MAX_OFFSCREEN_STATES {
+            offscreen.sort_by_key(|(_, item)| item.last_frame);
+            let excess = offscreen.len() - MAX_OFFSCREEN_STATES;
+            offscreen.drain(..excess);
+        }
+        kept.extend(offscreen);
+        // Pictures are for the current screen only. An off-screen item can be seen again later,
+        // but keeping one Skia Picture per item ever scrolled through is what turns a long Lazy
+        // list into a memory leak.
         let live_with_fade: std::collections::HashSet<u64> = kept
             .iter()
-            .filter(|(_, item)| item.fade_out.is_some())
+            .filter(|(_, item)| item.last_frame == frame && item.fade_out.is_some())
             .map(|(key, _)| *key)
             .collect();
         state.items.extend(kept);
@@ -307,8 +484,13 @@ impl ItemAnimationHost {
 
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         for (key, item) in left {
+            let start_alpha = item.alpha.peek().clamp(0.0, 1.0);
+            crate::animation::cancel_animation(&item.offset);
+            crate::animation::cancel_animation(&item.alpha);
             if let Some(captured) = store.pictures.remove(&key) {
-                let alpha = crate::runtime::state::State::new(1.0);
+                let order = store.next_exit_order;
+                store.next_exit_order += 1;
+                let alpha = crate::runtime::state::State::new(start_alpha);
                 crate::animation::push_animatable(
                     alpha.clone(),
                     0.0,
@@ -320,6 +502,7 @@ impl ItemAnimationHost {
                         picture: captured.picture,
                         position: captured.position,
                         alpha,
+                        order,
                     },
                 );
             }

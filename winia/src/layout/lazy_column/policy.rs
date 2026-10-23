@@ -24,6 +24,9 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     /// 当前数据全局 index → item key（build 期从 intervals 提取；
     /// measure 用其写 cache 的 key 视图——跨数据变化保持项身份高度）
     pub keys: Vec<u64>,
+    /// The same keys as a set: `finish_frame` asks "is this key still in the data?" once per
+    /// off-screen state, so a linear scan of `keys` would be O(offscreen * total) per layout.
+    pub key_set: std::collections::HashSet<u64>,
     /// 注册序中 sticky 子节点的 child 下标（全局升序）
     pub sticky_children: Vec<usize>,
     /// 钉住的 sticky header 全局 index（build 期回溯；钉住时锚点 = (pin, 0)）
@@ -344,19 +347,22 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
             nodes[c].item_paint = None;
-            // The marker sits on the item's ROOT content; the lazy list registers a wrapper group
-            // node per item, so the animation belongs to the wrapper and the marker is in its subtree.
-            let Some(spec) = crate::layout::item_animation::subtree_item_spec(nodes, c) else {
-                continue;
-            };
             let global = self.globals.get(i).copied().unwrap_or(i);
             let key = self.keys.get(global).copied().unwrap_or(global as u64);
+            // The marker sits on the item's ROOT content; the lazy list registers a wrapper group
+            // node per item, so the animation belongs to the wrapper and the marker is its direct
+            // content child. A deeper marker belongs to a nested item-aware layout and must not
+            // animate the whole outer item.
+            let Some(spec) = crate::layout::item_animation::wrapper_item_spec(nodes, c) else {
+                self.state.item_animations.retire(key);
+                continue;
+            };
             let position = nodes[c].position;
             self.state
                 .item_animations
                 .place(nodes, c, key, position, &spec);
         }
-        self.state.item_animations.finish_frame(Some(&self.keys));
+        self.state.item_animations.finish_frame(Some(&self.key_set));
     }
 }
 

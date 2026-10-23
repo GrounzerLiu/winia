@@ -1190,6 +1190,48 @@ fn item_animation_starts_from_the_previous_slot() {
     crate::animation::clear_all_animations();
 }
 
+/// Removing `animate_item` from a still-live child must drop its state, not turn the child into an
+/// exit ghost.
+#[test]
+fn removing_the_marker_does_not_ghost_a_live_item() {
+    use crate::layout::item_animation::{CapturedItem, ItemAnimationHost};
+
+    let host = ItemAnimationHost::default();
+    let policy = FlowRowLayout::new().item_animations(host.clone());
+    let spec = crate::animation::item::ItemAnimationSpec::new()
+        .fade_out(crate::animation::TweenSpec::default());
+    let mut nodes = vec![LayoutNode::leaf(
+        Modifier::new().size(40.0, 20.0).animate_item_with(spec),
+    )];
+    let children = vec![0];
+    let constraints = Constraints::new(0.0, 100.0, 0.0, 100.0);
+
+    let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
+    policy.place(&mut nodes, &children, &placements);
+    let key = if nodes[0].slot_key != 0 { nodes[0].slot_key } else { nodes[0].id };
+
+    let picture = {
+        let mut recorder = skia_safe::PictureRecorder::new();
+        {
+            let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
+        }
+        recorder.finish_recording_as_picture(None).expect("a picture")
+    };
+    host.store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pictures
+        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0 });
+
+    nodes[0].modifier = Modifier::new().size(40.0, 20.0);
+    let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
+    policy.place(&mut nodes, &children, &placements);
+    assert!(nodes[0].item_paint.is_none(), "the marker is gone, so nothing is painted");
+    let store = host.store().lock().unwrap_or_else(|e| e.into_inner());
+    assert!(store.exits.is_empty(), "a live item must not become a ghost");
+    assert!(store.pictures.is_empty(), "its cached picture must be dropped");
+}
+
 /// A Flow placement animation can use a curve other than the built-in spring.
 #[test]
 fn flow_row_placement_uses_the_configured_spec() {

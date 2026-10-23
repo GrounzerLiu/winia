@@ -35,6 +35,7 @@ fn capture_item(
         if store.pictures.get(&paint.key).is_some_and(|old| {
             old.position == captured_position
                 && old.size == crate::unit::Size::new(content.width, content.height)
+                && old.content_epoch == paint.content_epoch
                 && visual == crate::unit::Offset::ZERO
                 && paint.alpha.peek() >= 0.999
         }) {
@@ -71,6 +72,7 @@ fn capture_item(
                     picture,
                     position: captured_position,
                     size: crate::unit::Size::new(content.width, content.height),
+                    content_epoch: paint.content_epoch,
                 },
             );
     }
@@ -81,7 +83,14 @@ fn capture_item(
 fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAnimationHost) {
     let mut store = host.store().lock().unwrap_or_else(|e| e.into_inner());
     let mut finished = Vec::new();
-    for (key, exit) in store.exits.iter() {
+    let mut order: Vec<(u64, u64)> = store
+        .exits
+        .iter()
+        .map(|(key, exit)| (*key, exit.order))
+        .collect();
+    order.sort_by_key(|(_, order)| *order);
+    for (key, _) in order {
+        let Some(exit) = store.exits.get(&key) else { continue; };
         let alpha = exit.alpha.peek().clamp(0.0, 1.0);
         if alpha > 0.001 {
             canvas.save();
@@ -94,7 +103,7 @@ fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAn
         if alpha <= 0.001
             && !crate::animation::has_animation_for_state(exit.alpha.state_id())
         {
-            finished.push(*key);
+            finished.push(key);
         }
     }
     for key in finished {
@@ -125,7 +134,15 @@ impl<'a> ItemCanvasGuard<'a> {
         let alpha = paint.alpha.peek().clamp(0.0, 1.0);
         let layer = alpha < 0.999;
         if layer {
-            canvas.save_layer_alpha_f(Some(bounds), alpha);
+            // The canvas is already offset by the placement translation; the layer hint must cover
+            // where the item is actually painted, not only its final box, or a moving fade clips.
+            let visual_bounds = Rect::new(
+                bounds.left() + offset.x,
+                bounds.top() + offset.y,
+                bounds.right() + offset.x,
+                bounds.bottom() + offset.y,
+            );
+            canvas.save_layer_alpha_f(Some(visual_bounds), alpha);
         }
         Self { canvas, active: true, layer }
     }

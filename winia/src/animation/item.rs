@@ -11,12 +11,13 @@ use crate::animation::{AnimationSpec, SpringSpec};
 #[derive(Clone, Debug)]
 pub struct ItemAnimationSpec {
     /// How the paint offset travels from the old slot to the new one. `None` disables movement
-    /// (useful for an item that only fades).
+    /// (useful for an item that only fades). Must terminate: `Repeatable` and `Decay` are rejected.
     pub placement: Option<AnimationSpec>,
-    /// Fade-in applied when the key first appears after the host's first layout.
+    /// Fade-in applied when the key first appears after the host's first layout. Must terminate.
     pub fade_in: Option<AnimationSpec>,
     /// Fade-out curve for a removed key. The host captures the item's last rendered frame and the
-    /// exit layer consumes this curve after the item leaves the layout tree.
+    /// exit layer consumes this curve after the item leaves the layout tree. Must terminate: an
+    /// endless curve would keep the exit picture alive forever.
     pub fade_out: Option<AnimationSpec>,
 }
 
@@ -30,13 +31,32 @@ impl Default for ItemAnimationSpec {
     }
 }
 
+fn usable_channel(spec: &AnimationSpec) -> bool {
+    match spec {
+        // An item alpha/offset must settle; a looping or friction-only curve never reports the
+        // "animation finished" edge the host uses to drop an exit picture.
+        AnimationSpec::Repeatable(_) | AnimationSpec::Decay(_) => false,
+        AnimationSpec::Spring(spring) => spring.threshold > 0.0,
+        _ => true,
+    }
+}
+
 impl ItemAnimationSpec {
+    /// True when every configured channel is terminating and can be driven by the item host.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.placement.as_ref().is_none_or(usable_channel)
+            && self.fade_in.as_ref().is_none_or(usable_channel)
+            && self.fade_out.as_ref().is_none_or(usable_channel)
+    }
+
     /// The default placement spring with no fades.
     pub fn new() -> Self { Self::default() }
 
     /// Sets the placement curve.
     pub fn placement(mut self, spec: impl Into<AnimationSpec>) -> Self {
-        self.placement = Some(spec.into());
+        let spec = spec.into();
+        assert!(usable_channel(&spec), "item placement must settle (got {spec:?})");
+        self.placement = Some(spec);
         self
     }
 
@@ -48,18 +68,36 @@ impl ItemAnimationSpec {
 
     /// Sets the fade-in curve.
     pub fn fade_in(mut self, spec: impl Into<AnimationSpec>) -> Self {
-        self.fade_in = Some(spec.into());
+        let spec = spec.into();
+        assert!(usable_channel(&spec), "item fade_in must settle (got {spec:?})");
+        self.fade_in = Some(spec);
         self
     }
 
     /// Sets the fade-out curve recorded for the exit layer.
     pub fn fade_out(mut self, spec: impl Into<AnimationSpec>) -> Self {
-        self.fade_out = Some(spec.into());
+        let spec = spec.into();
+        assert!(usable_channel(&spec), "item fade_out must settle (got {spec:?})");
+        self.fade_out = Some(spec);
         self
     }
 
     /// True when the item has no channel at all, so a layout can skip its bookkeeping.
     pub fn is_inert(&self) -> bool {
         self.placement.is_none() && self.fade_in.is_none() && self.fade_out.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::{RepeatMode, RepeatableSpec, TweenSpec};
+
+    #[test]
+    #[should_panic(expected = "item fade_out must settle")]
+    fn a_repeating_item_fade_is_rejected() {
+        let _ = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(
+            RepeatableSpec::new(2, RepeatMode::Restart, TweenSpec::default()),
+        ));
     }
 }

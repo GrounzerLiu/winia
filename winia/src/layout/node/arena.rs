@@ -236,6 +236,9 @@ pub struct LayoutNode {
     pub(crate) focus_group_memory: Option<u64>,
     /// Per-item paint channels from a layout's item animation host: placement offset and opacity.
     pub(crate) item_paint: Option<crate::layout::item_animation::ItemPaint>,
+    /// Bumped whenever this node is measured, so the item exit-picture cache can tell that content
+    /// under the same box may have changed.
+    pub(crate) content_epoch: u64,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
     pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
@@ -438,6 +441,7 @@ impl LayoutNode {
             focus_reported: false,
             focus_group_memory: None,
             item_paint: None,
+            content_epoch: 0,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -534,6 +538,7 @@ impl Default for LayoutNode {
             focus_reported: false,
             focus_group_memory: None,
             item_paint: None,
+            content_epoch: 0,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),

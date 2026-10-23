@@ -177,6 +177,9 @@ pub(crate) fn measure_node_inner(
     // 真正执行 measure 才计数（常量折叠命中不计——测试验证折叠路径）
     #[cfg(test)]
     MEASURE_COUNT.with(|c| c.set(c.get() + 1));
+    // A real measure may change the painted content even when the box is unchanged. The item
+    // exit-picture cache uses this epoch to invalidate a stale ghost.
+    nodes[idx].content_epoch = nodes[idx].content_epoch.wrapping_add(1);
 
     // Set ACTIVE_SLOT_KEY = this node's slot so a State::get() inside a dynamic
     // size closure registers its dependency on THIS node (value change → node

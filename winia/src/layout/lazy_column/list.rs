@@ -592,6 +592,7 @@ impl<A: LazyAxis> LazyList<A> {
         // 时无法区分（固有局限，见文档）；有 key 段（items_from/item_keyed）
         // 身份精确追踪。
         let keys: Vec<u64> = (0..total).map(|g| intervals.key_of(g).unwrap_or(g as u64)).collect();
+        let key_set: std::collections::HashSet<u64> = keys.iter().copied().collect();
         // 数据签名（FNV-1a 折叠 key 序列）——检测数据变化：total 变或同 total
         // 重排/替换（key 序列变）。变化时按 item key 迁移高度缓存。
         let mut sig = 0xcbf29ce484222325u64;
@@ -780,6 +781,7 @@ impl<A: LazyAxis> LazyList<A> {
             cross_padding: self.cross_padding,
             globals,
             keys,
+            key_set,
             sticky_children,
             pin,
             reverse: self.reverse,

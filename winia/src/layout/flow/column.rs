@@ -118,6 +118,7 @@ impl MeasurePolicy for FlowColumnLayout {
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         self.item_animations.begin_frame();
+        let mut seen = std::collections::HashSet::new();
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
@@ -128,13 +129,21 @@ impl MeasurePolicy for FlowColumnLayout {
                 // from the parent's origin into view.
                 continue;
             }
-            let Some(spec) = nodes[c].modifier.animate_item_spec() else {
-                continue;
-            };
             let key = if nodes[c].slot_key != 0 {
                 nodes[c].slot_key
             } else {
                 nodes[c].id
+            };
+            if !seen.insert(key) {
+                debug_assert!(false, "Flow item key {key} is used by more than one child");
+                continue;
+            }
+            let Some(spec) = nodes[c].modifier.animate_item_spec() else {
+                // The child is still live, but its marker/spec is gone. Drop its channels and
+                // picture; finish_frame would otherwise mistake it for a removed item and draw a
+                // ghost over the live card.
+                self.item_animations.retire(key);
+                continue;
             };
             let position = nodes[c].position;
             self.item_animations
