@@ -14,18 +14,30 @@ use super::{measure::measure_flow, FlowOverflow};
 /// The FlowColumn measure policy: a vertical main axis that wraps when a column is too tall.
 #[derive(Debug, Clone)]
 pub struct FlowColumnLayout {
+    /// Main-axis arrangement of the items inside each column (Compose `verticalArrangement`).
     pub arrangement: Arrangement,
+    /// Default cross-axis alignment of an item inside its column (Compose `itemHorizontalAlignment`).
+    /// A child's `align_self` overrides it.
     pub alignment: Alignment,
+    /// Distribution of the free cross-axis space between columns (Compose `horizontalArrangement`).
     pub cross_arrangement: Arrangement,
+    /// Gap between adjacent items in one column, in logical pixels.
     pub main_spacing: f32,
+    /// Gap between adjacent columns, in logical pixels.
     pub cross_spacing: f32,
+    /// Maximum number of items per column. `usize::MAX` means unlimited; zero produces an empty flow.
     pub max_items_in_column: usize,
+    /// Maximum number of columns. `usize::MAX` means unlimited; zero produces an empty flow.
+    /// `FlowOverflow::Visible` ignores this cap.
     pub max_lines: usize,
+    /// What happens to items beyond the cross-axis budget.
     pub overflow: FlowOverflow,
+    /// Direction used to mirror the final placements.
     pub direction: LayoutDirection,
 }
 
 impl FlowColumnLayout {
+    /// Creates an unlimited column with Start arrangements, zero spacing and Clip overflow.
     pub fn new() -> Self {
         FlowColumnLayout {
             arrangement: Arrangement::Start,
@@ -40,14 +52,23 @@ impl FlowColumnLayout {
         }
     }
 
+    /// Sets the main-axis arrangement inside a column.
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    /// Sets the default cross-axis alignment of an item inside its column.
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    /// Sets the distribution of free cross-axis space between columns.
     pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    /// Sets the gap between items in one column.
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    /// Sets the gap between columns.
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    /// Sets the maximum number of items per column.
     pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+    /// Sets the maximum number of columns.
     pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    /// Selects the overflow policy.
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    /// Sets the layout direction used for mirroring.
     pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
 }
 
@@ -163,8 +184,15 @@ impl MeasurePolicy for FlowColumnLayout {
 }
 
 
-/// A flowing column: the vertical main axis wraps once it is full. Mirrors `FlowColumn`, with the
-/// same parameters, `max_lines`, and Clip/Visible overflow modes as FlowRow.
+/// A flowing column: items run down the vertical main axis and wrap into a new column when the
+/// current one is full (menus, vertical tag lists, wrapping toolbars).
+///
+/// Mirrors `FlowColumn(verticalArrangement, horizontalArrangement, maxItemsInEachColumn)`:
+/// `main_spacing` is the gap inside a column, `cross_spacing` the gap between columns,
+/// `cross_arrangement` the distribution of free cross space, `max_items_in_column` the per-column
+/// cap, `max_lines` the column cap (Clip mode; Visible bypasses it), and `overflow` selects Clip
+/// or Visible. Children may carry `layout_weight` / `layout_weight_fill`; line breaking uses
+/// their natural size. There is no overflow-indicator API yet; see the `layout::flow` module docs.
 pub struct FlowColumn {
     modifier: Modifier,
     arrangement: Arrangement,
@@ -178,6 +206,7 @@ pub struct FlowColumn {
 }
 
 impl FlowColumn {
+    /// Creates a column with Start arrangements, zero spacing, unlimited items and Clip overflow.
     pub fn new() -> Self {
         FlowColumn {
             modifier: Modifier::new(),
@@ -192,17 +221,32 @@ impl FlowColumn {
         }
     }
 
+    /// Appends the caller's modifier. The modifier is placed on the flow container itself, so
+    /// layout, paint and semantics attributes travel with the container.
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    /// Sets the main-axis arrangement inside a column.
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    /// Sets the default cross-axis alignment of an item inside its column; `align_self` overrides it.
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    /// Sets the distribution of free cross-axis space between columns.
     pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    /// Sets the gap between items in one column.
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    /// Sets the gap between columns.
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    /// Sets the maximum number of items per column. Zero produces an empty flow.
     pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+    /// Sets the maximum number of columns. Zero produces an empty flow; Visible ignores the cap.
     pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    /// Selects the overflow policy.
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
 
-    /// Deliberately not a macro (like Row/Column).
+    /// Composes the column and its children.
+    ///
+    /// The content closure is deliberately not wrapped in a component scope (like `Row` and
+    /// `Column`): a `State::get()` at the top of the content must bubble to the parent that
+    /// composed it. Every builder parameter that changes the layout is declared with
+    /// `ctx.changed` before the restartable group starts.
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.main_spacing);
         ctx.changed(&self.cross_spacing);

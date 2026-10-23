@@ -14,18 +14,30 @@ use super::{measure::measure_flow, FlowOverflow};
 /// The FlowRow measure policy: a horizontal main axis that wraps when a line is too wide.
 #[derive(Debug, Clone)]
 pub struct FlowRowLayout {
+    /// Main-axis arrangement of the items inside each line (Compose `horizontalArrangement`).
     pub arrangement: Arrangement,
+    /// Default cross-axis alignment of an item inside its line (Compose `itemVerticalAlignment`).
+    /// A child's `align_self` overrides it.
     pub alignment: Alignment,
+    /// Distribution of the free cross-axis space between lines (Compose `verticalArrangement`).
     pub cross_arrangement: Arrangement,
+    /// Gap between adjacent items in one line, in logical pixels.
     pub main_spacing: f32,
+    /// Gap between adjacent lines, in logical pixels.
     pub cross_spacing: f32,
+    /// Maximum number of items per line. `usize::MAX` means unlimited; zero produces an empty flow.
     pub max_items_in_row: usize,
+    /// Maximum number of lines. `usize::MAX` means unlimited; zero produces an empty flow.
+    /// `FlowOverflow::Visible` ignores this cap.
     pub max_lines: usize,
+    /// What happens to items beyond the cross-axis budget.
     pub overflow: FlowOverflow,
+    /// Direction used to mirror the final placements.
     pub direction: LayoutDirection,
 }
 
 impl FlowRowLayout {
+    /// Creates an unlimited row with Start arrangements, zero spacing and Clip overflow.
     pub fn new() -> Self {
         FlowRowLayout {
             arrangement: Arrangement::Start,
@@ -40,14 +52,23 @@ impl FlowRowLayout {
         }
     }
 
+    /// Sets the main-axis arrangement inside a line.
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    /// Sets the default cross-axis alignment of an item inside its line.
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    /// Sets the distribution of free cross-axis space between lines.
     pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    /// Sets the gap between items in one line.
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    /// Sets the gap between lines.
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    /// Sets the maximum number of items per line.
     pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+    /// Sets the maximum number of lines.
     pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    /// Selects the overflow policy.
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    /// Sets the layout direction used for mirroring.
     pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
 }
 
@@ -187,6 +208,7 @@ pub struct FlowRow {
 }
 
 impl FlowRow {
+    /// Creates a row with Start arrangements, zero spacing, unlimited items and Clip overflow.
     pub fn new() -> Self {
         FlowRow {
             modifier: Modifier::new(),
@@ -201,18 +223,32 @@ impl FlowRow {
         }
     }
 
+    /// Appends the caller's modifier. The modifier is placed on the flow container itself, so
+    /// layout, paint and semantics attributes travel with the container.
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    /// Sets the main-axis arrangement inside a line.
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    /// Sets the default cross-axis alignment of an item inside its line; `align_self` overrides it.
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    /// Sets the distribution of free cross-axis space between lines.
     pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    /// Sets the gap between items in one line.
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    /// Sets the gap between lines.
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    /// Sets the maximum number of items per line. Zero produces an empty flow.
     pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+    /// Sets the maximum number of lines. Zero produces an empty flow; Visible ignores the cap.
     pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    /// Selects the overflow policy.
     pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
 
-    /// Deliberately not a macro (like Row/Column): a State.get() at the content's top level has to
-    /// bubble up to the parent.
+    /// Composes the row and its children.
+    ///
+    /// The content closure is deliberately not wrapped in a component scope (like `Row` and
+    /// `Column`): a `State::get()` at the top of the content must bubble to the parent that
+    /// composed it. Every builder parameter that changes the layout is declared with
+    /// `ctx.changed` before the restartable group starts.
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.main_spacing);
         ctx.changed(&self.cross_spacing);
