@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_simple() {
+    fn a_column_stacks_its_children_top_to_bottom() {
         let column = ColumnLayout::new();
         let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0), make_leaf(120.0, 10.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -339,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_cross_axis_loose_in_tight_parent() {
+    fn a_tight_parent_width_leaves_the_children_loose() {
         // tight 交叉轴父（如 fill_max_size+padding 的 Column）：子节点交叉轴
         // 松约束（min=0）——自然宽，不继承父 tight（Compose Column 语义）
         let mut nodes = vec![make_leaf(100.0, 20.0)];
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_child_fill_max_width_in_tight_parent() {
+    fn a_fill_max_width_child_fills_a_tight_parent() {
         // tight 父下 fill_max_width 子节点仍撑满（显式 fill 优先于松约束）
         use crate::modifier::Modifier;
         let mut nodes = vec![
@@ -369,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_stretch_child_in_tight_parent() {
+    fn stretch_alignment_widens_the_child_to_the_container() {
         // Stretch 对齐：子节点拉伸到容器宽（放置期拉伸——stretch 语义不受松约束影响）
         let mut nodes = vec![make_leaf(100.0, 20.0)];
         let children: Vec<usize> = vec![0];
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_spacing() {
+    fn spacing_separates_a_columns_children() {
         let column = ColumnLayout::new().spacing(5.0);
         let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_end_alignment() {
+    fn end_alignment_pushes_each_child_to_the_end_edge() {
         let column = ColumnLayout::new().alignment(Alignment::End);
         let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(100.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();

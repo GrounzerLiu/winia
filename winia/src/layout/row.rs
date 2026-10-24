@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_simple() {
+    fn a_row_places_its_children_end_to_end() {
         let row = RowLayout::new();
         let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0), make_leaf(20.0, 120.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_spacing() {
+    fn spacing_separates_children_along_the_row() {
         let row = RowLayout::new().spacing(5.0);
         let mut nodes = vec![make_leaf(20.0, 100.0), make_leaf(30.0, 80.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_center_alignment() {
+    fn center_alignment_centres_each_child_vertically() {
         let row = RowLayout::new().alignment(Alignment::Center);
         let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 100.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_rtl_mirror() {
+    fn rtl_mirrors_the_child_order() {
         // RTL：子节点从右到左排列（第一个子在最右）
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_rtl_uses_own_width_not_constraint() {
+    fn rtl_mirrors_inside_the_rows_own_width() {
         // 回归：wrap Row 的 RTL 镜像必须用行自身宽度（此前误用 incoming
         // max——子节点被推到约束宽度，wrap 行内容消失/错位）
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
@@ -205,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_rtl_space_between_mirrors_full_width() {
+    fn space_between_mirrors_inside_a_tight_row() {
         // SpaceBetween 分配的是容器多余的主轴空间，而宽度由约束给出（min = max = 100），不是这个排列撑
         // 出来的——这正是 Compose 的行为：`Row(SpaceBetween)` 要靠 `fillMaxWidth()` 才有宽度可分配。
         // 对齐前后的差别见 `flex.rs` 的 `measured_main`。
