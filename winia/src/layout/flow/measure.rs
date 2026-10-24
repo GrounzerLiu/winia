@@ -259,7 +259,12 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         content_cross += info.cross;
     }
 
-    // Container size.
+    // Container size: COERCED into [min, max] on both axes, unlike Row/Column (which only floor at
+    // the minimum, `layout/flex.rs`). That is not an oversight — Compose's FlowLayout does the same:
+    // `totalCrossAxisSize.fastCoerceIn(constraints.crossAxisMin, constraints.crossAxisMax)` and
+    // `mainAxisTotalSize.fastCoerceIn(constraints.mainAxisMin, constraints.mainAxisMax)`
+    // (`FlowLayout.kt:1568-1583`), while `RowColumnMeasurePolicy.kt:252-258` never consults the
+    // maximum. Do not "align" the two without re-reading both.
     let container_main = A::constrain_main(
         constraints,
         line_infos.iter().map(|l| l.main).fold(0.0f32, f32::max),
