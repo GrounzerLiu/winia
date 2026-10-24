@@ -47,7 +47,9 @@ FlowColumn::new()
 
 - **Wrapping** (Compose `getWrapInfo`): never wrap at the start of a line; wrap past
   `max_items`; wrap when the remaining main-axis space cannot fit the next item. An
-  unbounded main axis never wraps. `max_items(0)` and `max_lines(0)` produce an empty flow.
+  unbounded main axis never wraps. `max_items(0)` and `max_lines(0)` produce an empty flow, and
+  a flow with no children lays out at 0x0 even under tight parent constraints (Compose's
+  `layout(0, 0)`).
 - **Child measurement**: every child is measured with the incoming main-axis maximum and a
   main-axis minimum of 0, exactly like Compose's `measureConstraints` (`FlowLayout.kt:1224-1231`).
   A text child therefore wraps at the flow's width instead of reporting its unwrapped width.

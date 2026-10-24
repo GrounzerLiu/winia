@@ -27,13 +27,10 @@ pub(crate) fn measure_flow<A: FlexAxis>(
 ) -> (Size, Vec<Placement>) {
     let n = children.len();
     if n == 0 {
-        return (
-            Size::new(
-                constraints.constrain_width(0.0),
-                constraints.constrain_height(0.0),
-            ),
-            Vec::new(),
-        );
+        // Compose's empty FlowMeasurePolicy returns layout(0, 0) before it looks at the incoming
+        // constraints. Clamping the zero through a tight parent would make an empty flow reserve
+        // the parent's minimum, which Compose does not do.
+        return (Size::ZERO, Vec::new());
     }
 
     if max_lines == 0 || max_items_in_main_axis == 0 {

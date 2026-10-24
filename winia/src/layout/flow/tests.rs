@@ -368,6 +368,36 @@ fn flow_row_zero_max_lines_is_empty() {
     assert!(placements.iter().all(|p| p.size == Size::ZERO));
 }
 
+/// An empty flow is Compose's `layout(0, 0)` even when the parent supplies a tight minimum.
+#[test]
+fn flow_row_with_no_children_is_empty_under_tight_constraints() {
+    let policy = FlowRowLayout::new();
+    let mut nodes: Vec<LayoutNode> = Vec::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &[],
+        Constraints::new(100.0, 100.0, 80.0, 100.0),
+    );
+    assert_eq!(size, Size::ZERO);
+    assert!(placements.is_empty());
+}
+
+/// The same empty-flow rule applies to the transposed policy.
+#[test]
+fn flow_column_with_no_children_is_empty_under_tight_constraints() {
+    let policy = FlowColumnLayout::new();
+    let mut nodes: Vec<LayoutNode> = Vec::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &[],
+        Constraints::new(80.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(size, Size::ZERO);
+    assert!(placements.is_empty());
+}
+
 /// fillMaxRowHeight stretches a short child to the tallest item in its row.
 #[test]
 fn flow_row_fill_max_row_height_fills_the_line() {
