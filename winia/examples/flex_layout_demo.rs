@@ -30,7 +30,12 @@ fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOn
         )
         .spacing(6.0)
         .build(ctx, |ctx| {
-            Text::new(title).font_size(14.0).build(ctx);
+            // The title carries a tag of its own: a test that needs the card's content origin has
+            // to read the title's measured height instead of hard-coding a font metric.
+            Text::new(title)
+                .modifier(Modifier::new().test_tag(format!("{tag}-title")))
+                .font_size(14.0)
+                .build(ctx);
             content(ctx);
         });
 }
@@ -67,15 +72,20 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
             // 1. Weighted child inside the scrolling content. In Compose an unbounded main axis gives
             //    a weighted child nothing; the point of the card is that the page stays finite.
             card(ctx, "scroll-weight", "1. weight inside the scroller", |ctx| {
+                // Remembered, not constructed inline: a new handle on every recomposition is the
+                // one shape the state-handle rule forbids (docs/state-handles.md).
+                let inner_scroll = ctx.remember(|| ScrollState::new()).get();
                 Column::new()
                     .modifier(
                         Modifier::new()
                             .fill_max_width()
                             .height(80.0)
-                            .vertical_scroll(ScrollState::new()),
+                            .vertical_scroll(inner_scroll),
                     )
                     .build(ctx, |ctx| {
-                        Column::new().build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().test_tag("scroll-content"))
+                            .build(ctx, |ctx| {
                             bar(ctx, "scroll-fixed", "fixed 40", 40.0, Color::from_argb(255, 90, 160, 220));
                             Text::new("weight(1) below — height 0 here, as in Compose")
                                 .modifier(Modifier::new().layout_weight(1.0))
@@ -131,7 +141,9 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
                 Stack::new()
                     .modifier(Modifier::new().fill_max_width().height(100.0).clip(Shape::Rectangle))
                     .build(ctx, |ctx| {
-                        Column::new().build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().test_tag("overflow-content"))
+                            .build(ctx, |ctx| {
                             for i in 0..4 {
                                 Stack::new()
                                     .modifier(

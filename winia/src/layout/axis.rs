@@ -7,7 +7,7 @@
 //!
 //! Both used to declare their own `VerticalAxis` and `HorizontalAxis`, so the crate had two types
 //! per name, and `size`/`point` took their arguments in opposite orders (`(main, cross)` in flex,
-//! `(cross, main)` in the lazy list) for the same operation. The markers and the shared six
+//! `(cross, main)` in the lazy list) for the same operation. The markers and the shared
 //! questions live here now; the two traits extend them.
 
 use super::constraints::Constraints;

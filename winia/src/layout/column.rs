@@ -304,12 +304,10 @@ mod tests {
         assert_eq!(size.height, 100.0, "the column is still its bound");
     }
 
-    /// A zero-sized child still charges its gap in Compose; winia skips children that measured zero
-    /// when it counts the spacings to subtract (the `width > 0.0 || height > 0.0` filter in
-    /// `layout/flex.rs`'s phase 1), so the child after it gets more room than Compose would give it.
-    ///
-    /// Compose: the empty child measures 0, `spaceAfterLastNoWeight = min(30, 100 - 0) = 30`, so the
-    /// second child is measured against 70 (`RowColumnMeasurePolicy.kt:123-145`).
+    /// A zero-sized child still charges its gap, and it does so in both implementations: winia
+    /// charges the gap of every preceding non-weighted child (phase 1 of `layout/flex.rs`), which
+    /// is Compose's `spaceAfterLastNoWeight = min(30, 100 - 0) = 30` — the second child is measured
+    /// against 70 (`RowColumnMeasurePolicy.kt:123-145`).
     #[test]
     fn a_zero_sized_child_charges_its_gap() {
         let mut nodes = vec![make_leaf(0.0, 0.0), make_leaf(100.0, 100.0)];

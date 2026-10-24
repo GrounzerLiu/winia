@@ -1595,7 +1595,7 @@ impl crate::modifier::DrawNode for SpillBand {
 ///
 /// The band is drawn, not measured: `Modifier::size` constrains the child's measurement but does
 /// not force the node's reported size — Compose's `SizeNode` returns the child's placeable size
-/// (`Size.kt:884`) — so a 500 dp `required_size` child made the hero itself 500 wide and left
+/// (`Size.kt:887`) — so a 500 dp `required_size` child made the hero itself 500 wide and left
 /// nothing outside its bounds to clip.
 #[crate::composable]
 fn spilling_hero_screen(

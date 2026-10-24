@@ -160,26 +160,33 @@ fn flex_layout_demo_pins_the_review_cases() {
     app.expect_text("Flex Layout");
     app.expect_tag("top-app-bar-title");
 
-    // 1. The scrolling content is its content, not 3.4e38. The card is 80 tall (its own height),
-    //    the fixed child 40, and the weighted child zero on an unbounded main axis.
+    // 1. The SCROLLING CONTENT is the measured thing, not the card: the card is pinned by its own
+    //    80 dp box either way, while the content Column was 3.4e38 before the fix. It holds the
+    //    40 dp fixed child plus a weighted child that an unbounded axis gives nothing.
     let card = app.expect_tag("scroll-weight");
+    let title = app.expect_tag("scroll-weight-title");
+    let content = app.expect_tag("scroll-content");
     let fixed = app.expect_tag("scroll-fixed");
     assert!((fixed.3 - 40.0).abs() < 1.0, "the fixed child keeps its 40: {fixed:?}");
-    // card padding 10 + title 19 + spacing 6 + the 80 dp scroll box. Anything near 3.4e38 (the old
-    // f32::MAX share) fails here; so does a scroll box that grew to its content.
     assert!(
-        (card.3 - 125.0).abs() < 2.0,
-        "the card is its 80 dp scroll box, not a 3.4e38 one: {card:?}"
+        (content.3 - 40.0).abs() < 1.0,
+        "the scrolling content is its 40 dp child, not a 3.4e38 one: {content:?}"
+    );
+    // The card is padding (10 top + 10 bottom) + the title + the 6 dp spacing + the 80 dp box.
+    assert!(
+        (card.3 - (20.0 + title.3 + 6.0 + 80.0)).abs() < 2.0,
+        "the card is padding + title + 6 + its 80 dp scroll box: {card:?}, title {title:?}"
     );
 
     // 2. SpaceBetween with one child packs it at the start, not the centre.
     let card = app.expect_tag("space-between-one");
+    let title = app.expect_tag("space-between-one-title");
     let bar = app.expect_tag("space-between-bar");
-    // card padding 10 + title 19 + spacing 6, then the bar at the start of its 60 dp row.
-    let expected_y = card.1 + 10.0 + 19.0 + 6.0;
+    // padding 10 + the title's own measured height + spacing 6, then the bar at the row's start.
+    let expected_y = card.1 + 10.0 + title.3 + 6.0;
     assert!(
         (bar.1 - expected_y).abs() < 2.0,
-        "the single child sits at the card's start: bar {bar:?} in card {card:?}"
+        "the single child sits at the card's start: bar {bar:?} in card {card:?}, title {title:?}"
     );
 
     // 3. weight(0) measures like an unweighted sibling instead of collapsing, and does not take
@@ -192,10 +199,20 @@ fn flex_layout_demo_pins_the_review_cases() {
         "the sibling follows the weight(0) child: {sibling:?} after {zero:?}"
     );
 
-    // 4. The overflowing Column is clipped by its 100-tall parent box.
+    // 4. The overflowing Column reports its content (4 x 45 = 180) while its 100 dp parent clips.
+    //    The row width is a control: required_size reports 120 on both sides of the fix.
     let card = app.expect_tag("overflow");
-    assert!((card.3 - 145.0).abs() < 2.0, "the overflow card is its 100 box: {card:?}");
+    let title = app.expect_tag("overflow-title");
+    let content = app.expect_tag("overflow-content");
     let row = app.expect_tag("overflow-row");
+    assert!(
+        (content.3 - 180.0).abs() < 1.0,
+        "the overflowing column reports its content: {content:?}"
+    );
+    assert!(
+        (card.3 - (20.0 + title.3 + 6.0 + 100.0)).abs() < 2.0,
+        "the card is padding + title + 6 + the 100 dp clip box: {card:?}, title {title:?}"
+    );
     assert!((row.2 - 120.0).abs() < 1.0, "the row keeps its required 120 width: {row:?}");
 
     // The debug direction override still mirrors the page with the top bar in place.

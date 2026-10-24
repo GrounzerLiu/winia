@@ -1,6 +1,9 @@
 //! Regression tests for the flex layout review.
 //!
-//! Four behaviours are pinned here, each one measured wrong before the fix:
+//! Nine of the cases below measured wrong before the fix and fail on `9106761^`; the other five
+//! (the infinite-axis pin, the bounded-axis pin, the RTL share, the RTL cross alignment, the RTL
+//! two-child gap) already held and are here to keep the fixed behaviour from regressing sideways.
+//! The four behaviours under test:
 //!
 //! - a weighted child must not explode when the main axis is unbounded. winia has TWO unbounded
 //!   sentinels — `Constraints::UNBOUNDED` uses `f32::INFINITY`, and a scroll container writes
@@ -9,6 +12,10 @@
 //! - `SpaceBetween` with a single child packs it at the start, not the centre;
 //! - a non-positive weight means "no weight" and the child measures like any other sibling;
 //! - a container whose content overflows reports the CONTENT size, not the incoming maximum.
+//!
+//! Three later cases cover arithmetic the first round got wrong: the share on an unbounded axis
+//! with a non-zero minimum, an infinite weight (coerced, not NaN), and a gap capped at what the
+//! axis has left.
 
 use winia::layout::{Arrangement, Column, Constraints, LayoutDirection, Row};
 use winia::prelude::*;
@@ -289,4 +296,84 @@ fn an_overflowing_rtl_row_mirrors_its_content() {
     assert_eq!(root.measured_size.width, 140.0);
     assert_eq!(composer.arena_nodes()[root.children[0]].position.x, 70.0);
     assert_eq!(composer.arena_nodes()[root.children[1]].position.x, 0.0);
+}
+
+/// Compose's pool is `targetSpace = if (mainAxisMax != Infinity) mainAxisMax else mainAxisMin`
+/// (`RowColumnMeasurePolicy.kt:157-162`). An unbounded axis with a non-zero minimum therefore
+/// still hands the weighted children that minimum, rather than nothing.
+#[test]
+fn a_weighted_child_shares_the_minimum_on_an_unbounded_axis() {
+    let mut composer = Composer::new();
+    composer.compose(winia::compose!(|ctx| {
+        Column::new().build(ctx, |ctx| {
+            Text::new("fixed").modifier(fixed(50.0, 50.0)).build(ctx);
+            Text::new("weighted")
+                .modifier(Modifier::new().layout_weight(1.0))
+                .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 200.0, 200.0, f32::MAX));
+    let root = composer.layout_root().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[root.children[1]].measured_size.height, 150.0,
+        "the share is the 200 dp minimum less the fixed child"
+    );
+    assert_eq!(root.measured_size.height, 200.0);
+}
+
+/// Compose coerces `+inf` to `Float.MAX_VALUE` before dividing (`Row.kt:388`). Without that the
+/// share is `inf / inf` — NaN — and the child gets NaN constraints.
+#[test]
+fn an_infinite_weight_is_coerced_instead_of_poisoning_the_share() {
+    let mut composer = Composer::new();
+    composer.compose(winia::compose!(|ctx| {
+        Column::new().build(ctx, |ctx| {
+            Text::new("fixed").modifier(fixed(50.0, 50.0)).build(ctx);
+            Text::new("infinite")
+                .modifier(Modifier::new().layout_weight(f32::INFINITY))
+                .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 200.0, 0.0, 300.0));
+    let root = composer.layout_root().unwrap();
+    assert_eq!(composer.arena_nodes()[root.children[1]].measured_size.height, 250.0);
+    assert_eq!(root.measured_size.height, 300.0);
+}
+
+/// Compose caps each non-weighted gap at what the axis has left (`spaceAfterLastNoWeight =
+/// min(spacing, (remaining - placeable).coerceAtLeast(0))`, `RowColumnMeasurePolicy.kt:143-145`).
+/// Charging the full gap instead inflated an over-full container to 110.
+#[test]
+fn a_gap_that_does_not_fit_is_capped_at_the_axis() {
+    let mut composer = Composer::new();
+    composer.compose(winia::compose!(|ctx| {
+        Column::new().spacing(60.0).build(ctx, |ctx| {
+            Text::new("a").modifier(fixed(50.0, 50.0)).build(ctx);
+            Text::new("b").modifier(fixed(50.0, 40.0)).build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+    let root = composer.layout_root().unwrap();
+    assert_eq!(root.measured_size.height, 100.0, "the gap is capped, not charged in full");
+    assert_eq!(
+        composer.arena_nodes()[root.children[1]].measured_size.height, 0.0,
+        "the capped gap leaves the second child nothing to measure into"
+    );
+}
+
+/// `Alignment::Stretch` still has to floor at the minimum and at the alignment lines: an
+/// overflowing child must not be reported smaller than it is.
+#[test]
+fn stretch_keeps_an_overflowing_child_in_the_reported_cross_size() {
+    let mut composer = Composer::new();
+    composer.compose(winia::compose!(|ctx| {
+        Column::new().alignment(Alignment::Stretch).build(ctx, |ctx| {
+            Text::new("wide")
+                .modifier(Modifier::new().required_size(150.0, 20.0))
+                .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let root = composer.layout_root().unwrap();
+    assert_eq!(root.measured_size.width, 150.0);
 }
