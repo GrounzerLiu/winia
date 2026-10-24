@@ -148,3 +148,62 @@ fn item_animation_demo_fades_added_and_removed_items() {
         app.find_tag("item-3").is_none()
     });
 }
+
+/// The flex layout demo exercises the four shapes the layout review found broken, through the
+/// real window: a weighted child inside a scrolling Column, SpaceBetween with a single child, a
+/// zero weight child, and a Column whose content overflows its box.
+#[test]
+fn flex_layout_demo_pins_the_review_cases() {
+    let mut app = UiTest::launch("flex_layout");
+
+    // The shared demo chrome is up: the top app bar and its title.
+    app.expect_text("Flex Layout");
+    app.expect_tag("top-app-bar-title");
+
+    // 1. The scrolling content is its content, not 3.4e38. The card is 80 tall (its own height),
+    //    the fixed child 40, and the weighted child zero on an unbounded main axis.
+    let card = app.expect_tag("scroll-weight");
+    let fixed = app.expect_tag("scroll-fixed");
+    assert!((fixed.3 - 40.0).abs() < 1.0, "the fixed child keeps its 40: {fixed:?}");
+    // card padding 10 + title 19 + spacing 6 + the 80 dp scroll box. Anything near 3.4e38 (the old
+    // f32::MAX share) fails here; so does a scroll box that grew to its content.
+    assert!(
+        (card.3 - 125.0).abs() < 2.0,
+        "the card is its 80 dp scroll box, not a 3.4e38 one: {card:?}"
+    );
+
+    // 2. SpaceBetween with one child packs it at the start, not the centre.
+    let card = app.expect_tag("space-between-one");
+    let bar = app.expect_tag("space-between-bar");
+    // card padding 10 + title 19 + spacing 6, then the bar at the start of its 60 dp row.
+    let expected_y = card.1 + 10.0 + 19.0 + 6.0;
+    assert!(
+        (bar.1 - expected_y).abs() < 2.0,
+        "the single child sits at the card's start: bar {bar:?} in card {card:?}"
+    );
+
+    // 3. weight(0) measures like an unweighted sibling instead of collapsing, and does not take
+    //    the column: the sibling still sits right below it.
+    let zero = app.expect_tag("zero-weight-child");
+    let sibling = app.expect_tag("zero-sibling");
+    assert!((zero.3 - 30.0).abs() < 1.0, "weight(0) keeps its 30: {zero:?}");
+    assert!(
+        (sibling.1 - (zero.1 + zero.3)).abs() < 2.0,
+        "the sibling follows the weight(0) child: {sibling:?} after {zero:?}"
+    );
+
+    // 4. The overflowing Column is clipped by its 100-tall parent box.
+    let card = app.expect_tag("overflow");
+    assert!((card.3 - 145.0).abs() < 2.0, "the overflow card is its 100 box: {card:?}");
+    let row = app.expect_tag("overflow-row");
+    assert!((row.2 - 120.0).abs() < 1.0, "the row keeps its required 120 width: {row:?}");
+
+    // The debug direction override still mirrors the page with the top bar in place.
+    let before = app.expect_tag("space-between-bar").0;
+    app.set_layout_direction(LayoutDirection::Rtl);
+    app.expect_eventually_timeout("the demo mirrors in RTL", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("space-between-bar").is_some_and(|r| (r.0 - before).abs() > 1.0)
+    });
+    app.clear_layout_direction();
+}

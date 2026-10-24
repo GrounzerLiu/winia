@@ -9,10 +9,13 @@
 mod flow_features;
 #[path = "../../examples/item_animation_demo.rs"]
 mod item_animation;
+#[path = "../../examples/flex_layout_demo.rs"]
+mod flex_layout;
 
 const SCENARIOS: &[(&str, fn())] = &[
     ("flow_features", flow_features::main),
     ("item_animation", item_animation::main),
+    ("flex_layout", flex_layout::main),
 ];
 
 fn main() {
