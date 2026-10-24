@@ -660,7 +660,7 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
                 content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
             }
         };
-        let max_h = if constraints.max_height.is_finite() { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
 
         // ── Top 端点放置 ──
         let top_content_h = icon_size.height

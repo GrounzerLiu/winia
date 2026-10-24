@@ -199,8 +199,29 @@
         // 且跟随指示器的动画位置（与可见图标对齐）
         assert_eq!(ripple.measured_size.width, NAVIGATION_BAR_INDICATOR_WIDTH);
         assert_eq!(ripple.measured_size.height, NAVIGATION_BAR_INDICATOR_HEIGHT);
-        assert_eq!(ripple.position.x, indicator.position.x, "ripple 与胶囊同 x");
+        // Both are centred on the item, and the capsule is ZERO width at progress 0, so the two
+        // share a centre rather than an x. Equal x used to hold only because the container width was
+        // f32::MAX and 56 is below its ULP — the assertion was measuring float saturation.
+        assert_eq!(
+            ripple.position.x + ripple.measured_size.width / 2.0,
+            indicator.position.x + indicator.measured_size.width / 2.0,
+            "ripple and capsule share a centre"
+        );
         assert_eq!(ripple.position.y, indicator.position.y, "ripple 跟随胶囊动画位置");
+    }
+
+    /// A scroll container hands its content `f32::MAX`, which `is_finite()` accepts. The item used
+    /// to take that as its own width (3.4e38); the bounded test must use the same sentinel.
+    #[test]
+    fn an_unbounded_width_falls_back_to_the_item_minimum() {
+        let composer = compose_layout(make_item(false, true));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(
+            nodes[root].measured_size.width,
+            NAVIGATION_BAR_ICON_SIZE + ITEM_TO_ICON_MINIMUM_PADDING * 2.0,
+            "the item falls back to its M3 minimum, not to f32::MAX"
+        );
     }
 
     fn make_horizontal_item(selected: bool) -> NavigationBarItem {

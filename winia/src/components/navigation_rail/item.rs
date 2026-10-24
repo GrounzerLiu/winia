@@ -252,7 +252,7 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
         } else {
             icon_size.width.max(total_indicator_w)
         };
-        let max_h = if constraints.max_height.is_finite() { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
 
         let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size {
             // placeLabelAndIcon：

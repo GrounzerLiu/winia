@@ -554,7 +554,9 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         if self.horizontal && self.has_label {
             // label 测量：宽度预算 = 可用宽 - iconW - gap
             // （androidx: looseConstraints.offset(horizontal = -(iconW + pad))）
-            let label_max_w = if loose.max_width.is_finite() {
+            // Bounded means BELOW the `f32::MAX` sentinel as well as finite: a scroll container
+            // hands its content `f32::MAX`, which `is_finite()` accepts (`layout/flex.rs`).
+            let label_max_w = if loose.max_width < f32::MAX {
                 (loose.max_width - icon_size.width - START_ICON_TO_LABEL_PADDING).max(0.0)
             } else {
                 f32::INFINITY
@@ -594,12 +596,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
                 ),
             );
 
-            let container_w = if constraints.max_width.is_finite() {
+            let container_w = if constraints.max_width < f32::MAX {
                 constraints.max_width
             } else {
                 icon_size.width + ITEM_TO_ICON_MINIMUM_PADDING * 2.0
             };
-            let max_h = if constraints.max_height.is_finite() {
+            let max_h = if constraints.max_height < f32::MAX {
                 constraints.max_height
             } else {
                 f32::MAX
@@ -670,12 +672,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         );
 
         // 容器宽：有界取约束宽；无界回退 iconW + 2x44（NavigationBarItemToIconMinimumPadding）
-        let container_w = if constraints.max_width.is_finite() {
+        let container_w = if constraints.max_width < f32::MAX {
             constraints.max_width
         } else {
             icon_size.width + ITEM_TO_ICON_MINIMUM_PADDING * 2.0
         };
-        let max_h = if constraints.max_height.is_finite() { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
 
         let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size {
             // placeLabelAndIcon：

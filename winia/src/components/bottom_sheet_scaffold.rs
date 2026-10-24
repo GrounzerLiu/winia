@@ -666,7 +666,9 @@ impl crate::layout::node::MeasurePolicy for ScaffoldStackPolicy {
         children: &[usize],
         constraints: crate::layout::Constraints,
     ) -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
-        let layout_h = if constraints.max_height.is_finite() {
+        // Bounded means below the `f32::MAX` sentinel too: a scroll container hands its content
+        // `f32::MAX`, and `is_finite()` accepts it, which would put the anchors 3.4e38 apart.
+        let layout_h = if constraints.max_height < f32::MAX {
             constraints.max_height
         } else {
             crate::layout::window_size().1
