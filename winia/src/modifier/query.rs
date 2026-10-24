@@ -531,23 +531,24 @@ impl Modifier {
     }
 
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
+    ///
+    /// The LAST element of this kind wins, like every other chain query (a modifier chain reads as
+    /// "later overrides earlier"); returning the first made `.align_self(a).align_self(b)` resolve
+    /// to `a`.
     pub fn get_align_self(&self) -> Option<crate::layout::Alignment> {
-        for el in &self.elements {
-            if let ModifierElement::AlignSelf { alignment } = el {
-                return Some(*alignment);
-            }
-        }
-        None
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::AlignSelf { alignment } => Some(*alignment),
+            _ => None,
+        })
     }
 
-    /// Both-axis alignment override, read by `Box`/`Stack` (Compose's `BoxScope.align`).
+    /// Both-axis alignment override, read by `Box`/`Stack` (Compose's `BoxScope.align`). Last wins, as
+    /// above.
     pub fn get_content_align_self(&self) -> Option<crate::layout::ContentAlignment> {
-        for el in &self.elements {
-            if let ModifierElement::ContentAlignSelf { alignment } = el {
-                return Some(*alignment);
-            }
-        }
-        None
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::ContentAlignSelf { alignment } => Some(*alignment),
+            _ => None,
+        })
     }
 
     /// 焦点请求器 ID

@@ -151,7 +151,15 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
                             .background(Color::from_argb(30, 120, 90, 200), Shape::rounded(8.0)),
                     )
                     .build(ctx, |ctx, scope| {
+                        // TOP_START, while the box's own alignment is BOTTOM_END — the label sits
+                        // above the opaque block instead of under it, and the card exercises the
+                        // child-over-box precedence at the same time.
                         Text::new(format!("max width {:.0} dp", scope.max_width()))
+                            .modifier(
+                                Modifier::new()
+                                    .content_align_self(ContentAlignment::TOP_START)
+                                    .test_tag("bwc-label"),
+                            )
                             .font_size(11.0)
                             .build(ctx);
                         block(

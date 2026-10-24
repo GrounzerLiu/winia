@@ -182,6 +182,18 @@ pub fn subcompose_overlay(
     subcompose_sized(constraints, false, content)
 }
 
+/// Compose a subcomposition's content under a stable key.
+///
+/// The composition runs inside measurement, where the statement stack that normally supplies a
+/// stable key is empty — so a content that builds a container (`build_container`'s
+/// `next_key()`) panics with "no stable key" in any non-test run. One key per subcomposing node:
+/// each node has its own composer and slot table, so the node id is the only identity needed (and
+/// it separates two subcompositions of the same call site).
+fn compose_keyed(ctx: &mut ComposeCtx, node: Option<usize>, content: impl Fn(&mut ComposeCtx)) {
+    let id = node.unwrap_or(0) as u64;
+    ctx.key(("subcompose", id), |ctx| content(ctx));
+}
+
 /// A subcomposition belongs to the same window as its host: a `ctx.frame_clock()` captured inside
 /// `BoxWithConstraints` / `TabRow` content has to wait on that window's frames, and window 0 never
 /// ticks.
@@ -237,14 +249,14 @@ fn subcompose_sized(
             let mut composer = composer;
             inherit_window(host, &mut composer);
             composer.prepare_subcomposition_for_recompose();
-            composer.compose(content);
+            composer.compose(|ctx| compose_keyed(ctx, node, content));
             composer.layout(constraints);
             composer
         }
         _ => {
             let mut fresh = Box::new(Composer::new());
             inherit_window(host, &mut fresh);
-            fresh.compose(content);
+            fresh.compose(|ctx| compose_keyed(ctx, node, content));
             fresh.layout(constraints);
             fresh
         }
@@ -380,6 +392,12 @@ fn adopt_one(
     // after that loop has already gone past the new child.
     {
         let rtl = arena.nodes[parent].layout_direction == crate::layout::LayoutDirection::Rtl;
+        // The parent's padding: the engine shifted its `children` by it before adoption attached this
+        // one, so the adopted root has to be moved by the same rule — otherwise a
+        // `BoxWithConstraints` with `Modifier::padding` places its content on the unpadded edge.
+        let (pad_s, pad_t, pad_e, _pad_b) = arena.nodes[parent].modifier.get_padding_sides();
+        arena.nodes[adopted_root].position.x += if rtl { pad_e } else { pad_s };
+        arena.nodes[adopted_root].position.y += pad_t;
         if let Some((ox, oy)) = arena.nodes[adopted_root].modifier.get_offset() {
             arena.nodes[adopted_root].position.x += if rtl { -ox } else { ox };
             arena.nodes[adopted_root].position.y += oy;
@@ -400,7 +418,13 @@ fn adopt_one(
     arena.add_child(parent, adopted_root);
     arena.nodes[parent].subcomposed_child = Some(adopted_root);
     if sized_by_content {
-        arena.nodes[parent].measured_size = inner_root_size;
+        // The padded OUTER size, not the content size: the policy measured the content against the
+        // box's inner constraints, and the engine's `size + padding` was overwritten above.
+        let (pad_s, pad_t, pad_e, pad_b) = arena.nodes[parent].modifier.get_padding_sides();
+        arena.nodes[parent].measured_size = Size::new(
+            inner_root_size.width + pad_s + pad_e,
+            inner_root_size.height + pad_t + pad_b,
+        );
     }
     arena.nodes[parent].subcomposed_measurements = measurements;
     #[cfg(debug_assertions)]
@@ -430,7 +454,11 @@ fn measurements_from(nodes: &[LayoutNode], root: usize) -> Vec<(usize, Size)> {
     // subcomposition was a single node (no children to recurse into). A content wrapper — one Box with
     // the content under it — made it index past the end on the first frame.
     fn walk(nodes: &[LayoutNode], root: usize, index: usize, out: &mut Vec<(usize, Size)>) {
-        out.push((index - root, nodes[index].measured_size));
+        // The arena refills from a LIFO free list, so a node re-allocated into a freed slot can sit
+        // BELOW its root. An underflow here would be a debug panic and a huge offset in release
+        // (which materialize then skips silently), so skip such a node instead.
+        let Some(offset) = index.checked_sub(root) else { return };
+        out.push((offset, nodes[index].measured_size));
         for &c in &nodes[index].children {
             walk(nodes, root, c, out);
         }

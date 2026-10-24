@@ -1,5 +1,23 @@
     use super::*;
 
+    /// A changed `content_align_self` must re-enter the box: the parameter is part of the Skip
+    /// contract (`BoxLayout` places children with it), and an element missing from `param_eq` is a
+    /// change a Clean slot skips past forever.
+    #[test]
+    fn param_eq_compares_the_box_child_alignment() {
+        use crate::layout::ContentAlignment;
+        let a = Modifier::new().content_align_self(ContentAlignment::TOP_END);
+        let b = Modifier::new().content_align_self(ContentAlignment::BOTTOM_END);
+        let a2 = Modifier::new().content_align_self(ContentAlignment::TOP_END);
+        assert!(!a.param_eq(&b), "a different corner must compare unequal");
+        assert!(a.param_eq(&a2), "the same corner must compare equal");
+
+        // The one-axis carrier too, and the two kinds are not interchangeable.
+        let one = Modifier::new().align_self(crate::layout::Alignment::Center);
+        let two = Modifier::new().content_align_self(ContentAlignment::both(crate::layout::Alignment::Center));
+        assert!(!one.param_eq(&two), "a 1-D and a 2-D alignment are different declarations");
+    }
+
     #[test]
     fn param_eq_detects_size_change() {
         let a = Modifier::new().width(200.0);

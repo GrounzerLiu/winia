@@ -207,6 +207,10 @@ impl BoxWithConstraints {
             alignment: align,
             direction: dir,
             propagate_min_constraints: self.propagate_min_constraints,
+            // The content composes during MEASUREMENT, where no provider is on the stack: without
+            // this snapshot it would read the defaults for the direction, the theme and the text
+            // style. Overlays solve the same problem the same way (`app/placement.rs`).
+            locals: crate::runtime::composition_local::capture(),
             first_measure: std::cell::Cell::new(None),
             content: std::sync::Arc::new(content),
         };
@@ -230,6 +234,9 @@ struct ConstraintsSubcomposePolicy {
     direction: LayoutDirection,
     /// Compose's `propagateMinConstraints` for the box that hosts the content.
     propagate_min_constraints: bool,
+    /// The composition locals captured where the box was built (direction, theme, text style) —
+    /// replayed around the measure-time composition.
+    locals: crate::runtime::composition_local::LocalSnapshot,
     /// What this frame's first measurement produced, together with the compose generation it belongs
     /// to. A second `layout()` in the SAME frame (the frame handler runs one when a shared flight
     /// attaches a layout override) measures this node again; composing a second time would discard the
@@ -274,21 +281,18 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         }
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = &self.content;
-        // Compose's structure is `SubcomposeLayout { Box(contentAlignment) { content } }`: the
-        // content is a child of a Box measured with the box's own constraints, so that Box decides the
-        // size and the alignment places the content inside it. Composing the content straight under
-        // this node (what this did) left `alignment` with nothing to do — the builder was a
-        // silent no-op, with the content pinned at (0,0) even in a forced 400x400 box.
+        // Compose runs its Box measure policy over the subcomposed measurables
+        // (`BoxWithConstraints.kt:63-69`); winia has no policy-over-measurables hook, so the same
+        // relation is expressed as an actual Box node around the content: that Box decides the size
+        // (max(content, min)) and places the content with the alignment. Composing the content
+        // straight under this node, as this did, left `alignment` with nothing to do — the builder
+        // was a silent no-op, with the content pinned at (0,0) even in a forced 400x400 box.
         // The subcomposed content is adopted as this node's child, so its measurement IS this node's
         // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
         // Reporting anything else would leave the box at 0 while holding a sized child — measured
         // while wiring this: the box read [0,0] with a [98,48] child under it.
-        let size = crate::layout::subcompose::subcompose(constraints, |ctx| {
-            // `ctx.key` is required, not decoration: this composition runs INSIDE measurement, where
-            // the statement stack that normally supplies a stable key is empty — `build_container`'s
-            // `next_key()` panicked with "no stable key" without it (measured on the first frame of
-            // the box demo).
-            ctx.key("bwc-content", |ctx| {
+        let size = crate::runtime::composition_local::with_snapshot(&self.locals, || {
+            crate::layout::subcompose::subcompose(constraints, |ctx| {
                 crate::layout::container::build_container(
                     ctx,
                     Modifier::new(),
@@ -298,15 +302,14 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
                         .propagate_min_constraints(self.propagate_min_constraints),
                     |ctx| content(ctx, scope),
                 );
-            });
+            })
         });
         self.first_measure.set(Some((generation, size)));
-        // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
-        // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
-        // out under `constraints`, while the engine clamps against the constraints the box's modifier
-        // produced (a different, usually tighter, set). Measured while wiring this: clamping both ways
-        // made the reported width depend on which layer ran last, and the box read 0 on one frame and
-        // 98 on the next.
+        // Report the content's size AS MEASURED. The engine takes a policy's size as-is — the only
+        // clamp on that path is the scroll-viewport one — so clamping here as well would double-clamp
+        // against a second, usually tighter, set of constraints. Measured while wiring this: clamping
+        // both ways made the reported width depend on which layer ran last, and the box read 0 on one
+        // frame and 98 on the next.
         (size, Vec::new())
     }
 
@@ -658,6 +661,90 @@ mod tests {
             composer.arena.nodes[content].position,
             Offset::new(300.0, 350.0),
             "BOTTOM_END puts a 100x50 child at the bottom-right of the 400x400 box"
+        );
+    }
+
+    /// The box's PADDING is part of its outer size, and the content sits inside it. Adoption used to
+    /// overwrite the padded size with the content size and leave the adopted root at the origin, so a
+    /// padded box reported itself 20 dp too small and painted its content on the unpadded edge.
+    #[test]
+    fn padding_is_part_of_the_box_and_offsets_the_content() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().padding(10.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::components::Text::new("x")
+                        .modifier(Modifier::new().size(100.0, 40.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(120.0, 60.0),
+            "the box is its content plus its padding"
+        );
+        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box");
+        assert_eq!(
+            composer.arena.nodes[host].position,
+            Offset::new(10.0, 10.0),
+            "the content box sits inside the padding (a child's position is relative to its parent)"
+        );
+        let content = composer.arena.nodes[host].children[0];
+        assert_eq!(
+            composer.arena.nodes[content].measured_size,
+            Size::new(100.0, 40.0),
+            "and it still measures its own size inside the padded box"
+        );
+    }
+
+    /// Multi-root content: the box is as big as its WIDEST root. Before the content was wrapped in a
+    /// Box, only the last top-level node defined the size.
+    #[test]
+    fn the_box_is_as_wide_as_its_widest_content_root() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            BoxWithConstraints::new().build(ctx, |ctx, _scope| {
+                crate::components::Text::new("a")
+                    .modifier(Modifier::new().size(60.0, 20.0))
+                    .build(ctx);
+                crate::components::Text::new("b")
+                    .modifier(Modifier::new().size(120.0, 20.0))
+                    .build(ctx);
+            });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena.nodes[root].measured_size.width, 120.0,
+            "the wider of the two roots defines the box"
+        );
+    }
+
+    /// The alignment mirrors under RTL: `BOTTOM_END` is the bottom-LEFT in a right-to-left box.
+    #[test]
+    fn the_alignment_mirrors_under_rtl() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            BoxWithConstraints::new()
+                .content_alignment(ContentAlignment::BOTTOM_END)
+                .modifier(Modifier::new().size(200.0, 100.0).layout_direction(LayoutDirection::Rtl))
+                .build(ctx, |ctx, _scope| {
+                    crate::components::Text::new("x")
+                        .modifier(Modifier::new().size(50.0, 20.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        let root = composer.arena.root.expect("root");
+        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box");
+        let content = composer.arena.nodes[host].children[0];
+        assert_eq!(
+            composer.arena.nodes[content].position,
+            Offset::new(0.0, 80.0),
+            "bottom-end mirrors to the leading edge under RTL"
         );
     }
 

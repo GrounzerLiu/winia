@@ -304,10 +304,13 @@ impl Surface {
 
         // content 闭包为组合 scope；布局策略 = BoxLayout（对标 Compose Box）。
         // Box 无方向参数（层叠堆叠——子节点共享空间），Direction 走 modifier 层。
+        // Compose's Surface is a Box with `propagateMinConstraints = true` (`Surface.kt:132`,
+        // `:266`, `:401`, `:537`), which is why a forced size on a Surface reaches its content
+        // (that is what makes a Compose button widen with its box).
         match ctx.start_restartable_group(
             key,
             modifier,
-            crate::layout::BoxLayout::new(),
+            crate::layout::BoxLayout::new().propagate_min_constraints(true),
         ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {

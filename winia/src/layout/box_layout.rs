@@ -42,7 +42,11 @@ impl BoxLayout {
         BoxLayout {
             alignment: Alignment::Start,
             content_alignment: None,
-            direction: LayoutDirection::Ltr,
+            // Compose resolves placement with the MEASURE SCOPE's direction on every Box
+            // (`Box.kt:157`, `:199`, `:213-220`), not only on the builders that remember to set
+            // it. Defaulting here covers every hand-built policy (Surface, Card, IconButton, …),
+            // whose `new()` runs during composition where the local is valid.
+            direction: crate::layout::direction::current(),
             propagate_min_constraints: false,
         }
     }
@@ -121,23 +125,29 @@ impl MeasurePolicy for BoxLayout {
         // child's own alignment wins, otherwise the box's). The two-axis value wins over the
         // axis-symmetric `align_self`, which wins over the box's `contentAlignment`.
         let align = self.effective_alignment();
-        let child_aligns: Vec<ContentAlignment> = children
-            .iter()
-            .map(|&c| {
-                nodes[c]
-                    .modifier
-                    .get_content_align_self()
-                    .or_else(|| nodes[c].modifier.get_align_self().map(ContentAlignment::both))
-                    .unwrap_or(align)
-            })
-            .collect();
         let space = Size::new(width, height);
         let placements: Vec<Placement> = child_sizes
             .iter()
-            .zip(child_aligns.iter())
-            .map(|(child_size, align)| {
-                let (x, y) = align.anchor(*child_size, space, self.direction);
-                let size = align.child_size(*child_size, space);
+            .enumerate()
+            .map(|(i, child_size)| {
+                // Precedence: the child's own two-axis value, then its axis-symmetric one, then the
+                // box's alignment. `Stretch` is skipped in the one-axis fallback: it means "fill the
+                // CROSS axis" in a Row/Column, and a Box would read it as fill-both-axes (which it
+                // cannot honour without resizing the child, something Compose's `BoxScope.align`
+                // never does).
+                let child_align = nodes[children[i]]
+                    .modifier
+                    .get_content_align_self()
+                    .or_else(|| {
+                        nodes[children[i]]
+                            .modifier
+                            .get_align_self()
+                            .filter(|a| *a != Alignment::Stretch)
+                            .map(ContentAlignment::both)
+                    })
+                    .unwrap_or(align);
+                let (x, y) = child_align.anchor(*child_size, space, self.direction);
+                let size = child_align.child_size(*child_size, space);
                 Placement {
                     size,
                     position: Offset::new(x, y),
@@ -354,7 +364,9 @@ mod tests {
     /// The box still floors at the incoming minimum — that half of the old `constrain` was right.
     #[test]
     fn a_content_sized_box_is_floored_by_the_minimum() {
-        let mut nodes = vec![make_leaf(20.0, 10.0)];
+        // `required_size`, not `size`: a plain `size` is coerced into the incoming range, so the child
+        // would come out at the minimum and the assertion would hold vacuously.
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().required_size(20.0, 10.0))];
         let children: Vec<usize> = vec![0];
         let (size, _) = BoxLayout::new().measure(
             &mut nodes,
@@ -363,6 +375,45 @@ mod tests {
             Constraints::new(100.0, 300.0, 50.0, 300.0),
         );
         assert_eq!(size, Size::new(100.0, 50.0));
+    }
+
+    /// Compose's empty Box is `layout(constraints.minWidth, constraints.minHeight)` (`Box.kt:128-130`).
+    /// `max(0, min)` preserves it, and nothing else pinned it.
+    #[test]
+    fn an_empty_box_takes_the_minimum() {
+        let (size, placements) = BoxLayout::new().measure(
+            &mut Vec::new(),
+            &[],
+            &[],
+            Constraints::new(120.0, 400.0, 60.0, 400.0),
+        );
+        assert_eq!(size, Size::new(120.0, 60.0));
+        assert!(placements.is_empty());
+    }
+
+    /// The public builder has to carry both new knobs into the policy: `Stack::propagate_min_constraints`
+    /// and `content_alignment` are what a caller writes, and a builder that drops one is silent.
+    #[test]
+    fn the_stack_builder_carries_propagation_and_alignment() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new()
+                .content_alignment(ContentAlignment::BOTTOM_END)
+                .propagate_min_constraints(true)
+                .modifier(Modifier::new().size(200.0, 60.0))
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("x").build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root().unwrap();
+        let child = composer.arena_nodes()[root.children[0]].measured_size;
+        assert_eq!(
+            (child.width, child.height),
+            (200.0, 60.0),
+            "propagation passed the box's minimum down"
+        );
     }
 }
 pub struct Stack {

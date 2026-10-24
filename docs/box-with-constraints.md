@@ -31,8 +31,16 @@ BoxWithConstraints::new()
 
 The content is composed **during measurement**, inside a subcomposition (`layout::subcompose`), and the
 composed tree is ADOPTED as the box's child — so the scope carries the constraints this measurement just
-computed, which is the relation Compose has. The box is as big as what its content composed (clamped by
-the constraints), so the policy reports the content's measured size instead of a size of its own.
+computed, which is the relation Compose has. Compose runs its Box measure policy over the subcomposed
+measurables (`BoxWithConstraints.kt:63-69`); winia has no policy-over-measurables hook, so the same
+relation is expressed as an actual Box node around the content. Two consequences worth knowing: the box
+costs one extra node (and one extra restartable group) per instance, and multi-root content is sized by
+its WIDEST root — before the wrapper only the last top-level node defined the size.
+
+The box is as big as what its content composed, floored by the minimum and never cropped to the maximum
+(Compose's Box rule), and its padding belongs to the outer size. `content_alignment` (two axes) places
+the content inside it, mirroring `Start`/`End` under the layout direction; `propagate_min_constraints`
+passes the box's minimum down to the content, both as in Compose.
 
 The content closure is `Fn`, not `FnOnce`: a later frame's measurement composes it again — into the
 composition the box kept from the previous frame, so a `remember` inside it survives the frame.
@@ -85,3 +93,7 @@ custom `MeasurePolicy`.
 | `the_box_sizes_to_its_content_on_the_first_frame_and_the_next` | the box's size IS the content's size, on the composed frame and on the next one (the reused parent detaches and re-attaches the adopted child) |
 | `the_box_keeps_its_adopted_child_across_a_frame_it_did_not_measure` | a frame the box folds does not detach the adopted subtree |
 | `a_cap_change_in_the_composition_reaches_the_content_the_box_composes` | the `bwc` UI fixture's failure, reduced: a state read in a PARENT scope feeding `.max_width(cap.get())` must re-measure the box and reach the content it composes, in both directions |
+| `the_boxes_alignment_places_the_content_it_composes` | `content_alignment` places the content (the builder used to hand it to a policy that discarded it) |
+| `padding_is_part_of_the_box_and_offsets_the_content` | the box is content + padding, and the adopted content box starts inside the padding |
+| `the_box_is_as_wide_as_its_widest_content_root` | multi-root content: the widest root defines the box |
+| `the_alignment_mirrors_under_rtl` | `BOTTOM_END` is the bottom-left in an RTL box |
