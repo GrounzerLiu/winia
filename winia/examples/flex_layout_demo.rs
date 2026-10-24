@@ -135,11 +135,19 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
                     });
             });
 
-            // 4. Overflow: the inner Column reports its 4 x 45 content height; the 100 dp Stack
-            //    around it decides what to clip (the card itself stays 100 + chrome tall).
+            // 4. Overflow: the inner Column reports its 4 x 45 content height; the 100 dp scroll box
+            //    around it clamps to the viewport (a plain Box would grow to its child instead — Compose
+            //    never crops, which is what the box layout fix aligned).
             card(ctx, "overflow", "4. overflow reports content", |ctx| {
-                Stack::new()
-                    .modifier(Modifier::new().fill_max_width().height(100.0).clip(Shape::Rectangle))
+                let strip = ctx.remember(|| ScrollState::new()).get();
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(100.0)
+                            .vertical_scroll(strip)
+                            .clip(Shape::Rectangle),
+                    )
                     .build(ctx, |ctx| {
                         Column::new()
                             .modifier(Modifier::new().test_tag("overflow-content"))

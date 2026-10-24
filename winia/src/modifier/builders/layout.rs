@@ -366,8 +366,19 @@ impl Modifier {
     }
 
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
+    ///
+    /// In a `Row`/`Column` this is the cross axis. A `Box` applies it to BOTH axes (the one-axis
+    /// value is axis-symmetric: `Start` is top-start, `End` is bottom-end); use
+    /// [`Self::content_align_self`] when the two axes need different values.
     pub fn align_self(self, alignment: crate::layout::Alignment) -> Self {
         self.push(ModifierElement::AlignSelf { alignment })
+    }
+
+    /// A child's own alignment inside a `Box`/`Stack`, on both axes — Compose's
+    /// `BoxScope.Modifier.align(Alignment.TopEnd)`. Overrides `align_self` and the box's own
+    /// `contentAlignment` for this child. Ignored by `Row`/`Column`, whose cross axis is one-axis.
+    pub fn content_align_self(self, alignment: crate::layout::ContentAlignment) -> Self {
+        self.push(ModifierElement::ContentAlignSelf { alignment })
     }
 
     /// Align this child by one of its own alignment lines instead of by its edge — Compose's

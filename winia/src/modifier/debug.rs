@@ -47,6 +47,9 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
+            Self::ContentAlignSelf { alignment } => {
+                f.debug_struct("ContentAlignSelf").field("alignment", alignment).finish()
+            }
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::FillMaxRowHeight { fraction } => {
                 f.debug_struct("FillMaxRowHeight").field("fraction", fraction).finish()

@@ -108,15 +108,34 @@ impl MeasurePolicy for BoxLayout {
             child_sizes.push(child_size);
         }
 
-        let width = constraints.constrain_width(max_width);
-        let height = constraints.constrain_height(max_height);
+        // Compose's Box reports `max(child, constraints.min)` and never consults the maximum
+        // (`Box.kt:146-147`, `:164-171`). Coercing into the max, as this did, cropped a child that
+        // ignores its constraints (`required_size`) and told the parent the box fits when it does
+        // not; `Row`/`Column` were aligned with Compose in the same way.
+        let width = max_width.max(constraints.min_width);
+        let height = max_height.max(constraints.min_height);
 
         // 为每个子节点计算在 Box 中的位置（根据 alignment）
+        //
+        // A child may carry its own alignment — Compose's `BoxScope.align` (`Box.kt:205-221`: the
+        // child's own alignment wins, otherwise the box's). The two-axis value wins over the
+        // axis-symmetric `align_self`, which wins over the box's `contentAlignment`.
         let align = self.effective_alignment();
+        let child_aligns: Vec<ContentAlignment> = children
+            .iter()
+            .map(|&c| {
+                nodes[c]
+                    .modifier
+                    .get_content_align_self()
+                    .or_else(|| nodes[c].modifier.get_align_self().map(ContentAlignment::both))
+                    .unwrap_or(align)
+            })
+            .collect();
         let space = Size::new(width, height);
         let placements: Vec<Placement> = child_sizes
             .iter()
-            .map(|child_size| {
+            .zip(child_aligns.iter())
+            .map(|(child_size, align)| {
                 let (x, y) = align.anchor(*child_size, space, self.direction);
                 let size = align.child_size(*child_size, space);
                 Placement {
@@ -151,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn test_box_max_size() {
+    fn a_box_takes_the_size_of_its_largest_child() {
         let box_layout = BoxLayout::new();
         let mut nodes = vec![
             make_leaf(50.0, 30.0),
@@ -173,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn test_box_center_alignment() {
+    fn center_alignment_centres_every_child() {
         let box_layout = BoxLayout::new().alignment(Alignment::Center);
         let mut nodes = vec![
             make_leaf(50.0, 30.0),
@@ -283,11 +302,76 @@ mod tests {
             "with propagation the forced minimum reaches the child, so the child paints that wide"
         );
     }
+
+    /// Compose's `BoxScope.align`: a child's own alignment wins over the box's `contentAlignment`
+    /// (`Box.kt:205-221`). Both carriers are read — the two-axis one first, then the axis-symmetric
+    /// `align_self`, which a Box applies to BOTH axes.
+    #[test]
+    fn a_child_alignment_wins_over_the_boxes_own_and_covers_both_carriers() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(50.0, 50.0).content_align_self(ContentAlignment::BOTTOM_END)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 50.0).align_self(Alignment::Center)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = BoxLayout::new()
+            .alignment(Alignment::Start)
+            .measure(&mut nodes, &[], &children, Constraints::fixed(400.0, 400.0));
+        assert_eq!(size, Size::new(400.0, 400.0));
+        assert_eq!(
+            placements[0].position,
+            Offset::new(350.0, 350.0),
+            "content_align_self(BOTTOM_END) overrides the box's Start"
+        );
+        assert_eq!(
+            placements[1].position,
+            Offset::new(175.0, 175.0),
+            "align_self(Center) applies to both axes in a Box"
+        );
+        assert_eq!(
+            placements[2].position,
+            Offset::new(0.0, 0.0),
+            "a child with neither keeps the box's alignment"
+        );
+    }
+
+    /// Compose's Box reports `max(child, constraints.min)` and never looks at the maximum
+    /// (`Box.kt:146-147`, `:164-171`): a child that ignores its constraints overflows the box
+    /// instead of being cropped to it.
+    #[test]
+    fn an_overflowing_child_is_reported_not_cropped() {
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().required_size(500.0, 50.0))];
+        let children: Vec<usize> = vec![0];
+        let (size, _) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
+        assert_eq!(size, Size::new(500.0, 50.0), "the content size, not the 200 maximum");
+    }
+
+    /// The box still floors at the incoming minimum — that half of the old `constrain` was right.
+    #[test]
+    fn a_content_sized_box_is_floored_by_the_minimum() {
+        let mut nodes = vec![make_leaf(20.0, 10.0)];
+        let children: Vec<usize> = vec![0];
+        let (size, _) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(100.0, 300.0, 50.0, 300.0),
+        );
+        assert_eq!(size, Size::new(100.0, 50.0));
+    }
 }
 pub struct Stack {
     modifier: Modifier,
     alignment: Alignment,
     content_alignment: Option<ContentAlignment>,
+    /// Compose's `Box(propagateMinConstraints = true)` — the box's own minimum is passed to its
+    /// children instead of being loosened away. See `BoxLayout::propagate_min_constraints`.
+    propagate_min_constraints: bool,
 }
 
 impl Stack {
@@ -296,6 +380,7 @@ impl Stack {
             modifier: Modifier::new(),
             alignment: Alignment::Start,
             content_alignment: None,
+            propagate_min_constraints: false,
         }
     }
 
@@ -308,17 +393,25 @@ impl Stack {
         self
     }
 
+    /// Compose's `Box(propagateMinConstraints = true)`.
+    pub fn propagate_min_constraints(mut self, on: bool) -> Self {
+        self.propagate_min_constraints = on;
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（参数相等跳过——同 Column）
         ctx.changed(&self.alignment);
         ctx.changed(&self.content_alignment);
+        ctx.changed(&self.propagate_min_constraints);
         // 方向：modifier 覆盖 > CompositionLocal 默认（同 Column/Row）——对齐的水平轴靠它镜像
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         // content 闭包自动成为组合 scope（与 Column 一致）
-        let policy = match self.content_alignment {
+        let mut policy = match self.content_alignment {
             Some(a) => BoxLayout::new().content_alignment(a).direction(dir),
             None => BoxLayout::new().alignment(self.alignment).direction(dir),
         };
+        policy = policy.propagate_min_constraints(self.propagate_min_constraints);
         build_container(ctx, self.modifier, policy, content);
     }
 }

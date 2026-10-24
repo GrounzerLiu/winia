@@ -345,6 +345,9 @@ pub(crate) enum ModifierElement {
     AbsoluteOffset { x: Dimension, y: Dimension },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
+    /// A child's own alignment inside a `Box`/`Stack`, on BOTH axes — Compose's
+    /// `BoxScope.Modifier.align(Alignment.TopEnd)`, which a one-axis `Alignment` cannot express.
+    ContentAlignSelf { alignment: crate::layout::ContentAlignment },
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },

@@ -540,6 +540,16 @@ impl Modifier {
         None
     }
 
+    /// Both-axis alignment override, read by `Box`/`Stack` (Compose's `BoxScope.align`).
+    pub fn get_content_align_self(&self) -> Option<crate::layout::ContentAlignment> {
+        for el in &self.elements {
+            if let ModifierElement::ContentAlignSelf { alignment } = el {
+                return Some(*alignment);
+            }
+        }
+        None
+    }
+
     /// 焦点请求器 ID
     pub fn focus_requester_id(&self) -> Option<u64> {
         for el in &self.elements {
