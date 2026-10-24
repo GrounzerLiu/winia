@@ -40,14 +40,15 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use winia::composable;
-use winia::core::composer::{ComposeCtx, Composer, GroupStatus};
+use winia::components::Text;
+use winia::graphics::{Color, Shape};
 use winia::layout::BoxLayout;
+use winia::layout::box_with_constraints::BoxWithConstraints;
 use winia::layout::constraints::Constraints;
-use winia::modifier::{Color, Modifier, Shape};
-use winia::ui::box_with_constraints::BoxWithConstraints;
-use winia::ui::layout_components::{Column, Row};
-use winia::ui::text::Text;
-use winia::State;
+use winia::layout::{Column, Row};
+use winia::modifier::Modifier;
+use winia::runtime::composer::GroupStatus;
+use winia::{ComposeCtx, Composer, State};
 
 /// One measured scene.
 struct Result {
