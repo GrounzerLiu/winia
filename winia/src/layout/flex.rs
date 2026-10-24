@@ -212,7 +212,14 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── per-child 属性 ──
-    let weights: Vec<Option<f32>> = children.iter().map(|&c| nodes[c].modifier.get_layout_weight()).collect();
+    // A non-positive weight is NOT a weighted child. Compose rejects `weight <= 0` at the modifier
+    // (`Row.kt:383-384`, `Column.kt:366-367`) and its measure pass only treats `weight > 0f` as
+    // weighted (`RowColumnMeasurePolicy.kt:113-116`). Treating `Some(0.0)` as weighted measured the
+    // child with a fixed zero slot, so it vanished instead of measuring like any other child.
+    let weights: Vec<Option<f32>> = children
+        .iter()
+        .map(|&c| nodes[c].modifier.get_layout_weight().filter(|w| *w > 0.0))
+        .collect();
     // Compose's `LayoutWeightParentData.fill`. A node with a weight but no explicit flag fills,
     // which is what `Modifier::layout_weight` has always meant here.
     let fills: Vec<bool> = children.iter()
@@ -264,7 +271,17 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // 剩余空间
-    let remaining = if A::main_max(constraints).is_finite() {
+    //
+    // A main axis is unbounded when it carries EITHER sentinel: `f32::INFINITY`
+    // (`Constraints::UNBOUNDED`) or `f32::MAX` (what a scroll container writes for its content —
+    // `measure/engine.rs:559-561`). `is_finite()` is true for `f32::MAX`, so the old test called a
+    // scrolling parent bounded and handed the weighted children `f32::MAX` as their share: measured,
+    // a weighted child in a `vertical_scroll` Column came out 3.4e38 tall and dragged the column
+    // with it. Compose makes every weighted child 0 on an unbounded axis (`targetSpace = if
+    // (mainAxisMax != Infinity) mainAxisMax else mainAxisMin`, `RowColumnMeasurePolicy.kt:157-165`),
+    // which is what the unbounded branch below gets.
+    let bounded_main = A::main_max(constraints) < f32::MAX;
+    let remaining = if bounded_main {
         (A::main_max(constraints) - total_fixed_main - total_spacing).max(0.0)
     } else {
         0.0
@@ -274,19 +291,15 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             let allocated = if total_weight > 0.0 { remaining * w / total_weight } else { 0.0 };
-            // The allocation only wins when the parent actually HAD space to allocate (a
-            // bounded main axis with a positive total weight). With an unbounded axis, or
-            // weight <= 0, `allocated` is 0 while the child's own measurement is not, and
-            // placing it in a 0-slot made it vanish — measured pre/post: a
-            // `weight(0) + size(100)` child beside a 50px sibling went from 100@0 / 50@100
-            // to 0@0 / 50@0 (overlapping, the row no longer containing its children).
-            // Compose rejects `weight <= 0`; we fall back to the child's measurement.
+            // The allocation only wins when the parent actually HAD space to allocate: a bounded
+            // main axis with a positive total weight. On an unbounded axis the share is 0 and the
+            // child keeps that measurement, which is Compose's rule too.
             //
             // `fill = false` also falls back to the child's own measurement, and that is the whole
             // point of the flag: Compose measures such a child with its share as the MAXIMUM and
             // then adds the size the child asked for to `weightedSpace`, so a short child leaves the
             // container short instead of stretching it to the share.
-            allocated_main[i] = if fills[i] && A::main_max(constraints).is_finite() && total_weight > 0.0 {
+            allocated_main[i] = if fills[i] && bounded_main && total_weight > 0.0 {
                 Some(allocated)
             } else {
                 None
@@ -310,11 +323,12 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     // The arrangement spreads the space the container ACTUALLY ends up with, so the container's main size
     // is resolved first and the leftover is derived from it. Two things make that subtle:
     //
-    //  - The unbounded sentinel is `f32::MAX`, which IS finite: the old `main_max().is_finite()` guard let
-    //    it through, so `remaining` came out as `f32::MAX` and `Arrangement::Center` placed the child at
-    //    1.7e38. Measured on a menu item's label (`pos:[12,170141173319319264429905852091742258462720]`).
+    //  - The unbounded sentinels are `f32::INFINITY` and `f32::MAX` (a scroll container writes the
+    //    latter); both are spelled out where `remaining` is decided. Getting that wrong once put
+    //    `Arrangement::Center`'s child at 1.7e38 — measured on a menu item's label
+    //    (`pos:[12,170141173319319264429905852091742258462720]`).
     //  - A container that carries a MINIMUM (a 48dp menu item whose label is 20px) really does have space
-    //    to distribute, which only shows up once the constrained size is used instead of the content size.
+    //    to distribute, which only shows up once the minimum is used to floor the content size.
     //
     // The size is the CONTENT size, floored by the incoming minimum — never the maximum the parent offers.
     // Compose resolves it the same way: `mainAxisLayoutSize = max((fixedSpace + weightedSpace)
@@ -331,7 +345,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     // nothing — every call site that wanted the spreading had already said so with an explicit
     // `fill_max_width` (`layout_demo`'s rows through their shared `arr_pad`, the date picker's nine
     // header/weekday/grid rows, `swipe_to_dismiss_demo`'s label row), which is the Compose idiom anyway.
-    let measured_main = A::constrain_main(constraints, total_content_main);
+    let measured_main = total_content_main.max(A::main_min(constraints));
     let remaining_main = (measured_main - total_content_main).max(0.0);
     let gap_count = if n > 1 { n - 1 } else { 0 };
     let (spacing_extra, leading_space) = compute_spacing(arrangement, remaining_main, gap_count);
@@ -359,7 +373,12 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let cross_size = if alignment == Alignment::Stretch && A::cross_max(constraints) < f32::MAX {
         A::cross_max(constraints)
     } else {
-        A::constrain_cross(constraints, max_cross.max(line_before + line_after))
+        // Compose: `maxOf(crossAxisSpace, crossAxisMin, beforeCrossAxisAlignmentLine +
+        // afterCrossAxisAlignmentLine)` — the cross axis is not coerced into `crossAxisMax` either
+        // (`RowColumnMeasurePolicy.kt:253-258`).
+        max_cross
+            .max(line_before + line_after)
+            .max(A::cross_min(constraints))
     };
 
     // 放置子节点

@@ -584,6 +584,8 @@ impl Modifier {
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
     ///
     /// The child occupies its whole share, which is Compose's `weight(weight, fill = true)`.
+    /// A non-positive weight means "no weight": the child is measured like any other unweighted
+    /// sibling. (Compose rejects `weight <= 0` at the modifier instead — `Row.kt:383-384`.)
     pub fn layout_weight(self, weight: f32) -> Self {
         self.push(ModifierElement::LayoutWeight { weight, fill: true })
     }

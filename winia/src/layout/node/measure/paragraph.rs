@@ -334,7 +334,11 @@ pub fn compute_spacing(
             if gap_count > 0 {
                 (remaining / gap_count as f32, 0.0)
             } else {
-                (0.0, remaining / 2.0)
+                // Compose's placeSpaceBetween divides by maxOf(size.lastIndex, 1), so a single
+                // child has one gap and sits at the START (LTR) — it is not centred. The RTL mirror
+                // the container applies afterwards turns that into the end edge, which is what
+                // Compose's reverseInput branch does too (Arrangement.kt:680-703).
+                (0.0, 0.0)
             }
         }
         crate::layout::Arrangement::SpaceAround => {

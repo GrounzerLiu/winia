@@ -1570,8 +1570,33 @@ fn peer_sourced_tier1_cancel_drops_the_mains_override() {
     crate::animation::clear_all_animations();
 }
 
-/// A bounds hero holding a child WIDER than its box, so the scaled content spills
+/// Paints a 500 dp band from the node's own left edge — the spill `overlayClip` has to police.
+#[derive(Debug)]
+struct SpillBand;
+
+impl crate::modifier::DrawNode for SpillBand {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color(skia_safe::Color::from_rgb(0, 255, 0));
+        paint.set_style(skia_safe::paint::Style::Fill);
+        canvas.draw_rect(
+            skia_safe::Rect::new(rect.left, rect.top, rect.left + 500.0, rect.top + 30.0),
+            &paint,
+        );
+    }
+
+    fn node_key(&self) -> String {
+        "spill_band".to_string()
+    }
+}
+
+/// A bounds hero whose painted content is WIDER than its box, so the scaled content spills
 /// past the lerped rect unless the marker's `overlayClip` clips it.
+///
+/// The band is drawn, not measured: `Modifier::size` constrains the child's measurement but does
+/// not force the node's reported size — Compose's `SizeNode` returns the child's placeable size
+/// (`Size.kt:884`) — so a 500 dp `required_size` child made the hero itself 500 wide and left
+/// nothing outside its bounds to clip.
 #[crate::composable]
 fn spilling_hero_screen(
     ctx: &mut ComposeCtx,
@@ -1600,17 +1625,10 @@ fn spilling_hero_screen(
                     ),
             )
             .build(ctx, |ctx| {
-                // 500 wide inside a 120-wide hero: spills by construction. `required_size`, not
-                // `size`: Compose coerces a plain `size()` into the incoming range
-                // (`enforceIncoming = true`), so 500 would come out at the hero's 120 and there
-                // would be nothing to spill; `requiredSize` is the deliberate-overflow escape.
+                // A 500-wide band painted from a 120-wide leaf: spills by construction, while the
+                // hero keeps the size its own `size(w, h)` gave it.
                 let key = ctx.next_key();
-                ctx.start_leaf(
-                    key,
-                    Modifier::new()
-                        .required_size(500.0, 30.0)
-                        .background(Color::GREEN, Shape::Rectangle),
-                );
+                ctx.start_leaf(key, Modifier::new().size(w, 30.0).draw_node(SpillBand));
                 ctx.end_node();
             });
     });

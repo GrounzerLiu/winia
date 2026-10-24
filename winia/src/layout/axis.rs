@@ -27,6 +27,13 @@ pub trait Axis: sealed::Sealed + 'static {
     fn cross_size(s: Size) -> f32;
     fn main_max(c: &Constraints) -> f32;
     fn cross_max(c: &Constraints) -> f32;
+    /// The smallest main extent the parent allows. A flex container's size is floored by it and is
+    /// NOT coerced into `main_max` — Compose's
+    /// `mainAxisLayoutSize = max((fixedSpace + weightedSpace).coerceAtLeast(0), mainAxisMin)`
+    /// (`RowColumnMeasurePolicy.kt:252`).
+    fn main_min(c: &Constraints) -> f32;
+    /// The smallest cross extent the parent allows — `crossAxisMin` in the same computation.
+    fn cross_min(c: &Constraints) -> f32;
     /// `(main, cross)` → size. The order is this way round in both traits: a caller that has a main
     /// extent and a cross extent should not have to remember which one this one wanted.
     fn size(main: f32, cross: f32) -> Size;
@@ -48,6 +55,8 @@ impl Axis for VerticalAxis {
     #[inline] fn cross_size(s: Size) -> f32 { s.width }
     #[inline] fn main_max(c: &Constraints) -> f32 { c.max_height }
     #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_width }
+    #[inline] fn main_min(c: &Constraints) -> f32 { c.min_height }
+    #[inline] fn cross_min(c: &Constraints) -> f32 { c.min_width }
     #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(cross, main) }
     #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(cross, main) }
 }
@@ -57,6 +66,8 @@ impl Axis for HorizontalAxis {
     #[inline] fn cross_size(s: Size) -> f32 { s.height }
     #[inline] fn main_max(c: &Constraints) -> f32 { c.max_width }
     #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_height }
+    #[inline] fn main_min(c: &Constraints) -> f32 { c.min_width }
+    #[inline] fn cross_min(c: &Constraints) -> f32 { c.min_height }
     #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(main, cross) }
     #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(main, cross) }
 }
