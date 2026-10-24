@@ -534,8 +534,12 @@ let root = composer.layout_root_idx().unwrap();
 assert_eq!(composer.arena_nodes()[root].measured_size.height, 152.0);
 ```
 
-Test names are sentences in snake_case, phrased as the property, not the method:
-`the_flexible_variants_take_their_height_from_the_subtitle`, not `test_height`.
+**SHOULD** phrase a test name as the property it pins, in snake_case, rather than as the method under
+test: `the_flexible_variants_take_their_height_from_the_subtitle`, not `test_height`. Two reasons:
+cargo already prints `test <name>`, so a `test_` prefix reads as `test test_...` in the output, and the
+name is the only place a failing assertion explains itself. This applies to NEW tests: an existing
+`test_*` name is renamed when the file is touched for another reason — the same grandfathering rule the
+Chinese-text convention uses.
 
 **MUST** hold `crate::animation::tests::TEST_SERIAL` and clear the registry in any test that pushes an
 animation (`push_animatable`, `update_animations`, `clear_all_animations`); the suite relies on

@@ -489,13 +489,13 @@ Divider::new().thickness(2.0).color(Color::GRAY).build(ctx);
 
 ```rust
 #[test]
-fn test_divider_builder() {
+fn a_divider_takes_its_thickness_and_colour() {
     let mut composer = Composer::new();
     composer.compose(|ctx| {
         Divider::new().thickness(2.0).color(Color::GRAY).build(ctx);
     });
     let root = composer.layout_root().unwrap();
-    // 验证 root 的 modifier 包含 size/background
+    // assert the root's modifier carries the size and the background
     assert!(...);
 }
 ```
