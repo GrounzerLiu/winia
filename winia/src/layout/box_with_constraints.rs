@@ -52,7 +52,7 @@
 
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{Alignment, MeasurePolicy, Placement};
+use crate::layout::node::{Alignment, ContentAlignment, LayoutDirection, MeasurePolicy, Placement};
 use crate::unit::{Size};
 use crate::modifier::Modifier;
 
@@ -140,6 +140,10 @@ impl std::fmt::Debug for BoxWithConstraintsScope {
 pub struct BoxWithConstraints {
     modifier: Modifier,
     alignment: Alignment,
+    /// Compose's two-axis `contentAlignment`; wins over `alignment` when set.
+    content_alignment: Option<ContentAlignment>,
+    /// Compose's `propagateMinConstraints`: the box's minimum is passed to its content.
+    propagate_min_constraints: bool,
 }
 
 impl BoxWithConstraints {
@@ -147,6 +151,8 @@ impl BoxWithConstraints {
         Self {
             modifier: Modifier::new(),
             alignment: Alignment::Start,
+            content_alignment: None,
+            propagate_min_constraints: false,
         }
     }
 
@@ -157,6 +163,18 @@ impl BoxWithConstraints {
 
     pub fn alignment(mut self, a: Alignment) -> Self {
         self.alignment = a;
+        self
+    }
+
+    /// Compose's two-axis `contentAlignment` — what the content is aligned to inside the box.
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = Some(a);
+        self
+    }
+
+    /// Compose's `propagateMinConstraints`: pass the box's minimum down to its content.
+    pub fn propagate_min_constraints(mut self, on: bool) -> Self {
+        self.propagate_min_constraints = on;
         self
     }
 
@@ -176,8 +194,19 @@ impl BoxWithConstraints {
         // (Compose's `SubcomposeLayout` relation). `Fn` shared behind an `Arc` because the policy takes
         // it by shared reference and every frame's subcomposition runs it once.
         let key = ctx.next_key();
+        let align = self
+            .content_alignment
+            .unwrap_or_else(|| ContentAlignment::both(self.alignment));
+        // The direction is resolved HERE, at composition: the content composes during measurement,
+        // where the ambient local is no longer the one the box was built under.
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         let policy = ConstraintsSubcomposePolicy {
-            alignment: self.alignment,
+            alignment: align,
+            direction: dir,
+            propagate_min_constraints: self.propagate_min_constraints,
             first_measure: std::cell::Cell::new(None),
             content: std::sync::Arc::new(content),
         };
@@ -195,7 +224,12 @@ impl Default for BoxWithConstraints {
 /// The policy behind [`BoxWithConstraints`]: it subcomposes the content with the constraints it was
 /// measured with, and reports what that content measured.
 struct ConstraintsSubcomposePolicy {
-    alignment: Alignment,
+    /// The content's alignment inside the box, resolved at composition.
+    alignment: ContentAlignment,
+    /// The layout direction it mirrors under, resolved at composition (see `build`).
+    direction: LayoutDirection,
+    /// Compose's `propagateMinConstraints` for the box that hosts the content.
+    propagate_min_constraints: bool,
     /// What this frame's first measurement produced, together with the compose generation it belongs
     /// to. A second `layout()` in the SAME frame (the frame handler runs one when a shared flight
     /// attaches a layout override) measures this node again; composing a second time would discard the
@@ -240,14 +274,32 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         }
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = &self.content;
+        // Compose's structure is `SubcomposeLayout { Box(contentAlignment) { content } }`: the
+        // content is a child of a Box measured with the box's own constraints, so that Box decides the
+        // size and the alignment places the content inside it. Composing the content straight under
+        // this node (what this did) left `alignment` with nothing to do — the builder was a
+        // silent no-op, with the content pinned at (0,0) even in a forced 400x400 box.
         // The subcomposed content is adopted as this node's child, so its measurement IS this node's
         // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
         // Reporting anything else would leave the box at 0 while holding a sized child — measured
         // while wiring this: the box read [0,0] with a [98,48] child under it.
         let size = crate::layout::subcompose::subcompose(constraints, |ctx| {
-            content(ctx, scope);
+            // `ctx.key` is required, not decoration: this composition runs INSIDE measurement, where
+            // the statement stack that normally supplies a stable key is empty — `build_container`'s
+            // `next_key()` panicked with "no stable key" without it (measured on the first frame of
+            // the box demo).
+            ctx.key("bwc-content", |ctx| {
+                crate::layout::container::build_container(
+                    ctx,
+                    Modifier::new(),
+                    crate::layout::BoxLayout::new()
+                        .content_alignment(self.alignment)
+                        .direction(self.direction)
+                        .propagate_min_constraints(self.propagate_min_constraints),
+                    |ctx| content(ctx, scope),
+                );
+            });
         });
-        let _ = self.alignment;
         self.first_measure.set(Some((generation, size)));
         // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
         // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
@@ -272,6 +324,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::node::MeasurePolicy;
+    use crate::unit::Offset;
 
     /// The scope's own semantics: the four bounds, the dimension helpers, `is_measured`, and the `_dp`
     /// forms carrying the logical numbers (`Dp::to_logical` is the identity here).
@@ -577,6 +630,34 @@ mod tests {
             remembered_value(2),
             vec![2],
             "the second composer must not see the first one's remembered value"
+        );
+    }
+
+    /// Compose's `BoxWithConstraints` is `SubcomposeLayout { Box(contentAlignment) { content } }`:
+    /// the content is a child of a Box measured with the box's constraints, so the alignment places it
+    /// inside the box. The builder used to hand the alignment to a policy that discarded it — the
+    /// content stayed at (0,0) in a forced 400x400 box and the method was a silent no-op.
+    #[test]
+    fn the_boxes_alignment_places_the_content_it_composes() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            BoxWithConstraints::new()
+                .content_alignment(ContentAlignment::BOTTOM_END)
+                .modifier(Modifier::new().size(400.0, 400.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::components::Text::new("content")
+                        .modifier(Modifier::new().size(100.0, 50.0))
+                        .build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box was adopted");
+        let content = *composer.arena.nodes[host].children.first().expect("content under the box");
+        assert_eq!(
+            composer.arena.nodes[content].position,
+            Offset::new(300.0, 350.0),
+            "BOTTOM_END puts a 100x50 child at the bottom-right of the 400x400 box"
         );
     }
 

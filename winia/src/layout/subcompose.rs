@@ -389,7 +389,7 @@ fn adopt_one(
             arena.nodes[adopted_root].position.y += ay;
         }
     }
-    let measurements = measurements_from(&arena.nodes[adopted_root..]);
+    let measurements = measurements_from(&arena.nodes, adopted_root);
     // The parent's size IS its content's size (a plain `Box` rule) — but only when the component says
     // so (`sized_by_content`). An overlay-shaped slot (a row's indicator) leaves the parent's own
     // measurement alone: overwriting it there made the row `[0,4]`, so nothing in it painted.
@@ -423,20 +423,22 @@ fn composer_ran_under(composer: &Composer, constraints: Constraints) -> bool {
 ///
 /// Pre-order matches the order the replay walks; relative offsets keep the values valid when the same
 /// subtree is re-attached at a different arena base on a later frame.
-fn measurements_from(nodes: &[LayoutNode]) -> Vec<(usize, Size)> {
-    fn walk(nodes: &[LayoutNode], offset: usize, out: &mut Vec<(usize, Size)>) {
-        out.push((offset, nodes[offset].measured_size));
-        for &c in &nodes[offset].children {
-            if c >= offset {
-                walk(nodes, c - offset, out);
-            }
+fn measurements_from(nodes: &[LayoutNode], root: usize) -> Vec<(usize, Size)> {
+    // The subtree's OWN indices are absolute (adoption rebased them by the arena base), so the walk
+    // takes the arena and the root rather than a slice starting at the root. Walking a slice and
+    // treating a child index as one was a latent bug: it only stayed invisible while every
+    // subcomposition was a single node (no children to recurse into). A content wrapper — one Box with
+    // the content under it — made it index past the end on the first frame.
+    fn walk(nodes: &[LayoutNode], root: usize, index: usize, out: &mut Vec<(usize, Size)>) {
+        out.push((index - root, nodes[index].measured_size));
+        for &c in &nodes[index].children {
+            walk(nodes, root, c, out);
         }
     }
-    if nodes.is_empty() {
-        return Vec::new();
-    }
     let mut out = Vec::new();
-    walk(nodes, 0, &mut out);
+    if root < nodes.len() {
+        walk(nodes, root, root, &mut out);
+    }
     out
 }
 
