@@ -36,7 +36,7 @@
         );
     }
 
-    // ── IntervalList：定位 / key 映射 ──
+    // ── IntervalList: locate / key mapping ──
     #[test]
     fn interval_list_locate() {
         let mut il = IntervalList::new();
@@ -51,7 +51,7 @@
         assert_eq!(il.locate(3), Some((1, 0)));
         assert_eq!(il.locate(4), Some((1, 1)));
         assert_eq!(il.locate(5), None);
-        // key：无工厂段用索引；有工厂段用工厂
+        // Keys: a section without a factory uses its index; one with a factory uses it.
         assert_eq!(il.key_of(2), Some(2));
         assert_eq!(il.key_of(3), Some(103));
         assert_eq!(il.index_of_key(103), Some(3));
@@ -59,156 +59,163 @@
         assert_eq!(il.index_of_key(999), None);
     }
 
-    // ── 高度缓存 ──
+    // ── The height cache ──
     #[test]
     fn height_cache_estimated_then_recorded() {
         let mut c = ItemHeightCache::default();
-        assert_eq!(c.height(0), LAZY_ITEM_ESTIMATED_HEIGHT, "未测项用预估");
+        assert_eq!(c.height(0), LAZY_ITEM_ESTIMATED_HEIGHT, "an unmeasured item uses the estimate");
         c.record(2, 30.0);
         assert_eq!(c.height(2), 30.0);
         assert_eq!(c.height(1), LAZY_ITEM_ESTIMATED_HEIGHT);
-        // 记录越界自动扩展
+        // Recording beyond the end extends the cache.
         c.record(5, 20.0);
         assert_eq!(c.height(5), 20.0);
     }
 
-    // ── 高度缓存：按 item key 迁移（方案 A——数据变化不因 index 平移错位）──
+    // ── Height cache: migrate by item key (a data change must not misplace heights by index) ──
     #[test]
     fn height_cache_keyed_rebase_follows_identity() {
-        // 场景：原数据 0..6（key = 自身），index 2（key=2）实测高 30、index 5（key=5）
-        // 实测高 20。随后数据前部插入 1 项（key=100）→ 原 key 2 移到 index 3、key 5
-        // 移到 index 6。rebase 后高度应跟随 key 而非旧 index。
+        // Setup: data 0..6 (key = itself); index 2 (key=2) measured 30, index 5 (key=5) measured 20.
+        // Then one item (key=100) is inserted at the head, so key 2 moves to index 3 and key 5 to
+        // index 6. After the rebase the heights must follow the KEY, not the old index.
         let mut c = ItemHeightCache::default();
         c.record(2, 30.0);
         c.record_keyed(2, 30.0);
         c.record(5, 20.0);
         c.record_keyed(5, 20.0);
-        // 新数据：key 序列 = [100, 0, 1, 2, 3, 4, 5]
+        // New data: the key sequence is [100, 0, 1, 2, 3, 4, 5].
         let new_keys = [100u64, 0, 1, 2, 3, 4, 5];
         c.rebase(&new_keys);
-        // key=2 现在 index 3 → 高度 30 迁移过去
-        assert_eq!(c.height(3), 30.0, "key=2 项应迁到 index 3");
-        // key=5 现在 index 6 → 高度 20 迁移过去
-        assert_eq!(c.height(6), 20.0, "key=5 项应迁到 index 6");
-        // 新插入项 key=100（index 0）无记录 → 预估
-        assert_eq!(c.height(0), LAZY_ITEM_ESTIMATED_HEIGHT, "新项走预估");
-        // 原 index 2 处现在对应 key=1（无记录）→ 预估（不再残留 30）
-        assert_eq!(c.height(2), LAZY_ITEM_ESTIMATED_HEIGHT, "旧 index 处不残留旧高度");
-        // 数据变短：截断后越界高度清除
-        c.record_keyed(9, 55.0); // 模拟曾测过 key=9（现不在数据中）
-        c.rebase(&[100u64, 0, 1, 2, 3, 4]); // 新 total 6
-        assert_eq!(c.heights.len(), 6, "数据变短清空越界高度");
-        assert_eq!(c.height_keyed(9), None, "消失的 key 记录被清理");
+        // key=2 is now index 3, so the height 30 migrates there.
+        assert_eq!(c.height(3), 30.0, "the key=2 item migrates to index 3");
+        // key=5 is now index 6, so the height 20 migrates there.
+        assert_eq!(c.height(6), 20.0, "the key=5 item migrates to index 6");
+        // The inserted key=100 (index 0) has no record, so it is estimated.
+        assert_eq!(c.height(0), LAZY_ITEM_ESTIMATED_HEIGHT, "a new item is estimated");
+        // Index 2 now holds key=1 (no record), so it is estimated — the old 30 must not linger.
+        assert_eq!(c.height(2), LAZY_ITEM_ESTIMATED_HEIGHT, "no stale height is left at the old index");
+        // Shorter data: heights past the end are dropped.
+        c.record_keyed(9, 55.0); // simulate a height recorded for key=9 (no longer in the data)
+        c.rebase(&[100u64, 0, 1, 2, 3, 4]); // the new total is 6
+        assert_eq!(c.heights.len(), 6, "shorter data clears the out-of-range heights");
+        assert_eq!(c.height_keyed(9), None, "the record of a vanished key is dropped");
     }
 
-    // 同 total 数据变化（方案 A 核心动机）：total 不变但 key 序列变化（重排/
-    // 中段删除/替换）时，高度仍按 key 跟随而非 index。
+    // A data change with the SAME total — the case that motivates the key view: a reorder, a
+    // mid-list removal or a replacement changes the key sequence while the total stays put, and the
+    // heights must still follow the key.
     #[test]
     fn height_cache_keyed_rebase_same_total_reorder_and_delete() {
-        // 原数据 [a=30, b=40, c=50]（key = a/b/c 映射）
+        // Original data [a=30, b=40, c=50] (keys a/b/c).
         let mut c = ItemHeightCache::default();
         c.record_keyed(10, 30.0); // a
         c.record_keyed(20, 40.0); // b
         c.record_keyed(30, 50.0); // c
-        // 场景 1：同 total 重排 [a,b,c] → [c,a,b]（key 序列 [30,10,20]，total 均 3）
+        // Case 1: same total, reordered [a,b,c] → [c,a,b] (key sequence [30,10,20], total 3).
         c.rebase(&[30u64, 10, 20]);
-        assert_eq!(c.heights.len(), 3, "同 total 重排不改变长度");
-        assert_eq!(c.height(0), 50.0, "index 0 现在是 c(30) 高 50");
-        assert_eq!(c.height(1), 30.0, "index 1 现在是 a(10) 高 30");
-        assert_eq!(c.height(2), 40.0, "index 2 现在是 b(20) 高 40");
-        // 场景 2：中段删除 [a,b,c] → [a,c]（total 3→2，key 序列 [10,30]）
+        assert_eq!(c.heights.len(), 3, "a same-total reorder does not change the length");
+        assert_eq!(c.height(0), 50.0, "index 0 is now c (key 30), height 50");
+        assert_eq!(c.height(1), 30.0, "index 1 is now a (key 10), height 30");
+        assert_eq!(c.height(2), 40.0, "index 2 is now b (key 20), height 40");
+        // Case 2: a mid-list removal, [a,b,c] → [a,c] (total 3→2, key sequence [10,30]).
         c.rebase(&[10u64, 30]);
-        assert_eq!(c.heights.len(), 2, "删除后长度收缩");
-        assert_eq!(c.height(0), 30.0, "index 0 是 a(10) 高 30 保持");
-        assert_eq!(c.height(1), 50.0, "index 1 是 c(30) 高 50 迁移到位");
-        assert_eq!(c.height_keyed(20), None, "被删的 b 高度记录清除");
-        // 场景 3：替换（同 key 段内容变化——文档承认的局限：key 不变则不失效，
-        // 此处 key 变才正确迁移）。[a,c] → [a,x,c]（前部插入 x）
+        assert_eq!(c.heights.len(), 2, "the removal shrinks the cache");
+        assert_eq!(c.height(0), 30.0, "index 0 is a (key 10) and keeps height 30");
+        assert_eq!(c.height(1), 50.0, "index 1 is c (key 30), migrated with height 50");
+        assert_eq!(c.height_keyed(20), None, "the removed key's height record is dropped");
+        // Case 3: a replacement. A section whose content changes but whose KEYS do not is the
+        // documented limitation (a stable key keeps its height); here the key changes, so the
+        // migration is exact. [a,c] → [a,x,c] with x inserted before c.
         c.rebase(&[10u64, 99, 30]);
-        assert_eq!(c.height(0), 30.0, "a 保持");
-        assert_eq!(c.height(1), LAZY_ITEM_ESTIMATED_HEIGHT, "新 key 99 走预估");
-        assert_eq!(c.height(2), 50.0, "c 迁移到 index 2");
+        assert_eq!(c.height(0), 30.0, "a keeps its height");
+        assert_eq!(c.height(1), LAZY_ITEM_ESTIMATED_HEIGHT, "the new key 99 is estimated");
+        assert_eq!(c.height(2), 50.0, "c moves to index 2");
     }
 
-    // ── 锚点转换 ──
+    // ── Anchor conversion ──
     #[test]
     fn anchor_from_offset_matches() {
         let mut c = ItemHeightCache::default();
         for i in 0..10 { c.record(i, 50.0); }
-        // 每项 50+0 间距：offset 0..50 → 项 0；50..100 → 项 1
+        // Every item is 50 tall with no spacing: offset 0..50 → item 0, 50..100 → item 1.
         assert_eq!(anchor_from_offset(&c, 0.0, 0.0, 0.0), (0, 0.0));
         assert_eq!(anchor_from_offset(&c, 49.0, 0.0, 0.0), (0, 49.0));
         assert_eq!(anchor_from_offset(&c, 50.0, 0.0, 0.0), (1, 0.0));
         assert_eq!(anchor_from_offset(&c, 120.0, 0.0, 0.0), (2, 20.0));
-        // before padding：内容起点下移（offset=50 含 before → 锚点仍在项 0，偏移 0）
+        // With `before` padding the content starts lower: offset 50 (which includes `before`) is
+        // still item 0, at offset 0 inside it.
         assert_eq!(anchor_from_offset(&c, 50.0, 0.0, 50.0), (0, 0.0));
         assert_eq!(anchor_from_offset(&c, 99.0, 0.0, 50.0), (0, 49.0));
         assert_eq!(anchor_from_offset(&c, 100.0, 0.0, 50.0), (1, 0.0));
-        // 超出已知范围（10 项已知）→ 按预估 48 继续扩展：99999 / 48 ≈ 2082
+        // Past the recorded range (10 items) the estimate extrapolates: 99999 / 48 ≈ 2082.
         let (far_idx, far_off) = anchor_from_offset(&c, 99999.0, 0.0, 0.0);
-        assert!(far_idx > 2000, "预估扩展：实际 {far_idx}");
-        // 已知 10 项 ×50 先扣掉，剩余按预估 48 继续：99999 - 500 - (idx-10)*48
+        assert!(far_idx > 2000, "the estimate extrapolates; got {far_idx}");
+        // The 10 recorded items take 50 each; the rest follows the 48 estimate:
+        // 99999 - 500 - (idx - 10) * 48.
         let expected = 99999.0 - 500.0 - (far_idx - 10) as f32 * 48.0;
         assert!((far_off - expected).abs() < 0.001);
     }
 
-    // ── 可见范围 ──
+    // ── The visible range ──
     #[test]
     fn visible_range_includes_beyond_bounds() {
         let mut c = ItemHeightCache::default();
         for i in 0..100 { c.record(i, 50.0); }
-        // 锚点项 5，偏移 0，视口 200 → 可见 4 项（200/50）+ 预取 4 = end≈9
+        // Anchor item 5 at offset 0, viewport 200 → 4 visible (200/50) plus 4 prefetched, so the
+        // end lands near 9.
         let (s, e) = visible_range(&c, 5, 0.0, 200.0, 0.0, 100, LAZY_BEYOND_BOUNDS);
-        assert_eq!(s, 1, "start = 5 - 预取 4");
-        assert!(e >= 9 && e <= 13, "end 覆盖视口 + 预取，实际 {e}");
-        // 视口很大时 end 到 total
+        assert_eq!(s, 1, "start = 5 minus the 4 prefetched items");
+        assert!(e >= 9 && e <= 13, "the end covers the viewport plus the prefetch; got {e}");
+        // A huge viewport runs the end up to the total.
         let (_, e2) = visible_range(&c, 5, 0.0, 99999.0, 0.0, 100, LAZY_BEYOND_BOUNDS);
         assert_eq!(e2, 100);
     }
 
-    // ── 组件级：稳定 key 数据变化保持滚动位置 ──
+    // ── Component level: a data change under stable keys keeps the scroll position ──
     #[test]
     fn key_preserves_scroll_position_on_data_change() {
-        // 场景：滚动到项 50（key=50），然后列表前部插入 10 项（原项 50 → 新 index 60）。
-        // last_known_first_key=50 应在下次 build 时校正 offset 到新位置。
+        // Setup: scroll to item 50 (key=50), then insert 10 items at the head (the old item 50 is now
+        // index 60). `last_known_first_key = 50` corrects the offset on the next `build`.
         let state = LazyListState::new();
-        // 模拟：滚动后 offset 对应项 50（每项高 48+0）
+        // Simulate the state after that scroll: offset corresponds to item 50 (48 per item, no
+        // spacing).
         state.offset.set(50.0 * 48.0);
         let mut il = IntervalList::new();
-        // 数据 1：0..100（key = 自身）
+        // Data 1: 0..100, key = itself.
         let c: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
         il.add(100, Some(Arc::new(|g| g as u64)), c.clone(), false);
         il.rebuild();
         assert_eq!(il.total(), 100);
-        // 记录锚点 key（模拟 build 中的行为）：offset=2400 → 项 50。
-        // 注意：anchor_from_offset 只锚定到已知高度范围（空缓存退化为 0）；
-        // 真实场景 build 有上一帧的高度缓存。这里显式记录前 60 项高度模拟已测状态。
+        // Record the anchor key the way `build` does: offset 2400 → item 50.
+        // Note that `anchor_from_offset` can only anchor inside the RECORDED range (an empty cache
+        // degrades to 0) while a real `build` has the previous frame's cache, so the first 60 heights
+        // are recorded explicitly to stand in for a measured state.
         let mut cache = ItemHeightCache::default();
         for i in 0..60 { cache.record(i, 48.0); }
         let (first, _) = anchor_from_offset(&cache, 2400.0, 0.0, 0.0);
-        assert_eq!(first, 50, "offset 2400 / 48 = 项 50");
+        assert_eq!(first, 50, "offset 2400 / 48 is item 50");
         let key50 = il.key_of(50).unwrap();
         assert_eq!(key50, 50);
-        // 数据 2：前部插入 10 项（key 仍唯一：新项 key 90..99？不——新项用 key 0..9，
-        // 原项 key 不变，但 index 平移 +10。模拟：key 0..99 + 10 个新 key 100..109）
+        // Data 2: 10 items inserted at the head. The keys stay unique; the new ones take 100..109
+        // while the original items keep their keys and shift by +10.
         let mut il2 = IntervalList::new();
-        // 前插 10 项（key 100..109），原 100 项后移（key = 数据 id = 0..99，
-        // 全局 index 10..109）——原 key=50 的项现在全局 index 60
+        // 10 items (keys 100..109) go in front, so the original 100 (keys 0..99) now occupy the
+        // global indices 10..109 — the item whose key is 50 sits at index 60.
         il2.add(10, Some(Arc::new(|g| (100 + g) as u64)), c.clone(), false);
         il2.add(100, Some(Arc::new(|g| (g - 10) as u64)), c.clone(), false);
         il2.rebuild();
         assert_eq!(il2.total(), 110);
-        // 原 key=50 的项现在在 index 60
+        // The key=50 item is now at index 60.
         assert_eq!(il2.index_of_key(50), Some(60));
-        // 校正：offset 应更新到新 index 的 prefix（60 × 48）
+        // The correction moves the offset to the new index's prefix (60 x 48).
         let corrected = prefix_height(&cache, 60, 0.0);
         assert_eq!(corrected, 60.0 * 48.0);
-        // 验证 key 保持语义：last_key=50 → 新 offset = prefix(60)
+        // Verify the key-keeping semantics: last_key = 50 → the new offset is prefix(60).
         state.last_known_first_key.set(Some(50));
         assert_eq!(state.last_known_first_key.get(), Some(50));
     }
 
-    // ── 组件级像素：懒加载渲染 + 滚动后内容变化 ──
+    // ── Component level, pixels: lazy rendering and content changes after a scroll ──
     fn render_lazy_sized(build: impl FnOnce(&mut ComposeCtx), w: f32, h: f32) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
@@ -259,13 +266,13 @@
     }
 
     fn count_text_clusters(px: &[[u8; 4]], w: usize, h: usize) -> usize {
-        // 深色文本像素行聚类
+        // Cluster the rows that contain dark text pixels.
         let mut rows = vec![false; h];
         for y in 0..h {
             let mut n = 0;
             for x in 0..w {
                 let p = px[y * w + x];
-                // BGRA → (b,g,r) 语义（raster_n32_premul 小端）
+                // BGRA → (b, g, r) (raster_n32_premul is little-endian).
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { n += 1; }
             }
             rows[y] = n > 3;
@@ -357,7 +364,7 @@
 
     #[test]
     fn lazy_renders_only_visible_items() {
-        // 1000 项列表：只渲染视口内的 ~12 项（600px / 40px），而非全部
+        // A 1000-item list renders only the ~12 items in the viewport (600 px / 40 px), not all of them.
         use std::sync::atomic::{AtomicUsize, Ordering};
         let composed = Arc::new(AtomicUsize::new(0));
         let composed2 = composed.clone();
@@ -382,11 +389,12 @@
         });
         let h = 600usize;
         let clusters = count_text_clusters(&px, w, h);
-        // 视口 600 / 项高 ~38 = ~15 项可见；注册窗含预取但渲染仅可见
-        assert!(clusters >= 8 && clusters <= 30, "只渲染可见项，clusters={clusters}");
-        // 组合次数 << 1000（懒加载核心断言）
+        // A 600 px viewport at ~38 px per item shows ~15; the registered window prefetches more, and only
+        // the visible ones paint.
+        assert!(clusters >= 8 && clusters <= 30, "only the visible items paint; clusters={clusters}");
+        // The composition count is far below 1000 — the core lazy assertion.
         let n = composed.load(Ordering::Relaxed);
-        assert!(n <= 60, "组合项数应远小于总数 1000，实际 {n}");
+        assert!(n <= 60, "far fewer items composed than the 1000 that exist; got {n}");
     }
 
     /// `fill_items` gives every item the viewport's main size — `fillParentMaxWidth` — and that is
@@ -456,7 +464,7 @@
                 })
                 .build(ctx);
         });
-        // 滚动：模拟 apply_scroll_delta 效果
+        // Scroll: simulate the effect of `apply_scroll_delta`.
         state.offset.set(2000.0);
         let (px1, w1) = render_lazy(|ctx| {
             LazyColumn::new()
@@ -471,8 +479,9 @@
                 .build(ctx);
         });
         assert_eq!(w0, w1);
-        // 帧间内容应不同（滚动后渲染不同项）：按行比较文本像素出现与否。
-        // 偏移 2000/38 ≈ 52 项 → 文本行整体平移 ~2000px，diff_rows 应为数百。
+        // The two frames must differ (a scroll brings other items into view): compare, row by row,
+        // whether text pixels appear. An offset of 2000 at ~38 px is ~52 items, so the text shifts by
+        // roughly 2000 px and hundreds of rows should differ.
         let h = 600usize;
         let mut diff_rows = 0;
         for y in 0..h {
@@ -486,14 +495,15 @@
             }
             if has0 != has1 { diff_rows += 1; }
         }
-        assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
-        // 派生锚点应为滚动后的精确值（约 2000/38 ≈ 52）
+        assert!(diff_rows > 10, "content changes after the scroll; diff_rows={diff_rows}");
+        // The derived anchor is the exact post-scroll value (~2000/38 ≈ 52).
         assert!(state.first_visible() >= 40, "first_visible={}", state.first_visible());
     }
 
-    // ── LazyRow 横向：同机制换轴 ──
+    // ── LazyRow: the same machinery on the other axis ──
     fn count_text_columns(px: &[[u8; 4]], w: usize, h: usize) -> usize {
-        // 深色文本像素列聚类（横向列表用——文本行都挤在少数行，按列数项）
+        // Cluster the COLUMNS that contain dark text (for the horizontal list: the text lines are packed
+        // into a few rows, so items are counted by column).
         let mut cols = vec![false; w];
         for x in 0..w {
             let mut n = 0;
@@ -516,7 +526,7 @@
 
     #[test]
     fn lazy_row_renders_only_visible_items() {
-        // 1000 项横向列表：只渲染视口内 ~9 项（600px / ~64px），而非全部
+        // A 1000-item horizontal list renders only the ~9 in the viewport (600 px / ~64 px), not all.
         use std::sync::atomic::{AtomicUsize, Ordering};
         let composed = Arc::new(AtomicUsize::new(0));
         let composed2 = composed.clone();
@@ -545,16 +555,17 @@
         );
         let h = 400usize;
         let clusters = count_text_columns(&px, w, h);
-        // 视口 600 / 项宽 ~64 = ~9 项可见（含预取与间隙）
-        assert!(clusters >= 5 && clusters <= 20, "只渲染可见项，clusters={clusters}");
+        // A 600 px viewport at ~64 px per item is ~9 visible (prefetch and gaps included).
+        assert!(clusters >= 5 && clusters <= 20, "only the visible items paint; clusters={clusters}");
         let n = composed.load(Ordering::Relaxed);
-        // 组合期预取窗固定 2000px（与 LazyColumn 同机制）：2000/56 ≈ 36 + 预取 8
-        assert!(n <= 60, "组合项数应远小于总数 1000，实际 {n}");
+        // The composition window covers 2000 px, the same machinery LazyColumn uses: 2000/56 ≈ 36 items
+        // plus the 8 prefetched.
+        assert!(n <= 60, "far fewer items composed than the 1000 that exist; got {n}");
     }
 
     #[test]
     fn lazy_row_scroll_changes_visible_items() {
-        // 横向滚动 offset=2000 后，渲染的 Item 文本应变化（不同项）
+        // After a horizontal scroll to offset 2000 the rendered item texts change (different items).
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let build_row = |ctx: &mut ComposeCtx, s: LazyListState| {
@@ -573,7 +584,8 @@
         state.offset.set(2000.0);
         let (px1, w1) = render_lazy_sized(|ctx| build_row(ctx, state.clone()), 600.0, 400.0);
         assert_eq!(w0, w1);
-        // 帧间内容应不同（滚动后渲染不同项）：按列比较文本像素出现与否
+        // The frames differ (a scroll brings other items into view): compare, column by column, whether
+        // text pixels appear.
         let h = 400usize;
         let mut diff_cols = 0;
         for x in 0..w0 {
@@ -587,12 +599,12 @@
             }
             if has0 != has1 { diff_cols += 1; }
         }
-        assert!(diff_cols > 10, "滚动后内容变化，diff_cols={diff_cols}");
-        // 派生锚点应为滚动后的精确值（约 2000/64 ≈ 31）
+        assert!(diff_cols > 10, "content changes after the scroll; diff_cols={diff_cols}");
+        // The derived anchor is the exact post-scroll value (~2000/64 ≈ 31).
         assert!(state.first_visible() >= 25, "first_visible={}", state.first_visible());
     }
 
-    // ── 程序化跳转：锚点权威，落点精确 ──
+    // ── Programmatic jumps: the anchor is authoritative, so the landing is exact ──
     fn render_lazy_state(
         state: &LazyListState,
         items: &Arc<Vec<u64>>,
@@ -615,9 +627,10 @@
 
     #[test]
     fn scroll_to_item_lands_exactly_on_index() {
-        // 回归：跳 500 必须落 500——旧实现用空缓存预估 48px/项算像素 offset，
-        // 实测高度 ~47.5 累积偏差 → 落到 505（用户实测）。新实现锚点权威：
-        // 测量期从写回后的缓存推导像素，round-trip 精确。
+        // Regression: a jump to 500 must land at 500. The old implementation computed the pixel offset
+        // from an empty cache at 48 px per item, the measured height was ~47.5, the drift accumulated
+        // and it landed at 505 (measured by the user). Now the anchor is authoritative: the measure
+        // derives the pixel from the written-back cache, so the round trip is exact.
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (px0, w0) = render_lazy_state(&state, &items);
@@ -627,17 +640,18 @@
         assert_eq!(
             state.first_visible(),
             500,
-            "跳转 500 必须精确落 500（旧实现 505）"
+            "a jump to 500 must land at exactly 500 (the old implementation landed at 505)"
         );
-        // 像素 offset 是预估混合前缀（未测中段按 48 预估）——但这不影响落点：
-        // 放置与 translate 共用同一 prefix 函数，item 500 视觉上精确在顶部；
-        // 随滚动测量推进，offset 逐步收敛到真实和。只断言合理范围。
+        // The pixel offset is a mixed prefix (unmeasured stretch priced at the 48 estimate), which does
+        // not affect the landing: placement and the translate share the same `prefix_height`, so item 500
+        // sits exactly at the top. As scrolling measures more items the offset converges to the true sum,
+        // so only a plausible range is asserted.
         assert!(
             state.offset() > 20000.0 && state.offset() < 26000.0,
-            "offset 应在 500 项前缀附近，实际 {}",
+            "the offset sits near the 500-item prefix; got {}",
             state.offset()
         );
-        // 内容确实变化（不同项）
+        // The content really changed (different items).
         let h = 600usize;
         let mut diff_rows = 0;
         for y in 0..h {
@@ -651,7 +665,7 @@
             }
             if has0 != has1 { diff_rows += 1; }
         }
-        assert!(diff_rows > 10, "跳转后内容变化，diff_rows={diff_rows}");
+        assert!(diff_rows > 10, "content changes after the jump; diff_rows={diff_rows}");
     }
 
     /// The landing precision that the jump documentation leans on, in the state a jump actually has to
@@ -686,39 +700,42 @@
     }
 
     #[test]
-    fn scroll_to_item_clamps_to_end() {        // 越界跳转 clamp 到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
+    fn scroll_to_item_clamps_to_end() {
+        // An out-of-range jump is clamped to the end (Compose clamps the scroll position during measure).
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (_px, _w) = render_lazy_state(&state, &items);
         state.scroll_to_item(99999, 0.0);
         let (_px1, _w1) = render_lazy_state(&state, &items);
-        // 滚动到底部时首项 = total - 视口容纳项数（600px 视口、~43px 项 → ≈987）
+        // At the bottom the first item is `total - items that fit` (a 600 px viewport at ~43 px ≈ 987).
         assert!(
             state.first_visible() >= 980,
-            "越界跳转应 clamp 到末尾，实际 {}",
+            "an out-of-range jump is clamped to the end; got {}",
             state.first_visible()
         );
-        // `offset` 在内容底部附近。这里的下界按**真实**内容高算：1000 项 × ~43px - 600px 视口
-        // ≈ 42400。原断言是 >45000——那是 48px 平坦估算（1000 × 48 - 600 = 47400）的产物；
-        // 现在内容高按已测行高的中位数计价（`coverage_height`），估算偏高 12% 的偏差被去掉。
+        // `offset` sits near the content's end. The lower bound here uses the REAL content height:
+        // 1000 x ~43 px minus a 600 px viewport ≈ 42400. The old bound (>45000) came from the flat 48 px
+        // estimate (1000 x 48 - 600 = 47400); the content height is now priced with the median of the
+        // measured rows (`coverage_height`), which removed that 12 % over-estimate.
         assert!(
             state.offset() > 41000.0,
-            "offset 应接近内容底部，实际 {}",
+            "the offset sits near the content end; got {}",
             state.offset()
         );
-        // 顶部跳转
+        // Jump back to the top.
         state.scroll_to_item(0, 0.0);
         let (_px2, _w2) = render_lazy_state(&state, &items);
-        assert_eq!(state.first_visible(), 0, "跳回顶部");
+        assert_eq!(state.first_visible(), 0, "back at the top");
     }
 
     #[test]
     fn jump_to_end_shows_last_item_with_real_viewport() {
-        // 回归（用户实测：跳末尾看不到 Item 999）：measure_node 对 scroll 容器
-        // 一律把 max_height 改写成 f32::MAX → policy 永远拿不到真实视口 → 回退
-        // vh=600，而真实视口 400 → clamp 的 max_offset = content_h - 600 偏大
-        // 100px → 跳末尾滚过头，Item 999 被推出视口底部。
-        // 修复：lazy 容器保留有限 max_height（policy 显式控制子约束）。
+        // Regression (measured by the user: jumping to the end left Item 999 off screen).
+        // `measure_node` used to rewrite every scroll container's `max_height` to f32::MAX, so the
+        // policy never saw the real viewport and fell back to vh = 600 against a real 400 — the clamp's
+        // `max_offset = content_h - 600` was 100 too large and the jump overshot, pushing Item 999 out
+        // of the bottom. Fixed by keeping a finite `max_height` on a lazy container (the policy owns the
+        // child constraints explicitly).
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let mk = |state: &LazyListState, items: &Arc<Vec<u64>>| {
@@ -745,7 +762,7 @@
         state.scroll_to_item(999, 0.0);
         let (px1, w1) = mk(&state, &items);
         assert_eq!(w0, w1);
-        // 视口底部 60px 内应有文本（Item 999 完整可见）
+        // There must be text within 60 px of the viewport bottom (Item 999 fully visible).
         let h = 400usize;
         let mut bottom_text_rows = 0;
         for y in (h - 60)..h {
@@ -758,9 +775,10 @@
         }
         assert!(
             bottom_text_rows > 10,
-            "末尾项应在视口底部可见，bottom_text_rows={bottom_text_rows}"
+            "the last item is visible at the viewport bottom; bottom_text_rows={bottom_text_rows}"
         );
-        // 首项应接近底部：视口 400 / ~47.5 ≈ 8.4 项 → first_visible ≈ 991
+        // The first item sits near the end: a 400 px viewport at ~47.5 px is 8.4 items, so
+        // first_visible ≈ 991.
         assert!(
             state.first_visible() >= 985,
             "first_visible={}",
@@ -768,12 +786,14 @@
         );
     }
 
-    // ── fling 惯性滚动：偏移推进 + 撞极限停止 ──
-    /// 泵全局动画直到 offset 收敛（两次读数差 < 0.5）。
-    /// ⚠ 不用 `has_animation_for_state` 做循环条件：未持串行锁时，并行测试的
-    /// update_animations 会整表取走动画（短暂空窗）→ 误判结束（实测并行下
-    /// fling 停在中途 836）。调用方若已持 TEST_SERIAL，可用下方的
-    /// `step_animations_until_target`（表空 + 距目标双条件，无空窗问题）。
+    // ── Fling: the offset advances and stops at the limit ──
+    /// Pump the global animations until the offset settles (two reads less than 0.5 apart).
+    ///
+    /// Do NOT loop on `has_animation_for_state`: without the serial lock a parallel test's
+    /// `update_animations` takes the whole animation table away for a moment (a brief empty window),
+    /// which reads as "finished" (measured under a parallel run: the fling stopped mid-way at 836).
+    /// A caller that already holds `TEST_SERIAL` can use `step_animations_until_target` below instead —
+    /// its two conditions (table empty AND near the target) have no such window.
     fn step_animations_until_done(state: &LazyListState, max_frames: usize) -> usize {
         use std::time::Duration;
         let mut frames = 0;
@@ -792,14 +812,16 @@
         frames
     }
 
-    /// 泵全局动画直到 offset 距目标 < 5.0 且动画表排空（精确目标场景专用——
-    /// 如 animate_scroll_to_item，目标由 scroll_to_item 同缓存推导，round-trip 精确）。
+    /// Pump the global animations until the offset is within 5.0 of the target AND the animation table
+    /// is empty — for scenarios with an EXACT target (e.g. `animate_scroll_to_item`, whose target is
+    /// derived from the same cache as `scroll_to_item`, so the round trip is exact).
     ///
-    /// 背景：spring 尾段每帧位移天然 < 0.5（threshold 0.01，50 倍间隙）——
-    /// `step_animations_until_done` 的位移判据会在引擎真正 done（写精确目标）
-    /// 之前提前触发，残余 ~13px 没收完（全量负载抖动时偶发超最终断言 5px 阈）。
-    /// 本函数要求调用方已持 TEST_SERIAL（串行下无跨测试取表/清表干扰，
-    /// `has_animation_for_state` 无空窗误判），以"表空 + 距目标"双条件收敛。
+    /// Background: a spring's per-frame travel is naturally < 0.5 near the end (threshold 0.01, a 50x
+    /// margin), so `step_animations_until_done` fires before the engine is really done (before it writes
+    /// the exact target) and leaves ~13 px behind — which under full-suite jitter occasionally exceeded
+    /// the 5 px threshold of the final assertion. This function requires the caller to hold `TEST_SERIAL`
+    /// (serially nothing else takes or clears the table, so `has_animation_for_state` cannot see a false
+    /// empty window) and settles on both conditions: table empty AND near the target.
     fn step_animations_until_target(
         state: &LazyListState,
         target: f32,
@@ -823,48 +845,50 @@
 
     #[test]
     fn fling_animates_offset_and_stops_at_limit() {
-        // 动画注册表全局共享——持串行锁防并行 clear/竞态抹掉在飞 fling
+        // The animation registry is process-global, so hold the serial lock: a parallel `clear` would wipe
+        // the fling in flight.
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        // 渲染一次让 policy 回写 fling_limit（内容高 - 视口 600）
+        // Render once so the policy writes `fling_limit` back (content height minus the 600 px viewport).
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (_px, _w) = render_lazy_state(&state, &items);
         let limit = state.fling_limit.get();
-        assert!(limit > 10000.0, "1000 项内容高 - 视口应很大，实际 {limit}");
+        assert!(limit > 10000.0, "1000 items of content minus the viewport is large; got {limit}");
 
-        // 自然停：v0=5000 → 衰减极限 5000/4.2 ≈ 1190 < limit
+        // A natural stop: v0 = 5000 decays to a limit of 5000/4.2 ≈ 1190, below `limit`.
         state.fling(5000.0);
         let frames = step_animations_until_done(&state, 300);
-        assert!(frames < 300, "fling 应收敛（{frames} 帧）");
+        assert!(frames < 300, "the fling converges ({frames} frames)");
         let end = state.offset();
         assert!(
             end > 1000.0 && end < 1400.0,
-            "fling 应推进 offset 到衰减极限附近，实际 {end}"
+            "the fling advances the offset near its decay limit; got {end}"
         );
 
-        // 撞极限：超大速度 → 停在 fling_limit（对齐 Compose：fling 消耗完即停）
+        // Hitting the limit: an enormous velocity stops at `fling_limit` (Compose stops when the fling is
+        // spent).
         state.fling(1_000_000.0);
         let frames = step_animations_until_done(&state, 300);
-        assert!(frames < 300, "撞极限 fling 应收敛（{frames} 帧）");
+        assert!(frames < 300, "the limit-hitting fling converges ({frames} frames)");
         let end2 = state.offset();
         assert!(
             (end2 - limit).abs() < 1.0,
-            "撞极限应停在 {limit}，实际 {end2}"
+            "it stops at {limit}; got {end2}"
         );
 
-        // 反向：负速度向下甩 → clamp 回 0
+        // The reverse direction: a negative velocity flings up and clamps back to 0.
         state.fling(-1_000_000.0);
         let frames = step_animations_until_done(&state, 300);
-        assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
-        assert_eq!(state.offset(), 0.0, "反向 fling 应停在顶部");
+        assert!(frames < 300, "the reverse fling converges ({frames} frames)");
+        assert_eq!(state.offset(), 0.0, "the reverse fling rests at the top");
     }
 
     // ═══════════════════════════════════════════════════
-    // sticky header（对齐 Compose stickyHeader）
+    // Sticky headers (Compose's `stickyHeader`)
     // ═══════════════════════════════════════════════════
 
-    /// 5 个 section：sticky header（红色背景 + HEAD n 文本）后跟 19 个普通项。
-    /// header 全局 index = n*20；普通项 key = 200 + n*19 + i（全列表唯一）。
+    /// Five sections: a sticky header (red background, "HEAD n" text) followed by 19 ordinary items.
+    /// Header global index = n*20; an ordinary item's key is 200 + n*19 + i (unique across the list).
     fn sticky_build(ctx: &mut ComposeCtx, state: LazyListState) {
         use crate::graphics::{Color, Shape};
         let mut lb = LazyColumn::new()
@@ -894,7 +918,7 @@
         lb.build(ctx);
     }
 
-    /// 带 content_padding 的 1000 项列表（对齐 render_lazy 的 400x600 视口）
+    /// A 1000-item list with content padding (matching `render_lazy`'s 400x600 viewport).
     fn plain_build_padded(ctx: &mut ComposeCtx, state: LazyListState, pad: (f32, f32), cross: (f32, f32)) {
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         LazyColumn::new()
@@ -911,7 +935,7 @@
             .build(ctx);
     }
 
-    /// 带 content_padding 的 5 sections 红底 sticky 列表（header 全局 index = n*20）
+    /// The five-section red-header sticky list with content padding (header global index = n*20).
     fn sticky_build_padded(ctx: &mut ComposeCtx, state: LazyListState, pad: f32) {
         use crate::graphics::{Color, Shape};
         let mut lb = LazyColumn::new()
@@ -942,7 +966,7 @@
         lb.build(ctx);
     }
 
-    /// 顶部红色 header 带数量：连续红色行段（header 背景）计数
+    /// How many red header BANDS touch the top: counts runs of red rows (the header background).
     fn red_bands(px: &[[u8; 4]], w: usize, h: usize, limit: usize) -> usize {
         let mut bands = 0;
         let mut in_band = false;
@@ -950,7 +974,7 @@
             let mut red = false;
             for x in (0..w).step_by(2) {
                 let p = px[y * w + x];
-                // ⚠ raster 是 BGRA8888（n32_premul 小端）：p[2] 才是红通道
+                // The raster is BGRA8888 (n32_premul, little-endian), so p[2] is the RED channel.
                 if p[2] > 150 && p[0] < 100 && p[1] < 100 {
                     red = true;
                     break;
@@ -966,7 +990,8 @@
         bands
     }
 
-    /// 视口顶连续红色行数（钉住 header 的可见高度；BGRA 字节序）
+    /// The number of consecutive red rows at the viewport top (the pinned header's visible height; BGRA
+    /// byte order).
     fn top_band_height(px: &[[u8; 4]], w: usize, h: usize) -> usize {
         let mut rows = 0;
         for y in 0..h {
@@ -989,25 +1014,26 @@
 
     #[test]
     fn sticky_header_pins_to_top_while_scrolling() {
-        // 深滚动后：钉住的 header 成为锚点（first_visible = header index），
-        // 红色带仍在视口顶，普通项内容从 header 下面滑过（下方仍有文本像素）
+        // After a deep scroll the pinned header becomes the anchor (`first_visible` = the header index),
+        // the red band still sits at the viewport top, and the ordinary items slide underneath it (their
+        // text pixels are still below).
         let state = LazyListState::new();
         let (px0, w0) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
-        assert_eq!(state.first_visible(), 0, "初始锚点 = header 0");
+        assert_eq!(state.first_visible(), 0, "the initial anchor is header 0");
         assert_eq!(state.first_visible_offset.get(), 0.0);
 
-        // 滚动进 section 3（offset 2000：C(40)≈1900 ≤ 2000 → header 2 钉住）
+        // Scroll into section 3 (offset 2000 with C(40) ≈ 1900, so header 2 pins).
         state.offset.set(2000.0);
         let (px1, w1) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
         assert_eq!(w0, w1);
         assert_eq!(
             state.first_visible(),
             40,
-            "钉住的 header 成为锚点（对齐 Compose firstVisibleItemIndex）"
+            "the pinned header becomes the anchor (Compose's firstVisibleItemIndex)"
         );
         assert_eq!(state.first_visible_offset.get(), 0.0);
-        // 红色带：恰一个，且在视口顶（钉住）
-        assert_eq!(red_bands(&px1, w1, 600, 300), 1, "钉住时视口顶恰一个 header");
+        // Exactly one red band, and it sits at the viewport top because it is pinned.
+        assert_eq!(red_bands(&px1, w1, 600, 300), 1, "exactly one header at the viewport top while pinned");
         let mut top_red = false;
         for x in (0..w1).step_by(2) {
             let p = px1[x];
@@ -1015,8 +1041,8 @@
                 top_red = true;
             }
         }
-        assert!(top_red, "钉住的 header 在视口最顶行");
-        // 内容从 header 下滑过：header 带下方仍有普通项文本
+        assert!(top_red, "the pinned header occupies the viewport's top row");
+        // The content slides under the header: ordinary item text is still below the band.
         let mut below_text = false;
         for y in (70..600).step_by(2) {
             for x in (0..w1).step_by(2) {
@@ -1026,8 +1052,8 @@
                 }
             }
         }
-        assert!(below_text, "普通项内容应继续渲染在钉住 header 之下");
-        // 与初始帧内容不同（滚动到不同 section）
+        assert!(below_text, "ordinary item content keeps rendering under the pinned header");
+        // Different content from the first frame (a different section is on screen).
         let mut diff_rows = 0;
         for y in 0..600usize {
             let mut has0 = false;
@@ -1042,37 +1068,40 @@
                 diff_rows += 1;
             }
         }
-        assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
+        assert!(diff_rows > 10, "content changes after the scroll; diff_rows={diff_rows}");
 
-        // 深滚动（超界 → clamp 到 4150 ≈ 末尾）：header 4 钉住——验证无界回溯
+        // A deep scroll (out of range → clamped to 4150, near the end) pins header 4 — this exercises the
+        // unbounded walk-back.
         state.offset.set(100_000.0);
         let (_px2, _w2) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
         assert!(
             state.offset() < 4500.0,
-            "越界应 clamp，实际 {}",
+            "the out-of-range offset is clamped; got {}",
             state.offset()
         );
         assert_eq!(
             state.first_visible(),
             80,
-            "深滚动后 header 4（全局 80）钉住——无界回溯",
+            "after the deep scroll header 4 (global index 80) is pinned — the unbounded walk-back",
         );
     }
 
     #[test]
     fn sticky_header_pushes_previous_on_approach() {
-        // 下一个 header 距顶 h(prev) 内时，前一个开始滑出（两 header 无缝相邻，
-        // 视觉上是一条连续红带）→ 断言**顶带高度变矮**；到位后前一个完全推出
+        // While the next header is within h(prev) of the top the previous one starts sliding out (the two
+        // are adjacent, so visually it is one continuous red band), which is why the assertion is that the
+        // TOP BAND GROWS; once it has arrived the previous header is gone entirely.
         let state = LazyListState::new();
         let (px0, w0) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
         let h0_full = top_band_height(&px0, w0, 600);
-        assert!(h0_full > 40, "初始 header 0 完整钉在顶，顶带高 {h0_full}");
+        assert!(h0_full > 40, "header 0 is fully pinned at the top; band height {h0_full}");
 
-        // ⚠ header 顶 C(20) 依赖运行时实测高度（字体加载时序不同 → 40 或 47.5），
-        // 过渡窗口 [C(20)-h(0), C(20)] 也随之漂移——用扫描区间断言不变量：
-        // 1) 过渡期：被推的 header 0 与 header 1 无缝相邻 → 顶带"变高"
-        //    （band ∈ (h, 2h)，两 header 合并）
-        // 2) 越过过渡区后 header 1 钉顶（锚点 = 20、单带、顶带恢复 h）
+        // The header top C(20) depends on the height measured at runtime (font loading order gives 40 or
+        // 47.5), so the transition window [C(20) - h(0), C(20)] drifts with it — hence a scan that asserts
+        // INVARIANTS over an interval:
+        // 1) during the transition the pushed-out header 0 and header 1 are adjacent, so the top band
+        //    GROWS (band in (h, 2h): the two headers merge);
+        // 2) past the transition window header 1 pins (anchor = 20, a single band, back to height h).
         let mut saw_merge = false;
         let mut saw_pinned = false;
         let mut final_band = 0usize;
@@ -1090,16 +1119,16 @@
                 }
             }
         }
-        assert!(saw_merge, "过渡期顶带应变高（两 header 合并，band > 单 header）");
-        assert!(saw_pinned, "越过过渡区后 header 1 应钉顶（锚点 20 + 单带）");
+        assert!(saw_merge, "the top band grows during the transition (the two headers merge, band > one header)");
+        assert!(saw_pinned, "past the transition window header 1 is pinned (anchor 20, a single band)");
         let final_diff = if final_band > h0_full { final_band - h0_full } else { h0_full - final_band };
-        assert!(final_diff < 6, "header 1 完整钉顶（顶带 {final_band} ≈ {h0_full}）");
+        assert!(final_diff < 6, "header 1 is fully pinned (band {final_band} ≈ {h0_full})");
     }
 
     #[test]
     fn sticky_header_composes_only_pinned_and_visible() {
-        // 组合项数：视口 600px ≈ 12 项 + 预取 8 + 钉住 header —— 远小于 total 100
-        // （sticky 回溯不拉全列表）
+        // Composition count: a 600 px viewport is ~12 items, plus 8 prefetched, plus the pinned header —
+        // far below the total of 100 (the sticky walk-back does not pull in the whole list).
         let composed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let state = LazyListState::new();
         let c0 = composed.clone();
@@ -1131,23 +1160,24 @@
             lb.build(ctx);
         });
         let n0 = composed.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(n0 <= 40, "初始组合应只含可见项+预取，实际 {n0}");
-        // 深滚动：钉住的 header 加入组合但列表不整体组合
+        assert!(n0 <= 40, "the first compose covers only the visible items plus the prefetch; got {n0}");
+        // A deep scroll brings the pinned header into the window without composing the whole list.
         state.offset.set(2000.0);
         let (px, w) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
         let n1 = composed.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(n1 <= 60, "深滚动组合项数应仍远小于 100，实际 {n1}");
+        assert!(n1 <= 60, "the deep-scroll compose is still far below 100; got {n1}");
         assert_eq!(red_bands(&px, w, 600, 200), 1);
     }
 
     // ═══════════════════════════════════════════════════
-    // contentPadding（对齐 Compose contentPadding）
+    // contentPadding (Compose's `contentPadding`)
     // ═══════════════════════════════════════════════════
 
     #[test]
     fn content_padding_starts_content_after_padding() {
-        // pad_before=50：offset 0 时首项内容从 y≈68 开始（50 + padding 12 + glyph），
-        // 顶部 20..30 行无文本；offset=50（内容滚进 padding）后首项贴顶，文本进入 18..30
+        // pad_before = 50: at offset 0 the first item's content starts at y ≈ 68 (50 + 12 of item padding +
+        // the glyph), so rows 20..30 have no text; at offset 50 (the content has scrolled into the padding)
+        // the first item touches the top and its text reaches 18..30.
         let state = LazyListState::new();
         let (px0, w0) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (50.0, 0.0), (0.0, 0.0)));
         let mut top_empty = true;
@@ -1157,7 +1187,7 @@
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { top_empty = false; }
             }
         }
-        assert!(top_empty, "offset 0 时顶部 20..30 行应为空白（内容从 pad 50 后开始）");
+        assert!(top_empty, "at offset 0 rows 20..30 are blank (the content starts after the 50 dp padding)");
 
         state.offset.set(50.0);
         let (px1, w1) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (50.0, 0.0), (0.0, 0.0)));
@@ -1168,21 +1198,22 @@
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { top_text = true; }
             }
         }
-        assert!(top_text, "offset=50 后首项应贴顶（文本进入 y 18..30）");
-        // 滚动前项顶在 y=50：自然边界处内容停在内边距处，不贴视口边
-        assert_eq!(state.first_visible(), 0, "pad 50 + offset 50 → 锚点 index 0");
+        assert!(top_text, "after offset 50 the first item touches the top (text reaches y 18..30)");
+        // Before scrolling the item top is at y = 50: at its natural boundary the content stops at the
+        // padding instead of touching the viewport edge.
+        assert_eq!(state.first_visible(), 0, "pad 50 plus offset 50 keeps the anchor at index 0");
     }
 
     #[test]
     fn content_padding_max_offset_includes_after() {
-        // pad_after=40：跳末尾时 max_offset = pad_before + Σ项 + pad_after - viewport，
-        // 末项底停在 viewport-40 处 → 底部 35 行无文本
+        // pad_after = 40: at the end `max_offset = pad_before + Σ items + pad_after - viewport`, so the last
+        // item's bottom stops at `viewport - 40` and the bottom 35 rows have no text.
         let state = LazyListState::new();
         state.scroll_to_item(99999, 0.0);
         let (px, w) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (0.0, 40.0), (0.0, 0.0)));
-        assert!(state.offset() > 20_000.0, "跳末尾应滚到接近末尾，实际 {}", state.offset());
+        assert!(state.offset() > 20_000.0, "a jump to the end scrolls near the end; got {}", state.offset());
         let first = state.first_visible();
-        assert!(first >= 970, "first_visible 应接近末尾，实际 {first}");
+        assert!(first >= 970, "first_visible sits near the end; got {first}");
         let mut bottom_empty = true;
         for y in (600 - 35)..600usize {
             for x in (0..w).step_by(2) {
@@ -1190,15 +1221,15 @@
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { bottom_empty = false; }
             }
         }
-        assert!(bottom_empty, "pad_after=40：底部 35 行应为空白（末项停在 padding 处）");
+        assert!(bottom_empty, "pad_after 40: the bottom 35 rows are blank (the last item stops at the padding)");
     }
 
     #[test]
     fn content_padding_sticky_pins_at_padding() {
-        // pad=50：深滚动后 header 4（全局 80）钉在视口 y=50（不是 0）：
-        // 顶部 45 行无红，红带在 y 50..98
+        // pad = 50: after a deep scroll header 4 (global index 80) pins at y = 50, not 0 — the top 45 rows
+        // have no red and the band sits at y 50..98.
         let state = LazyListState::new();
-        state.offset.set(3900.0); // C(80)=3800（h=47.5）→ header 4 钉住；且 < max_off≈4200 不 clamp
+        state.offset.set(3900.0); // C(80) = 3800 at h = 47.5, so header 4 pins; below max_off ≈ 4200, no clamp
         let (px, w) = render_lazy(|ctx| sticky_build_padded(ctx, state.clone(), 50.0));
         let mut top_clear = true;
         for y in 0..45usize {
@@ -1207,7 +1238,7 @@
                 if p[2] > 150 && p[0] < 100 && p[1] < 100 { top_clear = false; }
             }
         }
-        assert!(top_clear, "pad=50：顶部 45 行应为空白（header 钉在 y=50）");
+        assert!(top_clear, "pad 50: the top 45 rows are blank (the header pins at y = 50)");
         let mut band_red = false;
         for y in 50..98usize {
             for x in (0..w).step_by(2) {
@@ -1215,16 +1246,16 @@
                 if p[2] > 150 && p[0] < 100 && p[1] < 100 { band_red = true; }
             }
         }
-        assert!(band_red, "y 50..98 应为红色钉住 header");
-        assert_eq!(state.first_visible(), 80, "钉住时锚点 = 钉住的 header（全局 80）");
-        // 红带不再覆盖视口顶 0..40
-        assert_eq!(red_bands(&px, w, 600, 200), 1, "仅一条红带（钉住的 header）");
+        assert!(band_red, "y 50..98 is the red pinned header");
+        assert_eq!(state.first_visible(), 80, "the pinned header is the anchor (global index 80)");
+        // The band no longer covers the viewport top (rows 0..40).
+        assert_eq!(red_bands(&px, w, 600, 200), 1, "exactly one red band (the pinned header)");
     }
 
     #[test]
     fn content_padding_cross_axis_shrinks_items() {
-        // cross pad 40/40：item 从 x=40 开始放置且宽被限制在 400-80=320：
-        // x<36 无文本；文本起点 ≈ x 52..92
+        // Cross padding 40/40: an item is placed from x = 40 and its width is limited to 400 - 80 = 320, so
+        // there is no text before x = 36 and the text starts around x 52..92.
         let state = LazyListState::new();
         let (px, w) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (0.0, 0.0), (40.0, 40.0)));
         let mut left_empty = true;
@@ -1234,7 +1265,7 @@
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { left_empty = false; }
             }
         }
-        assert!(left_empty, "交叉轴 padding 40：x<36 应无文本");
+        assert!(left_empty, "cross padding 40: no text before x = 36");
         let mut text_after_pad = false;
         for y in (0..600).step_by(2) {
             for x in 56..70usize {
@@ -1242,11 +1273,11 @@
                 if p[0] < 120 && p[1] < 120 && p[2] < 120 { text_after_pad = true; }
             }
         }
-        assert!(text_after_pad, "文本应从 x≈54 开始（40 cross + 12 padding）");
+        assert!(text_after_pad, "the text starts around x = 54 (40 of cross padding plus 12 of item padding)");
     }
 
     // ═══════════════════════════════════════════════════════
-    // reverseLayout（对齐 Compose reverseLayout：index 0 在底部）
+    // reverseLayout (Compose's `reverseLayout`: index 0 sits at the bottom)
     // ═══════════════════════════════════════════════════════
 
     fn reverse_build(ctx: &mut ComposeCtx, state: LazyListState) {
@@ -1264,7 +1295,7 @@
             .build(ctx);
     }
 
-    /// 指定行区间内是否有暗色文本像素
+    /// Whether the given row range contains dark text pixels.
     fn rows_have_text(px: &[[u8; 4]], w: usize, y0: usize, y1: usize) -> bool {
         for y in y0..y1 {
             for x in (0..w).step_by(2) {
@@ -1277,22 +1308,23 @@
 
     #[test]
     fn reverse_layout_starts_at_bottom_and_scrolls_toward_end() {
-        // offset=0：项 0 在屏幕底（first_visible = 0），底部有文本、顶部也有
-        // （视口显示列表开头 ~12 项，index 0 在最下）
+        // offset 0: item 0 is at the bottom of the screen (`first_visible` = 0), so there is text at the
+        // bottom AND at the top (the viewport shows the list's first ~12 items, with index 0 lowest).
         let state = LazyListState::new();
         let (px0, w0) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
-        assert_eq!(state.first_visible(), 0, "offset=0 锚点 = 项 0（屏幕底）");
-        assert!(rows_have_text(&px0, w0, 570, 600), "项 0 应在屏幕底部可见");
-        assert!(rows_have_text(&px0, w0, 0, 30), "屏幕顶也应显示列表开头内容（~项 12）");
+        assert_eq!(state.first_visible(), 0, "at offset 0 the anchor is item 0 (the screen bottom)");
+        assert!(rows_have_text(&px0, w0, 570, 600), "item 0 is visible at the screen bottom");
+        assert!(rows_have_text(&px0, w0, 0, 30), "the screen top also shows the start of the list (~item 12)");
 
-        // offset 增 = 向列表末尾（index 增）——与正向滚动方向一致
+        // A growing offset still moves toward the list's END (a growing index) — the scroll direction is
+        // unchanged.
         state.offset.set(5000.0);
         let (px1, w1) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
         let first = state.first_visible();
-        assert!(first >= 90, "offset 5000 后锚点应推进到 ~105，实际 {first}");
-        // 底部项 = 锚点项（屏幕底显示 index ~105），顶部 = index ~117
-        assert!(rows_have_text(&px1, w1, 0, 30), "反向滚动后屏幕顶仍有内容");
-        // 帧间内容变化（滚到不同项）
+        assert!(first >= 90, "at offset 5000 the anchor advances to ~105; got {first}");
+        // The bottom item is the anchor (~105); the top is ~117.
+        assert!(rows_have_text(&px1, w1, 0, 30), "content is still at the screen top after the reverse scroll");
+        // The frames differ (a scroll brings other items into view).
         let mut diff_rows = 0;
         for y in 0..600usize {
             let mut h0 = false; let mut h1 = false;
@@ -1304,16 +1336,16 @@
             }
             if h0 != h1 { diff_rows += 1; }
         }
-        assert!(diff_rows > 10, "反向滚动后内容变化，diff_rows={diff_rows}");
+        assert!(diff_rows > 10, "content changes after the reverse scroll; diff_rows={diff_rows}");
     }
 
     #[test]
     fn reverse_layout_scroll_to_item_lands_at_bottom() {
-        // 跳 500：项 500 **底**贴视口底（与正向"顶贴顶"镜像）→ 底部行有文本；
-        // 锚点 = 500（屏幕底项）
+        // Jump to 500: item 500's BOTTOM touches the viewport bottom (the mirror of the forward "top to
+        // top"), so the bottom rows have text; the anchor is 500, the item at the screen bottom.
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
-        // 正向对照：项 500 贴屏幕**顶**
+        // The forward control: item 500 touches the screen TOP.
         let fwd = LazyListState::new();
         let (pf, wf) = render_lazy(|ctx| {
             let it = items.clone();
@@ -1349,41 +1381,43 @@
 
         state.scroll_to_item(500, 0.0);
         let (px, w) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
-        assert_eq!(state.first_visible(), 500, "反向跳 500：锚点 = 500（屏幕底项）");
-        assert!(rows_have_text(&px, w, 570, 600), "项 500 底应贴视口底（底部行有文本）");
-        // 顶部也有内容（项 500 上方 ~12 项）
-        assert!(rows_have_text(&px, w, 0, 40), "项 500 上方的项应在屏幕顶可见");
-        // offset = prefix(500) ≈ 23750（0 spacing + 无 padding）
+        assert_eq!(state.first_visible(), 500, "reverse jump to 500: the anchor is 500 (the item at the screen bottom)");
+        assert!(rows_have_text(&px, w, 570, 600), "item 500's bottom touches the viewport bottom (text on the bottom rows)");
+        // There is content at the top too (the ~12 items above item 500).
+        assert!(rows_have_text(&px, w, 0, 40), "the items above item 500 are visible at the screen top");
+        // offset = prefix(500) ≈ 23750 (no spacing, no padding).
         assert!(
             state.offset() > 20_000.0 && state.offset() < 26_000.0,
-            "反向 jump offset = prefix(500)，实际 {}",
+            "the reverse jump offset is prefix(500); got {}",
             state.offset()
         );
     }
 
     #[test]
     fn reverse_layout_clamps_at_both_ends() {
-        // 越界（offset=100000）→ clamp 到 max_off = content_h - vh ≈ 46900 → 锚点 ≈ 987
+        // Out of range (offset 100000) clamps to max_off = content_h - vh ≈ 46900, so the anchor is ≈ 987.
         let state = LazyListState::new();
         state.offset.set(100_000.0);
-        // 首帧：build 用未 clamp 的 offset 锚定（组合窗偏窄）；第二帧 offset 已被
-        // policy clamp → 组合窗收敛（真实 app 首帧后自然收敛，测试断言收敛帧）
+        // First frame: `build` anchors on the un-clamped offset (a too-narrow window); by the second frame
+        // the policy has clamped the offset and the window converges (a real app converges after the first
+        // frame, so the test asserts on the converged frame).
         let (_px0, _w0) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
         let (px, w) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
         let first = state.first_visible();
-        assert!(first >= 970, "越界 clamp 后应接近列表末尾（index 大），实际 {first}");
-        assert!(rows_have_text(&px, w, 570, 600), "末尾项应在屏幕底可见");
-        // 回到开头
+        assert!(first >= 970, "after the clamp the index is near the list end; got {first}");
+        assert!(rows_have_text(&px, w, 570, 600), "the last item is visible at the screen bottom");
+        // Back to the start.
         state.offset.set(0.0);
         let (_px2, _w2) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
-        assert_eq!(state.first_visible(), 0, "offset=0 回到项 0");
+        assert_eq!(state.first_visible(), 0, "offset 0 is back at item 0");
     }
 
-    // ── animateScrollToItem（对齐 Compose animateScrollToItem——spring 动画）──
+    // ── animateScrollToItem (Compose's `animateScrollToItem` — a spring) ──
     #[test]
     fn animate_scroll_to_item_animates_offset() {
-        // 动画注册表全局共享——持串行锁（step_animations_until_target 的
-        // has_animation_for_state 无空窗误判依赖串行，见 helper 注释）
+        // The animation registry is process-global, so hold the serial lock: `step_animations_until_target`
+        // relies on `has_animation_for_state` never seeing a false empty window, which needs serial runs
+        // (see the helper's docs).
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
@@ -1391,28 +1425,29 @@
         let before = state.offset();
         assert_eq!(before, 0.0);
 
-        // 立即跳转测出精确目标（实测高度：prefix(500)——运行时字体高度不同，
-        // 不能用常数 23750 断言）
+        // An immediate jump measures the exact target (prefix(500) over the real heights — the font height
+        // differs at runtime, so a constant 23750 cannot be asserted).
         state.scroll_to_item(500, 0.0);
         let (_px, _w) = render_lazy_state(&state, &items);
         let target = state.offset();
-        assert!(target > 15_000.0 && target < 30_000.0, "目标应 ≈ prefix(500)，实际 {target}");
+        assert!(target > 15_000.0 && target < 30_000.0, "the target is ≈ prefix(500); got {target}");
 
-        // 回到 0 再动画滚动到同一目标
+        // Back to 0, then animate to the same target.
         state.offset.set(0.0);
         let (_px, _w) = render_lazy_state(&state, &items);
         state.animate_scroll_to_item(500, 0.0);
         let (_px, _w) = render_lazy_state(&state, &items);
-        // 测量期消费：注册 spring 动画（push_animatable 立即 update 一帧——
-        // elapsed≈0 位移≈0，之后由 step 循环推进）。目标由 scroll_to_item
-        // 同缓存推导、round-trip 精确——用表空+距目标双条件收敛（位移判据
-        // 会在引擎 done 前提前触发，残余 ~13px，见 helper 注释）。
+        // The measure pass consumes the request and registers a spring (`push_animatable` updates once
+        // immediately — elapsed ≈ 0, travel ≈ 0 — and the step loop advances it afterwards). The target is
+        // derived from the same cache as `scroll_to_item`, so the round trip is exact, and the settle uses
+        // both conditions (table empty AND near the target) because a travel-only criterion fires before the
+        // engine is done, leaving ~13 px (see the helper's docs).
         let frames = step_animations_until_target(&state, target, 400);
-        assert!(frames < 400, "spring 应收敛（{frames} 帧）");
+        assert!(frames < 400, "the spring converges ({frames} frames)");
         let end = state.offset();
         assert!(
             (end - target).abs() < 5.0,
-            "动画应收敛到 scroll_to_item 同一目标 {target}，实际 {end}"
+            "the animation settles on the same target as scroll_to_item ({target}); got {end}"
         );
     }
 
@@ -1498,7 +1533,7 @@
         );
     }
 
-    // ── 重复 key 检测（对齐 Compose：key 冲突抛异常）──
+    // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]
     fn duplicate_key_detected_in_rebuild() {
@@ -1507,14 +1542,15 @@
         let c2: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
         il.add(1, Some(Arc::new(|_| 42u64)), c1, false);
         il.add(1, Some(Arc::new(|_| 42u64)), c2, false);
-        il.rebuild(); // 应 panic
+        il.rebuild(); // must panic
     }
 
-    // ── measure/build convergence（审计 Phase 3.2）：窗口 resize 放大后，build
-    //    是否按真实视口收敛可见范围？──
-    /// 同一 Composer 跨多帧渲染（模拟窗口 resize 后同一列表的收敛）。
-    /// 每帧对 `heights[i]` 做 compose+layout；渲染最后帧，返回视口底部 60px
-    /// 内是否有文本（判断可见项是否被 build 组合覆盖）。
+    // ── measure/build convergence (audit Phase 3.2): after the window grows, does `build`
+    //    converge the visible range onto the REAL viewport? ──
+    /// Render across several frames on ONE composer (the convergence of a list after a window resize).
+    /// Each frame composes and lays out with `heights[i]`; the last frame is rendered and the return value
+    /// says whether there is text within 60 px of the viewport bottom — i.e. whether `build` composed the
+    /// items the bottom needs.
     fn render_lazy_frames_bottom_text(build: impl Fn(&mut ComposeCtx, &LazyListState) + Send, heights: &[f32]) -> bool {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
@@ -1535,7 +1571,7 @@
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
         let w = 400usize;
         let h = last_h as usize;
-        // 检查视口底部 60px 是否有文本行（可见项若被 build 组合覆盖则有文本）
+        // Look for text rows within 60 px of the viewport bottom: composed items leave text there.
         let mut text_rows = 0;
         for y in (h.saturating_sub(60))..h {
             let mut has = false;
@@ -1550,9 +1586,9 @@
 
     #[test]
     fn resize_to_larger_viewport_converges_to_cover_visible_items() {
-        // 视口从 400 放大到 2500（超过原固定 2000 估算窗）。方向一后 build 感知
-        // 真实视口（跨帧信号），经多帧收敛后底部可见项应被组合覆盖。
-        // 帧序：400（初始）→ 2500（resize）→ 2500（收敛帧——build 读到 2500）。
+        // The viewport grows from 400 to 2500 (past the old fixed 2000 estimate window). With the
+        // cross-frame viewport signal in place, `build` sees the real extent and the bottom items are
+        // composed after a few frames. Frame order: 400 (initial) → 2500 (resize) → 2500 (converged).
         let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
         let covered = render_lazy_frames_bottom_text(
             |ctx, _state| {
@@ -1568,9 +1604,9 @@
             },
             &[400.0, 2500.0, 2500.0],
         );
-        eprintln!("resize 到 2500 并收敛后视口底部是否被可见项覆盖: {covered}");
-        // 方向一实现后：build 感知真实视口，跨帧收敛，底部项应被组合覆盖。
-        assert!(covered, "方向一后放大视口应收敛覆盖底部可见项（covered={covered}）");
+        eprintln!("bottom of the viewport covered after resizing to 2500 and converging: {covered}");
+        // With the cross-frame viewport signal, the bottom items are composed once it converges.
+        assert!(covered, "after a resize the enlarged viewport converges with its bottom items composed (covered={covered})");
     }
 
     /// The trigger the frame handler's same-frame convergence consumes, and what makes it affordable:
@@ -1825,7 +1861,8 @@
     /// The gap this round is about: the frame the viewport GROWS on must already cover what the new
     /// viewport shows. Today `LazyList::build` reads the viewport the PREVIOUS frame's measure wrote, so
     /// a resize to a taller viewport composes the old, smaller window and the bottom of the new one is
-    /// empty until the next frame (documented in `docs/architecture-audit.md` §Phase 3.2, "跨帧收敛").
+    /// empty until the next frame (documented in `docs/architecture-audit.md` Phase 3.2, "cross-frame
+    /// convergence").
     ///
     /// The harness renders the given frame heights and inspects the LAST one only, so passing a single
     /// resize frame (`[400, 2500]`) measures exactly that frame — no convergence frame is allowed.
@@ -1908,14 +1945,14 @@
         // which is the defect `docs/architecture-audit.md` §Phase 3.2 recorded. If this ever stops
         // failing, the assertion below proves nothing.
         let without = resize_frame_bottom_covered(false);
-        eprintln!("resize 帧（400 -> 2500，无同帧收敛）视口底部是否被覆盖: {without}");
+        eprintln!("resize frame (400 -> 2500, no same-frame convergence), bottom covered: {without}");
         assert!(
             !without,
             "control: without same-frame convergence the resize frame must miss the new bottom \
              (covered={without})"
         );
         let covered = resize_frame_bottom_covered(true);
-        eprintln!("resize 帧（400 -> 2500，同帧收敛）视口底部是否被覆盖: {covered}");
+        eprintln!("resize frame (400 -> 2500, same-frame convergence), bottom covered: {covered}");
         assert!(
             covered,
             "the resize frame itself must cover the new viewport's bottom, not the frame after it \
