@@ -254,7 +254,8 @@ pub(crate) fn intrinsic_size_of(
     let other = (other - pad_other).max(0.0);
 
     // A fixed axis needs no measurement, and it is also the node's own size: the pipeline tightens
-    // the node to it BEFORE padding is offset, so `size(100).padding(8)` measures 100, not 116.
+    // the node to it and adds the padding to the OUTER size (padding is a chain step now), so
+    // `size(100).padding(8)` measures 100, not 116.
     if lo == hi && lo < f32::MAX {
         return lo;
     }

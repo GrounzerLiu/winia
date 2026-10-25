@@ -58,8 +58,10 @@
   (`SizeStep::Padding`), so it deflates the constraints where it stands. `.padding(8).size(300)`
   fixes 300 inside the already-deflated range and reports a 316 dp node;
   `.size(300).padding(8)` absorbs the padding; `.padding(8).aspect_ratio(2.0)` derives from
-  the deflated range (284x142) and reports 300x158. Window-inset padding is still applied after the
-  walk, because insets are not chain steps.
+  the deflated range (284x142) and reports 300x158. Window-INSET padding is the exception: an inset
+  has no chain position, so it is applied after the walk — a size written inside an inset therefore
+  behaves the way element padding did before this change. Making insets chain steps needs the inset
+  consumers (scroll viewport, `padding_from`) re-ordered with them, so it is a separate job.
 - the two growth steps interact with a match-parent child differently, and both match Compose.
   `aspect_ratio` moved into the size walk (`SizeStep::AspectRatio`): the constraints are fixed to
   the derived size before the policy, as Compose's `AspectRatioNode` does, so the content — and a
@@ -81,8 +83,17 @@ reports content, the minimum floor, empty box, and the `Stack` builder carrying 
 a later frame follows the box, its own `Modifier::offset` still applies, toggling the flag
 re-measures, and an ancestor box grows with an overflowing child. The aspect cases are
 `aspect_ratio_fixes_the_box_and_its_content` and `aspect_ratio_and_a_match_parent_child` here, plus
-`layout::node::tests` for the candidate order and `layout::node::intrinsic_tests` for the ratio's
-intrinsic answers. The min-interactive parity pin is
+`layout::node::tests` for the candidate order
+(`aspect_ratio_falls_back_to_the_minimum_when_both_maxima_are_unbounded`,
+`aspect_ratio_falls_back_to_an_unsatisfied_candidate_before_giving_up`) and the chain orders
+(`wrap_content_outside_an_aspect_ratio_relaxes_then_restores_the_range`,
+`an_aspect_ratio_outside_wrap_content_keeps_its_box_and_centres_the_content`,
+`padding_outside_a_size_deflates_before_the_size_is_fixed`,
+`a_size_outside_padding_absorbs_the_padding`,
+`padding_outside_an_aspect_ratio_derives_from_the_deflated_range`,
+`an_intrinsic_width_request_counts_its_padding_once`,
+`wrap_content_outside_padding_clamps_the_inner_size`), and `layout::node::intrinsic_tests` for the
+ratio's intrinsic answers. The min-interactive parity pin is
 `a_match_parent_child_matches_the_pre_growth_box_under_minimum_interactive_size`.
 
 Some of those drive a `Composer` end to end (the later-frame, offset, alignment, ancestor and

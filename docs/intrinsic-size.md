@@ -341,9 +341,11 @@ what decides a conflict in Compose — the outer call wins (`.max_width(200).min
 the tests pin:
 
 - A fixed axis short-circuits: a node whose axis is fixed returns that value **without** padding,
-  because the pipeline tightens the node's own box before the padding offset is pushed inward.
+  because the pipeline tightens the node's own box and the padding is added to the OUTER size
+  afterwards (padding is a chain step, `SizeStep::Padding`).
 - Otherwise the answer is `content.clamp(lo, hi) + padding`, mirroring "measure the content, then add
-  padding back".
+  padding back". The engine's intrinsic-request block subtracts the axis padding again before
+  tightening, because the outer size adds it back — one count, not two.
 - The content is asked with the OTHER axis reduced by that axis's padding (`other - pad_other`), as
   Compose's padding node offsets the constraints before the child answers
   (`Padding.kt:449`); measured before the fix: a `padding_horizontal(10)` node under a height query

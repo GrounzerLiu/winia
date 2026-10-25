@@ -370,10 +370,9 @@ pub(crate) fn measure_node_inner(
                 // (rather than resizing the node after the policy, as this did) is what makes the
                 // content — and a `match_parent_size` child — see the aspect box, and it no longer
                 // DROPS the padding (the old pass replaced the node's padded size with the inner box;
-                // here the padding is added on top of the derived box). The chain order is
-                // approximate as it is for every size step: the walk runs before the padding offset,
-                // so `.padding(8).aspect_ratio(2)` derives from the UNDEFLATED constraints where Compose
-                // would derive from the deflated ones.
+                // here the padding is added on top of the derived box). The chain order is exact:
+                // padding is a step too (`SizeStep::Padding`), so `.padding(8).aspect_ratio(2)`
+                // derives from the DEFLATED constraints, as Compose's node order does.
                 if let Some(size) = aspect_ratio_size(&inner_constraints, ratio, match_height_first) {
                     inner_constraints = Constraints::fixed(size.width, size.height);
                 }
@@ -388,6 +387,16 @@ pub(crate) fn measure_node_inner(
                 // (`foundation/layout/Padding.kt`); the chain order decides whether a size fixed
                 // inside the padding sees the deflated range. The node's OUTER size adds the total
                 // padding afterwards, which is why the step only shrinks what follows.
+                //
+                // WINDOW-INSET padding is deliberately NOT a step: an inset has no chain position, so
+                // it is applied after the walk (see the inset accumulators below). A size inside an
+                // inset therefore absorbs the inset instead of growing around it — the one place the
+                // two kinds of padding differ, and the reason `docs/box.md` lists it.
+                //
+                // The deflated value and the value added to the outer size are resolved separately
+                // (`size_steps` vs `get_padding_horizontal/vertical`); they agree for a static
+                // dimension, and a `Dimension::Dynamic` closure that is not pure would deflate by one
+                // value and add another. Making the walk the single source is a later cleanup.
                 inner_constraints = inner_constraints.offset(start + end, top + bottom);
             }
             SizeStep::MinWidth(v) => {
@@ -529,14 +538,20 @@ pub(crate) fn measure_node_inner(
     // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的
     // 固有尺寸，把约束收紧到它；`enforceIncoming`（`size/width/height` 形式）为真时 incoming 仍
     // 是最终夹取者，`requiredWidth/Height(IntrinsicSize)` 为假（忽略 incoming，同 requiredSize）。
-    // 位置必须在 padding offset **之前**：管线是"先定节点尺寸，再把 padding 偏移进内层"，
-    // 所以这里收紧的是节点自身（含 padding）的尺寸。
+    // 位置在尺寸步进**之后**：padding 现在是步进的一步（`SizeStep::Padding`），已经按链序内缩，
+    // 所以这里收紧的是"节点盒子减掉 padding 之后"的内容尺寸；外层尺寸最后再把 padding 加回去
+    // （`intrinsic_size_of` 答的是含 padding 的盒子，因此这里要先减掉，见下方注释）。
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_width_request() {
         // The constraints the request saw at ITS chain position decide the clamp: a fill outside
         // has already tightened them (Compose's IntrinsicWidthNode measures under those), while a
         // fill inside has not (FillNode forwards the intrinsic answer, so the request decides
         // first and the inner fill then fills the tight result).
         let other = inner_constraints.max_height;
+        // `intrinsic_size_of` answers the PADDED box (its own padding bookkeeping), while the engine
+        // adds the element padding to the outer size at the end of this function. Tightening to the
+        // padded value and then adding the padding again counted it twice (measured before this:
+        // `padding_horizontal(12).width(IntrinsicSize::Max)` over a 56 dp label came out 104 instead of
+        // 80). Clamp in the request's own space, then hand the content width to the pipeline.
         let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
         if enforce_incoming {
             w = match intrinsic_incoming_width {
@@ -544,7 +559,8 @@ pub(crate) fn measure_node_inner(
                 None => inner_constraints.constrain_width(w),
             };
         }
-        inner_constraints = inner_constraints.tighten_width(w);
+        let (pad_s, pad_e) = nodes[idx].modifier.get_padding_horizontal();
+        inner_constraints = inner_constraints.tighten_width((w - pad_s - pad_e).max(0.0));
     }
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
         let other = inner_constraints.max_width;
@@ -555,7 +571,8 @@ pub(crate) fn measure_node_inner(
                 None => inner_constraints.constrain_height(h),
             };
         }
-        inner_constraints = inner_constraints.tighten_height(h);
+        let (pad_t, pad_b) = nodes[idx].modifier.get_padding_vertical();
+        inner_constraints = inner_constraints.tighten_height((h - pad_t - pad_b).max(0.0));
     }
 
     // 2. 应用 padding
@@ -945,30 +962,35 @@ pub(crate) fn measure_node_inner(
     // range and places it inside that box by `align` (`Size.kt:1024-1061`). Steps apply from the
     // innermost out — the last one recorded wraps everything measured before it.
     for wrap in wrap_steps.iter().rev() {
-        let content = result.0;
-        let wrapper = Size::new(
-            content.width.clamp(wrap.min_width, wrap.max_width),
-            content.height.clamp(wrap.min_height, wrap.max_height),
+        // The wrap node sits INSIDE the element padding (Compose's padding node deflates before the
+        // wrap reaches it), so the range it recorded is the INNER one — and `result.0` is already the
+        // OUTER size (the padding was added above). Clamping the outer size against the inner range
+        // made a padded node short by the padding on each side: `.padding(8).wrap_content_width` over
+        // a 380 dp content in a 0..400 slot reported 392 where Compose reports 396.
+        let outer = result.0;
+        let inner = Size::new(
+            (outer.width - pad_x).max(0.0),
+            (outer.height - pad_y).max(0.0),
         );
+        let wrapper_inner = Size::new(
+            inner.width.clamp(wrap.min_width, wrap.max_width),
+            inner.height.clamp(wrap.min_height, wrap.max_height),
+        );
+        let wrapper = Size::new(wrapper_inner.width + pad_x, wrapper_inner.height + pad_y);
         let (dx, dy) = wrap_alignment_offset(
             wrap.align,
-            content,
-            wrapper,
+            inner,
+            wrapper_inner,
             nodes[idx].layout_direction,
             wrap.width,
             wrap.height,
         );
         if dx != 0.0 || dy != 0.0 {
             if nodes[idx].children.is_empty() {
-                let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
+                let (pad_s, pad_t, pad_e, _pad_b) = nodes[idx].modifier.get_padding_sides();
                 let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
                 let left = if rtl { pad_e } else { pad_s };
-                nodes[idx].content_box_override = Some((
-                    left + dx,
-                    pad_t + dy,
-                    (content.width - pad_s - pad_e).max(0.0),
-                    (content.height - pad_t - pad_b).max(0.0),
-                ));
+                nodes[idx].content_box_override = Some((left + dx, pad_t + dy, inner.width, inner.height));
             } else {
                 let kids = nodes[idx].children.clone();
                 for c in kids {

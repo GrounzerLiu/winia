@@ -856,12 +856,15 @@ impl TextField {
                     )
                 ),
             );
+            // The M3 minimum (280x56) is the FIELD's box, so it sits OUTSIDE the padding: padding is
+            // a chain step (`SizeStep::Padding`), and a minimum inside it would be deflated by the
+            // padding and then have the padding added back on top (312x80 instead of 280x56).
             container_modifier
+                .min_width(280.0)
+                .min_height(56.0)
                 .padding_horizontal(pad_h)
                 .padding_top(pad_top)
                 .padding_bottom(pad_bottom)
-                .min_width(280.0)
-                .min_height(56.0)
                 .text_field_visual(
                     variant,
                     shape,

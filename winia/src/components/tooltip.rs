@@ -181,10 +181,12 @@ fn plain_tooltip_content(ctx: &mut ComposeCtx, text: &str) {
     ctx.key(0, |ctx| {
         let theme = crate::theme::WiniaTheme::colors();
         let shape = crate::graphics::Shape::RoundedRect { corner_radius: 8.0 };
+        // 180 is the tooltip's BOX width (docs/tooltip.md), so the width sits outside the padding:
+        // padding is a chain step, and a width inside it would make the box 196.
         let m = Modifier::new()
             .background(theme.inverse_surface, shape)
-            .padding(8.0)
-            .width(180.0);
+            .width(180.0)
+            .padding(8.0);
         let sk = ctx.next_key();
         match ctx.start_restartable_group(sk, m, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             GroupStatus::Skip => {}

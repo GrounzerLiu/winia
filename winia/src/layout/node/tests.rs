@@ -520,6 +520,58 @@
         assert_eq!((size.width, size.height), (300.0, 158.0));
     }
 
+    /// An `IntrinsicSize` request and padding on ONE chain count the padding once: the request
+    /// answers the PADDED box, and the engine adds the padding to the outer size itself. Measured
+    /// before the fix: 104 (content + 2 x padding) instead of 80.
+    #[test]
+    fn an_intrinsic_width_request_counts_its_padding_once() {
+        use crate::layout::IntrinsicSize;
+        #[derive(Debug)]
+        struct FiftySix;
+        impl crate::layout::node::MeasurePolicy for FiftySix {
+            fn measure(
+                &self,
+                _n: &mut Vec<LayoutNode>,
+                _p: &[Box<dyn crate::layout::node::MeasurePolicy>],
+                _c: &[usize],
+                _constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                (Size::new(56.0, 20.0), Vec::new())
+            }
+            fn place(&self, _n: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+        }
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> = vec![Box::new(FiftySix)];
+        let m = Modifier::new().padding_horizontal(12.0).width(IntrinsicSize::Max);
+        let mut nodes = vec![LayoutNode::new(m, Some(0))];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(size.width, 80.0, "56 dp of content plus 24 dp of padding, counted once");
+    }
+
+    /// The wrap node sits INSIDE the padding, so its recorded range is the inner one; the wrapper is
+    /// clamped in that space and the padding is added back. Clamping the padded size against the
+    /// inner range lost the padding: 392 instead of 396.
+    #[test]
+    fn wrap_content_outside_padding_clamps_the_inner_size() {
+        // padding(outer) → wrap → size(inner): the wrap records the deflated range (0..384), the
+        // size fixes 380 inside it, and the node reports 380 + 16 = 396.
+        let m = Modifier::new()
+            .padding(8.0)
+            .wrap_content_width(Alignment::Start, false)
+            .size(380.0, 20.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(size.width, 396.0, "380 of content plus the border");
+
+        // A tight parent: the inner range is 276, so the wrapper is 276 and the node stays at 300.
+        let m = Modifier::new()
+            .padding(12.0)
+            .wrap_content_width(Alignment::Start, false)
+            .required_size(380.0, 20.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::fixed(300.0, 300.0));
+        assert_eq!(size.width, 300.0, "the padded node stays at the tight size");
+    }
+
     /// The UNENFORCED pass: when no candidate satisfies the range, Compose still returns one
     /// ("the constraints will not be respected", `AspectRatio.kt:43-47`). winia then CLAMPS it
     /// (the derivation feeds `Constraints::fixed`, where Compose has an extra node), so the

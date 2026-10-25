@@ -382,16 +382,12 @@
     /// A slot that pads ITSELF must be placed by its padded extent: Compose measures whatever host it is given,
     /// and M3's `SnackbarHost` carries its margins inside that host.
     ///
-    /// The root cause is NOT in this component, which is why the test is ignored rather than the rule changed:
-    /// a chain of `padding_vertical(16).size(200, 48)` reports `200x48` here, where Compose reports
-    /// `200x80` — `Modifier::size` sets the node's own size without the earlier `padding` being added around
-    /// it (measured 2026-10-11 with two `on_size_changed` probes on that chain: both printed `200x48`). The
-    /// component's rule is exact for an unpadded slot (the test above pins both endpoints). Nesting instead of
-    /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
-    /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
-    /// model (`docs/modifier-node.md`, item 5 of its known-limitations section) and needs its own fix.
+    /// This used to be ignored: a chain of `padding_vertical(16).size(200, 48)` reported `200x48` where
+    /// Compose reports `200x80`, because the node subtracted the whole chain's padding AFTER the size
+    /// walk. Padding is a chain step now (`SizeStep::Padding`, `docs/modifier-node.md`), so the chain
+    /// measures 80 and the slot is placed by its padded extent — the component's rule is exact for both
+    /// an unpadded and a padded slot.
     #[test]
-    #[ignore = "Modifier::padding before size() is not added to the measured size: 200x48 comes back where Compose measures 200x80"]
     fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
         let _serial =
             crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -429,10 +425,13 @@
         let root = c.layout_root_idx().expect("laid out");
         let card = node_with_tag(nodes, "snack");
         let y = absolute_position(nodes, root, card).expect("under the root").1;
+        // The slot's BOX is the padded extent (48 + 16 + 16 = 80) and it is placed by that box: its
+        // bottom sits on the sheet's top (720 - 56), so its top is at 584. The card's content starts
+        // 16 px inside it, at 600 — that half is the slot's own padding, not this component's rule.
         assert_eq!(
             y,
-            720.0 - 56.0 - 16.0 - 48.0,
-            "the padded box's bottom sits on the sheet's top, so the card itself ends 16 px above it"
+            720.0 - 56.0 - 80.0,
+            "the slot is placed by its PADDED extent"
         );
     }
 
