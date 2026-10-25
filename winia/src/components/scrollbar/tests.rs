@@ -216,7 +216,7 @@
     fn lazy_scrollbar_follows_lazy_list_state() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::layout::lazy_column::LazyListState;
+        use crate::layout::lazy::LazyListState;
         use crate::theme::{ThemeColors, WiniaTheme};
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -229,7 +229,7 @@
             composer.compose(|ctx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::layout::components::Row::new().build(ctx, |ctx| {
-                        crate::layout::lazy_column::LazyColumn::new()
+                        crate::layout::lazy::LazyColumn::new()
                             .state(list_state.clone())
                             .modifier(Modifier::new().fill_max_height().layout_weight(1.0))
                             .items_plain(30, |ctx, _i| {
@@ -278,7 +278,7 @@
     fn lazy_reverse_mirror() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::layout::lazy_column::LazyListState;
+        use crate::layout::lazy::LazyListState;
         use crate::theme::{ThemeColors, WiniaTheme};
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -292,7 +292,7 @@
             composer.compose(|ctx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::layout::components::Row::new().build(ctx, |ctx| {
-                        crate::layout::lazy_column::LazyColumn::new()
+                        crate::layout::lazy::LazyColumn::new()
                             .state(list_state.clone())
                             .reverse_layout(true)
                             .modifier(Modifier::new().fill_max_height().layout_weight(1.0))
@@ -336,7 +336,7 @@
             composer.compose(|ctx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::layout::components::Row::new().build(ctx, |ctx| {
-                        crate::layout::lazy_column::LazyColumn::new()
+                        crate::layout::lazy::LazyColumn::new()
                             .state(list_state.clone())
                             .modifier(Modifier::new().fill_max_height().layout_weight(1.0))
                             .items_plain(30, |ctx, _i| {
@@ -390,7 +390,7 @@
     fn horizontal_lazy_scrollbar_follows_lazy_list_state() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::layout::lazy_column::LazyListState;
+        use crate::layout::lazy::LazyListState;
         use crate::theme::{ThemeColors, WiniaTheme};
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -401,7 +401,7 @@
             composer.compose(|ctx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::layout::components::Column::new().build(ctx, |ctx| {
-                        crate::layout::lazy_column::LazyRow::new()
+                        crate::layout::lazy::LazyRow::new()
                             .state(list_state.clone())
                             .modifier(Modifier::new().fill_max_width().layout_weight(1.0))
                             .items_plain(20, |ctx, _i| {
@@ -452,7 +452,7 @@
     fn horizontal_lazy_reverse_mirror() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::layout::lazy_column::LazyListState;
+        use crate::layout::lazy::LazyListState;
         use crate::theme::{ThemeColors, WiniaTheme};
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -468,7 +468,7 @@
             composer.compose(|ctx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::layout::components::Column::new().build(ctx, |ctx| {
-                        let mut row = crate::layout::lazy_column::LazyRow::new()
+                        let mut row = crate::layout::lazy::LazyRow::new()
                             .state(list_state.clone());
                         if reverse_list {
                             row = row.reverse_layout(true);

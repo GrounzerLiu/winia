@@ -302,7 +302,7 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 ## 八、附：`animate_scroll_to_item_animates_offset` flaky 根因（分支外，记录）
 
 - 现象：全量跑时偶发 `23980 vs 23966`（差 13px，阈值 5px），单跑必过。
-- 根因：`step_animations_until_done`（`lazy_column.rs:1630`）用
+- 根因：`step_animations_until_done`（`layout/lazy/tests.rs`）用
   `sleep(20ms)` + `(v-last)<0.5 && frames>5` 判收敛——spring 尾段每帧位移
   <0.5 即停，残余 13px 未收完就 assert。机器负载高时帧间隔抖动，
   收敛判据提前触发。
@@ -311,7 +311,7 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
   helper——调用方持 TEST_SERIAL（串行下 `has_animation_for_state` 无空窗误判），
   以"动画表排空 + 距目标 <5px"双条件收敛（与最终断言同阈）；`animate_scroll_to_item`
   用例切到该 helper。判据间隙：引擎 done 阈 0.01 vs 旧位移判据 0.5（50 倍），
-  尾段提前触发是必然的。验证：单跑 10/10 + `lazy_column` 模块 28/28 +
+  尾段提前触发是必然的。验证：单跑 10/10 + `lazy` 模块 28/28 +
   全量 730/730（`--test-threads=1`）。
 
 ## 七、提交历史（分支 `exp/modifier-node`，已删，内容全合入 v2）

@@ -59,7 +59,7 @@ empty `remember` slots. That is what `remember_saveable` fixes — see [saveable
 
 ### 3. The scroll-container family
 
-`winia/src/layout/` contains `lazy_column.rs` and nothing else in that family.
+`winia/src/layout/` contains `lazy.rs` and nothing else in that family.
 
 | Missing | Compose equivalent | Consequence |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ unblock whole categories of screens.
 ## Re-checking this document
 
 ```bash
-ls winia/src/layout | grep -i 'lazy\|grid\|pager'      # scroll containers: only lazy_column today
+ls winia/src/layout | grep -i 'lazy\|grid\|pager'      # scroll containers: only lazy today
 grep -rln 'AnchoredDraggableState' winia/src            # the shared drag state machine (exists)
 grep -rln 'CompositionLocal' winia/src | wc -l           # exists
 grep -rn 'MutableSnapshot' winia/src                     # records: expect nothing

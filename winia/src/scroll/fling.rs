@@ -17,7 +17,7 @@
 
 use crate::animation::{DecaySpec, SpringSpec};
 
-/// The friction every fling in this tree decays with: the scroll state, `lazy_column.rs` and
+/// The friction every fling in this tree decays with: the scroll state, `layout/lazy/list.rs` and
 /// `top_app_bar.rs` all pass 4.2 to `exponential_decay`. The built-in strategy estimates "how many
 /// pages would this flick carry" from the same number, so the estimate and the motion cannot disagree.
 pub(crate) const FLING_FRICTION: f32 = 4.2;

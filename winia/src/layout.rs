@@ -17,7 +17,11 @@ pub(crate) mod container;
 pub mod components;
 pub mod spacer;
 pub mod box_with_constraints;
-pub mod lazy_column;
+/// The lazy lists — `LazyColumn` AND `LazyRow`, which share one axis-generic core.
+pub mod lazy;
+/// The module used to be named `lazy_column`, before `LazyRow` moved in beside it. Kept as an alias
+/// so the old `winia::layout::lazy_column::…` paths keep resolving.
+pub use lazy as lazy_column;
 pub mod adaptive;
 pub mod subcompose;
 pub mod node;
@@ -40,7 +44,7 @@ pub use box_layout::Stack;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
-pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
+pub use lazy::{ItemHeightCache, LazyColumn, LazyList, LazyListState, LazyRow};
 pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
 pub use node::*;
 pub use relocation::BringIntoViewRequester;

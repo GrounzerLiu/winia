@@ -508,7 +508,7 @@ fn scrollbar_build_shared(
 /// 语义镜像（offset 0 = 内容末端），scrollbar 几何/拖拽用同一镜像坐标
 /// `visual = max - scroll`。`None` 与 `Some(false)` 等价（都直用）。
 pub struct LazyScrollbar {
-    state: crate::layout::lazy_column::LazyListState,
+    state: crate::layout::lazy::LazyListState,
     modifier: Modifier,
     thickness: f32,
     thumb_color: Option<Color>,
@@ -519,7 +519,7 @@ pub struct LazyScrollbar {
 }
 
 impl LazyScrollbar {
-    pub fn new(state: crate::layout::lazy_column::LazyListState) -> Self {
+    pub fn new(state: crate::layout::lazy::LazyListState) -> Self {
         Self {
             state,
             modifier: Modifier::new(),
@@ -599,7 +599,7 @@ impl LazyScrollbar {
 /// HorizontalLazyScrollbar::new(list_state).build(ctx);
 /// ```
 pub struct HorizontalLazyScrollbar {
-    state: crate::layout::lazy_column::LazyListState,
+    state: crate::layout::lazy::LazyListState,
     modifier: Modifier,
     thickness: f32,
     thumb_color: Option<Color>,
@@ -610,7 +610,7 @@ pub struct HorizontalLazyScrollbar {
 }
 
 impl HorizontalLazyScrollbar {
-    pub fn new(state: crate::layout::lazy_column::LazyListState) -> Self {
+    pub fn new(state: crate::layout::lazy::LazyListState) -> Self {
         Self {
             state,
             modifier: Modifier::new(),

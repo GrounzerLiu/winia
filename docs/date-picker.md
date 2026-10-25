@@ -332,7 +332,7 @@ the theme.
 
 One deviation that used to be recorded here was **wrong** and is gone: this file claimed winia composes one
 month at a time because "winia has no lazy row", with the arrows stepping the month directly. winia has had
-`LazyRow` (`LazyList<HorizontalAxis>`, `ui/lazy_column.rs`) all along. Both pickers now compose material3's
+`LazyRow` (`LazyList<HorizontalAxis>`, `layout/lazy.rs`) all along. Both pickers now compose material3's
 shape — a paged `LazyRow` over every month in the year range, with the arrows animating the list rather than
 writing the month — see "Swiping between months".
 

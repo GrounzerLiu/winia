@@ -190,4 +190,4 @@ notch before any of them pages; a notch drops travel a touchpad banked; a revers
 start the bank over; one oversized event turns one page and carries nothing; two containers never
 share one gesture's travel; a vertical wheel reaches a horizontal PAGER but not a plain row; a
 banking event is held rather than pixel-scrolled.
-`cargo test -p winia --lib layout::lazy_column` - the list underneath (window, snapping, anchors).
+`cargo test -p winia --lib layout::lazy` - the list underneath (window, snapping, anchors).

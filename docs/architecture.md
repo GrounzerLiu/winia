@@ -140,7 +140,7 @@ with it, which places five things worse than it fixes one. The edge is deliberat
 | module | production lines | holds |
 | --- | --- | --- |
 | `runtime/` | 7 submodules | `composer.rs` (7.0k), `materialize.rs`, `state.rs`, `composition_local.rs`, `state_list.rs`, `density.rs`, `lifecycle.rs` |
-| `layout/` | 15 submodules | `node.rs` (the arena), `constraints.rs`, `flex.rs` + `column.rs`/`row.rs`/`flow.rs`, `lazy_column.rs`, `components.rs` (`Column`/`Row`/`Stack`/`Spacer`/`Flow*`), `subcompose.rs`, `box_with_constraints.rs`, `adaptive.rs`, `axis.rs`, `direction.rs`, `sizing.rs` |
+| `layout/` | 15 submodules | `node.rs` (the arena), `constraints.rs`, `flex.rs` + `column.rs`/`row.rs`/`flow.rs`, `lazy.rs` (LazyColumn/LazyRow), `components.rs` (`Column`/`Row`/`Stack`/`Spacer`/`Flow*`), `subcompose.rs`, `box_with_constraints.rs`, `adaptive.rs`, `axis.rs`, `direction.rs`, `sizing.rs` |
 | `components/` | 51 files, flat | one file per component (`button.rs`, `text_field.rs`, `date_picker.rs`, …) plus `components.rs`, the facade |
 | `modifier.rs` | 3.0k | `Modifier`, `ModifierElement`, the node traits |
 | `render.rs` | 2.3k | the arena walk, layers, clips, per-element painting |

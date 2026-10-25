@@ -30,7 +30,7 @@ use crate::components::button::Button;
 use crate::components::divider::Divider;
 use crate::components::icon::Icon;
 use crate::components::icon_button::{IconButton, IconButtonSize};
-use crate::layout::lazy_column::{LazyColumn, LazyListState, LazyRow};
+use crate::layout::lazy::{LazyColumn, LazyListState, LazyRow};
 use crate::layout::components::{Column, Row, Spacer, Stack};
 use crate::components::dropdown_menu::ExposedDropdownMenuDefaults;
 use crate::components::scrollbar::LazyScrollbar;

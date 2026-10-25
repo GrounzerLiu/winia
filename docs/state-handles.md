@@ -120,7 +120,7 @@ Counts from `grep -E "\.set_silent\(|\.set_no_wake\(|\.set_visual\(|\.update\("`
 from production but listed for migration):
 
 - `set_silent` ×45 — `composer.rs` ×7 (slot restore sync), `nav.rs` ×10
-  (progress/spec staging, seq counters), `lazy_column.rs` ×5 (content height,
+  (progress/spec staging, seq counters), `lazy/list.rs` ×5 (content height,
   fling limits, caches), `app.rs` ×4 (window size ×2, overlay progress ×2),
   `tab_row.rs` ×4 (indicator offsets), `progress_indicator.rs` ×4 (test pose
   staging), `scrollbar.rs` ×3 (frame baselines, grab offset), `slider.rs` ×3
@@ -263,7 +263,7 @@ Pick the spelling that matches the semantics you want:
 `bfc1c17` converted nine sites of the first shape (`effect.rs`, `nav.rs`,
 `ui/date_picker.rs`) and its message claimed nothing else was affected. A review
 of that commit found eight more it had missed; `f029a33` converted them — five in
-`LazyList::build` (`ui/lazy_column.rs`: the item height cache, the viewport
+`LazyList::build` (`layout/lazy/list.rs`: the item height cache, the viewport
 height, the data signature, and the two write-back slots) and three under
 `winia/examples/`. Two of the five turned out to be row 2 rather than row 1:
 `content_height` and `fling_limit` became `remember_backchannel(|| …)`, because a

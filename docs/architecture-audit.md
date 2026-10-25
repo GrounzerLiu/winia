@@ -206,11 +206,11 @@ Phase 2.3 checklist 第 3 项同步关闭（见 §11）。
 
 ### 4.1 同数量数据变化会复用错误高度
 
-位置：winia/src/layout/lazy_column.rs:494-516、winia/src/layout/lazy_column.rs:603-617。ItemHeightCache 按 index 存储高度，last_known_first_key 只有 total_changed 时才校正。同 total 的替换、重排或 key 内容变化会保留旧高度，导致 prefix_height、visible_range 和 first-visible 错误。
+位置：winia/src/layout/lazy.rs:494-516、winia/src/layout/lazy.rs:603-617。ItemHeightCache 按 index 存储高度，last_known_first_key 只有 total_changed 时才校正。同 total 的替换、重排或 key 内容变化会保留旧高度，导致 prefix_height、visible_range 和 first-visible 错误。
 
 ### 4.2 measure 校正可能没有触发下一轮组合
 
-位置：winia/src/layout/lazy_column.rs:693-769、winia/src/layout/lazy_column.rs:847-908。组合期按预估高度注册窗口，测量期写回真实高度。如果 first_visible_index/offset 数值未变但 end 窗口发生变化，可能不会 Enter 组合新 item。
+位置：winia/src/layout/lazy.rs:693-769、winia/src/layout/lazy.rs:847-908。组合期按预估高度注册窗口，测量期写回真实高度。如果 first_visible_index/offset 数值未变但 end 窗口发生变化，可能不会 Enter 组合新 item。
 
 ### 4.3 reverse LazyList 首帧 content height 过期
 
@@ -489,13 +489,13 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **验证**：新增单元测试 `height_cache_keyed_rebase_follows_identity`（前插 1 项后 key=2→index 3、key=5→index 6 高度迁移正确；新项走预估；旧 index 不残留；数据变短清越界 + 清消失 key）；既有 lazy 测试 27 项全通过；完整 `cargo test -p winia --lib` 634 项通过。另用 debug-server 交互验证 demo `winia/examples/hc_verify_demo.rs`：100 项（48/96 混合高，key=id）滚动到项 50 → 连续前部插入 10 项三次，`firstVisible` 精确 50→60→70→80、`offset` 3216→3696→4176→4656（每次 +480 = 10×48），可见项始终保持 Item 50 在视口——高度缓存与滚动位置按 key 精确跟随。
 
-   **涉及文件**：`winia/src/layout/lazy_column.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
+   **涉及文件**：`winia/src/layout/lazy.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
 
 2. [x] 为 measure/build convergence 增加显式的窗口变化重组通道（方向一——build 感知真实视口，跨帧收敛；已在 `lazy-convergence` 分支实施）
 
-   **目标**：`LazyColumn/LazyRow` build 此前用固定 `viewport_h = 2000.0` 估算可见范围（`lazy_column.rs` 组合期），不感知真实视口。窗口 resize 放大超过 2000px 时，build 组合不足 → 底部可见项不被组合 → 渲染空白（**实测确认**：跨帧测试视口 400→2500，底部 `covered=false`）。
+   **目标**：`LazyColumn/LazyRow` build 此前用固定 `viewport_h = 2000.0` 估算可见范围（`lazy.rs` 组合期），不感知真实视口。窗口 resize 放大超过 2000px 时，build 组合不足 → 底部可见项不被组合 → 渲染空白（**实测确认**：跨帧测试视口 400→2500，底部 `covered=false`）。
 
-   **根因**：winia 命令式组合架构——build 立即注册节点，**无 Compose 的 LazyLayout 测量期组合**（`lazy_column.rs:14-15` 作者已注明差异）。measure 只放置 build 已注册的项，不能新增，故 build 必须感知真实视口才能组合足够项。
+   **根因**：winia 命令式组合架构——build 立即注册节点，**无 Compose 的 LazyLayout 测量期组合**（`lazy.rs:14-15` 作者已注明差异）。measure 只放置 build 已注册的项，不能新增，故 build 必须感知真实视口才能组合足够项。
 
    **方案（方向一）**：
    - build 读 `viewport` State（上一帧 measure 写回的真实视口）替代固定 2000：`let viewport_h = viewport.get().max(1.0)`。
@@ -507,7 +507,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **局限（后续轮已收敛）**：跨帧收敛那至多 1 帧的可见项不足（resize 放大瞬间）已关闭——measure 发现窗口不足时请求本帧再组合，帧处理循环消费该请求（验证见下面第 5 项）。与 Compose 仍未对齐的是**机制**而非**结果**：Compose 在测量期组合窗口（`SubcomposeLayout`），从不组合错窗口；winia 按上一帧视口组合，测出不足时本帧收敛，代价是那些帧多一轮 compose+layout。
 
-   **涉及文件**：`winia/src/layout/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
+   **涉及文件**：`winia/src/layout/lazy.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
 
 3. [x] 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照（已实施）
 
@@ -544,7 +544,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **目标**：第 2 项留下"resize 放大那一帧底部空、下一帧才补上"。本轮把这一帧关掉，并用测试锁死两个方向。
 
-   **根因（代码层面）**：`build` 用上一帧 measure 写回的视口算窗口（`lazy_column.rs` 组合期），而本帧 measure 才知道真实视口。窗口不足的项从未被组合，measure 只能放置已注册项、无法新增——所以唯一的出路是**本帧再组合一次**。
+   **根因（代码层面）**：`build` 用上一帧 measure 写回的视口算窗口（`lazy.rs` 组合期），而本帧 measure 才知道真实视口。窗口不足的项从未被组合，measure 只能放置已注册项、无法新增——所以唯一的出路是**本帧再组合一次**。
 
    **方案**：measure 写回高度缓存后，用刚解析出的锚点与真实视口算"需要覆盖的范围"，与自己拿到的窗口（`globals` 的 min/max）比较；不足则 `composer::request_compose_after_layout()`。`PerWindow::recompose_layout_render` 在首轮 layout 后循环消费该请求（上限 8 轮），请求在每帧开头清一次（避免上限残留让下一帧白跑一轮）。顶层弹出层（dialog/popup，各自独立 Composer）在 `layout_overlays` 里按同一契约收敛——每个 overlay 在自己 layout 之后立刻消费请求，这正是把它限定在"自己这棵树"上的方式。
 
@@ -556,7 +556,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **与 Compose 的差异（记录）**：本轮**没有**扩展 `subcompose`。实测设计核查的三条结构事实使其无法承载 `LazyLayout` 的"测量期组合"：①一次 measure 只能 park 一个槽且只有最后一个被采纳；②策略只拿到 `size()`，拿不到可自己 measure/place 的一组 placeable；③采纳发生在整棵树测完之后，策略在自己的 measure 里看不到也放不了它。另有语义代价：把 item 组合搬进 subcomposition 会让 item 的状态读取登记在内层 composer 上（历史一轮试过把内层读取改记到外层槽 key，结果打断长按测试后回退）。故 winia 走"本帧收敛"而不是"测量期组合"，结果一致、机制不同、代价明确（仅不足的帧多一轮）。
 
-   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛 + 逐帧轮数发布）、`winia/src/debug.rs`（`fp`/`fpc`）、`winia/src/layout/lazy_column.rs`（窗口不足判定 + 2 条测试）、`winia/tests/ui_fixtures/fixture_lazy_resize.rs`（新场景）、`winia/tests/ui_test.rs`（app 路径测试）
+   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛 + 逐帧轮数发布）、`winia/src/debug.rs`（`fp`/`fpc`）、`winia/src/layout/lazy.rs`（窗口不足判定 + 2 条测试）、`winia/tests/ui_fixtures/fixture_lazy_resize.rs`（新场景）、`winia/tests/ui_test.rs`（app 路径测试）
 
 ### Phase 4：窗口平台与 E2E
 

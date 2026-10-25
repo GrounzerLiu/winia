@@ -167,7 +167,7 @@ pub fn build(self, ctx: &mut ComposeCtx) {
   - `scene_strategy_chain_priority_and_fallback`（自定义 Scene/策略链优先级 + SinglePane 兜底）
   - `scene_strategy_switch_converges`（策略链切换：entries 未变 → 瞬时切（防 dup-key），可反复切换无冻结）
   - `dialog_entry_renders_as_overlay`（as_dialog 标记：主树不渲染 dialog 内容、base 恒定、pop 生命周期）
-- 完整 `cargo test -p winia --lib` 657 项通过（animated_size / lazy_column 等时序敏感 flaky 与 nav 无关）
+- 完整 `cargo test -p winia --lib` 657 项通过（animated_size / lazy 等时序敏感 flaky 与 nav 无关）
 - 真实 demo（`examples/nav_demo.rs`，debug-server 实操）：
   - Home → 点「打开 Detail 42」→ `[Home, Detail(42)]` + Detail 页面 ✓
   - Detail → 点「返回」→ `[Home]` + Home 页面 ✓

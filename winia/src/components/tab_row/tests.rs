@@ -699,7 +699,7 @@
         // 动画推进：selected 0→1 → 步进 update_animations → offset 单调变化并收敛到新 target
         use crate::runtime::state::State;
         use std::time::{Duration, Instant};
-        // 动画注册表全局共享——持串行锁防并行 clear/竞态（与 lazy_column/animated_size 同）
+        // 动画注册表全局共享——持串行锁防并行 clear/竞态（与 lazy/animated_size 同）
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
         fn make_scene(

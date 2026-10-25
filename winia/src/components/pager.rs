@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 
 use crate::composable;
 use crate::layout::axis::{HorizontalAxis, VerticalAxis};
-use crate::layout::lazy_column::{LazyAxis, LazyList, LazyListState};
+use crate::layout::lazy::{LazyAxis, LazyList, LazyListState};
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
