@@ -281,6 +281,80 @@
         clusters
     }
 
+    /// `Modifier::padding` on the list itself deflates the VIEWPORT (the padding is outside the
+    /// lazy node, Compose's rule), while the items are shifted into the padded area by the engine.
+    /// The node still fills its slot exactly: the viewport is the inner size, and the padding is
+    /// added on top of it — not the other way round.
+    #[test]
+    fn a_lazy_column_with_modifier_padding_measures_the_deflated_viewport() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .modifier(Modifier::new().padding(10.0))
+                .items(
+                    6,
+                    |i| i as u64,
+                    |ctx, i| {
+                        crate::components::Text::new(format!("Item {i}"))
+                            .modifier(Modifier::new().size(50.0, 40.0))
+                            .build(ctx);
+                    },
+                )
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let nodes = composer.arena_nodes();
+        assert_eq!(
+            nodes[root].measured_size,
+            crate::unit::Size::new(200.0, 200.0),
+            "the node fills its 200 dp slot: viewport 180 + padding 20"
+        );
+        let first = nodes[root].children[0];
+        assert_eq!(
+            nodes[first].position,
+            crate::unit::Offset::new(10.0, 10.0),
+            "and the items start inside the padding"
+        );
+    }
+
+    /// Modifier padding and `contentPadding` are different things and ADD UP: the modifier
+    /// padding deflates the viewport, the content padding insets the items inside it (Compose's
+    /// rule). A list with both starts its first item at modifier + content padding.
+    #[test]
+    fn modifier_padding_and_content_padding_add_up() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .content_padding(6.0, 4.0)
+                .modifier(Modifier::new().padding(10.0))
+                .items(
+                    4,
+                    |i| i as u64,
+                    |ctx, i| {
+                        crate::components::Text::new(format!("Item {i}"))
+                            .modifier(Modifier::new().size(50.0, 40.0))
+                            .build(ctx);
+                    },
+                )
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].measured_size, crate::unit::Size::new(200.0, 200.0));
+        let first = nodes[root].children[0];
+        assert_eq!(
+            nodes[first].position,
+            crate::unit::Offset::new(10.0, 16.0),
+            "10 dp of modifier padding plus 6 dp of content padding"
+        );
+    }
+
     #[test]
     fn lazy_renders_only_visible_items() {
         // 1000 项列表：只渲染视口内的 ~12 项（600px / 40px），而非全部
