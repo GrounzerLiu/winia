@@ -439,6 +439,53 @@
         );
     }
 
+    /// `wrapContentWidth` outside `aspectRatio`: the wrap node relaxes the incoming minimum
+    /// for the aspect node inside it, which then derives from the relaxed range; the wrap node
+    /// reports the content coerced back into the incoming range (`Size.kt:1029-1061`).
+    #[test]
+    fn wrap_content_outside_an_aspect_ratio_relaxes_then_restores_the_range() {
+        let m = Modifier::new()
+            .wrap_content_width(Alignment::Start, false)
+            .aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (300.0, 150.0));
+    }
+
+    /// `aspectRatio` outside `wrapContentWidth`: the aspect node fixes the range first, so the
+    /// wrap node's recorded range is that fixed one; its relaxed measurement lets the content be
+    /// smaller, and the wrapper puts the node back at the aspect size, centring the content.
+    #[test]
+    fn an_aspect_ratio_outside_wrap_content_keeps_its_box_and_centres_the_content() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Stack::new()
+                .modifier(
+                    Modifier::new()
+                        .aspect_ratio(2.0, false)
+                        .wrap_content_width(Alignment::Center, false),
+                )
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("content")
+                        .modifier(Modifier::new().size(100.0, 50.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(300.0, 150.0),
+            "the aspect box survives the wrap"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]].position.x,
+            100.0,
+            "and the 100 dp content is centred inside the 300 dp box"
+        );
+    }
+
     /// The UNENFORCED pass: when no candidate satisfies the range, Compose still returns one
     /// ("the constraints will not be respected", `AspectRatio.kt:43-47`). winia then CLAMPS it
     /// (the derivation feeds `Constraints::fixed`, where Compose has an extra node), so the

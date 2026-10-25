@@ -54,6 +54,13 @@
 - `BoxWithConstraints` is winia's `Stack` plus a subcomposition; Compose runs the Box policy over
   the subcomposed measurables, winia wraps the content in a real Box node (one extra node, and
   multi-root content is sized by its widest root).
+- CHAIN ORDER for `padding`: winia subtracts the whole chain's padding AFTER the size walk
+  (`measure_node_inner` offsets the final constraints), while Compose's padding node deflates at its
+  position. `.padding(8).aspect_ratio(2.0)` over a 0..300 axis therefore derives 300x150 and puts
+  the content in 284x134, where Compose derives 284x142 and reports 300x158. The difference is the
+  padding on the derived axis, and it is pre-existing for EVERY size step, not just the aspect one —
+  fixing it means padding becomes a step in the walk, which changes the semantics of every padded
+  node, so it is documented rather than patched here.
 - the two growth steps interact with a match-parent child differently, and both match Compose.
   `aspect_ratio` moved into the size walk (`SizeStep::AspectRatio`): the constraints are fixed to
   the derived size before the policy, as Compose's `AspectRatioNode` does, so the content — and a
