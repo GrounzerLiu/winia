@@ -1,31 +1,33 @@
 use super::*;
 
-/// Lazy 列表滚动状态（winia 像素模型 + 派生锚点）
+/// A lazy list's scroll state: winia's pixel model with Compose's anchor model on top.
 ///
-/// 滚动输入走 winia 现有通道：`ScrollState.offset`（像素总偏移，挂 vertical_scroll）。
-/// `first_visible_index/offset` 是派生锚点（对齐 Compose 的锚点模型语义，供外部读取）；
-/// `last_known_first_key` 记录第一个可见项 key——数据前部增删后按 key 校正偏移。
+/// Scrolling goes through the existing channel — `ScrollState.offset` (a total pixel offset, attached
+/// with `vertical_scroll`/`horizontal_scroll`). `first_visible_index` / `first_visible_offset` are the
+/// DERIVED anchor (Compose's semantics, exposed for callers), and `last_known_first_key` remembers the
+/// first visible item's key, so inserting or removing items at the head can correct the offset by key.
 #[derive(Debug, Clone)]
 pub struct LazyListState {
-    /// 像素滚动偏移（挂 vertical_scroll modifier——滚动输入通道）
+    /// The pixel scroll offset (attached with the scroll modifier — the input channel).
     pub offset: crate::runtime::state::State<f32>,
-    /// 最近已知的第一个可见项 key（数据变化后按 key 校正位置）
+    /// The last known key of the first visible item (a data change corrects the position by it).
     pub(crate) last_known_first_key: crate::runtime::state::State<Option<u64>>,
-    /// 上次 build 见到的 total——**状态级**守卫（非组合级 remember）：
-    /// 外部持有 state 跨 Composer 复用时，组合级 remember 会每帧误触发 key 校正
-    /// （实测：第二次 render 把 offset=2000 拉回 0）。放这里与 LazyListState
-    /// 同生命周期，只有数据真的变化（total 变）才校正。
+    /// The total the last `build` saw — a STATE-level guard, deliberately not a composition remember:
+    /// when a caller holds the state across composers, a remembered flag fired the key correction every
+    /// frame (measured: the second render pulled offset 2000 back to 0). Living here it shares
+    /// `LazyListState`'s lifetime, so only a real data change (a different total) corrects.
     pub(crate) known_total: crate::runtime::state::State<usize>,
-    /// 程序化跳转请求 (index, offset-in-item, animate)——锚点权威（对齐 Compose
-    /// `requestPositionAndForgetLastKnownKey`：scroll position 就是锚点，
-    /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
-    /// 首次测量消费后清空。animate = 动画滚动（spring，对齐 animateScrollToItem）。
+    /// A programmatic jump request, `(index, offset-in-item, animate)`. The anchor is authoritative
+    /// (Compose's `requestPositionAndForgetLastKnownKey`: the scroll position IS the anchor, composition
+    /// starts there, and the pixel offset is derived from the cache during measure — never the other way
+    /// round). Consumed and cleared by the first measure; `animate` selects a spring
+    /// (`animateScrollToItem`).
     pub(crate) jump_request: crate::runtime::state::State<Option<(usize, f32, bool)>>,
     /// How far a fling may travel: written back during measure as `content height - viewport height`,
     /// or `f32::MAX` while that is still unknown. A REAL `0` means the content fits and the list cannot
     /// move — see `ScrollState::fling_limit`, which had the same "0 means unknown" conflation.
     ///
-    /// 同 crate 的 scrollbar.rs 可见（scrollbar 侧读，content = limit + viewport）。
+    /// Visible to `components::scrollbar`, which reads it as `content = limit + viewport`.
     pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
     /// The viewport's main-axis size from the last measure: what a pager needs to turn a pixel offset
     /// into a page fraction. `0.0` until the first measure.
@@ -34,10 +36,10 @@ pub struct LazyListState {
     /// pager's own build does not run again just because the viewport appeared - a derived value that
     /// reads this has to be woken by the write.
     pub(crate) viewport_main: crate::runtime::state::State<f32>,
-    /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
-    /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
-    /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
-    /// 的 scrollbar.rs 可见）。
+    /// The scroll-activity pulse (lights a boundary scrollbar; same semantics as
+    /// `ScrollState::scroll_pulse`). A lazy list assembles its `ScrollState` during `build` from three
+    /// clones (`offset`, `is_scrolling`, `fling_limit`), so the pulse has to live HERE to stay stable
+    /// across frames; the assembled state clones it. Visible to `components::scrollbar`.
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`. This is
     /// not a flag of its own: `build` hands this same state to the `ScrollState` the list assembles as
@@ -56,9 +58,9 @@ pub struct LazyListState {
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     /// Per-item placement/fade animations (keyed by item key), shared with the measure policy.
     pub(crate) item_animations: crate::layout::item_animation::ItemAnimationHost,
-    /// 派生：第一个可见项索引（每次 build 后更新）
+    /// Derived: the first visible item's index (updated after every `build`).
     pub first_visible_index: crate::runtime::state::State<usize>,
-    /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
+    /// Derived: the first visible item's offset (positive = how far it has scrolled out).
     pub first_visible_offset: crate::runtime::state::State<f32>,
 }
 
@@ -81,10 +83,10 @@ impl LazyListState {
         }
     }
 
-    /// 当前第一个可见项索引
+    /// The first visible item's index.
     pub fn first_visible(&self) -> usize { self.first_visible_index.get() }
 
-    /// 当前第一个可见项偏移
+    /// The first visible item's offset (positive = scrolled out).
     pub fn offset(&self) -> f32 { self.offset.get() }
 
     /// How far the first visible item has been scrolled past, in pixels (`0.0` = its leading edge is
@@ -143,21 +145,23 @@ impl LazyListState {
     /// callers use to stay off a list that is already moving.
     pub fn is_scrolling(&self) -> bool { self.is_scrolling.get() }
 
-    /// 立即滚动到指定索引（项顶部对齐视口顶部，可带偏移）。
+    /// Jump to an index immediately (the item's top aligns with the viewport top, plus an offset).
     ///
-    /// 签名对齐 Compose `scrollToItem(index, scrollOffset = 0)`：不需要高度
-    /// 缓存/间距——跳转请求由测量期消费：先按锚点组合窗口，再用写回后的高度
-    /// 缓存推导像素 offset（与放置/锚点解析共用同一 prefix 函数，round-trip
-    /// 精确——不会出现预估 48 vs 实测 47.5 的累积偏差导致落点漂移）。
-    /// 越界 clamp 在 measure 期（本方法不知道 total）。
+    /// The signature matches Compose's `scrollToItem(index, scrollOffset = 0)`: no height cache and no
+    /// spacing are needed here, because the measure pass consumes the request — it composes the window
+    /// from the anchor first, then derives the pixel offset from the written-back heights (the same
+    /// `prefix_height` the placement and the anchor resolution use, so a round trip is exact: no
+    /// estimate-vs-measured drift of 48 against 47.5 moving the landing point). An out-of-range target is
+    /// clamped during the measure; this method does not know the total.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
         self.jump_request.set(Some((index, scroll_offset, false)));
     }
 
-    /// 动画滚动到指定索引（对齐 Compose `animateScrollToItem(index, scrollOffset)`）。
-    /// 与 `scroll_to_item` 同一锚点权威：请求由测量期消费并推导像素目标，
-    /// 用 Spring 动画（默认阻尼 1.0 / 刚度 200，收敛 ~300-400ms）从当前 offset
-    /// 平滑滚动到目标；目标 clamp 到 [0, max_offset]。
+    /// Animate a scroll to an index (Compose's `animateScrollToItem(index, scrollOffset)`).
+    ///
+    /// Same anchor authority as [`LazyListState::scroll_to_item`]: the measure pass consumes the request
+    /// and derives the pixel target, and a spring (default damping 1.0, stiffness 200 — settles in about
+    /// 300-400 ms) moves the offset there. The target is clamped into `[0, max_offset]`.
     pub fn animate_scroll_to_item(&self, index: usize, scroll_offset: f32) {
         self.jump_request.set(Some((index, scroll_offset, true)));
     }

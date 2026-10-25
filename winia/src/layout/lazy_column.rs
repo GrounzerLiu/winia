@@ -1,18 +1,29 @@
-//! LazyColumn / LazyRow 组件 — 对标 Compose foundation lazy `LazyColumn` / `LazyRow`
+//! `LazyColumn` / `LazyRow` — Compose foundation's lazy lists, on one axis-generic core.
 //!
-//! 核心机制（对齐 Compose lazy 架构）：
-//! - **锚点滚动模型**：`LazyListState.first_visible_index + first_visible_offset`
-//!   而非像素 offset——滚动位置由"第一个可见项的索引 + 其偏移"表达；
-//! - **稳定 key**：`items()` 接受 `key` 工厂（数据 id 等稳定值）。插入/删除
-//!   列表前部项后，按 key 找回原 firstVisibleItem 保持滚动位置（Compose
-//!   `LazyListScrollPosition.updateScrollPositionIfTheFirstItemWasMoved` 语义）；
-//! - **区间内容**：`item/items` 注册为 IntervalList（count + key 工厂 + content
-//!   闭包），全局 index 经区间定位转局部 index（Compose `LazyListIntervalContent`）；
-//! - **懒测量**：组合期按高度缓存预估可见范围 [start, end]，只注册/组合可见项；
-//!   测量期真实排布并把高度写回缓存（未缓存项用默认高度预估，偏差触发补注册）。
+//! Both are the SAME type over a different axis marker: `LazyColumn = LazyList<VerticalAxis>` and
+//! `LazyRow = LazyList<HorizontalAxis>` (`list.rs`), with the axis differences confined to
+//! [`LazyAxis`]. Everything below therefore holds for either axis.
 //!
-//! ⚠ 与 Compose 差异：winia 组合为命令式（build 直接注册节点），无 Compose 的
-//! LazyLayout 测量期组合——这里用"组合期预估 + 测量期校正"两阶段模型。
+//! Core mechanisms, aligned with Compose's lazy architecture:
+//!
+//! - **Anchor scroll model**: `LazyListState.first_visible_index + first_visible_offset`, not a raw
+//!   pixel offset — the scroll position is "which item is first visible, and by how much" (Compose
+//!   `LazyListScrollPosition`).
+//! - **Stable keys**: `items()` takes a `key` factory (a data id, or any stable value). After items
+//!   are inserted or removed at the head of the list, the key finds the original first visible item
+//!   again so the viewport does not jump (Compose's
+//!   `updateScrollPositionIfTheFirstItemWasMoved`).
+//! - **Interval content**: `item`/`items` register as an `IntervalList` (count + key factory +
+//!   content closure); a global index resolves to a (section, local index) pair — Compose's
+//!   `LazyListIntervalContent`.
+//! - **Lazy measurement**: composition estimates the visible range `[start, end]` from the height
+//!   cache and registers only those items; measurement places them for real and writes the measured
+//!   sizes back into the cache (uncached items are priced with the default estimate, and a large
+//!   enough deviation asks for another compose).
+//!
+//! ⚠ Difference from Compose: winia's composition is imperative (`build` registers nodes directly)
+//! and has no `LazyLayout` measure-time composition. The model here is two-phase — estimate during
+//! compose, correct during measure (`docs/lazy-column.md` §2.9).
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
@@ -22,9 +33,11 @@ use crate::modifier::Modifier;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// 未测量项的预估高度（首次进入视口时用，测量后写回缓存）
+/// The size an unmeasured item is priced at when it first enters the viewport; the measured size is
+/// written back to the cache and used from then on.
 pub const LAZY_ITEM_ESTIMATED_HEIGHT: f32 = 48.0;
-/// 超出视口后仍注册的额外项数（上下各预取，减少滚动时补注册抖动）
+/// How many items beyond the viewport stay registered on each side (Compose's
+/// `beyondViewportPageCount`) — prefetching them keeps scrolling from constantly re-registering.
 pub const LAZY_BEYOND_BOUNDS: usize = 4;
 
 /// The lazy list's main axis. Sealed, like [`Axis`](super::axis::Axis): the two markers it carries are
@@ -47,7 +60,7 @@ pub trait LazyAxis: super::axis::Axis {
     /// viewport, which is what makes a snap position an item boundary.
     #[doc(hidden)]
     fn with_main_exact(c: Constraints, v: f32) -> Constraints;
-    /// The scroll modifier, per axis (vertical / horizontal)
+    /// The scroll modifier for this axis — `vertical_scroll` or `horizontal_scroll`.
     #[doc(hidden)]
     fn scroll(state: crate::modifier::ScrollState) -> Modifier;
     /// Whether this axis scrolls vertically — the direction an item's placement animates in.

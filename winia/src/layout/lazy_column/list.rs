@@ -54,7 +54,7 @@ pub struct LazyList<A: LazyAxis> {
     pub(crate) fling_behavior: Option<std::sync::Arc<dyn crate::fling::FlingBehavior>>,
 }
 
-/// 垂直懒列表（对标 Compose `LazyColumn`）
+/// A vertical lazy list (Compose's `LazyColumn`).
 pub type LazyColumn = LazyList<crate::layout::axis::VerticalAxis>;
 /// A horizontal lazy list (Compose's `LazyRow`)
 pub type LazyRow = LazyList<crate::layout::axis::HorizontalAxis>;
@@ -224,14 +224,15 @@ impl<A: LazyAxis> LazyList<A> {
         self
     }
 
-    /// 带 key 的单一项
+    /// A single item with an explicit key — Compose's `item(key = …) { }`.
     pub fn item_keyed(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
         self.intervals.add(1, Some(Arc::new(move |_| key)), c, false);
         self
     }
 
-    /// count 个项 + key 工厂（对标 `items(count, key: (index) -> Any, itemContent)`）
+    /// `count` items with a key factory — Compose's
+    /// `items(count, key: (index) -> Any, itemContent)`.
     pub fn items(
         mut self,
         count: usize,
@@ -244,7 +245,7 @@ impl<A: LazyAxis> LazyList<A> {
         self
     }
 
-    /// count 个无 key 项（位置即 key）
+    /// `count` items without keys; the position acts as the key.
     pub fn items_plain(
         mut self,
         count: usize,
@@ -255,9 +256,10 @@ impl<A: LazyAxis> LazyList<A> {
         self
     }
 
-    /// 从数据列表迭代（对标 `items(items, key: (item) -> Any, itemContent)`）——
-    /// **用户要求的"稳定 key 迭代"入口**：key 从数据 id 提取，列表前部增删
-    /// 后滚动位置按 key 保持。
+    /// Iterate a data list — Compose's
+    /// `items(items, key: (item) -> Any, itemContent)`. This is the entry point for STABLE-KEY
+    /// iteration: keys come from the data (an id), so inserting or removing items at the head keeps
+    /// the scroll position on the same item.
     /// Takes the list as an `Arc<Vec<T>>` or anything that converts into one — notably a
     /// [`crate::StateList`] snapshot, so a list that observes its own mutations feeds the lazy list
     /// without copying its elements:
@@ -288,9 +290,9 @@ impl<A: LazyAxis> LazyList<A> {
         self
     }
 
-    /// sticky header 区间（对标 Compose `stickyHeader(key, content)`）——
-    /// 滚动时钉在视口主轴起始端，内容从它下面滑过；下一个 sticky header
-    /// 到来时把前一个推上去。key 必须全列表唯一。
+    /// A sticky-header section — Compose's `stickyHeader(key, content)`. While scrolling it stays
+    /// pinned at the main axis's start edge and the content slides underneath; the next sticky
+    /// header pushes the previous one out. The key must be unique across the whole list.
     pub fn sticky_header(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
         self.intervals.add(1, Some(Arc::new(move |_| key)), c, true);
@@ -299,21 +301,24 @@ impl<A: LazyAxis> LazyList<A> {
 }
 
 // ═══════════════════════════════════════════════════════
-// 高度缓存 + 可见范围计算
+// Height cache + visible-range arithmetic
 // ═══════════════════════════════════════════════════════
 
-/// 每项高度缓存（全局 index → 测量高度）；未测项用预估
+/// Per-item height cache (global index → measured height); unmeasured items are priced with the
+/// estimate.
 ///
-/// 公开：可用于外部读取实测高度（如自定义滚动逻辑）；`scroll_to_item`
-/// 不需要它（锚点权威，测量期自动用缓存推导像素）。
+/// Public because external code may want the measured heights (custom scroll logic).
+/// `scroll_to_item` does NOT need it: the anchor is authoritative and the measure pass derives
+/// pixels from the cache by itself.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemHeightCache {
-    /// index 视图（index → 高度）：供连续扫描（prefix/anchor/visible_range）
-    /// 与越界预估使用；数据前部增删/重排后此视图会错位，由 [`ItemHeightCache::rebase`] 校正。
+    /// The INDEX view (index → height), used by the linear scans (`prefix_height`, the anchor
+    /// recovery, `visible_range`) and by the out-of-range estimate. It goes stale when items are
+    /// inserted or reordered at the head; [`ItemHeightCache::rebase`] repairs it.
     pub heights: Vec<f32>,
-    /// key 视图（item key → 高度）：跨数据变化保持"项身份 → 高度"——
-    /// 数据增删/重排后，同一 key 的项高度不因 index 平移而丢失。私有，
-    /// 由 `record_keyed` 写入、`rebase` 读回迁移到 index 视图。
+    /// The KEY view (item key → height): keeps "identity → height" across data changes, so an
+    /// item's height survives index shifts. Private; written by `record_keyed` and read back by
+    /// `rebase`, which migrates it into the index view.
     pub(crate) keyed: std::collections::HashMap<u64, f32>,
     /// The last few measured heights, a ring — the sample behind [`ItemHeightCache::coverage_height`]'s
     /// median. Not the `keyed` view: this is about the rows being shown NOW, not about identity.
@@ -339,7 +344,7 @@ impl ItemHeightCache {
 
 impl ItemHeightCache {
     pub fn height(&self, index: usize) -> f32 {
-        // 未测（缺失或 0）→ 预估；记录过的 >0 高度直接返回
+        // Unmeasured (absent or 0) → the estimate; a recorded height above zero is returned as is.
         self.heights
             .get(index)
             .copied()
@@ -406,29 +411,29 @@ impl ItemHeightCache {
         self.note_recent(h);
     }
 
-    /// 按 item key 记录高度（写入 key 视图）。测量侧在写 index 视图的同时
-    /// 调用，使跨数据变化时项身份 → 高度 的关系得以保留。
+    /// Record a height by item key (writes the KEY view). The measure pass calls this alongside the
+    /// index write, which is what keeps "identity → height" across data changes.
     pub fn record_keyed(&mut self, key: u64, h: f32) {
         self.keyed.insert(key, h);
     }
 
-    /// 按 item key 读高度（无记录 → None）。跨数据变化时用于在迁移前确认
-    /// 某项是否有已知高度。
+    /// Read a height by item key (`None` when unrecorded) — used before a rebase to ask whether an
+    /// item already has a known height.
     pub fn height_keyed(&self, key: u64) -> Option<f32> {
         self.keyed.get(&key).copied()
     }
 
-    /// 数据变化后的校正：把 key 视图中仍存在的项高度迁移到当前 index 视图
-    /// 的正确位置（`keys[i]` = 当前数据第 i 项的 key）。
+    /// Repair the cache after the data changed: migrate the heights of the items that still exist
+    /// into the current index view (`keys[i]` is the current data's key for index `i`).
     ///
-    /// - 同 key 项：从 `keyed` 迁移到 `heights[新 index]`（数据增删/重排后
-    ///   高度跟随项身份，不因位置漂移而丢失）。
-    /// - 无 key 记录的项：`heights` 置 0 → 走预估/重测。
-    /// - 数据变短：清空超出 `keys.len()` 的残留高度。
+    /// - Same key: the height moves from `keyed` to `heights[new index]`, so it follows the item's
+    ///   identity instead of being lost to the index shift.
+    /// - No key record: `heights` stays 0 and the item is estimated or measured again.
+    /// - Shorter data: heights past `keys.len()` are dropped.
     ///
-    /// 幂等：key 没变的项高度保持，key 变化的项由新 key 的 `keyed` 决定。
-    /// 可见项随后由测量重新填充（Enter 路径 record 覆盖），此处只保证
-    /// 不可见项的缓存高度在数据变化后仍与正确项对应。
+    /// Idempotent: an item whose key did not change keeps its height; a changed key takes whatever
+    /// `keyed` holds for the new key. Visible items are re-recorded by the next measure pass, so this
+    /// only has to keep the OFF-SCREEN heights associated with the right items.
     pub fn rebase(&mut self, keys: &[u64]) {
         self.heights.clear();
         self.heights.resize(keys.len(), 0.0);
@@ -437,15 +442,15 @@ impl ItemHeightCache {
                 self.heights[i] = h;
             }
         }
-        // 清理已从数据中消失的 key 记录（防 keyed 无限膨胀；项后续可能
-        // 复用新 key 重建——旧记录无意义）。用 HashSet 加速 contain 查询，
-        // 避免 `keys.contains` 对每个 keyed 键做 O(n) 线性扫描（O(n²)）。
+        // Drop the key records of items that left the data (otherwise `keyed` grows without bound;
+        // a rebuilt item takes a new key, so the stale record is worthless). The HashSet makes the
+        // containment check O(1) — a linear scan per key would make this O(n²).
         let live: std::collections::HashSet<u64> = keys.iter().copied().collect();
         self.keyed.retain(|k, _| live.contains(k));
     }
 }
 
-/// 累计高度：index 之前各项高度和（含间距）
+/// The accumulated extent before `index` (heights plus spacing).
 ///
 /// Uses `coverage_height` — the same function the window walk uses — because the conversions that trade
 /// between an index and a pixel offset have to agree on what an unmeasured item is worth, or they do not
@@ -461,17 +466,19 @@ pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32)
     acc
 }
 
-/// 由像素偏移定位第一个可见项（锚点）
+/// Resolve the first visible item (the anchor) from a pixel offset.
 ///
-/// 未测项按预估高度继续推算（而非在已知范围末尾截断）——否则滚动超出已测范围时
-/// 锚点错误退回 0（实测：offset=2000 空缓存时恒返回 (0,0)，滚动失效）。
-/// 已知高度部分线性扫描，超出部分用除法直接估算（O(1) 防大 offset 循环）。
+/// Unmeasured items are extrapolated with the estimate instead of stopping at the end of the
+/// recorded range — truncating there made the anchor fall back to 0 once the scroll left the
+/// measured window (measured: an empty cache returned (0,0) for offset 2000 and the list stopped
+/// scrolling). The recorded part is scanned linearly; the rest is a single division, so a huge
+/// offset costs O(1).
 ///
 /// `coverage_height` for the same reason as [`prefix_height`]: this is the inverse of it, and the two are
 /// only inverses if they price an unmeasured item the same way. The extrapolation past the recorded part
 /// uses that same value as its step, for the same reason.
 pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32, before: f32) -> (usize, f32) {
-    // 内容坐标含 before padding：项 i 顶 = before + prefix(i)
+    // Content coordinates include the `before` padding: item i's top is `before + prefix(i)`.
     let known = cache.heights.len();
     let mut acc = before;
     for i in 0..known {
@@ -481,7 +488,7 @@ pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: 
         }
         acc += h;
     }
-    // 超出已知范围：按预估高度除法估算剩余项数
+    // Past the recorded range: divide by the estimate to count the remaining items.
     let step = cache.coverage_height(known) + spacing;
     if step <= 0.0 { return (known.saturating_sub(1), 0.0); }
     let remaining = offset - acc;
@@ -490,7 +497,7 @@ pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: 
     (idx, remaining - extra as f32 * step)
 }
 
-/// 由锚点 + 视口高计算可见范围（含预取窗）
+/// The visible range from the anchor and the viewport extent (beyond-bounds window included).
 pub(crate) fn visible_range(
     cache: &ItemHeightCache,
     first_index: usize,
@@ -515,7 +522,7 @@ pub(crate) fn visible_range(
 }
 
 // ═══════════════════════════════════════════════════════
-// build — 组合期注册可见项
+// build — register the visible items during composition
 // ═══════════════════════════════════════════════════════
 
 impl<A: LazyAxis> LazyList<A> {
@@ -526,18 +533,20 @@ impl<A: LazyAxis> LazyList<A> {
             None => ctx.remember(|| LazyListState::new()).get(),
         };
         ctx.changed(&state.offset);
-        // 派生锚点依赖：policy 测量后 set 精确值 → 触发重组收敛（build 用预估高度算的
-        // 锚点与真实值不同时，下一帧以真实缓存重算；相同则无变化不重组）
+        // The derived anchor is a dependency: the policy writes the exact value after measuring, which
+        // asks `build` to run again — the next frame recomputes from the real cache. When the estimate
+        // already matched, nothing changes and no recomposition happens.
         ctx.changed(&state.first_visible_index);
         ctx.changed(&state.first_visible_offset);
         let key = ctx.next_key();
 
-        // 内容注册表（重建——数据变化反映）
+        // The interval registry, rebuilt so a data change is visible to this pass.
         let mut intervals = self.intervals;
         intervals.rebuild();
         let total = intervals.total();
 
-        // 跨帧 remember：高度缓存 / 视口高 / 滚动中标记 / fling 极限
+        // Remembered across frames: the height cache, the viewport extent, the scrolling flag, the
+        // fling limit.
         let cache = ctx.remember(ItemHeightCache::default);
         let viewport = ctx.remember(|| 600.0f32);
         let is_scrolling = state.is_scrolling.clone();
@@ -582,19 +591,20 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&self.cross_padding);
         ctx.changed(&total);
         ctx.changed(&self.reverse);
-        // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
-        // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
-        // 平移导致旧高度错位）
+        // A signature of the data's key sequence: it changes when the total changes, or when the same
+        // total is reordered or replaced. On a change the height cache migrates by item key to the
+        // right index, so an index shift cannot leave heights on the wrong items.
         let data_sig = ctx.remember(|| 0u64);
 
-        // 当前数据全局 index → item key（供 policy 写 key 视图 + 数据变化迁移）。
-        // 无 key 工厂的段（items_plain）用索引自身作 key——同 key 段内容替换
-        // 时无法区分（固有局限，见文档）；有 key 段（items_from/item_keyed）
-        // 身份精确追踪。
+        // Global index → item key for the current data (feeds the policy's key view and the migration).
+        // A section without a key factory (`items_plain`) uses the index itself as the key, so replacing
+        // the content of such a section is invisible — an inherent limitation, documented; sections
+        // WITH keys (`items_from`, `item_keyed`) track identity exactly.
         let keys: Vec<u64> = (0..total).map(|g| intervals.key_of(g).unwrap_or(g as u64)).collect();
         let key_set: std::collections::HashSet<u64> = keys.iter().copied().collect();
-        // 数据签名（FNV-1a 折叠 key 序列）——检测数据变化：total 变或同 total
-        // 重排/替换（key 序列变）。变化时按 item key 迁移高度缓存。
+        // The data signature (FNV-1a over the key sequence) detects a data change: a different total,
+        // or the same total reordered or replaced (the key sequence changed). On a change the height
+        // cache migrates by item key.
         let mut sig = 0xcbf29ce484222325u64;
         for &k in &keys { sig ^= k; sig = sig.wrapping_mul(0x100000001b3); }
         if data_sig.get() != sig {
@@ -612,11 +622,16 @@ impl<A: LazyAxis> LazyList<A> {
         // frame by accident, and an undeclared data change was simply invisible.
         ctx.changed(&sig);
 
-        // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
-        // ⚠ 仅当 total 变化（数据增删）时校正——正常滚动时锚点项变化是用户滚动
-        // 的结果，绝不能校正回原位置（实测：每帧校正会把滚动拉回 0）。
-        // ⚠ 必须在 rebase 之后：offset 校正用 prefix_height 依赖**按 key 迁移后**
-        // 的高度缓存（rebase 前 index 视图还是旧数据，prefix 算错 → offset 错位）。
+        // Key correction: after items were inserted or removed at the head, `last_known_first_key`
+        // finds the item that used to be first visible.
+        //
+        // Only when the TOTAL changed (items added or removed): during ordinary scrolling the anchor
+        // item changing is the result of the user's scroll and must never be corrected back (measured:
+        // correcting every frame pulled the scroll position back to 0).
+        //
+        // And strictly AFTER the rebase: the offset calculation uses `prefix_height` over the height
+        // cache MIGRATED BY KEY — before the rebase the index view still describes the old data, so the
+        // prefix would be wrong and the offset misplaced.
         let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
         if total_changed {
@@ -632,8 +647,9 @@ impl<A: LazyAxis> LazyList<A> {
 
         let offset = state.offset.get();
         let cache_ref = cache.get();
-        // 锚点：跳转请求权威（对齐 Compose——requestPosition 后直接从请求的
-        // index 开始组合，不经过像素反推）；否则由像素 offset 反推
+        // The anchor: a jump request is authoritative (Compose composes from the requested index
+        // directly, without going through the pixel conversion); otherwise it is recovered from the
+        // pixel offset.
         let pad_before = self.content_padding.0;
         let (first_index, first_item_offset) = match state.jump_request.get() {
             Some((idx, off, _)) => {
@@ -665,35 +681,38 @@ impl<A: LazyAxis> LazyList<A> {
                 }
             }
             None => {
-                // ⚠ 锚点 index 必须 clamp 到 total 内：offset 超界时 anchor 按预估
-                // 高度外推（可远超 total）→ visible_range 的 end<start → 组合窗溢出
+                // The anchor index MUST be clamped into `0..total`: past the end the anchor
+                // extrapolates with the estimate (far beyond the total), which would make
+                // `visible_range` return end < start and the composition window overflow.
                 let (fi, fo) = anchor_from_offset(&cache_ref, offset, self.spacing, pad_before);
                 (fi.min(total.saturating_sub(1)), fo)
             }
         };
-        // 记录锚点项 key（供下次数据变化校正）——派生锚点由测量期 policy 写回精确值
+        // Record the anchor item's key (the next data change corrects against it). The exact anchor is
+        // written back by the policy after the measure.
         if let Some(k) = intervals.key_of(first_index) {
             state.last_known_first_key.set(Some(k));
         }
 
-        // 组合期窗口高度：读上一帧 measure 回写的真实视口（方向一——build 感知
-        // 真实视口，resize 后按新视口组合足够项）。此前用固定 2000，resize 放大
-        // 超过 2000 时 build 组合不足、底部可见项缺失。
-        // ⚠ 约束振荡：fill_max_height 时 viewport 由外部约束决定（稳定，不振荡）；
-        // wrap-content 时 measure 用 `< f32::MAX` 判定回退缓存（不写 ∞），build 读
-        // 缓存稳定。故 build 读 viewport 安全。下限 1.0 防 0/负值。
+        // Window extent during composition: the real viewport the previous measure wrote back, so
+        // `build` sees the true size and composes enough items after a resize. (It used to be a fixed
+        // 2000, and a viewport grown past that left the bottom of the list uncomposed.)
+        //
+        // No oscillation: under `fill_max_height` the viewport comes from the outer constraints and is
+        // stable; under wrap-content the measure falls back to the cache when the axis is unbounded (it
+        // does not write infinity), so reading it here is safe. The 1.0 floor guards against 0/negative.
         let viewport_h = viewport.get().max(1.0);
         let (mut start, end) = visible_range(
             &cache_ref, first_index, first_item_offset,
             viewport_h, self.spacing, total, self.beyond_bounds,
         );
 
-        // sticky header 回溯（对齐 Compose：钉住的 header 即使自然位置远在视口
-        // 上方也必须留在窗口内）：
-        // - pin  = 最后一个 C(i) ≤ offset 的 sticky header（锚点上方第一个 sticky，
-        //   深滚动时回溯距离 = 当前 section 长度；无 sticky 列表时跳过）
-        // - prev = pin 上方一个 sticky header，仅当其底部仍低于视口顶
-        //   （C(prev)+h(prev) > offset，即正处于被推出的过渡期）才纳入窗口
+        // Sticky-header walk-back (Compose keeps a pinned header in the window even when its natural
+        // position is far above the viewport):
+        // - pin  = the last sticky header whose C(i) <= offset — the first sticky above the anchor; the
+        //   walk-back distance is the current section's length (no sticky list → skipped)
+        // - prev = the sticky header above `pin`, included only while its bottom is still below the
+        //   viewport top (C(prev) + h(prev) > offset, i.e. it is in the middle of being pushed out)
         let mut pin: Option<usize> = None;
         let mut prev_pin: Option<usize> = None;
         if intervals.has_sticky_headers() {
@@ -715,7 +734,8 @@ impl<A: LazyAxis> LazyList<A> {
                 }
             }
             if let Some(p) = pin {
-                // prev：pin 上方最近的 sticky；走到底部 ≤ 视口顶即停（更上方不可见）
+                // prev: the nearest sticky above `pin`; walk up until its bottom is at or above the
+                // viewport top (anything further up is not visible).
                 let mut c2 = pad_before + prefix_height(&cache_ref, p, self.spacing);
                 let mut j = p;
                 while j > 0 {
@@ -737,24 +757,25 @@ impl<A: LazyAxis> LazyList<A> {
             start = start.min(pp);
         }
 
-        // 挂自定义测量策略（真实测量 + 写回高度 + 放置 + 视口回写）
+        // Install the custom measure policy: real measurement, height write-back, placement, and the
+        // viewport write-back.
         let scroll = crate::modifier::ScrollState {
             offset: state.offset.clone(),
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
-            // pulse 接通：LazyListState.scroll_pulse 跨帧稳定（与 offset 同
-            // 生命周期），拼装 clone 进去——分发层自增落在同一 State 上，
-            // scrollbar 侧 pulse 点亮对 lazy 同样生效。
+            // Pulse wired through: `LazyListState.scroll_pulse` is stable across frames (same lifetime
+            // as `offset`), and the assembled state clones it, so the dispatch layer increments the same
+            // State and a scrollbar's pulse lights up for a lazy list too.
             scroll_pulse: state.scroll_pulse.clone(),
             snap: state.snap.clone(),
             // Keep the in-flight page target with the list, not with this per-build adapter.
             step_goal: state.step_goal.clone(),
             fling_behavior: self.fling_behavior.clone(),
         };
-        // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
-        // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。
-        // globals[i] = 第 i 个子节点的全局 index（policy 放置/写回用，不能再
-        // 用 start+i 位置映射）
+        // Registration order: ordinary items first, sticky headers last (a child's paint order is its
+        // registration order, so the sticky one paints on top and covers the content sliding under it).
+        // `globals[i]` is the global index of child `i`, which the policy places and writes back with —
+        // a positional `start + i` mapping no longer holds.
         let mut globals: Vec<usize> = Vec::with_capacity(end - start);
         let mut sticky_children: Vec<usize> = Vec::new();
         for g in start..end {
@@ -808,19 +829,20 @@ impl<A: LazyAxis> LazyList<A> {
         let m = m
             .then(self.modifier)
             .then(Modifier::new().with_item_animation_host(state.item_animations.clone()));
-        // 注册顺序（policy 移动进 group 后不可再读——先取出）
+        // The registration order, taken out before the policy moves into the group (unreadable after).
         let child_globals = policy.globals.clone();
-        // ⚠ item 子节点必须在 start_restartable_group **之后**注册（挂到
-        // LazyColumn 节点下）——组合顺序决定父子关系
+        // The item children MUST be registered AFTER `start_restartable_group` (so they attach under
+        // the LazyColumn node) — composition order decides the parent/child relation.
         match ctx.start_restartable_group(key, m, policy) {
             GroupStatus::Skip => {
-                // Skip：复用上帧子树——但可见范围可能变了，无法原地改子节点数；
-                // 依赖下一帧 Enter。winia Skip 仅当所有依赖未变时命中（offset 变了
-                // 会 Enter），此处安全。
+                // Skip: the previous frame's subtree is reused — but the visible range may have
+                // changed and the child count cannot be edited in place, so the next frame's Enter does
+                // it. A Skip only happens when every dependency is unchanged (a moved offset enters),
+                // so this is safe.
             }
             GroupStatus::Enter => {
-                // 注册可见项子节点（按 globals 顺序——sticky 在后）：slot key
-                // 混合 item key（跨帧复用/回收）
+                // Register the visible item children in `globals` order (sticky last). The slot key
+                // mixes in the item key, so a node is reused or recycled across frames by identity.
                 const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
                 for g in child_globals {
                     let item_key = intervals.key_of(g).unwrap_or(g as u64);

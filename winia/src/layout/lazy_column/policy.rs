@@ -1,37 +1,50 @@
 use super::*;
 
 // ═══════════════════════════════════════════════════════
-// LazyListPolicy — 测量策略
+// LazyListPolicy — the measure policy
 // ═══════════════════════════════════════════════════════
 
-/// 懒列表测量：把已注册子节点按锚点排布，真实高度写回缓存，视口高回写。
-/// 轴无关（`A: LazyAxis` 决定主轴方向——LazyColumn/LazyRow 共用）。
+/// The lazy list's measure pass: place the registered children against the anchor, write the
+/// measured sizes back into the cache, and report the viewport extent.
+///
+/// Axis-agnostic — `A: LazyAxis` decides which way is "main" (LazyColumn and LazyRow share this).
 pub(crate) struct LazyListPolicy<A: LazyAxis> {
+    /// Which way is "main" — the only thing the two list kinds differ by.
     pub axis: PhantomData<A>,
+    /// Measured item sizes, shared with `build` (which prices unmeasured items from it).
     pub cache: crate::runtime::state::State<ItemHeightCache>,
+    /// The viewport extent. Written here, read by the NEXT `build` to choose its window.
     pub viewport: crate::runtime::state::State<f32>,
+    /// Total content extent (measured + estimated + content padding) — the scroll clamp's input.
     pub content_height: crate::runtime::state::Backchannel<f32>,
+    /// How far a fling may travel; `f32::MAX` until the first measure, a real `0` when the content fits.
     pub fling_limit: crate::runtime::state::Backchannel<f32>,
+    /// Compose's `isScrollInProgress`: the same flag the drag and fling paths write, shared with the
+    /// `ScrollState` the list assembles.
     pub is_scroll_in_progress: crate::runtime::state::State<bool>,
+    /// Space between consecutive items, along the main axis.
     pub spacing: f32,
+    /// How many items the data holds; the composition window is a sub-range of it.
     pub total: usize,
-    /// 主轴内容内边距 (before, after)
+    /// Main-axis content padding `(before, after)` — vertical for a column, horizontal for a row.
     pub content_padding: (f32, f32),
-    /// 交叉轴内容内边距 (before, after)
+    /// Cross-axis content padding `(before, after)` — shrinks the space an item may use.
     pub cross_padding: (f32, f32),
-    /// 注册顺序 → 全局 index（sticky 项排在最后——画在最上层）
+    /// Registration order → global item index (sticky items are appended last, so they paint on top).
     pub globals: Vec<usize>,
-    /// 当前数据全局 index → item key（build 期从 intervals 提取；
-    /// measure 用其写 cache 的 key 视图——跨数据变化保持项身份高度）
+    /// Global item index → item key, extracted from the intervals during `build`. `measure` writes
+    /// the same view into the cache, so an item's identity keeps its height across data changes.
     pub keys: Vec<u64>,
     /// The same keys as a set: `finish_frame` asks "is this key still in the data?" once per
     /// off-screen state, so a linear scan of `keys` would be O(offscreen * total) per layout.
     pub key_set: std::collections::HashSet<u64>,
-    /// 注册序中 sticky 子节点的 child 下标（全局升序）
+    /// Child indices of the sticky items in registration order (global index ascending).
     pub sticky_children: Vec<usize>,
-    /// 钉住的 sticky header 全局 index（build 期回溯；钉住时锚点 = (pin, 0)）
+    /// The global index of the sticky header currently PINNED, found by walking back at `build`;
+    /// while pinned the anchor is `(pin, 0)`.
     pub pin: Option<usize>,
-    /// 反向布局（reverseLayout）：放置内容坐标 = content_h - 镜像位置 - 项高
+    /// Reverse layout (`reverseLayout`): a placement's content coordinate is
+    /// `content_h - mirrored - item_size` (index 0 sits at the content's bottom).
     pub reverse: bool,
     /// Paging snap (from `snap_paging`): the step is written back only when every measured item
     /// measures at the viewport's main size, and `None` (no snapping) otherwise — with items of
@@ -51,7 +64,7 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub snap_max_pages: usize,
     /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
     pub beyond_bounds: usize,
-    pub state: LazyListState,  // 派生锚点回写（测量后精确值）
+    pub state: LazyListState,  // derived anchor, written back after the measure (exact values)
 }
 
 impl<A: LazyAxis> std::fmt::Debug for LazyListPolicy<A> {
@@ -68,14 +81,16 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         children: &[usize],
         constraints: crate::layout::constraints::Constraints,
     ) -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
-        // 视口主轴尺寸：有限约束直接用（回写缓存）；无界（父内容驱动——Column 无
-        // 固定高度时给子节点 f32::MAX；⚠ is_finite() 对 f32::MAX 也返回 true，
-        // 必须用框架惯例 `< f32::MAX` 判定）回退缓存值，避免视口
-        // 无限膨胀（实测：f32::MAX 视口会让 clamp 把 offset 清零）
+        // Viewport main extent: a bounded constraint is used directly (and written back to the
+        // cache); an unbounded one — the parent drives its content, and a Column with no fixed
+        // height hands its children `f32::MAX` — falls back to the cached value, because an
+        // f32::MAX viewport makes the scroll clamp zero the offset. (`is_finite()` is TRUE for
+        // f32::MAX, so the check has to be the framework's `< f32::MAX`.)
         let main_max = A::main_max(&constraints);
         let vh = if main_max < f32::MAX && main_max > 0.0 {
-            // 非 silent set：viewport 变化（resize）→ 通知 build 重组，用新视口
-            // 补组合可见项（方向一）。值稳定时 PartialEq 去重不通知（无振荡）。
+            // NOT a silent set: a viewport change (a resize) has to notify `build`, so the
+            // window is re-composed against the new viewport. A stable value is de-duplicated by
+            // PartialEq and notifies nobody, so this cannot oscillate.
             self.viewport.set(main_max);
             main_max
         } else {
@@ -112,9 +127,9 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             measured.push((A::main_size(size), A::cross_size(size)));
         }
 
-        // 全局 index 映射：注册顺序从 start 到 end，start = first_index - 预取数
-        // 但 build 只给了 policy first_index（锚点）——子节点全局序需要从 placement 反推：
-        // 实际实现：build 把 (start, end) 传给 policy，这里按序写回
+        // Global index mapping: the registration order runs start..end. `build` hands the policy
+        // only the anchor's first index, so the children's global order comes from `globals`
+        // (build passes (start, end) to the policy) and is written back here positionally.
         let mut cache = self.cache.get();
         // `fill_items` pins every item to the viewport, so unmeasured items can be priced exactly. It
         // has to be declared, or the flat estimate is used and every position outside the measured
@@ -126,14 +141,15 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         for (i, (h, _)) in measured.iter().enumerate() {
             let global = self.globals[i];
             cache.record(global, *h);
-            // 同步写 key 视图（keys[global] = 该全局项的 item key）——跨数据
-            // 变化保持"项身份 → 高度"，rebase 据此迁移到正确的 index
+            // Also record the KEY view (`keys[global]` is that item's key): an item's identity
+            // keeps its height across data changes, and `rebase` migrates it to the new index.
             if let Some(&k) = self.keys.get(global) {
                 cache.record_keyed(k, *h);
             }
         }
-        // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）；
-        // 含 主轴 contentPadding（对齐 Compose：max_offset = before + 内容 + after - 视口）
+        // Total content extent: measured items plus the estimate for unmeasured ones — this is
+        // what `apply_scroll_delta` derives `max_offset` from. It includes the main-axis content
+        // padding, matching Compose: max_offset = before + content + after - viewport.
         // The snap offset is a PLACEMENT shift (Compose shifts the page, not the scroll target).
         // Price spacing only BETWEEN items, then add enough trailing room for the final snap position
         // to reach the same visual alignment as every earlier page.
@@ -156,24 +172,25 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             }
         }
         self.content_height.set(content_h);
-
-        // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
-        // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
+        // Out-of-range clamp: `scroll_to_item` carries no `total`, so a programmatic scroll past
+        // the end is pulled back here (Compose clamps the scroll position during measure too).
         let max_off = (content_h - vh).max(0.0);
 
-        // 程序化跳转：消费 jump_request（放在 max_off 之后——动画目标需要 clamp）。
-        // 像素 offset 用**写回后的缓存**推导（实测项真实高度 + 未测项预估）——
-        // 与锚点解析/放置共用同一 prefix_height，round-trip 精确：跳 500 就是
-        // 500，不会因预估 vs 实测高度差累积漂移（实测：旧实现 500×48 vs 47.5
-        // → 落到 505）。reverseLayout 下公式相同（offset = before + prefix + 偏移：
-        // 语义变为项**底**贴视口底——镜像坐标中与正向同构）。
+        // Programmatic jump: consume `jump_request` (after `max_off`, because an animated target
+        // needs the clamp). The pixel offset is derived from the WRITTEN-BACK cache (measured
+        // sizes plus estimates) — the same `prefix_height` the anchor resolution and the placement
+        // use — so a round trip is exact: jumping to 500 lands at 500 instead of drifting by the
+        // estimate error (the old implementation landed at 505 for 500 x 48 against 47.5). The
+        // formula is the same under `reverseLayout` (offset = before + prefix + offset), where it
+        // means the item's BOTTOM hugs the viewport bottom — isomorphic in mirrored coordinates.
         if let Some((req_idx, req_off, animate)) = self.state.jump_request.get() {
             let idx = req_idx.min(self.total.saturating_sub(1));
             let target = pad_before + prefix_height(&cache, idx, self.spacing) + req_off;
             self.state.jump_request.set(None);
             if animate {
-                // 动画滚动（对齐 Compose animateScrollToItem——spring 收敛）；
-                // push_animatable 内部处理同 state 动画替换（retarget 继承速度）
+                // Animated scroll (Compose's `animateScrollToItem` — a spring to the target).
+                // `push_animatable` replaces a running animation on the same state; retargeting
+                // carries the velocity over.
                 //
                 // The flag goes UP for the length of the spring, not down. It is the same state the
                 // drag and fling paths write (`build` hands this clone to the list's ScrollState), and
@@ -202,13 +219,14 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                     },
                 );
             } else {
-                // 立即跳转：取消进行中的 fling + 结束滚动中标记
+                // Immediate jump: cancel a running fling and clear the scrolling flag.
                 crate::animation::cancel_animation(&self.state.offset);
                 self.is_scroll_in_progress.set(false);
                 self.state.offset.set(target);
             }
         }
-        // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
+        // Fling limit written back — both the input path's `ScrollState::fling` and the
+        // programmatic `LazyListState::fling` read it.
         self.fling_limit.set(max_off);
         self.state.fling_limit.set(max_off);
         // The viewport is what a pager divides a pixel offset by; write it beside the limit.
@@ -252,11 +270,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             self.state.offset.set(clamped);
         }
 
-        // 精确锚点回写：用真实高度（cache 已写回）反推 first_visible_index/offset——
-        // build 期用的是预估高度，这里给出精确值（对齐 Compose 从 measure result 更新）
+        // Exact anchor write-back: derive `first_visible_index` / `first_visible_offset` from the
+        // real heights (already in the cache). `build` worked from the ESTIMATES; this is the
+        // precise value, mirroring Compose updating from the measure result.
+        //
+        // While pinned the anchor is `(pin, 0)` — Compose's `firstVisibleItemIndex` IS the pinned
+        // header — otherwise the natural anchor (recovered from the pixel offset).
         let offset = self.state.offset.get();
-        // 钉住时锚点 = (pin, 0)（对齐 Compose：firstVisibleItemIndex 就是钉住的
-        // header）；否则自然锚点（像素反推）
         let (real_first, real_off) = match self.pin {
             Some(p) if offset >= pad_before + prefix_height(&cache, p, self.spacing) => (p, 0.0),
             _ => anchor_from_offset(&cache, offset, self.spacing, pad_before),
@@ -286,15 +306,18 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             }
         }
 
-        // 锚点排布：**内容坐标**（主轴 = 项在内容中的累计位置，不含 offset）——
-        // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
-        // 双重偏移（实测：滚动 3000 后内容完全滚出视口）。
-        // 内容起点 = before 内容内边距（对齐 Compose contentPadding）。
-        // sticky pass（对齐 Compose LazyListMeasure）：
-        //   正向 final(i) = max(C(i) - offset, before)   —— 滚过顶钉在 before 处
-        //   反向 final(prev) = min(final(prev), final(next) - h(prev))
-        //     —— 下一个 header 距顶 h(prev) 内时前一个开始滑出
-        // 放置内容坐标 = final + offset；普通项保持自然位置（累计）
+        // Anchor placement in CONTENT coordinates (main axis = the item's accumulated position in
+        // the content, WITHOUT the offset) — scrolling is the framework's `translate(-offset)`. A
+        // placement that carried the offset too would shift twice (measured: after scrolling 3000
+        // the content left the viewport entirely).
+        //
+        // The content starts at the `before` content padding (Compose's `contentPadding`).
+        //
+        // Sticky pass (Compose's `LazyListMeasure`):
+        //   forward  final(i) = max(C(i) - offset, before)  — scrolled past, the header pins at `before`
+        //   backward final(prev) = min(final(prev), final(next) - h(prev))
+        //            — the previous header slides out while the next is within h(prev) of the top
+        // The placement coordinate is `final + offset`; ordinary items keep their natural position.
         let mut fin: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &ci in &self.sticky_children {
             let v = pad_before + prefix_height(&cache, self.globals[ci], self.spacing) - offset;
@@ -327,11 +350,12 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                     p
                 }
             };
-            // 反向布局：镜像坐标（从底向上累计）→ 内容坐标 = content_h - pos - h
-            // （index 0 在内容底部；锚点/可见范围/pin 回溯在镜像坐标中公式不变）
+            // Reverse layout: mirrored coordinates (accumulated from the bottom) → content
+            // coordinate = content_h - pos - h (index 0 sits at the content's bottom; anchors,
+            // visible ranges and the pin walk keep their formulas in mirrored coordinates).
             let content_pos = if self.reverse { content_h - pos - h } else { pos };
             placements.push(crate::layout::node::Placement {
-                // 交叉轴从 cross_before 处开始（contentPadding 交叉轴语义）
+                // The cross axis starts at `cross_before` (the cross-axis content padding).
                 position: A::point(content_pos, cb),
                 size: A::size(h, w),
             });
