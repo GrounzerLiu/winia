@@ -1,6 +1,7 @@
-//! Box 布局 — 层叠子节点（Z 轴堆叠）
+//! Box layout — children stacked on the Z axis.
 //!
-//! 所有子节点获得相同的空间，类似 FrameLayout / Box
+//! Every child is measured against the same constraints and the box takes the largest of them,
+//! like Compose's `Box` and Android's `FrameLayout`.
 //!
 //! Two Compose behaviours live here beyond the stacking: a child's own alignment
 //! (`content_align_self` / `align_self`, Compose's `BoxScope.align`) and `match_parent_size`,
@@ -15,16 +16,27 @@ use super::container::build_container;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 
-/// Box 布局策略 — 子节点层叠排列
+/// The box measure policy: children stack, and the box sizes to the largest of them.
 ///
-/// 与 Column/Row 不同，Box 的每个子节点获得相同的约束，
-/// Box 的尺寸取所有子节点中的最大值。
+/// Unlike `Column`/`Row`, a box gives every child the SAME constraints (loosened, or the box's own
+/// minimum when `propagate_min_constraints` is on) and reports the largest measured child — floored
+/// by its incoming minimum, never cropped to its maximum.
+///
+/// Three Compose behaviours live in `BoxLayout::measure`:
+///
+/// - `match_parent_size` children do NOT size the box; they are measured in a second pass at the
+///   size the box settled on (an unbounded box hands them 0 as their minimum, `Box.kt:180-186`).
+/// - A child's own alignment wins over the box's (`BoxScope.align`, `Box.kt:205-221`): the 2-D
+///   `content_align_self` first, then the axis-symmetric `align_self`, then the box's own.
+/// - A match-parent child falls back to Compose's implicit `Center` when it carries no alignment
+///   of its own (`Box.kt:282-289`).
 #[derive(Debug, Clone)]
 pub struct BoxLayout {
-    /// 子节点在 Box 中的对齐方式（单轴值同时作用于两个轴——见 [`ContentAlignment`]）
+    /// How every child is placed — one axis-symmetric value, applied to both axes (`Start` is
+    /// Compose's `TopStart`, `End` its `BottomEnd`). See [`ContentAlignment`].
     pub alignment: Alignment,
-    /// 两个轴各自的对齐（Compose 的二维 `contentAlignment`）。设了就用它，
-    /// 否则退回上面的 `alignment`。
+    /// Per-axis placement (Compose's 2-D `contentAlignment`). When set it wins over `alignment`,
+    /// which stays the fallback for the boxes that only ever set one value.
     pub content_alignment: Option<ContentAlignment>,
     /// The layout direction the horizontal half of the alignment mirrors under — Compose resolves
     /// `contentAlignment` with the measure scope's `layoutDirection`, so `Start` is the LEFT edge in
@@ -36,13 +48,17 @@ pub struct BoxLayout {
     ///
     /// It matters where something FORCES a size on the box: without it the box reports the forced
     /// size while its child still hugs its own content, so the box grows and the thing that paints
-    /// does not. `Surface` sets it (`material3/Surface.kt:219`), which is why a Compose button
-    /// widens with its box; winia's Button wraps its visual box in a min-interactive container and
-    /// that container needs the same.
+    /// does not. Compose's `Surface` passes it (`material3/Surface.kt:132`, `:266`, `:401`), which is
+    /// why a button widens with its box; winia's `Surface` sets it too
+    /// (`winia/src/components/surface.rs`), and `Button` wraps its visual box in a min-interactive
+    /// container that needs the same.
     pub propagate_min_constraints: bool,
 }
 
 impl BoxLayout {
+    /// A box that stacks from the start edge, resolving placement with the ambient layout
+    /// direction — Compose reads the measure scope's direction on every Box (`Box.kt:157`), not
+    /// only on the builders that remember to set one.
     pub fn new() -> Self {
         BoxLayout {
             alignment: Alignment::Start,
@@ -68,6 +84,9 @@ impl BoxLayout {
         self
     }
 
+    /// Override the direction the horizontal half of the alignment mirrors under. The public
+    /// builders take it from the `Modifier`; a hand-built policy gets the ambient value from
+    /// [`BoxLayout::new`].
     pub fn direction(mut self, d: LayoutDirection) -> Self {
         self.direction = d;
         self
@@ -92,6 +111,10 @@ impl Default for BoxLayout {
 }
 
 impl MeasurePolicy for BoxLayout {
+    /// Three phases, in this order: measure the sizing children (skipping match-parent ones) and
+    /// take the largest; measure the match-parent children at that size; place every child with the
+    /// alignment resolved for it. The box itself is `max(child, constraints.min)` — see the type
+    /// doc for why it never crops to the maximum.
     fn measure(
         &self,
         nodes: &mut Vec<LayoutNode>,
@@ -99,8 +122,8 @@ impl MeasurePolicy for BoxLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        // 测量所有子节点，每个子节点获得相同的约束——除非开了 propagate_min_constraints，
-        // 这时把本盒子的 MIN 约束一并传下去（Compose 的 `Box(propagateMinConstraints = true)`）
+        // Every child gets the same constraints — loosened, unless `propagate_min_constraints`
+        // passes the box's own MINIMUM through (Compose's `Box(propagateMinConstraints = true)`).
         let child_constraints = if self.propagate_min_constraints {
             constraints
         } else {
@@ -149,7 +172,7 @@ impl MeasurePolicy for BoxLayout {
             child_sizes[i] = child_size;
         }
 
-        // 为每个子节点计算在 Box 中的位置（根据 alignment）
+        // Place every child inside the box according to the alignment resolved for it.
         //
         // A child may carry its own alignment — Compose's `BoxScope.align` (`Box.kt:205-221`: the
         // child's own alignment wins, otherwise the box's). The two-axis value wins over the
@@ -199,6 +222,8 @@ impl MeasurePolicy for BoxLayout {
         (Size::new(width, height), placements)
     }
 
+    /// Write the placements back into the arena. The engine has already applied the padding shift
+    /// to the children and to this node's outer size, so the positions here are padding-free.
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;
@@ -237,7 +262,7 @@ mod tests {
             Constraints::UNBOUNDED,
         );
 
-        // Box 取最大宽度 100，最大高度 80
+        // The box takes the widest child, 100, and the tallest, 80.
         assert_eq!(size, Size::new(100.0, 80.0));
         assert_eq!(placements.len(), 3);
     }
@@ -258,11 +283,11 @@ mod tests {
             Constraints::UNBOUNDED,
         );
 
-        // max w=100, h=80 → 居中子节点
+        // The box is 100 x 80, so every child is centred inside it.
         assert_eq!(size, Size::new(100.0, 80.0));
-        // 第一个 (50,30) 居中: x=(100-50)/2=25, y=(80-30)/2=25
+        // First child (50,30) centred: x=(100-50)/2=25, y=(80-30)/2=25.
         assert_eq!(placements[0].position, Offset::new(25.0, 25.0));
-        // 第二个 (100,80) 居中: x=(100-100)/2=0, y=0
+        // Second child (100,80) centred: x=(100-100)/2=0, y=0.
         assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
     }
 
@@ -991,6 +1016,13 @@ mod tests {
         );
     }
 }
+
+/// The public `Box`/`Stack` builder — the container the `Box`-shaped components are built from.
+///
+/// Shaped like `Column`/`Row`: options are builder methods that return `Self`, the caller's
+/// `modifier` is applied last, and [`Stack::build`] publishes every parameter through
+/// `ctx.changed` so a clean slot can skip the subtree. The policy it drives is [`BoxLayout`];
+/// Compose calls the same thing `Box` with a `contentAlignment`.
 pub struct Stack {
     modifier: Modifier,
     alignment: Alignment,
@@ -1001,6 +1033,7 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// An empty stack: no modifier, every child placed at the start edge.
     pub fn new() -> Self {
         Stack {
             modifier: Modifier::new(),
@@ -1010,7 +1043,10 @@ impl Stack {
         }
     }
 
+    /// Append a modifier. A `layout_direction` in it wins over the ambient CompositionLocal.
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+
+    /// Place every child with one axis-symmetric value — see [`BoxLayout::alignment`].
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
 
     /// Each axis on its own — Compose's 2-D `Box(contentAlignment = …)`.
@@ -1019,20 +1055,25 @@ impl Stack {
         self
     }
 
-    /// Compose's `Box(propagateMinConstraints = true)`.
+    /// Pass the box's own MINIMUM constraints to its children instead of loosening them —
+    /// Compose's `Box(propagateMinConstraints = true)`. See
+    /// [`BoxLayout::propagate_min_constraints`] for why it matters.
     pub fn propagate_min_constraints(mut self, on: bool) -> Self {
         self.propagate_min_constraints = on;
         self
     }
 
+    /// Compose the box: publish the parameters, resolve the direction, and hand the rest to
+    /// `build_container` — the content closure becomes the box's composition scope.
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        // 参数暂存（参数相等跳过——同 Column）
+        // Publish the parameters first: a clean slot skips the subtree, as in Column.
         ctx.changed(&self.alignment);
         ctx.changed(&self.content_alignment);
         ctx.changed(&self.propagate_min_constraints);
-        // 方向：modifier 覆盖 > CompositionLocal 默认（同 Column/Row）——对齐的水平轴靠它镜像
+        // Direction: an explicit modifier wins over the CompositionLocal (as in Column/Row) — the
+        // horizontal half of the alignment mirrors under it.
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
-        // content 闭包自动成为组合 scope（与 Column 一致）
+        // The content closure becomes the composition scope, same as Column.
         let mut policy = match self.content_alignment {
             Some(a) => BoxLayout::new().content_alignment(a).direction(dir),
             None => BoxLayout::new().alignment(self.alignment).direction(dir),
