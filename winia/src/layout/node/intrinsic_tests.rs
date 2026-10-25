@@ -33,7 +33,7 @@
     /// box at all. The default intrinsic path runs the same two-pass measure, so the child must be
     /// excluded from the answer there too.
     #[test]
-    fn a_box_intrinsic_ignores_a_match_parent_child() {
+    fn the_intrinsic_size_of_a_box_ignores_a_match_parent_child() {
         use crate::layout::BoxLayout;
         let mut nodes = vec![
             LayoutNode::new(Modifier::new(), Some(0)),
@@ -46,6 +46,13 @@
             Box::new(FixedPolicy(120.0, 40.0)),
             Box::new(FixedPolicy(300.0, 200.0)),
         ];
+        // The control: the fixture really answers 300 on its own, so the 120 below is the box's
+        // exclusion and not a smaller fixture.
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 2, IntrinsicQuery::MaxWidth, 100.0),
+            300.0,
+            "control: the match-parent child's own intrinsic width is 300"
+        );
         assert_eq!(
             intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
             120.0,

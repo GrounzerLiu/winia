@@ -611,10 +611,11 @@ mod tests {
         );
     }
 
-    /// The `Constraints.Infinity` guard: when the box's own size is not finite, the match-parent
-    /// child is measured with `min = 0` (not `min = f32::MAX`) and `max = box`, so it keeps its
-    /// own size instead of being forced to infinity. A non-match child reporting `f32::MAX@ is the
-    /// only way to reach that branch, which is why it needs a test rather than a comment.
+    /// The `Constraints.Infinity` guard: when the box's size reaches the unbounded sentinel
+    /// (`>= f32::MAX`, so `f32::MAX` and `f32::INFINITY` alike), the match-parent child is measured
+    /// with `min = 0` and `max = box`, so it keeps its own size instead of being forced to
+    /// infinity. Only a non-match child that reports such a size reaches that branch, which is why
+    /// it needs a test rather than a comment.
     #[test]
     fn a_match_parent_child_under_an_unbounded_box_keeps_its_own_size() {
         let mut nodes = vec![
@@ -634,10 +635,19 @@ mod tests {
             Size::new(40.0, 10.0),
             "the match-parent child is not stretched to infinity"
         );
+        // Both halves of the guard: `min` is 0 and `max` is the box. A regression that only
+        // changed the minimum would still pass the size assertion above.
+        assert_eq!(
+            nodes[1].cached_constraints,
+            Some(Constraints::new(0.0, f32::MAX, 0.0, f32::MAX)),
+            "the guard hands the child min 0 and max = the box, not min = f32::MAX"
+        );
     }
 
     /// A later frame re-measures the match-parent child at the box's NEW size: the child's cached
-    /// constraints are the old box size, so the second pass has to run again.
+    /// constraints are the old box size, so the second pass has to run again. The child is identified
+    /// by its flag, not by its index: it measures the same size as the anchor by construction, so an
+    /// index-only assertion would pass with the two children swapped.
     #[test]
     fn a_match_parent_child_follows_the_box_on_a_later_frame() {
         use crate::runtime::composer::Composer;
@@ -664,6 +674,10 @@ mod tests {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let root = composer.arena.root.expect("root");
         let matched = composer.arena_nodes()[root].children[1];
+        assert!(
+            composer.arena_nodes()[matched].modifier.is_match_parent_size(),
+            "the node under test is the one carrying the flag"
+        );
         assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(100.0, 40.0));
         assert_eq!(
             composer.arena_nodes()[matched].measured_size,
@@ -678,6 +692,7 @@ mod tests {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let root = composer.arena.root.expect("root");
         let matched = composer.arena_nodes()[root].children[1];
+        assert!(composer.arena_nodes()[matched].modifier.is_match_parent_size());
         assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(200.0, 40.0));
         assert_eq!(
             composer.arena_nodes()[matched].measured_size,
@@ -686,8 +701,10 @@ mod tests {
         );
     }
 
-    /// A match-parent child still honours its own `Modifier::offset`: the engine applies offsets to
-    /// children after the policy places them, and the flag does not opt out of that.
+    /// A match-parent child still honours its own `Modifier::offset`. The property pinned here is
+    /// the ORDERING: the engine's post-place offset step (`measure_node_inner`) applies to every child,
+    /// so the flag cannot opt out of it. The placement itself is (0,0) under any alignment because
+    /// the child fills the box — the offset is the observable.
     #[test]
     fn a_match_parent_child_keeps_its_own_offset() {
         use crate::runtime::composer::Composer;
@@ -705,9 +722,11 @@ mod tests {
                 });
         }));
         composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
-        let root = composer.layout_root().unwrap();
+        let root = composer.arena.root.expect("root");
+        let matched = composer.arena_nodes()[root].children[1];
+        assert!(composer.arena_nodes()[matched].modifier.is_match_parent_size());
         assert_eq!(
-            composer.arena_nodes()[root.children[1]].position,
+            composer.arena_nodes()[matched].position,
             Offset::new(5.0, 7.0),
             "the offset rides on top of the matched placement"
         );
@@ -757,6 +776,10 @@ mod tests {
             Offset::new(150.0, 80.0),
             "BOTTOM_END moves it to the far corner on the next frame"
         );
+        // The mechanism this pins: the state is read in the ENCLOSING scope (before `build`), so the
+        // box's own slot stays Clean and only `ctx.changed(&content_alignment)` can make it Enter.
+        // If that read ever moves inside the box's content the slot becomes dirty and this test
+        // stops pinning the declaration — the comment is here so that edit is noticed.
     }
 
     /// A box does not crop an overflowing child, and neither does its ANCESTOR: the outer box reports
@@ -780,6 +803,79 @@ mod tests {
             composer.arena_nodes()[root].measured_size,
             Size::new(500.0, 40.0),
             "the outer box reports the 500 the inner one reported"
+        );
+        let inner = composer.arena_nodes()[root].children[0];
+        assert_eq!(
+            composer.arena_nodes()[inner].measured_size,
+            Size::new(500.0, 40.0),
+            "and the inner box reports the 500 its child required"
+        );
+    }
+
+    /// The guard is per axis: a box that is unbounded on ONE axis still tightens the other, so a
+    /// single condition for both axes would be wrong.
+    #[test]
+    fn the_infinity_guard_is_per_axis() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().required_size(f32::MAX, 40.0)),
+            LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
+        ];
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &[0, 1],
+            Constraints::UNBOUNDED,
+        );
+        assert_eq!(size, Size::new(f32::MAX, 40.0));
+        assert_eq!(
+            placements[1].size,
+            Size::new(40.0, 40.0),
+            "the finite height still tightens the child; the infinite width does not"
+        );
+    }
+
+    /// `Constraints.UNBOUNDED` carries `f32::INFINITY`, not `f32::MAX`: the guard compares
+    /// `>= f32::MAX`, so the true unbounded value takes the same branch.
+    #[test]
+    fn a_match_parent_child_under_infinity_constraints_keeps_its_own_size() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().required_size(f32::INFINITY, f32::INFINITY)),
+            LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
+        ];
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &[0, 1],
+            Constraints::UNBOUNDED,
+        );
+        assert_eq!(size, Size::new(f32::INFINITY, f32::INFINITY));
+        assert_eq!(placements[1].size, Size::new(40.0, 10.0));
+    }
+
+    /// A match-parent child's OWN alignment wins over the implicit `Center`: a regression that
+    /// hard-coded `Center` for every match child would pass every other match test (they all fill
+    /// the box, where the alignment is a no-op).
+    #[test]
+    fn a_match_parent_childs_own_alignment_wins_over_the_implicit_centre() {
+        let mut nodes = vec![
+            make_leaf(100.0, 100.0),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .required_size(200.0, 60.0)
+                    .match_parent_size()
+                    .content_align_self(ContentAlignment::TOP_START),
+            ),
+        ];
+        let (_, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &[0, 1],
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            placements[1].position,
+            Offset::new(0.0, 0.0),
+            "TOP_START beats the match-parent default of Centre (-50, 20)"
         );
     }
 }

@@ -50,19 +50,27 @@
 - `BoxWithConstraints` is winia's `Stack` plus a subcomposition; Compose runs the Box policy over
   the subcomposed measurables, winia wraps the content in a real Box node (one extra node, and
   multi-root content is sized by its widest root).
-- a BOX-level post-measure growth step (`aspect_ratio`, `minimum_interactive_size`) runs after the
-  policy, so a match-parent child matches the PRE-growth size. Compose's modifier nodes put the
-  adjusted constraints in front of the box instead. Not introduced by `match_parent_size`, but it
-  is the case where the two differ, and it is not pinned by a test because the current behaviour is
-  the one being documented, not the one being promised.
+- a BOX-level `aspect_ratio` runs after the policy (its node measures the child with
+  `Constraints.fixed`, then the engine grows the box), so a match-parent child matches the
+  PRE-growth size. `minimum_interactive_size` is NOT a divergence: Compose's
+  `MinimumInteractiveModifierNode` also measures with the incoming constraints and grows the box
+  afterwards. Not introduced by `match_parent_size`, and deliberately not pinned by a test: the
+  current behaviour is what is being documented, not what is being promised.
 
 ## Tests
 
-`winia/src/layout/box_layout.rs::tests` (unit, arena-level): size from the largest child, centre
-alignment, RTL mirroring, two-axis corners, `propagate_min_constraints`, per-child alignment
-precedence, overflow reports content, the minimum floor, empty box, `match_parent_size` (does not
-size the box / fills a forced box / only-match takes the minimum / toggling re-measures), and the
-`Stack` builder carrying both knobs.
+`winia/src/layout/box_layout.rs::tests`: size from the largest child, centre alignment, RTL
+mirroring, two-axis corners, `propagate_min_constraints`, per-child alignment precedence, overflow
+reports content, the minimum floor, empty box, and the `Stack` builder carrying both knobs.
+`match_parent_size`: does not size the box, fills a forced box, only-match takes the minimum
+(loose and tight), an escaping child is centred, the child's own alignment beats the implicit
+`Center`, the `Constraints.Infinity` guard (both halves, per axis, `f32::MAX` and `f32::INFINITY`),
+a later frame follows the box, its own `Modifier::offset` still applies, toggling the flag
+re-measures, and an ancestor box grows with an overflowing child.
+
+Some of those drive a `Composer` end to end (the later-frame, offset, alignment, ancestor and
+toggling cases) rather than the policy alone; `layout::node::intrinsic_tests` covers the intrinsic
+path, and `layout::row::tests` pins that a Row ignores the flag.
 
 `winia/tests/ui_box_test.rs` drives `examples/box_layout_demo.rs` through the fixture: per-child
 alignment, overflow, `BoxWithConstraints` alignment, the `match_parent_size` scrim, and RTL.

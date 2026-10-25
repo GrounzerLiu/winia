@@ -775,8 +775,18 @@ mod tests {
         let host = composer.arena.nodes[root].subcomposed_child.expect("content box");
         let content = &composer.arena.nodes[host];
         assert_eq!(content.children.len(), 2, "the content box hosts both children");
+        let anchor = content.children[0];
+        let scrim = content.children[1];
+        assert!(
+            !composer.arena_nodes()[anchor].modifier.is_match_parent_size(),
+            "the first child is the anchor that sizes the box"
+        );
+        assert!(
+            composer.arena_nodes()[scrim].modifier.is_match_parent_size(),
+            "and the second is the scrim"
+        );
         assert_eq!(
-            composer.arena_nodes()[content.children[1]].measured_size,
+            composer.arena_nodes()[scrim].measured_size,
             Size::new(50.0, 20.0),
             "the scrim matched the box the content defined"
         );

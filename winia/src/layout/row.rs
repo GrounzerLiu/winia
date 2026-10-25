@@ -147,6 +147,31 @@ mod tests {
         node
     }
 
+    /// `match_parent_size` is a Box behaviour: a Row measures such a child like any other, at the
+    /// child's own size. Only `BoxLayout` reads the flag, so it must not leak into the shared size
+    /// walk.
+    #[test]
+    fn a_match_parent_flag_is_ignored_by_a_row() {
+        let row = RowLayout::new();
+        let mut nodes = vec![
+            LayoutNode::leaf(crate::modifier::Modifier::new().size(40.0, 10.0).match_parent_size()),
+            make_leaf(30.0, 10.0),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 200.0, 0.0, 100.0),
+        );
+        assert_eq!(size, Size::new(70.0, 10.0), "the row stacks both children normally");
+        assert_eq!(
+            placements[0].size,
+            Size::new(40.0, 10.0),
+            "and the flagged child keeps its own size"
+        );
+    }
+
     #[test]
     fn a_row_places_its_children_end_to_end() {
         let row = RowLayout::new();

@@ -97,3 +97,4 @@ custom `MeasurePolicy`.
 | `padding_is_part_of_the_box_and_offsets_the_content` | the box is content + padding, and the adopted content box starts inside the padding |
 | `the_box_is_as_wide_as_its_widest_content_root` | multi-root content: the widest root defines the box |
 | `the_alignment_mirrors_under_rtl` | `BOTTOM_END` is the bottom-left in an RTL box |
+| `a_match_parent_child_inside_the_composed_content_fills_the_box` | a `match_parent_size` child in the composed content matches the box the content defines (the extra Box node is its parent) |
