@@ -486,6 +486,40 @@
         );
     }
 
+    /// Padding is a CHAIN STEP: Compose's padding node deflates the constraints where it stands
+    /// (`foundation/layout/Padding.kt`), so a size fixed INSIDE the padding is clamped into the
+    /// already-deflated range and the node adds the padding on top — 300 inside 8 dp of padding is
+    /// a 316 dp node.
+    #[test]
+    fn padding_outside_a_size_deflates_before_the_size_is_fixed() {
+        let m = Modifier::new().padding(8.0).size(300.0, 120.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!((size.width, size.height), (316.0, 136.0));
+    }
+
+    /// The other order absorbs the padding: the size is fixed first, then the padding deflates what
+    /// is left, and the 8 dp comes out of the 300 rather than on top of it.
+    #[test]
+    fn a_size_outside_padding_absorbs_the_padding() {
+        let m = Modifier::new().size(300.0, 120.0).padding(8.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!((size.width, size.height), (300.0, 120.0));
+    }
+
+    /// The combination the chain-order fix exists for: the aspect ratio now derives from the
+    /// DEFLATED range, as Compose's padding node would leave it (284 x 142), and the node adds the
+    /// padding back (300 x 158). Before the padding step it derived 300x150 and put the content in
+    /// 284x134.
+    #[test]
+    fn padding_outside_an_aspect_ratio_derives_from_the_deflated_range() {
+        let m = Modifier::new().padding(8.0).aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (300.0, 158.0));
+    }
+
     /// The UNENFORCED pass: when no candidate satisfies the range, Compose still returns one
     /// ("the constraints will not be respected", `AspectRatio.kt:43-47`). winia then CLAMPS it
     /// (the derivation feeds `Constraints::fixed`, where Compose has an extra node), so the

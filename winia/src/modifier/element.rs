@@ -264,6 +264,11 @@ pub(crate) enum SizeStep {
     /// position and fix what follows to it (`Constraints.fixed`). Emitted in chain order so the
     /// derivation sees exactly the constraints the aspect modifier would.
     AspectRatio { ratio: f32, match_height_first: bool },
+    /// A `padding` element, resolved. Compose's padding node deflates the constraints at ITS position,
+    /// so this is a step too: `.padding(8).size(300)` must fix 300 inside a range already 16 smaller,
+    /// and `.size(300).padding(8)` must deflate afterwards. Emitted in chain order; the node's
+    /// OUTER size still adds the total padding at the end.
+    Padding { start: f32, top: f32, end: f32, bottom: f32 },
     /// `wrapContent*` — relax the incoming minimum (and max when unbounded) for what follows.
     Wrap {
         width: bool,

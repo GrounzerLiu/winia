@@ -218,6 +218,14 @@ impl Modifier {
                         min_height: opt(min_height),
                     })
                 }
+                ModifierElement::PaddingSides { start, top, end, bottom } => {
+                    out.push(SizeStep::Padding {
+                        start: resolve(start),
+                        top: resolve(top),
+                        end: resolve(end),
+                        bottom: resolve(bottom),
+                    })
+                }
                 ModifierElement::AspectRatio { ratio, match_height_first } => {
                     out.push(SizeStep::AspectRatio { ratio: *ratio, match_height_first: *match_height_first })
                 }

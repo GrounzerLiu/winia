@@ -378,6 +378,18 @@ pub(crate) fn measure_node_inner(
                     inner_constraints = Constraints::fixed(size.width, size.height);
                 }
             }
+            SizeStep::Padding {
+                start,
+                top,
+                end,
+                bottom,
+            } => {
+                // Compose's padding node deflates the constraints where it stands
+                // (`foundation/layout/Padding.kt`); the chain order decides whether a size fixed
+                // inside the padding sees the deflated range. The node's OUTER size adds the total
+                // padding afterwards, which is why the step only shrinks what follows.
+                inner_constraints = inner_constraints.offset(start + end, top + bottom);
+            }
             SizeStep::MinWidth(v) => {
                 inner_constraints.min_width =
                     v.clamp(inner_constraints.min_width, inner_constraints.max_width);
@@ -549,6 +561,10 @@ pub(crate) fn measure_node_inner(
     // 2. 应用 padding
     let (mut pad_start, mut pad_end) = nodes[idx].modifier.get_padding_horizontal();
     let (mut pad_top, mut pad_bottom) = nodes[idx].modifier.get_padding_vertical();
+    // The ELEMENT padding already deflated in the walk (`SizeStep::Padding`, chain order), so only
+    // the WINDOW-INSET padding is applied here: insets are not chain steps.
+    let (mut inset_start, mut inset_end) = (0.0f32, 0.0f32);
+    let (mut inset_top, mut inset_bottom) = (0.0f32, 0.0f32);
     // Window-inset padding is resolved HERE, at measure time: the controller's state read registers a
     // layout dependency (so an inset change re-measures just these nodes), and the insets it applies
     // are consumed for the subtree. Consume-only elements mark them without padding.
@@ -560,6 +576,10 @@ pub(crate) fn measure_node_inner(
         pad_end += value.right;
         pad_top += value.top;
         pad_bottom += value.bottom;
+        inset_start += value.left;
+        inset_end += value.right;
+        inset_top += value.top;
+        inset_bottom += value.bottom;
         inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
     }
     for (kind, controller) in nodes[idx].modifier.inset_consume_steps() {
@@ -569,8 +589,10 @@ pub(crate) fn measure_node_inner(
     let _inset_guard = crate::window::insets::ConsumeScope::enter(inset_consumed);
     let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
-    if pad_x > 0.0 || pad_y > 0.0 {
-        inner_constraints = inner_constraints.offset(pad_x, pad_y);
+    let inset_x = inset_start + inset_end;
+    let inset_y = inset_top + inset_bottom;
+    if inset_x > 0.0 || inset_y > 0.0 {
+        inner_constraints = inner_constraints.offset(inset_x, inset_y);
     }
 
     // 2b. `Modifier::paddingFrom` relaxes the MINIMUM on its line's axis before the content is
