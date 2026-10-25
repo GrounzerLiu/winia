@@ -170,4 +170,29 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
                 .any(|text| text.contains("items ") && *text != label_before)
         },
     );
+
+    // 9. Accessibility: the window's semantics tree reports the lists as COLLECTIONS of 200 items and
+    //    each row's position in it — what a screen reader turns into "row 3 of 200". Read from the
+    //    real window's tree, not a unit fixture.
+    // The snapshot is published once per frame; the request retries until the frame that has it.
+    let sem = app
+        .semantics_until(Duration::from_secs(2), |value| {
+            value.to_string().contains("collection")
+        })
+        .expect("the window's semantics tree")
+        .to_string();
+    // `semantics()` round-trips the JSON through serde_json, whose maps are ordered by key, so the
+    // nested objects come back alphabetized.
+    assert!(
+        sem.contains("\"collection\":{\"columns\":0,\"rows\":200}"),
+        "the column cards are 200-row collections"
+    );
+    assert!(
+        sem.contains("\"collection\":{\"columns\":200,\"rows\":0}"),
+        "the row cards are 200-column collections"
+    );
+    assert!(
+        sem.contains("\"collectionItem\":{\"index\":0,\"span\":1}"),
+        "and every row declares its position"
+    );
 }

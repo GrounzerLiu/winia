@@ -77,12 +77,38 @@ is Compose's distinction too.
 | `SemanticsPropertyKey` set (hundreds, custom keys) | role, name, state, click | An API that grows to fit real consumers beats one copied whole from a surface with no consumer here. |
 | `SemanticsActions` incl. `SetProgress`, `ScrollBy`, `SetText` | click only | Each action needs a platform pattern behind it (UIA invoke / range value); click is the one wired end to end. |
 | `customActions` | `SemanticsConfig::custom_action(label, f)` — listed on the tree node and invokable | The Windows bridge still exposes only Invoke: UIA has no generic custom-action pattern. |
-| Collections (`collectionInfo`, `indexForKey`), `heading`, `traversalIndex` | absent | Same reason. |
+| Collections (`collectionInfo`, `indexForKey`), `heading`, `traversalIndex` | `collection_info` / `collection_item_info` declared, resolved into the tree and the debug JSON; the lazy lists set them | A reader can now announce "row 3 of 200" and skip by position. `indexForKey` and `heading` are still absent: nothing needs them yet, and the Windows bridge has no ItemContainer pattern behind them. |
 | `clearAndSetSemantics` | `Modifier::clear_and_set_semantics(config)` — replaces the declaration and hides the subtree | Implemented; an empty block hides the node (Compose's "invisible to the user"). The clickable flag is still taken from the modifier chain (Compose would drop it unless the block declares its own onClick action, which winia's config cannot express yet). |
 | `ContentDescription` and `Text` are separate properties | one `name` | One field until a consumer needs the distinction, which is what a screen reader's Name property resolves to anyway. |
 | Semantics merge during composition into a `SemanticsConfiguration` | merged at read time from the modifier chain | winia's modifier is plain data read per query; nothing has to be kept in sync. |
 
 Dead ends kept from the analysis: `docs/semantics-gap.md`.
+
+## Collections
+
+A one-dimensional list is a collection of `n` items, so the model carries Compose's two declarations:
+
+```rust
+SemanticsConfig::new().collection_info(CollectionInfo::rows(200))        // the list
+SemanticsConfig::new().collection_item_info(CollectionItemInfo::new(3))  // one row
+```
+
+`CollectionInfo` keeps Compose's row/column pair (a grid uses both; a lazy list fills one and leaves
+the other at zero, so `len()` is the item count on the axis the collection runs on). A collection
+declaration makes a node an element of its own — the plain "declares nothing is transparent" rule
+would otherwise drop a list whose only statement is its item count — and it keeps its children, so a
+row's content stays readable under its position. The item position merges like every other field: a
+caller that restates it wins, saying nothing keeps the component's.
+
+The lazy lists declare both ends (`layout/lazy/list.rs`): the list node declares
+`CollectionInfo::rows(total)` for a `LazyColumn` / `::columns(total)` for a `LazyRow`, and each
+composed row declares its own index, so a reader turns the pair into "row 3 of 200". Composed-but-
+off-screen prefetch rows are in the tree too — the platform filters by bounds, as it does for any
+other clipped element.
+
+The debug channel's `sem` command resolves the tree for the app's window (`0` means "the app's own
+window", like every other debug command — reading the published snapshot), and
+`tests/ui_lazy_test.rs` asserts the collections straight off a running window.
 
 ## The Windows bridge (feature `accessibility`)
 

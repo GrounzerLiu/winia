@@ -37,7 +37,10 @@ pub(crate) use tree::*;
 pub use json::semantics_json;
 pub use registry::{forget, has_actions, publish, published, request_action, take_actions, OverlaySemantics, UiAction, WindowSemantics};
 pub use tree::{click_node_by_id, semantics_tree};
-pub use types::{LiveRegionMode, SemanticsAction, SemanticsConfig, SemanticsNode, SemanticsRole, SemanticsState};
+pub use types::{
+    CollectionInfo, CollectionItemInfo, LiveRegionMode, SemanticsAction, SemanticsConfig, SemanticsNode,
+    SemanticsRole, SemanticsState,
+};
 
 #[cfg(test)]
 mod tests;

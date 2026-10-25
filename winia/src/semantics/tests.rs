@@ -53,6 +53,109 @@
         }
     }
 
+    // ── Collections (Compose's CollectionInfo / CollectionItemInfo) ──
+
+    /// A declared collection reaches the tree with its count AND keeps its children: the items are
+    /// the collection's children, not something folded into it.
+    #[test]
+    fn a_declared_collection_reaches_the_tree_and_the_json() {
+        let tree = tree_of(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new().collection_info(CollectionInfo::rows(200)),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("one").build(ctx);
+                    Text::new("two").build(ctx);
+                });
+        });
+        let list = tree
+            .iter()
+            .find(|node| node.collection.is_some())
+            .expect("the collection element is in the tree");
+        assert_eq!(list.collection, Some(CollectionInfo::rows(200)));
+        assert_eq!(list.children.len(), 2, "the items stay children of the collection");
+        assert!(list.collection_item.is_none());
+        let json = semantics_json(&tree);
+        assert!(
+            json.contains("\"collection\":{\"rows\":200,\"columns\":0}"),
+            "the debug tree reports the count: {json}"
+        );
+    }
+
+    /// An item position is a declaration of its own: a node that only says "I am row 1 of the
+    /// enclosing list" is an element, not something transparent.
+    #[test]
+    fn a_collection_item_is_an_element_of_its_own() {
+        let tree = tree_of(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new().collection_info(CollectionInfo::rows(3)),
+                ))
+                .build(ctx, |ctx| {
+                    for i in 0..3usize {
+                        Column::new()
+                            .modifier(Modifier::new().semantics(
+                                SemanticsConfig::new()
+                                    .collection_item_info(CollectionItemInfo::new(i)),
+                            ))
+                            .build(ctx, |ctx| {
+                                Text::new(format!("row {i}")).build(ctx);
+                            });
+                    }
+                });
+        });
+        let list = tree
+            .iter()
+            .find(|node| node.collection.is_some())
+            .expect("the collection element");
+        let positions: Vec<usize> = list
+            .children
+            .iter()
+            .filter_map(|node| node.collection_item.map(|info| info.index))
+            .collect();
+        assert_eq!(positions, vec![0, 1, 2], "each item reports its own position");
+        assert!(
+            semantics_json(&tree).contains("\"collectionItem\":{\"index\":1,\"span\":1}"),
+            "and the position is in the debug tree"
+        );
+    }
+
+    /// A caller's declaration wins field by field, and an undeclared one keeps the component's.
+    #[test]
+    fn a_caller_collection_wins_over_the_components() {
+        let component = SemanticsConfig::new().collection_info(CollectionInfo::rows(200));
+        let caller = SemanticsConfig::new().collection_info(CollectionInfo::columns(7));
+        assert_eq!(
+            caller.or(component.clone()).collection_info_value(),
+            Some(CollectionInfo::columns(7)),
+            "a filtered/restated collection replaces the component's"
+        );
+        assert_eq!(
+            SemanticsConfig::new().or(component).collection_info_value(),
+            Some(CollectionInfo::rows(200)),
+            "and saying nothing keeps it"
+        );
+        // The item position merges the same way.
+        let with_item = SemanticsConfig::new().collection_item_info(CollectionItemInfo::spanning(3, 2));
+        assert_eq!(
+            SemanticsConfig::new().or(with_item).collection_item_info_value(),
+            Some(CollectionItemInfo::spanning(3, 2))
+        );
+    }
+
+    #[test]
+    fn collection_info_lengths_and_spans_are_sane() {
+        assert_eq!(CollectionInfo::rows(200).len(), 200);
+        assert!(CollectionInfo::rows(200).is_vertical());
+        assert!(!CollectionInfo::rows(0).is_vertical(), "an empty collection has no axis");
+        assert!(CollectionInfo::rows(0).is_empty());
+        assert_eq!(CollectionInfo::columns(7).len(), 7);
+        assert!(!CollectionInfo::columns(7).is_vertical());
+        assert_eq!(CollectionItemInfo::new(3).span, 1);
+        assert_eq!(CollectionItemInfo::spanning(3, 0).span, 1, "a span is at least one");
+    }
+
     #[test]
     fn the_structure_fingerprint_tracks_shape_not_content() {
         // Frames of ONE composer, which is what a bridge ever compares (a different composer means a
@@ -133,6 +236,8 @@
                 focused: false,
                 live_region: LiveRegionMode::Off,
                 selectable_group: false,
+                collection: None,
+                collection_item: None,
                 bounds: (0.0, 0.0, 50.0, 50.0),
                 children: Vec::new(),
             }],

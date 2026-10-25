@@ -856,7 +856,17 @@ impl<A: LazyAxis> LazyList<A> {
             .lazy_scroll_reverse(mirror);
         let m = m
             .then(self.modifier)
-            .then(Modifier::new().with_item_animation_host(state.item_animations.clone()));
+            .then(Modifier::new().with_item_animation_host(state.item_animations.clone()))
+            // Accessibility: the list is a COLLECTION of `total` items, and each item below declares
+            // its own position in it. Without both, a reader walks the visible rows as an anonymous
+            // stack instead of announcing "item 3 of 200" (Compose's `LazyListSemantics`).
+            .then(Modifier::new().semantics(
+                crate::semantics::SemanticsConfig::new().collection_info(if A::VERTICAL {
+                    crate::semantics::CollectionInfo::rows(total)
+                } else {
+                    crate::semantics::CollectionInfo::columns(total)
+                }),
+            ));
         // The registration order, taken out before the policy moves into the group (unreadable after).
         let child_globals = policy.globals.clone();
         // The item children MUST be registered AFTER `start_restartable_group` (so they attach under
@@ -877,7 +887,14 @@ impl<A: LazyAxis> LazyList<A> {
                     let ik = ctx.next_key() ^ (item_key.wrapping_mul(MIX));
                     if let Some((iv_idx, _local)) = intervals.locate(g) {
                         let content = intervals.intervals[iv_idx].content.clone();
-                        match ctx.start_restartable_group(ik, Modifier::new(), BoxLayout::new()) {
+                        // The item's position in the collection — a reader says "3 of 200" from these
+                        // two declarations (the count on the list node above, the index here).
+                        let item_modifier = Modifier::new().semantics(
+                            crate::semantics::SemanticsConfig::new().collection_item_info(
+                                crate::semantics::CollectionItemInfo::new(g),
+                            ),
+                        );
+                        match ctx.start_restartable_group(ik, item_modifier, BoxLayout::new()) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 content(ctx, g);

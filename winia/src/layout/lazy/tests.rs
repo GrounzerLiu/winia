@@ -2135,6 +2135,161 @@
         assert_eq!(header.index, 0, "and it keeps its data index");
     }
 
+    // ── Accessibility: the list is a collection, each row an item ──
+
+    fn semantics_of(composer: &crate::runtime::composer::Composer, root: usize) -> Vec<crate::semantics::SemanticsNode> {
+        crate::semantics::semantics_tree(composer.arena_nodes(), root)
+    }
+
+    /// A `LazyColumn` declares a collection of `total` rows, and each composed row declares its own
+    /// index — the pair a reader turns into "row 3 of 200".
+    #[test]
+    fn a_lazy_column_declares_a_collection_and_its_item_positions() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree
+            .iter()
+            .find(|node| node.collection.is_some())
+            .expect("the list is a collection");
+        assert_eq!(
+            list.collection,
+            Some(crate::semantics::CollectionInfo::rows(200)),
+            "a column counts ROWS"
+        );
+        let positions: Vec<usize> = list
+            .children
+            .iter()
+            .filter_map(|node| node.collection_item.map(|info| info.index))
+            .collect();
+        // The tree covers the whole COMPOSED window (the visible rows plus the beyond-bounds
+        // prefetch), so the assertion is: the positions are contiguous from 0, and every VISIBLE
+        // item is among them — a reader filters the rest by bounds.
+        assert_eq!(positions, (0..positions.len()).collect::<Vec<_>>(), "contiguous from the head");
+        let visible: Vec<usize> = state.layout_info().visible_items.iter().map(|i| i.index).collect();
+        assert_eq!(visible, vec![0, 1, 2, 3, 4], "five rows fit");
+        assert!(positions.len() > visible.len(), "the prefetch is composed too: {positions:?}");
+        assert!(visible.iter().all(|index| positions.contains(index)));
+    }
+
+    /// A `LazyRow` counts COLUMNS — same declaration, the other axis.
+    #[test]
+    fn a_lazy_row_declares_columns() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyRow::new()
+                .state(state.clone())
+                .items(40, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        assert_eq!(list.collection, Some(crate::semantics::CollectionInfo::columns(40)));
+        let positions: Vec<usize> = list
+            .children
+            .iter()
+            .filter_map(|node| node.collection_item.map(|info| info.index))
+            .collect();
+        assert_eq!(positions, (0..positions.len()).collect::<Vec<_>>(), "contiguous from the head");
+        let visible: Vec<usize> = state.layout_info().visible_items.iter().map(|i| i.index).collect();
+        assert_eq!(visible, vec![0, 1, 2, 3], "four 50 dp tiles fit in 200 dp");
+    }
+
+    /// The positions are DATA indices, so they follow the scroll: after scrolling to offset 400 the
+    /// first composed row is 10, and an RTL row still counts from 0 at its data start.
+    #[test]
+    fn the_item_positions_follow_the_data_index() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        // A real frame: the window is chosen during COMPOSITION, so scrolling needs a compose as
+        // well as a layout — a layout alone keeps the rows the previous compose registered.
+        state.offset.set(400.0);
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        let positions: Vec<usize> = list
+            .children
+            .iter()
+            .filter_map(|node| node.collection_item.map(|info| info.index))
+            .collect();
+        let visible: Vec<usize> = state.layout_info().visible_items.iter().map(|i| i.index).collect();
+        assert_eq!(visible, vec![10, 11, 12, 13, 14], "offset 400 at 40 dp per row");
+        assert!(positions.contains(&10), "and the window starts at the anchor: {positions:?}");
+    }
+
+    /// An empty list still declares its (zero-length) collection: a reader should hear "list, empty"
+    /// rather than nothing at all.
+    #[test]
+    fn an_empty_lazy_list_still_declares_its_collection() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(0, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        assert_eq!(list.collection, Some(crate::semantics::CollectionInfo::rows(0)));
+        assert!(list.children.is_empty());
+    }
+
+    /// The item wrapper keeps its content as a child, so a row's text is still readable ("row 3" with
+    /// its label) instead of being swallowed by the position declaration.
+    #[test]
+    fn a_row_keeps_its_content_under_its_position() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(5, |i| i as u64, |ctx, i| {
+                    crate::components::Text::new(format!("row {i}"))
+                        .modifier(Modifier::new().size(50.0, 40.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        let first = list.children.first().expect("a row element");
+        assert_eq!(first.collection_item.map(|info| info.index), Some(0));
+        assert!(
+            first.find_by_name("row 0").is_some(),
+            "the row's text is still in the tree under its position"
+        );
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

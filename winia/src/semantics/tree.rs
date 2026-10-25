@@ -32,7 +32,9 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             || clear.merges_descendants()
             || clear.is_selectable_group()
             || clear.live_region_mode() != LiveRegionMode::Off
-            || !clear.custom_actions().is_empty();
+            || !clear.custom_actions().is_empty()
+            || clear.collection_info_value().is_some()
+            || clear.collection_item_info_value().is_some();
         if declared {
             out.push(SemanticsNode {
                 node_id: node.id,
@@ -44,6 +46,8 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
                 focused: node.focused,
                 live_region: clear.live_region_mode(),
                 selectable_group: clear.is_selectable_group(),
+                collection: clear.collection_info_value(),
+                collection_item: clear.collection_item_info_value(),
                 bounds,
                 children: Vec::new(),
             });
@@ -101,6 +105,8 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
                 .live_region_mode()
                 .max(absorbed.iter().map(|child| child.live_region).max().unwrap_or_default()),
             selectable_group: config.is_selectable_group(),
+            collection: config.collection_info_value(),
+            collection_item: config.collection_item_info_value(),
             bounds,
             children: Vec::new(),
         });
@@ -119,6 +125,10 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
         // A group flag is a declaration too: without this the group node would be transparent and the tree
         // would lose the one thing that says its children are a collection.
         || config.is_selectable_group()
+        // Same for a collection: a lazy list declares the item count and (as an item of its own list)
+        // the position, and both have to survive into the tree or the reader sees an anonymous stack.
+        || config.collection_info_value().is_some()
+        || config.collection_item_info_value().is_some()
     {
         // A declared node keeps its place and its children (nothing was claimed).
         out.push(SemanticsNode {
@@ -131,6 +141,8 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             focused: node.focused,
             live_region: config.live_region_mode(),
             selectable_group: config.is_selectable_group(),
+            collection: config.collection_info_value(),
+            collection_item: config.collection_item_info_value(),
             bounds,
             children,
         });

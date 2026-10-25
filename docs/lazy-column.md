@@ -340,6 +340,16 @@ The snapshot is written at the end of every measure pass, so a composable that r
 scroll; `cargo run -p winia --example lazy_layout_demo` card 4 prints its visible range from it, and
 `tests/ui_lazy_test.rs` asserts that the text changes after a drag.
 
+## 3c. Accessibility
+
+The list is a COLLECTION: the list node declares `CollectionInfo` (rows for a `LazyColumn`, columns for
+a `LazyRow`, counted from the data total) and every composed row declares `CollectionItemInfo` with its
+data index, so a reader announces "row 3 of 200" instead of walking an anonymous stack. The declarations
+travel through the semantics tree and the debug JSON; see `docs/semantics.md` §Collections.
+
+What is still missing for a full screen-reader experience: the `ScrollToIndex` action (a reader asking
+the list to jump), `IndexForKey`, and the Windows bridge's item-container pattern.
+
 ## 3b. RTL, and the unbounded cross axis
 
 A HORIZONTAL list mirrors its main axis under RTL: `mirror = reverse_layout ^ rtl`, and the same

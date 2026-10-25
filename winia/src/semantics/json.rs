@@ -66,8 +66,18 @@ pub(crate) fn node_json(node: &SemanticsNode, out: &mut String) {
         .map(|action| json_string(action.label()))
         .collect::<Vec<_>>()
         .join(",");
+    // A collection and an item position are separate keys: a list declares the count, its items
+    // declare where they sit, and a consumer may read either without the other.
+    let collection = match node.collection {
+        Some(info) => format!("{{\"rows\":{},\"columns\":{}}}", info.rows, info.columns),
+        None => "null".to_string(),
+    };
+    let collection_item = match node.collection_item {
+        Some(info) => format!("{{\"index\":{},\"span\":{}}}", info.index, info.span),
+        None => "null".to_string(),
+    };
     out.push_str(&format!(
-        "{{{}}},\"actions\":[{actions}],\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
+        "{{{}}},\"actions\":[{actions}],\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"collection\":{collection},\"collectionItem\":{collection_item},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
         state.join(","),
         node.clickable,
         node.focused,

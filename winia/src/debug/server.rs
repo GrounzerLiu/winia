@@ -418,7 +418,16 @@ mod request_tests {
 /// Read from `crate::semantics`, which is the one store the frame loop publishes into — the
 /// accessibility bridge reads the SAME snapshots (they are kept as a tree there, not as this string).
 pub fn semantics_json(window_id: u64) -> String {
-    crate::semantics::published(window_id)
+    // `0` means "the app's own window", the same convention every other debug command uses
+    // (`request_screenshot`, `queue_event_for_window`). Without this the single-window case — i.e.
+    // every app that is not multi-window — answered the empty fallback, because the snapshot is
+    // published under the HWND and nothing had set a `target`.
+    let id = if window_id == 0 {
+        legacy_target().unwrap_or(0)
+    } else {
+        window_id
+    };
+    crate::semantics::published(id)
         .map(|snapshot| snapshot.json())
         .unwrap_or_else(|| "{\"main\":[],\"overlays\":[]}".to_string())
 }

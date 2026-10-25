@@ -192,6 +192,75 @@ impl SemanticsState {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Collections
+// ═══════════════════════════════════════════════════════════
+
+/// How many items a COLLECTION has — Compose's `CollectionInfo`.
+///
+/// A reader announces it as "3 of 200", and a platform bridge turns it into its container pattern.
+/// Compose carries a row and a column count because a grid uses both; a one-dimensional lazy list
+/// fills exactly one of them and leaves the other at zero, so [`CollectionInfo::len`] is the item
+/// count along whichever axis the collection runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollectionInfo {
+    /// Rows: the item count of a VERTICAL collection (a `LazyColumn`).
+    pub rows: usize,
+    /// Columns: the item count of a HORIZONTAL collection (a `LazyRow`).
+    pub columns: usize,
+}
+
+impl CollectionInfo {
+    /// A vertical collection of `rows` items.
+    pub fn rows(rows: usize) -> Self {
+        Self { rows, columns: 0 }
+    }
+
+    /// A horizontal collection of `columns` items.
+    pub fn columns(columns: usize) -> Self {
+        Self { rows: 0, columns }
+    }
+
+    /// The item count along the collection's own axis.
+    pub fn len(&self) -> usize {
+        self.rows.max(self.columns)
+    }
+
+    /// Whether the collection is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether the items run along rows (a vertical collection).
+    pub fn is_vertical(&self) -> bool {
+        self.rows > 0 && self.columns == 0
+    }
+}
+
+/// Where an item sits in its collection — Compose's `CollectionItemInfo`.
+///
+/// A one-dimensional list needs the zero-based position and, for a reader that asks, the span (one
+/// item for a lazy list; a header spanning several rows would say so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollectionItemInfo {
+    /// Zero-based position along the collection's axis: the row of a column, the column of a row.
+    pub index: usize,
+    /// How many positions this item spans, at least one.
+    pub span: usize,
+}
+
+impl CollectionItemInfo {
+    /// Item `index` spanning one position.
+    pub fn new(index: usize) -> Self {
+        Self { index, span: 1 }
+    }
+
+    /// Item `index` spanning `span` positions (clamped to at least one).
+    pub fn spanning(index: usize, span: usize) -> Self {
+        Self { index, span: span.max(1) }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 // Declaration
 // ═══════════════════════════════════════════════════════════
 
@@ -250,6 +319,10 @@ pub struct SemanticsConfig {
     pub(crate) selectable_group: bool,
     /// Named actions beyond click — Compose's `customActions`.
     pub(crate) custom_actions: Vec<SemanticsAction>,
+    /// This node is a COLLECTION of `count` items — Compose's `CollectionInfo`.
+    pub(crate) collection: Option<CollectionInfo>,
+    /// This node is an ITEM of an enclosing collection — Compose's `CollectionItemInfo`.
+    pub(crate) collection_item: Option<CollectionItemInfo>,
 }
 
 impl SemanticsConfig {
@@ -346,6 +419,29 @@ impl SemanticsConfig {
         &self.custom_actions
     }
 
+    /// Declare this node as a collection of `info` items — Compose's `CollectionInfo`. A lazy list
+    /// sets it so a reader can announce "item 3 of 200" instead of reading an anonymous stack.
+    pub fn collection_info(mut self, info: CollectionInfo) -> Self {
+        self.collection = Some(info);
+        self
+    }
+
+    /// This node's collection info, if it declared one.
+    pub fn collection_info_value(&self) -> Option<CollectionInfo> {
+        self.collection
+    }
+
+    /// Declare this node as an item of an enclosing collection — Compose's `CollectionItemInfo`.
+    pub fn collection_item_info(mut self, info: CollectionItemInfo) -> Self {
+        self.collection_item = Some(info);
+        self
+    }
+
+    /// This node's position in its collection, if it declared one.
+    pub fn collection_item_info_value(&self) -> Option<CollectionItemInfo> {
+        self.collection_item
+    }
+
     /// Fill every field this config leaves open from `fallback` — how a caller's declaration is
     /// folded into the one the component already made: what the caller sets wins, and what it does
     /// not mention keeps the component's value, so adding a content description does not wipe the
@@ -373,6 +469,10 @@ impl SemanticsConfig {
                 }
                 actions
             },
+            // A declaration wins over the component's, field by field: a caller that restates the
+            // collection (a filtered list, say) must not end up with two.
+            collection: self.collection.or(fallback.collection),
+            collection_item: self.collection_item.or(fallback.collection_item),
         }
     }
 }
@@ -412,6 +512,10 @@ pub struct SemanticsNode {
     /// Whether this element is a group of selectable children (`Modifier::selectable_group`). A reader treats
     /// such a node as a collection whose items are its children.
     pub selectable_group: bool,
+    /// This element is a COLLECTION of `count` items (Compose's `CollectionInfo`), if it declared one.
+    pub collection: Option<CollectionInfo>,
+    /// This element's position in its enclosing collection (Compose's `CollectionItemInfo`).
+    pub collection_item: Option<CollectionItemInfo>,
     /// Absolute bounds in logical pixels: `(x, y, width, height)`, scroll offsets applied — the same
     /// space `hit_test` works in, so a platform bridge can hand these to the OS and an action can be
     /// fired by id without hit-testing.
