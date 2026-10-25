@@ -610,6 +610,178 @@ mod tests {
             "propagation passed the box's minimum down"
         );
     }
+
+    /// The `Constraints.Infinity` guard: when the box's own size is not finite, the match-parent
+    /// child is measured with `min = 0` (not `min = f32::MAX`) and `max = box`, so it keeps its
+    /// own size instead of being forced to infinity. A non-match child reporting `f32::MAX@ is the
+    /// only way to reach that branch, which is why it needs a test rather than a comment.
+    #[test]
+    fn a_match_parent_child_under_an_unbounded_box_keeps_its_own_size() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().required_size(f32::MAX, f32::MAX)),
+            LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
+        ];
+        let children: Vec<usize> = vec![0, 1];
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::UNBOUNDED,
+        );
+        assert_eq!(size, Size::new(f32::MAX, f32::MAX), "the sizing child reports infinity");
+        assert_eq!(
+            placements[1].size,
+            Size::new(40.0, 10.0),
+            "the match-parent child is not stretched to infinity"
+        );
+    }
+
+    /// A later frame re-measures the match-parent child at the box's NEW size: the child's cached
+    /// constraints are the old box size, so the second pass has to run again.
+    #[test]
+    fn a_match_parent_child_follows_the_box_on_a_later_frame() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+        let width = State::new(100.0f32);
+        let build = {
+            let width = width.clone();
+            move |ctx: &mut ComposeCtx| {
+                let width = width.clone();
+                Stack::new().build(ctx, move |ctx| {
+                    crate::components::Text::new("anchor")
+                        .modifier(Modifier::new().size(width.get(), 40.0))
+                        .build(ctx);
+                    Stack::new()
+                        .modifier(Modifier::new().match_parent_size())
+                        .build(ctx, |_ctx| {});
+                });
+            }
+        };
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        let matched = composer.arena_nodes()[root].children[1];
+        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(100.0, 40.0));
+        assert_eq!(
+            composer.arena_nodes()[matched].measured_size,
+            Size::new(100.0, 40.0),
+            "frame 1: the match-parent child is the box"
+        );
+
+        width.set(200.0);
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        let matched = composer.arena_nodes()[root].children[1];
+        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(200.0, 40.0));
+        assert_eq!(
+            composer.arena_nodes()[matched].measured_size,
+            Size::new(200.0, 40.0),
+            "frame 2: it follows the box it matched"
+        );
+    }
+
+    /// A match-parent child still honours its own `Modifier::offset`: the engine applies offsets to
+    /// children after the policy places them, and the flag does not opt out of that.
+    #[test]
+    fn a_match_parent_child_keeps_its_own_offset() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().size(100.0, 40.0))
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("anchor")
+                        .modifier(Modifier::new().size(100.0, 40.0))
+                        .build(ctx);
+                    Stack::new()
+                        .modifier(Modifier::new().match_parent_size().offset(5.0, 7.0))
+                        .build(ctx, |_ctx| {});
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.layout_root().unwrap();
+        assert_eq!(
+            composer.arena_nodes()[root.children[1]].position,
+            Offset::new(5.0, 7.0),
+            "the offset rides on top of the matched placement"
+        );
+    }
+
+    /// Changing the box's `content_alignment` re-enters it: the builder declares it with
+    /// `ctx.changed`, so a Clean slot cannot keep the old placement.
+    #[test]
+    fn a_content_alignment_change_re_enters_the_box() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+        let align = State::new(ContentAlignment::TOP_START);
+        let build = {
+            let align = align.clone();
+            move |ctx: &mut ComposeCtx| {
+                let align = align.clone();
+                Stack::new()
+                    .content_alignment(align.get())
+                    .modifier(Modifier::new().size(200.0, 100.0))
+                    .build(ctx, move |ctx| {
+                        crate::components::Text::new("x")
+                            .modifier(Modifier::new().size(50.0, 20.0))
+                            .build(ctx);
+                    });
+            }
+        };
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root().unwrap();
+        assert_eq!(
+            composer.arena_nodes()[root.children[0]].position,
+            Offset::new(0.0, 0.0),
+            "TOP_START puts the child at the origin"
+        );
+
+        align.set(ContentAlignment::BOTTOM_END);
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root().unwrap();
+        assert_eq!(
+            composer.arena_nodes()[root.children[0]].position,
+            Offset::new(150.0, 80.0),
+            "BOTTOM_END moves it to the far corner on the next frame"
+        );
+    }
+
+    /// A box does not crop an overflowing child, and neither does its ANCESTOR: the outer box reports
+    /// the inner one's content size (Compose's Box never consults the maximum on either level).
+    #[test]
+    fn an_ancestor_box_grows_with_an_overflowing_child() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new().build(ctx, |ctx| {
+                Stack::new().build(ctx, |ctx| {
+                    crate::components::Text::new("wide")
+                        .modifier(Modifier::new().required_size(500.0, 40.0))
+                        .build(ctx);
+                });
+            });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(500.0, 40.0),
+            "the outer box reports the 500 the inner one reported"
+        );
+    }
 }
 pub struct Stack {
     modifier: Modifier,

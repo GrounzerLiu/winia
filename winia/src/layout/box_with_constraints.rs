@@ -748,6 +748,40 @@ mod tests {
         );
     }
 
+    /// A match-parent child inside the content the box composes: the extra Box node the policy builds
+    /// IS the child's parent, so `match_parent_size` works there exactly as it does in a hand-written
+    /// `Stack` — and a regression that special-cased the subcomposed child would show up here.
+    #[test]
+    fn a_match_parent_child_inside_the_composed_content_fills_the_box() {
+        use crate::layout::Stack;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            BoxWithConstraints::new().build(ctx, |ctx, _scope| {
+                crate::components::Text::new("anchor")
+                    .modifier(Modifier::new().size(50.0, 20.0))
+                    .build(ctx);
+                Stack::new()
+                    .modifier(Modifier::new().match_parent_size())
+                    .build(ctx, |_ctx| {});
+            });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(50.0, 20.0),
+            "the anchor defines the box"
+        );
+        let host = composer.arena.nodes[root].subcomposed_child.expect("content box");
+        let content = &composer.arena.nodes[host];
+        assert_eq!(content.children.len(), 2, "the content box hosts both children");
+        assert_eq!(
+            composer.arena_nodes()[content.children[1]].measured_size,
+            Size::new(50.0, 20.0),
+            "the scrim matched the box the content defined"
+        );
+    }
+
     // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is
     // covered by `layout::subcompose`'s own tests. It cannot be tested here through
     // `measure_node` alone, because `subcompose()` requires the composer's layout pass to be armed

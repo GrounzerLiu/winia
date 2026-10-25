@@ -29,6 +29,38 @@
         intrinsic_size_of(nodes, &policies, idx, IntrinsicQuery::MaxWidth, other)
     }
 
+    /// A match-parent child does not contribute to the box's intrinsic size — it does not size the
+    /// box at all. The default intrinsic path runs the same two-pass measure, so the child must be
+    /// excluded from the answer there too.
+    #[test]
+    fn a_box_intrinsic_ignores_a_match_parent_child() {
+        use crate::layout::BoxLayout;
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::new(Modifier::new(), Some(1)),
+            LayoutNode::new(Modifier::new().match_parent_size(), Some(2)),
+        ];
+        nodes[0].children = vec![1, 2];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![
+            Box::new(BoxLayout::new()),
+            Box::new(FixedPolicy(120.0, 40.0)),
+            Box::new(FixedPolicy(300.0, 200.0)),
+        ];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            120.0,
+            "the match-parent child must not widen the box"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            120.0
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
+            40.0
+        );
+    }
+
     /// A policy that only implements `measure` — the default intrinsic methods must reuse it
     /// (Compose: "make a best effort attempt … by reusing the measure method").
     #[derive(Debug)]

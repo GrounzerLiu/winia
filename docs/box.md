@@ -50,6 +50,11 @@
 - `BoxWithConstraints` is winia's `Stack` plus a subcomposition; Compose runs the Box policy over
   the subcomposed measurables, winia wraps the content in a real Box node (one extra node, and
   multi-root content is sized by its widest root).
+- a BOX-level post-measure growth step (`aspect_ratio`, `minimum_interactive_size`) runs after the
+  policy, so a match-parent child matches the PRE-growth size. Compose's modifier nodes put the
+  adjusted constraints in front of the box instead. Not introduced by `match_parent_size`, but it
+  is the case where the two differ, and it is not pinned by a test because the current behaviour is
+  the one being documented, not the one being promised.
 
 ## Tests
 
