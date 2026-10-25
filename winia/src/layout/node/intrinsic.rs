@@ -219,9 +219,11 @@ pub(crate) fn intrinsic_size_of(
         pad_other,
         intrinsic_request,
         other_axis_scrolled,
+        aspect,
     ) = {
         let m = &nodes[idx].modifier;
         let (lo, hi) = intrinsic_axis_range(m, horizontal);
+        let aspect = m.aspect_ratio_constraint();
         let (pad_x, pad_y) = m.get_padding_values();
         // Compose's Scroll intrinsic block unbounds the axis that SCROLLS when it is asked about
         // the OTHER axis (a vertical scroller answers a width query with an infinite height).
@@ -239,6 +241,7 @@ pub(crate) fn intrinsic_size_of(
             if horizontal { pad_y } else { pad_x },
             if horizontal { m.intrinsic_width_request() } else { m.intrinsic_height_request() },
             other_axis_scrolled,
+            aspect,
         )
     };
 
@@ -269,10 +272,22 @@ pub(crate) fn intrinsic_size_of(
         (Some(IntrinsicSize::Max), false) => Some(IntrinsicQuery::MaxHeight),
         (None, _) => None,
     };
+    // Compose's `AspectRatioNode` answers all four intrinsic queries from the ratio and the OTHER
+    // axis (`AspectRatio.kt:123-161`), deferring to the child only when that axis is unbounded.
+    // An outer `width/height(IntrinsicSize)` still wins for its own axis, which is why this branch
+    // comes after `declared`.
+    let aspect_other = if other_axis_scrolled { f32::MAX } else { other };
     let content = if let Some(declared) = declared {
         // `Modifier.width/height(IntrinsicSize)`: this axis IS the content's measurement, at the
         // extreme the modifier declares.
         content_intrinsic(nodes, policies, idx, declared, other)
+    } else if let Some((ratio, _)) = aspect.filter(|_| aspect_other < f32::MAX) {
+        let v = if horizontal { aspect_other * ratio } else { aspect_other / ratio };
+        if v.is_finite() && v > 0.0 {
+            v
+        } else {
+            content_intrinsic(nodes, policies, idx, query, aspect_other)
+        }
     } else if other_axis_scrolled {
         // Asking a scroller about its CROSS axis: the scrolling axis is unbounded, so the content
         // is not squeezed by the current scroll extent (Compose's `Scroll` intrinsic block).

@@ -158,6 +158,51 @@ pub(crate) fn measure_node(
     out
 }
 
+/// Compose's `AspectRatioNode.findSize` (`AspectRatio.kt:163-232`): build the four candidates from
+/// the incoming range — maximum width, maximum height, minimum width, minimum height (the
+/// `match_height_first` form swaps the width/height priority) — and take the first that
+/// SATISFIES the range; then repeat the same four UNENFORCED; then give up (`None`, which leaves
+/// the constraints alone: Compose measures the child with them and keeps its size).
+///
+/// Two deliberate differences from Compose. The winner is CLAMPED into the incoming range, because
+/// Compose's derivation lives in a layout node that reports the child's size while winia feeds the
+/// result straight into `Constraints::fixed` — the clamp is what keeps a tight `size()`
+/// authoritative. And a bounded maximum is `< f32::MAX`, winia's unbounded sentinel.
+fn aspect_ratio_size(c: &Constraints, ratio: f32, match_height_first: bool) -> Option<Size> {
+    let bounded = |v: f32| v < f32::MAX;
+    let max_w = bounded(c.max_width).then(|| Size::new(c.max_width, c.max_width / ratio));
+    let max_h = bounded(c.max_height).then(|| Size::new(c.max_height * ratio, c.max_height));
+    let min_w = Size::new(c.min_width, c.min_width / ratio);
+    let min_h = Size::new(c.min_height * ratio, c.min_height);
+    let order = if match_height_first {
+        [max_h, max_w, Some(min_h), Some(min_w)]
+    } else {
+        [max_w, max_h, Some(min_w), Some(min_h)]
+    };
+    let satisfied = |s: &Size| {
+        s.width >= c.min_width
+            && s.width <= c.max_width
+            && s.height >= c.min_height
+            && s.height <= c.max_height
+    };
+    for enforce in [true, false] {
+        for cand in order.iter().flatten() {
+            let usable = cand.width.is_finite()
+                && cand.height.is_finite()
+                && cand.width > 0.0
+                && cand.height > 0.0;
+            if !usable || (enforce && !satisfied(cand)) {
+                continue;
+            }
+            return Some(Size::new(
+                cand.width.clamp(c.min_width, c.max_width),
+                cand.height.clamp(c.min_height, c.max_height),
+            ));
+        }
+    }
+    None
+}
+
 pub(crate) fn measure_node_inner(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -314,6 +359,23 @@ pub(crate) fn measure_node_inner(
                 if height && intrinsic_incoming_height.is_none() {
                     intrinsic_incoming_height =
                         Some((inner_constraints.min_height, inner_constraints.max_height));
+                }
+            }
+            SizeStep::AspectRatio {
+                ratio,
+                match_height_first,
+            } => {
+                // Compose's `AspectRatioNode.measure`: derive the size from the constraints at THIS
+                // position, then measure the child with `Constraints.fixed(size)`. Deriving it here
+                // (rather than resizing the node after the policy, as this did) is what makes the
+                // content — and a `match_parent_size` child — see the aspect box, and it no longer
+                // DROPS the padding (the old pass replaced the node's padded size with the inner box;
+                // here the padding is added on top of the derived box). The chain order is
+                // approximate as it is for every size step: the walk runs before the padding offset,
+                // so `.padding(8).aspect_ratio(2)` derives from the UNDEFLATED constraints where Compose
+                // would derive from the deflated ones.
+                if let Some(size) = aspect_ratio_size(&inner_constraints, ratio, match_height_first) {
+                    inner_constraints = Constraints::fixed(size.width, size.height);
                 }
             }
             SizeStep::MinWidth(v) => {
@@ -1085,36 +1147,6 @@ pub(crate) fn measure_node_inner(
                 nodes[idx].measured_size = result.0;
             }
         }
-    }
-
-    // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）
-    // 推导节点尺寸（对标 Compose——aspect 的 incoming = 链中 aspect 位置的
-    // 约束；固定一轴推另一轴 + clamp；内容按 inner_constraints 已排版，
-    // 节点尺寸可能大于内容——留白正常）
-    if let Some((ratio, match_height_first)) = nodes[idx].modifier.aspect_ratio_constraint() {
-        let (min_w, max_w) = (inner_constraints.min_width, inner_constraints.max_width);
-        let (min_h, max_h) = (inner_constraints.min_height, inner_constraints.max_height);
-        let (w, h) = if match_height_first {
-            if max_h < f32::MAX {
-                let w = max_h * ratio;
-                if w <= max_w { (w, max_h) } else { (max_w, max_w / ratio) }
-            } else if max_w < f32::MAX {
-                (max_w, max_w / ratio)
-            } else {
-                (result.0.width, result.0.height)
-            }
-        } else if max_w < f32::MAX {
-            let h = max_w / ratio;
-            if h <= max_h { (max_w, h) } else { (max_h * ratio, max_h) }
-        } else if max_h < f32::MAX {
-            (max_h * ratio, max_h)
-        } else {
-            (result.0.width, result.0.height)
-        };
-        let w = w.clamp(min_w, max_w);
-        let h = h.clamp(min_h, max_h);
-        result.0 = Size::new(w, h);
-        nodes[idx].measured_size = result.0;
     }
 
     // 标记测量完成，缓存约束供下帧复用

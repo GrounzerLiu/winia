@@ -144,8 +144,8 @@ impl Modifier {
         out
     }
 
-    /// The size-shaping elements in CHAIN ORDER: min/max nodes, the range nodes
-    /// (`widthIn`/`sizeIn`/`required*In`) and `wrapContent`.
+    /// The size-shaping elements in CHAIN ORDER: fixed sizes, `aspectRatio`, the min/max nodes, the
+    /// range nodes (`widthIn`/`sizeIn`/`required*In`) and `wrapContent`.
     ///
     /// Compose nests one layout node per call and feeds each one the constraints the previous one
     /// produced, so every node's output range is a sub-range of its input's and the OUTER call
@@ -217,6 +217,9 @@ impl Modifier {
                         min_width: opt(min_width),
                         min_height: opt(min_height),
                     })
+                }
+                ModifierElement::AspectRatio { ratio, match_height_first } => {
+                    out.push(SizeStep::AspectRatio { ratio: *ratio, match_height_first: *match_height_first })
                 }
                 ModifierElement::WrapContent {
                     width,
@@ -389,14 +392,15 @@ impl Modifier {
         })
     }
 
-    /// 宽高比约束（ratio, match_height_first）
+    /// The aspect-ratio element, if any: `(ratio, match_height_first)`.
+    ///
+    /// The MEASURE path consumes it through `SizeStep::AspectRatio`, in chain order; this getter
+    /// exists for the intrinsic path, where the ratio answers from the OTHER axis the way Compose's
+    /// `AspectRatioNode` does.
     pub fn aspect_ratio_constraint(&self) -> Option<(f32, bool)> {
-        self.elements.iter().find_map(|el| {
-            if let ModifierElement::AspectRatio { ratio, match_height_first } = el {
-                Some((*ratio, *match_height_first))
-            } else {
-                None
-            }
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::AspectRatio { ratio, match_height_first } => Some((*ratio, *match_height_first)),
+            _ => None,
         })
     }
 

@@ -54,12 +54,15 @@
 - `BoxWithConstraints` is winia's `Stack` plus a subcomposition; Compose runs the Box policy over
   the subcomposed measurables, winia wraps the content in a real Box node (one extra node, and
   multi-root content is sized by its widest root).
-- a BOX-level `aspect_ratio` runs after the policy (its node measures the child with
-  `Constraints.fixed`, then the engine grows the box), so a match-parent child matches the
-  PRE-growth size. `minimum_interactive_size` is NOT a divergence: Compose's
-  `MinimumInteractiveModifierNode` also measures with the incoming constraints and grows the box
-  afterwards. Not introduced by `match_parent_size`, and deliberately not pinned by a test: the
-  current behaviour is what is being documented, not what is being promised.
+- the two growth steps interact with a match-parent child differently, and both match Compose.
+  `aspect_ratio` moved into the size walk (`SizeStep::AspectRatio`): the constraints are fixed to
+  the derived size before the policy, as Compose's `AspectRatioNode` does, so the content — and a
+  match-parent child — see the aspect box, and the padding is no longer dropped by a post-measure
+  rewrite. `minimum_interactive_size` stays a post-measure wrapper, because Compose's
+  `MinimumInteractiveModifierNode` also measures its child with the incoming constraints and grows
+  around that placeable (`material3/InteractiveComponentSize.kt:101-137`); a match-parent child
+  therefore matches the PRE-growth box — the scrim covers the visual content, not the 48 dp touch
+  target — and `a_match_parent_child_matches_the_pre_growth_box_under_minimum_interactive_size` pins it.
 
 ## Tests
 
@@ -70,7 +73,11 @@ reports content, the minimum floor, empty box, and the `Stack` builder carrying 
 (loose and tight), an escaping child is centred, the child's own alignment beats the implicit
 `Center`, the `Constraints.Infinity` guard (both halves, per axis, `f32::MAX` and `f32::INFINITY`),
 a later frame follows the box, its own `Modifier::offset` still applies, toggling the flag
-re-measures, and an ancestor box grows with an overflowing child.
+re-measures, and an ancestor box grows with an overflowing child. The aspect cases are
+`aspect_ratio_fixes_the_box_and_its_content` and `aspect_ratio_and_a_match_parent_child` here, plus
+`layout::node::tests` for the candidate order and `layout::node::intrinsic_tests` for the ratio's
+intrinsic answers. The min-interactive parity pin is
+`a_match_parent_child_matches_the_pre_growth_box_under_minimum_interactive_size`.
 
 Some of those drive a `Composer` end to end (the later-frame, offset, alignment, ancestor and
 toggling cases) rather than the policy alone; `layout::node::intrinsic_tests` covers the intrinsic

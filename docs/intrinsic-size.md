@@ -124,7 +124,8 @@ the space the content is queried about — on both axes, not just the queried on
 - The modifier chain can only answer *constraints*, never *content*: `resolved_size`, `fixed_size`,
   `min_size_constraint`, `max_size_constraint`, `required_size_constraint`,
   `get_padding_horizontal/vertical`, `is_fill_max_width/height`, `get_layout_weight`,
-  `aspect_ratio_constraint` (inventory: `docs/render_modifier_analysis.md:235`).
+  `aspect_ratio_constraint` (the INTRINSIC path only — measuring consumes `SizeStep::AspectRatio`
+  in chain order) (inventory: `docs/render_modifier_analysis.md:235`).
 - Nothing in `winia/src/modifier.rs` corresponds to `Modifier.width(IntrinsicSize.Max)`.
 
 ### 2.3 Three components work around it by hand

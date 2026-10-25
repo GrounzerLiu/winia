@@ -194,11 +194,12 @@ incoming
  → min（MinWidth/Height，提升 min，受 max 夹）
  → required（RequiredSize，直接覆盖，⚠必须在 size 之后）
  → fixed（Fixed/Dp/Px 兼容分支）
+ → aspectRatio（按当前约束推导尺寸，并把子约束 fixed 成它——Compose 的 `AspectRatioNode`）
  → padding（offset(pad)，子约束缩小）
  → fill（min=max，scroll 前保存 viewport）
  → scroll（viewport 回写节点字段；lazy 不改无界，普通改无界）
  → policy.measure / 叶子分支
- → 后处理：padding 回加 → scroll clamp 回视口 → aspectRatio → 缓存+上报
+ → 后处理：padding 回加 → scroll clamp 回视口 → 缓存+上报
 ```
 
 ### 结论：分两型渐进，不要一次做完全接管

@@ -29,6 +29,35 @@
         intrinsic_size_of(nodes, &policies, idx, IntrinsicQuery::MaxWidth, other)
     }
 
+    /// Compose's `AspectRatioNode` answers every intrinsic query from the OTHER axis
+    /// (`AspectRatio.kt:123-161`), and defers to the child when that axis is unbounded.
+    #[test]
+    fn an_aspect_ratio_answers_the_intrinsic_query_from_the_other_axis() {
+        let m = Modifier::new().aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let policies: Vec<Box<dyn MeasurePolicy>> = Vec::new();
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            200.0,
+            "max width = height x ratio"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            200.0,
+            "the minimum query answers the same way, as Compose's four overrides do"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
+            50.0,
+            "max height = width / ratio"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            0.0,
+            "an unbounded other axis defers to the child (an empty leaf answers 0)"
+        );
+    }
+
     /// A match-parent child does not contribute to the box's intrinsic size — it does not size the
     /// box at all. The default intrinsic path runs the same two-pass measure, so the child must be
     /// excluded from the answer there too.

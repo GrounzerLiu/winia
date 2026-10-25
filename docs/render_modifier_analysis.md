@@ -234,7 +234,7 @@ pub fn then(mut self, other: Modifier) -> Self {
 
 ### 8. Modifier 在测量/布局/渲染三阶段介入
 
-- **测量/布局**（layout 引擎消费，本文件只提供查询）：`get_padding_sides`、`resolved_size`（modifier.rs:1490-1514，**合并所有 Size 元素**——⚠ 只取第一个会丢 `width(300).height(dyn)` 的动态高度）、`min_size_constraint`、`is_fill_max_width/height`、`get_layout_weight`、`aspect_ratio_constraint`、`required_size_constraint`、`get_align_self`、`get_offset/get_absolute_offset`、`image_intrinsic_size`、scroll states、`nested_scroll_connection`。**动态 SizeValue 在测量期求值——`State::get()` 注册布局依赖 → 动画更新 State → 节点重测（不重组）**。
+- **测量/布局**（layout 引擎消费，本文件只提供查询）：`get_padding_sides`、`resolved_size`（modifier.rs:1490-1514，**合并所有 Size 元素**——⚠ 只取第一个会丢 `width(300).height(dyn)` 的动态高度）、`min_size_constraint`、`is_fill_max_width/height`、`get_layout_weight`、`aspect_ratio_constraint`（**仅固有尺寸路径**；测量走链序的 `SizeStep::AspectRatio`）、`required_size_constraint`、`get_align_self`、`get_offset/get_absolute_offset`、`image_intrinsic_size`、scroll states、`nested_scroll_connection`。**动态 SizeValue 在测量期求值——`State::get()` 注册布局依赖 → 动画更新 State → 节点重测（不重组）**。
 - **组合期**：`register_state_deps`（modifier.rs:1837-1848）注册 scroll offset 的 State→Slot 依赖（新含 State 的变体必须同步加分支）。
 - **渲染期**：render.rs 直接 `elements()` 匹配绘制；`graphics_layer_params`、`backdrop_blur_radius`、`get_padding_sides`、`focusable_interaction`（焦点环 alpha）。
 

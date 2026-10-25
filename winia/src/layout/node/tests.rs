@@ -395,8 +395,10 @@
 
     #[test]
     fn aspect_ratio_respects_inner_fixed_size() {
-        // 链内 size(50,20) 是 tight（min=max）——aspect 推导 40x20 被
-        // clamp 回 min——Compose 同（tight size 下 aspect 无法改变尺寸）
+        // 链内 size(50,20) 是 tight（min=max）——aspect 的候选全部不满足，落到 unenforced 的
+        // 50x25，再被 clamp 回 tight 范围 → 50x20。**节点尺寸**与 Compose 一致；内容不同：
+        // Compose 把子节点量成 50x25、由外层 size 节点收成 50x20，winia 直接把 fixed(50,20)
+        // 交给子节点（见 docs/box.md 的差异表）。
         let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -420,6 +422,36 @@
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 300.0));
         assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
+    }
+
+    /// Compose's `findSize` has FOUR candidates on each pass; with no bounded maximum the
+    /// minimum candidates still produce a size (`AspectRatio.kt:196-222`). The old derivation
+    /// gave up when both maxima were unbounded and the ratio was ignored.
+    #[test]
+    fn aspect_ratio_falls_back_to_the_minimum_when_both_maxima_are_unbounded() {
+        let m = Modifier::new().min_width(200.0).aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
+        assert_eq!(
+            (size.width, size.height),
+            (200.0, 100.0),
+            "the minimum-width candidate answers when nothing is bounded"
+        );
+    }
+
+    /// The UNENFORCED pass: when no candidate satisfies the range, Compose still returns one
+    /// ("the constraints will not be respected", `AspectRatio.kt:43-47`). winia then CLAMPS it
+    /// (the derivation feeds `Constraints::fixed`, where Compose has an extra node), so the
+    /// height lands on the range instead of on the unenforced 62.5.
+    #[test]
+    fn aspect_ratio_falls_back_to_an_unsatisfied_candidate_before_giving_up() {
+        let m = Modifier::new()
+            .width_in(250.0, 250.0)
+            .height_in(55.0, 60.0)
+            .aspect_ratio(4.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
+        assert_eq!((size.width, size.height), (250.0, 60.0));
     }
 
     // ── minWidth / minHeight（对标 Compose widthIn/heightIn）──

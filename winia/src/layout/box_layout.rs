@@ -782,6 +782,118 @@ mod tests {
         // stops pinning the declaration — the comment is here so that edit is noticed.
     }
 
+    /// `aspect_ratio` is a size-shaping step, so it fixes the box BEFORE the policy (Compose's
+    /// `AspectRatioNode` measures the child with `Constraints.fixed(size)`). The content is laid out
+    /// inside the aspect box instead of keeping its own size next to a resized node — which also
+    /// means padding is no longer dropped by a post-measure rewrite.
+    #[test]
+    fn aspect_ratio_fixes_the_box_and_its_content() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().aspect_ratio(2.0, false))
+                .build(ctx, |ctx| {
+                    // `fill_max_size`, not `size`: the child's maximum is what the aspect step changes
+                    // (the old post-measure derivation left the child a 300x300 range and only resized
+                    // the node, so the child came out 300x300).
+                    crate::components::Text::new("content")
+                        .modifier(Modifier::new().fill_max_size())
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(300.0, 150.0),
+            "the aspect box comes from the maximum width"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]].measured_size,
+            Size::new(300.0, 150.0),
+            "the content is measured against the aspect box, not against the incoming maximum"
+        );
+    }
+
+    /// The point of moving `aspect_ratio` into the walk: a match-parent child sees the aspect box.
+    #[test]
+    fn aspect_ratio_and_a_match_parent_child() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().aspect_ratio(2.0, false))
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("anchor")
+                        .modifier(Modifier::new().size(100.0, 100.0))
+                        .build(ctx);
+                    Stack::new()
+                        .modifier(Modifier::new().match_parent_size())
+                        .build(ctx, |_ctx| {});
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(300.0, 150.0));
+        let scrim = composer.arena_nodes()[root].children[1];
+        assert!(composer.arena_nodes()[scrim].modifier.is_match_parent_size());
+        assert_eq!(
+            composer.arena_nodes()[scrim].measured_size,
+            Size::new(300.0, 150.0),
+            "the scrim matched the aspect box, not the pre-aspect content size"
+        );
+    }
+
+    /// `minimum_interactive_size` is Compose's `MinimumInteractiveModifierNode`: it measures its child
+    /// with the INCOMING constraints and then grows around that placeable
+    /// (`material3/InteractiveComponentSize.kt:101-137`). A match-parent child inside the box therefore
+    /// matches the PRE-growth box — the scrim covers the visual content, not the touch target —
+    /// which is what winia already did; the engine deliberately does not re-measure it after the
+    /// growth.
+    #[test]
+    fn a_match_parent_child_matches_the_pre_growth_box_under_minimum_interactive_size() {
+        use crate::runtime::composer::Composer;
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().minimum_interactive_size(48.0))
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("anchor")
+                        .modifier(Modifier::new().size(20.0, 20.0))
+                        .build(ctx);
+                    Stack::new()
+                        .modifier(Modifier::new().match_parent_size())
+                        .build(ctx, |_ctx| {});
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(48.0, 48.0),
+            "the touch target grew to 48"
+        );
+        let anchor = composer.arena_nodes()[root].children[0];
+        let scrim = composer.arena_nodes()[root].children[1];
+        assert!(composer.arena_nodes()[scrim].modifier.is_match_parent_size());
+        assert_eq!(
+            composer.arena_nodes()[anchor].position,
+            Offset::new(14.0, 14.0),
+            "the content is centred in the grown box"
+        );
+        assert_eq!(
+            composer.arena_nodes()[scrim].measured_size,
+            Size::new(20.0, 20.0),
+            "the scrim matches the box the CONTENT defined, not the grown touch target"
+        );
+        assert_eq!(
+            composer.arena_nodes()[scrim].position,
+            Offset::new(14.0, 14.0),
+            "and it rides the centring shift with the content"
+        );
+    }
+
     /// A box does not crop an overflowing child, and neither does its ANCESTOR: the outer box reports
     /// the inner one's content size (Compose's Box never consults the maximum on either level).
     #[test]

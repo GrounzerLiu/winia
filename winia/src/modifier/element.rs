@@ -260,6 +260,10 @@ pub(crate) enum SizeStep {
     /// snapshot the constraints the request saw. A `fillMax` outside the request tightens those
     /// constraints (and the intrinsic answer honours them); a `fillMax` inside it does not.
     Intrinsic { width: bool, height: bool },
+    /// `aspectRatio` — Compose's `AspectRatioNode`: derive a size from the constraints at THIS
+    /// position and fix what follows to it (`Constraints.fixed`). Emitted in chain order so the
+    /// derivation sees exactly the constraints the aspect modifier would.
+    AspectRatio { ratio: f32, match_height_first: bool },
     /// `wrapContent*` — relax the incoming minimum (and max when unbounded) for what follows.
     Wrap {
         width: bool,
