@@ -173,6 +173,10 @@ pub(crate) fn intrinsic_axis_range(m: &crate::modifier::Modifier, horizontal: bo
                     hi += pad;
                 }
             }
+            // Each node constrains the answer the INNER ones produced (Compose's rule), so the
+            // OUTER call wins a conflict: raising the floor also lifts the ceiling the inner node
+            // left, and lowering the ceiling also drops the floor — which is what keeps the fold
+            // consistent with the walk, where the outer node's `clamp` is applied last.
             crate::modifier::SizeStep::MinWidth(v) if horizontal => {
                 lo = lo.max(v);
                 hi = hi.max(v);
@@ -325,6 +329,11 @@ pub(crate) fn intrinsic_size_of(
     // The range already carries the padding (`intrinsic_axis_range` replays `SizeStep::Padding`
     // outward), so the answer is the CONTENT plus the padding clamped into it — the same box the
     // measure path reports.
+    //
+    // A contradictory chain (`.min_width(300).max_width(200)`) folds to `lo > hi`, and
+    // `f32::clamp` PANICS on that; the walk resolves the same conflict by clamping the minimum into
+    // the maximum, so the maximum wins here too.
+    let lo = lo.min(hi);
     (content + pad_axis).clamp(lo, hi)
 }
 
@@ -372,7 +381,11 @@ pub(crate) fn content_intrinsic(
 /// - anything else measures nothing, so it is 0 (the pipeline gives it its fixed axis, if any).
 pub(crate) fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: IntrinsicQuery, other: f32) -> f32 {
     if nodes[idx].has_text_content {
-        let Some(para) = build_text_paragraph(&nodes[idx], other) else {
+        // A width query carries the HEIGHT in `other`, so it must not become the layout width (the
+        // richtext branch below already guards this): the paragraph is built unbounded and its own
+        // intrinsic width is the answer.
+        let layout_width = if query.is_width() { f32::MAX } else { other };
+        let Some(para) = build_text_paragraph(&nodes[idx], layout_width) else {
             return 0.0;
         };
         return match query {

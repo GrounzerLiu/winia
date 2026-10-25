@@ -654,6 +654,124 @@
         assert_eq!(size.height, 192.0, "the content was asked at 384, so half of it is 192");
     }
 
+    /// A contradictory range (`min_width` above `max_width`) resolves by CHAIN ORDER, like every
+    /// other conflict: the outer node wins, so the answer is the floor when the floor is outer. Both
+    /// paths agree (the walk applies the outer `clamp` last), and neither panics.
+    #[test]
+    fn a_contradictory_min_and_max_resolves_by_chain_order() {
+        #[derive(Debug)]
+        struct Nothing;
+        impl crate::layout::node::MeasurePolicy for Nothing {
+            fn measure(
+                &self,
+                _n: &mut Vec<LayoutNode>,
+                _p: &[Box<dyn crate::layout::node::MeasurePolicy>],
+                _c: &[usize],
+                _constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                (Size::new(0.0, 0.0), Vec::new())
+            }
+            fn place(&self, _n: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+        }
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> = vec![Box::new(Nothing)];
+        let floor_outer = Modifier::new().min_width(300.0).max_width(200.0);
+        let mut nodes = vec![LayoutNode::new(floor_outer, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(
+                &mut nodes,
+                &policies,
+                0,
+                crate::layout::IntrinsicQuery::MaxWidth,
+                100.0
+            ),
+            300.0,
+            "the floor is the outer node, so it wins"
+        );
+        let cap_outer = Modifier::new().max_width(200.0).min_width(300.0);
+        let mut nodes = vec![LayoutNode::new(cap_outer, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(
+                &mut nodes,
+                &policies,
+                0,
+                crate::layout::IntrinsicQuery::MaxWidth,
+                100.0
+            ),
+            200.0,
+            "and the cap wins when it is outer"
+        );
+    }
+
+    /// `defaultMinSize` is a node in the chain, so its floor applies to the box it owns: outside
+    /// the padding it is a 58 dp box, inside it the padding is added on top (74).
+    #[test]
+    fn padding_and_default_min_size_answer_in_chain_order() {
+        #[derive(Debug)]
+        struct Nothing;
+        impl crate::layout::node::MeasurePolicy for Nothing {
+            fn measure(
+                &self,
+                _n: &mut Vec<LayoutNode>,
+                _p: &[Box<dyn crate::layout::node::MeasurePolicy>],
+                _c: &[usize],
+                _constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                (Size::new(0.0, 0.0), Vec::new())
+            }
+            fn place(&self, _n: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+        }
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> = vec![Box::new(Nothing)];
+        let outside = Modifier::new().default_min_size(58.0, 40.0).padding(8.0);
+        let mut nodes = vec![LayoutNode::new(outside, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(&mut nodes, &policies, 0, crate::layout::IntrinsicQuery::MaxWidth, 100.0),
+            58.0,
+            "the floor is the box; the padding is inside it"
+        );
+        let inside = Modifier::new().padding(8.0).default_min_size(58.0, 40.0);
+        let mut nodes = vec![LayoutNode::new(inside, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(&mut nodes, &policies, 0, crate::layout::IntrinsicQuery::MaxWidth, 100.0),
+            74.0,
+            "the floor applies to the content, so the padding is added on top"
+        );
+    }
+
+    /// The padding replay past a cap: with the padding OUTSIDE a 100 dp maximum the answer is
+    /// 100 + 16; with it inside, the 100 caps the box and the padding comes out of it.
+    #[test]
+    fn padding_and_max_width_answer_in_chain_order() {
+        #[derive(Debug)]
+        struct Hundred;
+        impl crate::layout::node::MeasurePolicy for Hundred {
+            fn measure(
+                &self,
+                _n: &mut Vec<LayoutNode>,
+                _p: &[Box<dyn crate::layout::node::MeasurePolicy>],
+                _c: &[usize],
+                _constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                (Size::new(100.0, 20.0), Vec::new())
+            }
+            fn place(&self, _n: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+        }
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> = vec![Box::new(Hundred)];
+        let outside = Modifier::new().max_width(100.0).padding(8.0);
+        let mut nodes = vec![LayoutNode::new(outside, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(&mut nodes, &policies, 0, crate::layout::IntrinsicQuery::MaxWidth, 100.0),
+            100.0,
+            "the cap is the box; the padding is inside it"
+        );
+        let inside = Modifier::new().padding(8.0).max_width(100.0);
+        let mut nodes = vec![LayoutNode::new(inside, Some(0))];
+        assert_eq!(
+            crate::layout::node::intrinsic_size_of(&mut nodes, &policies, 0, crate::layout::IntrinsicQuery::MaxWidth, 100.0),
+            116.0,
+            "the cap applies to the content, so the padding is added on top"
+        );
+    }
+
     /// Window insets are chain steps too: a size fixed INSIDE the inset is clamped into the
     /// deflated range and the node grows by the inset, while a size OUTSIDE it absorbs the inset.
     #[test]

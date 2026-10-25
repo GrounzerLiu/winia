@@ -255,11 +255,17 @@ pub(crate) fn remaining(kind: InsetsKind, window: WindowInsets, consumed: Consum
     out
 }
 
-/// Record kind's value as consumed for the subtree, merging with what ancestors already consumed.
+/// Record kind's value as consumed for the subtree, MERGING with what ancestors already consumed.
+///
+/// The merge is a maximum, not an overwrite: a chain whose window value shrank between two elements
+/// (or an ancestor that consumed more of the same source) must not make a later element see room
+/// again. `ConsumeScope::enter` re-unions on entry, so an under-set local accumulator was harmless
+/// today, but only by accident.
 pub(crate) fn consume(kind: InsetsKind, window: WindowInsets, consumed: Consumed) -> Consumed {
     let mut next = consumed;
     for &source in kind.sources() {
-        next = next.set(source, kind.source_value(window, source));
+        let own = kind.source_value(window, source);
+        next = next.set(source, own.max(next.get(source)));
     }
     next
 }
