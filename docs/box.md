@@ -36,6 +36,10 @@
   cropped. Content that is all match-parent children therefore gives the incoming minimum (0 under
   loose constraints), and a scrim covers the box without dragging it out to its own parent (a
   `fill_max_size` child would);
+- an unbounded box (its size reaches the `f32::MAX` sentinel) centres such a child in that
+  box, so the offset is astronomically large (~1.7e38). Compose has the same shape with
+  `Int.MAX_VALUE`; no real tree reaches it — the branch exists for intrinsic probes — but it is
+  the arithmetic the guard implies, and it is deliberately left unpinned.
 - an empty box is `constraints.min`.
 
 ## Differences from Compose
