@@ -102,8 +102,10 @@ Components that implement the protocol directly instead:
 
 `foundation/layout/Padding.kt` contains no intrinsic code of its own: its node inherits Compose's
 `LayoutModifierNode` defaults, which offset the constraints before asking the child
-(`Padding.kt:449` + `ui/node/LayoutModifierNode.kt:285-354`), so padding participates by shrinking
-the space the content is queried about — on both axes, not just the queried one.
+(`Padding.kt:449` + `ui/node/LayoutModifierNode.kt:285-354`). So padding does two things to an
+intrinsic answer: it SHRINKS the space the content is asked about on the OTHER axis, and it ADDS its
+own extent on the queried axis (the answer describes the padding node's box, not the content's) —
+which is why `.padding(8).size(300)` answers 316 while `.size(300).padding(8)` answers 300.
 
 ## 2. winia today
 
@@ -423,7 +425,7 @@ four methods, so the query never enters the approximation at all.
 
 ### 8.7 Tests
 
-`winia/src/layout/node.rs` ends with `#[cfg(test)] mod intrinsic_tests`: one test per pipeline step and
+`winia/src/layout/node/intrinsic_tests.rs` holds one test per pipeline step and
 per protocol rule, including the default approximation, the fixed-axis short-circuit, the padding
 addition, the probe's cache hygiene, the weighted-label trap, Row/Column main- and cross-axis answers,
 `width`/`height(IntrinsicSize)` vs the `required` forms, the scroll forwarding, and the subcomposing

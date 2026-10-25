@@ -753,6 +753,9 @@ mod tests {
     /// box reported the bare content height); it now reads the padding the engine resolved.
     #[test]
     fn a_window_inset_pads_the_box_like_element_padding() {
+        let _lock = crate::window::insets::INSET_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let controller = crate::window::insets::current();
         struct ResetInsets(crate::window::insets::WindowInsetsController);
         impl Drop for ResetInsets {

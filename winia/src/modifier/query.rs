@@ -44,7 +44,15 @@ impl Modifier {
         &self,
         index: usize,
     ) -> Option<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
-        match self.elements.get(index)? {
+        let element = self.elements.get(index)?;
+        debug_assert!(
+            matches!(
+                element,
+                ModifierElement::WindowInsetsPadding { .. } | ModifierElement::ConsumeWindowInsets { .. }
+            ),
+            "inset step index {index} does not point at an inset element — `size_steps` and `elements` disagree"
+        );
+        match element {
             ModifierElement::WindowInsetsPadding { kind, controller }
             | ModifierElement::ConsumeWindowInsets { kind, controller } => Some((*kind, controller.clone())),
             _ => None,

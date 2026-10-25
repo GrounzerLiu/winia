@@ -270,8 +270,9 @@ pub(crate) enum SizeStep {
     /// OUTER size still adds the total padding at the end.
     Padding { start: f32, top: f32, end: f32, bottom: f32 },
     /// A `windowInsetsPadding` element: the inset is resolved from the window state DURING the walk,
-    /// at this element's chain position (it is consumed for the subtree there). Carries the element
-    /// index because the controller is not `Copy`.
+    /// at this element's chain position (it is consumed for the subtree there). The payload is an
+    /// INDEX into `Modifier::elements` (the controller is not `Copy`), and `size_steps` emits exactly
+    /// one step per element, so the index is stable for the chain it was built from.
     InsetPadding(usize),
     /// A consume-only `consumeWindowInsets` element, at its chain position: it pads by nothing and
     /// only marks the inset as consumed for what follows.

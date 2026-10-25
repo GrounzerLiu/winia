@@ -61,7 +61,8 @@
   the deflated range (284x142) and reports 300x158. Window-INSET padding is a step too
   (`SizeStep::InsetPadding`): each inset is resolved from the window state and consumed at its chain
   position, so `.status_bars_padding().size(200,48)` reports 200x72 and the reverse order reports
-  200x48. Insets are still excluded from intrinsic answers, as before.
+  200x48. An intrinsic probe's CROSS axis is therefore inset-deflated too (the inset is inside the
+  walk now), while the queried axis still answers the box the way `padding` does.
 - the two growth steps interact with a match-parent child differently, and both match Compose.
   `aspect_ratio` moved into the size walk (`SizeStep::AspectRatio`): the constraints are fixed to
   the derived size before the policy, as Compose's `AspectRatioNode` does, so the content — and a
@@ -92,7 +93,9 @@ re-measures, and an ancestor box grows with an overflowing child. The aspect cas
 `a_size_outside_padding_absorbs_the_padding`,
 `padding_outside_an_aspect_ratio_derives_from_the_deflated_range`,
 `an_intrinsic_width_request_counts_its_padding_once`,
-`wrap_content_outside_padding_clamps_the_inner_size`), and `layout::node::intrinsic_tests` for the
+`wrap_content_outside_padding_clamps_the_inner_size`, `window_inset_padding_is_a_chain_step`,
+`a_consume_before_an_inset_padding_neutralises_it`,
+`an_intrinsic_height_probe_asks_the_content_at_the_deflated_width`), and `layout::node::intrinsic_tests` for the
 ratio's intrinsic answers. The min-interactive parity pin is
 `a_match_parent_child_matches_the_pre_growth_box_under_minimum_interactive_size`.
 

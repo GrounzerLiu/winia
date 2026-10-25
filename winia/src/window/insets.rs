@@ -363,6 +363,12 @@ impl std::fmt::Debug for WindowInsetsController {
     }
 }
 
+/// Serialises the tests that mutate the process-global fallback controller: outside a window
+/// `current()` resolves to one shared controller, so two tests setting different insets would reset
+/// each other mid-measure and turn exact-size assertions flaky.
+#[cfg(test)]
+pub(crate) static INSET_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn fallback_controller() -> WindowInsetsController {
     static FALLBACK: LazyLock<WindowInsetsController> =
         LazyLock::new(WindowInsetsController::new);

@@ -572,10 +572,95 @@
         assert_eq!(size.width, 300.0, "the padded node stays at the tight size");
     }
 
+    /// A consume-only element neutralises a padding element AFTER it, because the walk resolves
+    /// them in chain order. Before insets became steps, every padding element was resolved before
+    /// every consume-only one, so the first order padded by the inset too.
+    #[test]
+    fn a_consume_before_an_inset_padding_neutralises_it() {
+        let _lock = crate::window::insets::INSET_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let controller = crate::window::insets::current();
+        struct ResetInsets(crate::window::insets::WindowInsetsController);
+        impl Drop for ResetInsets {
+            fn drop(&mut self) {
+                self.0.set(crate::window::insets::WindowInsets::default());
+            }
+        }
+        let _reset = ResetInsets(controller.clone());
+        controller.set(crate::window::insets::WindowInsets {
+            status_bars: crate::window::insets::Insets::new(0.0, 24.0, 0.0, 0.0),
+            ..Default::default()
+        });
+
+        let consume_first = Modifier::new()
+            .consume_window_insets(crate::window::insets::InsetsKind::StatusBars)
+            .status_bars_padding()
+            .size(10.0, 10.0);
+        let mut nodes = vec![LayoutNode::leaf(consume_first)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size, Size::new(10.0, 10.0), "the inset was consumed before the padding element");
+
+        let pad_first = Modifier::new()
+            .status_bars_padding()
+            .consume_window_insets(crate::window::insets::InsetsKind::StatusBars)
+            .size(10.0, 10.0);
+        let mut nodes = vec![LayoutNode::leaf(pad_first)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size, Size::new(10.0, 34.0), "and the reverse order still pads");
+    }
+
+    /// The intrinsic probe's CROSS axis is deflated once: the walk already shrank the range by the
+    /// chain's padding, so the engine hands the probe an outer-space value and the probe's own
+    /// subtraction cancels. Before this the content was asked at 400 - 2 * 8.
+    #[test]
+    fn an_intrinsic_height_probe_asks_the_content_at_the_deflated_width() {
+        use crate::layout::IntrinsicSize;
+        #[derive(Debug)]
+        struct WidthEcho;
+        impl crate::layout::node::MeasurePolicy for WidthEcho {
+            fn measure(
+                &self,
+                _n: &mut Vec<LayoutNode>,
+                _p: &[Box<dyn crate::layout::node::MeasurePolicy>],
+                _c: &[usize],
+                constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                let w = constraints.max_width;
+                (Size::new(w, w * 0.5), Vec::new())
+            }
+            fn place(&self, _n: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+            fn max_intrinsic_height(
+                &self,
+                _c: &mut crate::layout::node::IntrinsicCtx<'_>,
+                _n: &[usize],
+                width: f32,
+            ) -> f32 {
+                width * 0.5
+            }
+            fn min_intrinsic_height(
+                &self,
+                _c: &mut crate::layout::node::IntrinsicCtx<'_>,
+                _n: &[usize],
+                width: f32,
+            ) -> f32 {
+                width * 0.5
+            }
+        }
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> = vec![Box::new(WidthEcho)];
+        let m = Modifier::new().padding_horizontal(8.0).height(IntrinsicSize::Max);
+        let mut nodes = vec![LayoutNode::new(m, Some(0))];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(size.height, 192.0, "the content was asked at 384, so half of it is 192");
+    }
+
     /// Window insets are chain steps too: a size fixed INSIDE the inset is clamped into the
     /// deflated range and the node grows by the inset, while a size OUTSIDE it absorbs the inset.
     #[test]
     fn window_inset_padding_is_a_chain_step() {
+        let _lock = crate::window::insets::INSET_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let controller = crate::window::insets::current();
         struct ResetInsets(crate::window::insets::WindowInsetsController);
         impl Drop for ResetInsets {
@@ -773,8 +858,11 @@
     #[test]
     fn inset_padding_consumes_for_the_subtree() {
         use crate::window::insets::{Insets, WindowInsets};
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The shared lock: a function-local one cannot protect against the OTHER tests that mutate
+        // the same process-global fallback controller.
+        let _guard = crate::window::insets::INSET_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let controller = crate::window::insets::current();
         // Reset on Drop, not at the end of the body: a failing assertion must not leave system
         // insets behind for every later test in this process.

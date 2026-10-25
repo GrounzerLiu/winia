@@ -264,6 +264,10 @@ pub(crate) fn measure_node_inner(
     nodes[idx].minimum_interactive_content = None;
     nodes[idx].minimum_interactive_painted = None;
     nodes[idx].content_shift = None;
+    // Same rule for the content box a leaf paints itself into: a node that stops carrying
+    // `wrapContent` or `paddingFrom` must not keep the previous frame's override (it is only
+    // written while those elements are in force).
+    nodes[idx].content_box_override = None;
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
@@ -536,8 +540,8 @@ pub(crate) fn measure_node_inner(
     }
 
     // 开放布局节点 A 型（exp/modifier-node）：在尺寸步骤之后串行变换约束。
-    // 位置语义 = 链中 size/min/max/fill/wrap 之后，intrinsic/padding 之前；动态值在
-    // transform 内求值（measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
+    // 位置语义 = 链中所有 size/padding/insets 步骤之后、intrinsic 请求与 padding 记账之前；
+    // 动态值在 transform 内求值（measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
     // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
@@ -570,7 +574,13 @@ pub(crate) fn measure_node_inner(
         // has already tightened them (Compose's IntrinsicWidthNode measures under those), while a
         // fill inside has not (FillNode forwards the intrinsic answer, so the request decides
         // first and the inner fill then fills the tight result).
-        let other = inner_constraints.max_height;
+        // The walk already deflated `inner_constraints` by the chain's padding, while
+        // `intrinsic_size_of` subtracts the axis padding from `other` itself — so hand it an
+        // OUTER-space value (add the element padding back) and the two cancel. Without this the
+        // content was asked at `width - 2 * padding`: `.padding_horizontal(8).height(IntrinsicSize::Max)`
+        // in a 400 dp slot laid its content out at 368 instead of 384.
+        let (pad_other_a, pad_other_b) = nodes[idx].modifier.get_padding_vertical();
+        let other = inner_constraints.max_height + pad_other_a + pad_other_b;
         // `intrinsic_size_of` answers the PADDED box (its own padding bookkeeping), while the engine
         // adds the element padding to the outer size at the end of this function. Tightening to the
         // padded value and then adding the padding again counted it twice (measured before this:
@@ -587,7 +597,8 @@ pub(crate) fn measure_node_inner(
         inner_constraints = inner_constraints.tighten_width((w - pad_s - pad_e).max(0.0));
     }
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
-        let other = inner_constraints.max_width;
+        let (pad_other_a, pad_other_b) = nodes[idx].modifier.get_padding_horizontal();
+        let other = inner_constraints.max_width + pad_other_a + pad_other_b;
         let mut h = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
         if enforce_incoming {
             h = match intrinsic_incoming_height {

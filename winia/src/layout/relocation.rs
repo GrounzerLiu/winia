@@ -137,7 +137,9 @@ fn reveal_in(
     rect: LocalRect,
 ) -> LocalRect {
     let (w, h) = (nodes[ancestor].measured_size.width, nodes[ancestor].measured_size.height);
-    let (pad_s, pad_t, pad_e, pad_b) = nodes[ancestor].modifier.get_padding_sides();
+    // The padding the ancestor RESOLVED when it measured (element padding + window insets) — the
+    // modifier alone drops the insets and would use the un-inset viewport here.
+    let (pad_s, pad_t, pad_e, pad_b) = nodes[ancestor].resolved_padding;
     let rtl = nodes[ancestor].layout_direction == crate::layout::LayoutDirection::Rtl;
     let (vx, vy) = (ax + if rtl { pad_e } else { pad_s }, ay + pad_t);
     let (vw, vh) = ((w - pad_s - pad_e).max(0.0), (h - pad_t - pad_b).max(0.0));

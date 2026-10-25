@@ -176,8 +176,9 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
    上报 200x48（padding 从固定尺寸里吸收）。`BottomSheetScaffold` 的 snackbar 槽按实测高度
    摆放，链式 padding 现在正确；`a_snackbar_slot_that_pads_itself_is_measured_with_the_padding` 已解除
    `#[ignore]`，并改断言为"按 padded extent 摆放"（584 = 720 - 56 - 80）。
-   - 注意：window-inset padding **不是**链步骤，仍在 walk 之后统一内缩（inset 没有链位置，
-     见 `docs/box.md` 的差异表）。
+   - Window-inset padding is a chain step too (`SizeStep::InsetPadding`): each inset is resolved
+     from the window state and consumed at its element's position, so it behaves exactly like
+     element padding in every order. `consumeWindowInsets` is the consume-only step.
 
 ## 五、下一步：LayoutNode 预研结论
 
@@ -191,7 +192,7 @@ incoming
  → fixed（Fixed/Dp/Px 兼容分支）
  → aspectRatio（按当前约束推导尺寸，并把子约束 fixed 成它——Compose 的 `AspectRatioNode`）
  → padding（offset(pad)，子约束缩小）
- → insets（windowInsetsPadding：按窗口状态求值并 consume，位置同 padding）
+ → insets (windowInsetsPadding: resolved from the window state and consumed here, at its chain position)
  → fill（min=max，scroll 前保存 viewport）
  → scroll（viewport 回写节点字段；lazy 不改无界，普通改无界）
  → policy.measure / 叶子分支
