@@ -334,18 +334,19 @@ The pipeline order in `measure_node_inner` is the specification, and the probe r
 modifier chain instead of the node. The box range comes from folding `size_steps()` from the
 INNERMOST element outward — Compose nests one layout node per call, so each call constrains the
 answer the inner one produced. `size`/`requiredSize` pin both ends, `sizeIn` clamps both ends into
-its target range, and the min/max family (including `defaultMinSize`) moves one end; `fillMax` and
-`wrapContent` are skipped because neither node overrides the intrinsic methods upstream. This is
+its target range, the min/max family (including `defaultMinSize`) moves one end, and `padding`
+ADDS its extent (the node's box includes it) — so `.padding(8).size(300)` answers 316 while
+`.size(300).padding(8)` answers 300; `fillMax` and `wrapContent` are skipped because neither node
+overrides the intrinsic methods upstream. This is
 what decides a conflict in Compose — the outer call wins (`.max_width(200).min_width(300)` answers
 200, the reverse 300; this used to be a recorded "the min always wins" deviation). Consequences that
 the tests pin:
 
-- A fixed axis short-circuits: a node whose axis is fixed returns that value **without** padding,
-  because the pipeline tightens the node's own box and the padding is added to the OUTER size
-  afterwards (padding is a chain step, `SizeStep::Padding`).
-- Otherwise the answer is `content.clamp(lo, hi) + padding`, mirroring "measure the content, then add
-  padding back". The engine's intrinsic-request block subtracts the axis padding again before
-  tightening, because the outer size adds it back — one count, not two.
+- A fixed axis short-circuits: when the folded range is a single value the answer IS that value,
+  padding included (it was added to the range by the replay).
+- Otherwise the answer is `(content + padding).clamp(lo, hi)`: the range already carries the padding,
+  and the content is what the policy/leaf reports. The engine's intrinsic-request block subtracts
+  the axis padding once before tightening, because the outer size adds it back.
 - The content is asked with the OTHER axis reduced by that axis's padding (`other - pad_other`), as
   Compose's padding node offsets the constraints before the child answers
   (`Padding.kt:449`); measured before the fix: a `padding_horizontal(10)` node under a height query

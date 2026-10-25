@@ -29,6 +29,26 @@
         intrinsic_size_of(nodes, &policies, idx, IntrinsicQuery::MaxWidth, other)
     }
 
+    /// The intrinsic answer is the node's BOX, so a padding OUTSIDE a size is added to it: the
+    /// range walk replays `SizeStep::Padding` outward. With the size outside the padding the
+    /// padding is inside the fixed box and comes out of it.
+    #[test]
+    fn padding_and_size_answer_the_intrinsic_box_in_chain_order() {
+        let policies: Vec<Box<dyn MeasurePolicy>> = Vec::new();
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().padding(8.0).size(300.0, 120.0))];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            316.0,
+            "size inside the padding: 300 + 16"
+        );
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(300.0, 120.0).padding(8.0))];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            300.0,
+            "size outside the padding: the padding comes out of the 300"
+        );
+    }
+
     /// Compose's `AspectRatioNode` answers every intrinsic query from the OTHER axis
     /// (`AspectRatio.kt:123-161`), and defers to the child when that axis is unbounded.
     #[test]

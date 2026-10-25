@@ -158,6 +158,21 @@ pub(crate) fn intrinsic_axis_range(m: &crate::modifier::Modifier, horizontal: bo
                     hi = v;
                 }
             }
+            crate::modifier::SizeStep::Padding {
+                start,
+                top,
+                end,
+                bottom,
+            } => {
+                // Padding is a chain NODE: walking outward, it adds its extent to whatever the inner
+                // range is, because the node's box includes the padding. An unbounded maximum stays
+                // unbounded (there is nothing to add it to).
+                let pad = if horizontal { start + end } else { top + bottom };
+                lo += pad;
+                if hi < f32::MAX {
+                    hi += pad;
+                }
+            }
             crate::modifier::SizeStep::MinWidth(v) if horizontal => {
                 lo = lo.max(v);
                 hi = hi.max(v);
@@ -307,9 +322,10 @@ pub(crate) fn intrinsic_size_of(
     // content first and adding the padding afterwards lets the padding escape the clamp (measured:
     // a menu item with `min_width(112).padding_horizontal(12)` reported 136 instead of 112, because
     // its 64dp label was lifted to the minimum before the 24dp of padding was added on top).
-    let lo_inner = (lo - pad_axis).max(0.0);
-    let hi_inner = (hi - pad_axis).max(lo_inner);
-    content.clamp(lo_inner, hi_inner) + pad_axis
+    // The range already carries the padding (`intrinsic_axis_range` replays `SizeStep::Padding`
+    // outward), so the answer is the CONTENT plus the padding clamped into it — the same box the
+    // measure path reports.
+    (content + pad_axis).clamp(lo, hi)
 }
 
 /// The CONTENT's answer to an intrinsic query: the node's policy, or the node itself as a leaf.
