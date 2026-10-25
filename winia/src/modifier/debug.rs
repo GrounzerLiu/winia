@@ -50,6 +50,7 @@ impl Debug for ModifierElement {
             Self::ContentAlignSelf { alignment } => {
                 f.debug_struct("ContentAlignSelf").field("alignment", alignment).finish()
             }
+            Self::MatchParentSize => f.write_str("MatchParentSize"),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::FillMaxRowHeight { fraction } => {
                 f.debug_struct("FillMaxRowHeight").field("fraction", fraction).finish()

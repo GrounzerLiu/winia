@@ -542,6 +542,14 @@ impl Modifier {
         })
     }
 
+    /// Whether this child asked to match its box's size (Compose's `matchParentSize`). Read by
+    /// `Box`/`Stack`, which excludes it from the size computation and measures it at the box size.
+    pub fn is_match_parent_size(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::MatchParentSize))
+    }
+
     /// Both-axis alignment override, read by `Box`/`Stack` (Compose's `BoxScope.align`). Last wins, as
     /// above.
     pub fn get_content_align_self(&self) -> Option<crate::layout::ContentAlignment> {

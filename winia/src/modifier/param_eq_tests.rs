@@ -12,6 +12,13 @@
         assert!(!a.param_eq(&b), "a different corner must compare unequal");
         assert!(a.param_eq(&a2), "the same corner must compare equal");
 
+        // `match_parent_size` is a declaration like any other: it must compare unequal to its absence
+        // (a Clean slot would otherwise keep a stale box size), and equal to itself.
+        let matching = Modifier::new().match_parent_size();
+        let plain = Modifier::new();
+        assert!(!matching.param_eq(&plain), "adding match_parent_size must re-enter");
+        assert!(matching.param_eq(&Modifier::new().match_parent_size()));
+
         // The one-axis carrier too, and the two kinds are not interchangeable.
         let one = Modifier::new().align_self(crate::layout::Alignment::Center);
         let two = Modifier::new().content_align_self(ContentAlignment::both(crate::layout::Alignment::Center));

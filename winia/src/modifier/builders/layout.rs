@@ -381,6 +381,15 @@ impl Modifier {
         self.push(ModifierElement::ContentAlignSelf { alignment })
     }
 
+    /// Match the parent Box's size WITHOUT taking part in it — Compose's
+    /// `BoxScope.Modifier.matchParentSize()`. The child is excluded from sizing the box and then
+    /// measured at the box's size, which is what lets a scrim or a background cover the box without
+    /// forcing the box to fill its own parent (a `fill_max_size` child does force that). Ignored by
+    /// `Row`/`Column`/`Flow`.
+    pub fn match_parent_size(self) -> Self {
+        self.push(ModifierElement::MatchParentSize)
+    }
+
     /// Align this child by one of its own alignment lines instead of by its edge — Compose's
     /// `RowScope.Modifier.alignBy` / `ColumnScope.Modifier.alignBy`.
     ///

@@ -64,6 +64,28 @@ fn box_layout_demo_places_children_per_child() {
         "and at its bottom edge: {child:?} in {bwc:?}"
     );
 
+    // 4. match_parent_size: the scrim covers the box without sizing it (the box is the anchor's
+    //    120x40, not the scrim's), which is what separates it from a fill_max_size child.
+    let frame = app.expect_tag("box-match-frame");
+    let anchor = app.expect_tag("box-match-anchor");
+    let scrim = app.expect_tag("box-match-scrim");
+    assert!(
+        (frame.2 - anchor.2).abs() < 2.0 && (frame.3 - anchor.3).abs() < 2.0,
+        "the scrim did not size the box: frame {frame:?} vs anchor {anchor:?}"
+    );
+    assert!(
+        (frame.2 - 120.0).abs() < 2.0,
+        "and the frame is the anchor's 120 dp wide, not the card's: {frame:?}"
+    );
+    assert!(
+        (scrim.2 - frame.2).abs() < 2.0 && (scrim.3 - frame.3).abs() < 2.0,
+        "the scrim covers the box: {scrim:?} in {frame:?}"
+    );
+    assert!(
+        (scrim.0 - frame.0).abs() < 2.0 && (scrim.1 - frame.1).abs() < 2.0,
+        "and starts at its origin: {scrim:?} in {frame:?}"
+    );
+
     // RTL mirrors the horizontal half: bottom-end becomes bottom-left, top-start becomes top-right.
     let frame_before = app.expect_tag("box-align-frame");
     app.set_layout_direction(LayoutDirection::Rtl);

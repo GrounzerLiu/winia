@@ -168,6 +168,34 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
                         );
                     });
             });
+
+            // 4. match_parent_size: the scrim covers the box WITHOUT sizing it — the box is the
+            //    anchor's 120x40, not the scrim's, which is the whole difference from fill_max_size.
+            card(ctx, "box-match", "4. match_parent_size scrim", |ctx| {
+                Stack::new()
+                    // No fill_max_width: the frame is exactly the anchor's size, so the scrim
+                    // covering it is the whole difference from a fill_max_size child (which would
+                    // drag the box out to its parent instead).
+                    .modifier(
+                        Modifier::new()
+                            .test_tag("box-match-frame")
+                            .background(Color::from_argb(30, 90, 160, 220), Shape::rounded(8.0)),
+                    )
+                    .build(ctx, |ctx| {
+                        block(
+                            ctx, "box-match-anchor", "sizes the box", 120.0, 40.0,
+                            Color::from_argb(255, 90, 160, 220), Modifier::new(),
+                        );
+                        Stack::new()
+                            .modifier(
+                                Modifier::new()
+                                    .match_parent_size()
+                                    .test_tag("box-match-scrim")
+                                    .background(Color::from_argb(70, 0, 0, 0), Shape::Rectangle),
+                            )
+                            .build(ctx, |_ctx| {});
+                    });
+            });
         });
 }
 

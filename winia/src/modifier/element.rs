@@ -348,6 +348,9 @@ pub(crate) enum ModifierElement {
     /// A child's own alignment inside a `Box`/`Stack`, on BOTH axes — Compose's
     /// `BoxScope.Modifier.align(Alignment.TopEnd)`, which a one-axis `Alignment` cannot express.
     ContentAlignSelf { alignment: crate::layout::ContentAlignment },
+    /// Compose's `BoxScope.matchParentSize`: the child does NOT take part in sizing its box and is
+    /// then measured at the box's size. Only a `Box`/`Stack` reads it.
+    MatchParentSize,
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },

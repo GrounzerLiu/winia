@@ -1,6 +1,11 @@
 //! Box 布局 — 层叠子节点（Z 轴堆叠）
 //!
 //! 所有子节点获得相同的空间，类似 FrameLayout / Box
+//!
+//! Two Compose behaviours live here beyond the stacking: a child's own alignment
+//! (`content_align_self` / `align_self`, Compose's `BoxScope.align`) and `match_parent_size`,
+//! where the child does NOT size the box and is measured at the box's size instead
+//! (`BoxScope.matchParentSize`). The full contract is in `docs/box.md`.
 
 use super::constraints::Constraints;
 use crate::unit::{Offset, Size};
@@ -94,10 +99,6 @@ impl MeasurePolicy for BoxLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        let mut max_width: f32 = 0.0;
-        let mut max_height: f32 = 0.0;
-        let mut child_sizes: Vec<Size> = Vec::with_capacity(children.len());
-
         // 测量所有子节点，每个子节点获得相同的约束——除非开了 propagate_min_constraints，
         // 这时把本盒子的 MIN 约束一并传下去（Compose 的 `Box(propagateMinConstraints = true)`）
         let child_constraints = if self.propagate_min_constraints {
@@ -105,11 +106,23 @@ impl MeasurePolicy for BoxLayout {
         } else {
             constraints.loosen()
         };
-        for &c in children {
+
+        // Compose's `matchParentSize` (`Box.kt:161-192`): such a child does NOT size the box. It is
+        // measured at the box's size in a second pass, so a scrim covers the box without making the
+        // box fill its own parent — which is exactly what a `fill_max_size` child would do instead.
+        // The flag is re-read where it is needed rather than collected: a `Vec<bool>` per box per
+        // measured frame is an allocation this hot path does not need.
+        let mut child_sizes: Vec<Size> = vec![Size::ZERO; children.len()];
+        let mut max_width: f32 = 0.0;
+        let mut max_height: f32 = 0.0;
+        for (i, &c) in children.iter().enumerate() {
+            if nodes[c].modifier.is_match_parent_size() {
+                continue;
+            }
             let (child_size, _) = measure_node(nodes, policies, c, child_constraints);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
-            child_sizes.push(child_size);
+            child_sizes[i] = child_size;
         }
 
         // Compose's Box reports `max(child, constraints.min)` and never consults the maximum
@@ -118,6 +131,23 @@ impl MeasurePolicy for BoxLayout {
         // not; `Row`/`Column` were aligned with Compose in the same way.
         let width = max_width.max(constraints.min_width);
         let height = max_height.max(constraints.min_height);
+
+        // Second pass: the match-parent children, at the size the box settled on. An unbounded box
+        // hands them 0 as the minimum (Compose's infinity guard, `Box.kt:180-186`); its maximum stays
+        // the box size, so they still fill it.
+        for (i, &c) in children.iter().enumerate() {
+            if !nodes[c].modifier.is_match_parent_size() {
+                continue;
+            }
+            let fixed = Constraints::new(
+                if width < f32::MAX { width } else { 0.0 },
+                width,
+                if height < f32::MAX { height } else { 0.0 },
+                height,
+            );
+            let (child_size, _) = measure_node(nodes, policies, c, fixed);
+            child_sizes[i] = child_size;
+        }
 
         // 为每个子节点计算在 Box 中的位置（根据 alignment）
         //
@@ -130,11 +160,14 @@ impl MeasurePolicy for BoxLayout {
             .iter()
             .enumerate()
             .map(|(i, child_size)| {
+                let matching = nodes[children[i]].modifier.is_match_parent_size();
                 // Precedence: the child's own two-axis value, then its axis-symmetric one, then the
-                // box's alignment. `Stretch` is skipped in the one-axis fallback: it means "fill the
-                // CROSS axis" in a Row/Column, and a Box would read it as fill-both-axes (which it
-                // cannot honour without resizing the child, something Compose's `BoxScope.align`
-                // never does).
+                // box's alignment — except that a match-parent child falls back to Compose's implicit
+                // CENTER (the `matchParentSize` element carries `alignment = Center`, `Box.kt:282-289`).
+                // `Stretch` is skipped in the one-axis fallback: it means "fill the CROSS axis" in a
+                // Row/Column, and a Box would read it as fill-both-axes (which it cannot honour
+                // without resizing the child, something Compose's `BoxScope.align` never does).
+                let fallback = if matching { ContentAlignment::CENTER } else { align };
                 let child_align = nodes[children[i]]
                     .modifier
                     .get_content_align_self()
@@ -145,9 +178,17 @@ impl MeasurePolicy for BoxLayout {
                             .filter(|a| *a != Alignment::Stretch)
                             .map(ContentAlignment::both)
                     })
-                    .unwrap_or(align);
+                    .unwrap_or(fallback);
                 let (x, y) = child_align.anchor(*child_size, space, self.direction);
-                let size = child_align.child_size(*child_size, space);
+                // A match-parent child keeps its MEASURED size. It was measured at the box's size, but
+                // one that escapes the fixed constraints (`required_size`, a post-measure growth
+                // step, an unbounded box) is placed at its own size and CENTRED — Compose's
+                // `placeInBox` always runs, so pinning it at the origin was a divergence.
+                let size = if matching {
+                    *child_size
+                } else {
+                    child_align.child_size(*child_size, space)
+                };
                 Placement {
                     size,
                     position: Offset::new(x, y),
@@ -389,6 +430,160 @@ mod tests {
         );
         assert_eq!(size, Size::new(120.0, 60.0));
         assert!(placements.is_empty());
+    }
+
+    /// Compose's `matchParentSize` (`Box.kt:161-192`): the child is excluded from sizing the box,
+    /// then measured at the box's size. A scrim built with it covers the box; a `fill_max_size` child
+    /// would instead drag the box out to its own parent.
+    #[test]
+    fn a_match_parent_child_does_not_size_the_box() {
+        let mut nodes = vec![
+            make_leaf(120.0, 40.0),
+            LayoutNode::leaf(Modifier::new().size(300.0, 200.0).match_parent_size()),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(size, Size::new(120.0, 40.0), "the match-parent child must not grow the box");
+        assert_eq!(
+            placements[1].size,
+            Size::new(120.0, 40.0),
+            "and it is measured at the box's size"
+        );
+        assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
+        assert_eq!(
+            placements[0].position,
+            Offset::new(0.0, 0.0),
+            "the sizing child keeps the box's Start alignment"
+        );
+    }
+
+    /// A forced box gives the match-parent child its forced size (Compose measures it with
+    /// `Constraints.fixed` at the box size).
+    #[test]
+    fn a_match_parent_child_fills_a_forced_box() {
+        // The alignment is irrelevant once the child fills the box (Compose still runs
+        // `placeInBox`, which is a no-op at this size); the child stays at the origin.
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new()
+                .match_parent_size()
+                .content_align_self(ContentAlignment::BOTTOM_END),
+        )];
+        let children: Vec<usize> = vec![0];
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::fixed(200.0, 100.0),
+        );
+        assert_eq!(size, Size::new(200.0, 100.0));
+        assert_eq!(placements[0].size, Size::new(200.0, 100.0));
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
+    }
+
+    /// A match-parent child that ESCAPES the fixed constraints keeps its own size and is centred:
+    /// Compose's `matchParentSize` element carries `alignment = Center` (`Box.kt:282-289`) and
+    /// `placeInBox` always runs (`Box.kt:205-221`), so pinning it at the origin was a divergence.
+    #[test]
+    fn a_match_parent_child_that_escapes_the_box_is_centred() {
+        let mut nodes = vec![
+            make_leaf(100.0, 100.0),
+            LayoutNode::leaf(Modifier::new().required_size(200.0, 60.0).match_parent_size()),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(size, Size::new(100.0, 100.0), "the escaping child does not size the box");
+        assert_eq!(placements[1].size, Size::new(200.0, 60.0), "it keeps its measured size");
+        assert_eq!(
+            placements[1].position,
+            Offset::new(-50.0, 20.0),
+            "and is centred, not pinned at the origin"
+        );
+    }
+
+    /// Only match-parent children: the box is the incoming MINIMUM (Compose starts `boxWidth` at
+    /// `constraints.minWidth`), which is 0 under loose constraints.
+    #[test]
+    fn a_box_of_only_match_parent_children_takes_the_minimum() {
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(300.0, 200.0).match_parent_size())];
+        let children: Vec<usize> = vec![0];
+
+        let (loose, _) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(loose, Size::new(0.0, 0.0), "nothing sizes the box, so it is the minimum");
+
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(300.0, 200.0).match_parent_size())];
+        let (tight, placements) = BoxLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::fixed(100.0, 50.0),
+        );
+        assert_eq!(tight, Size::new(100.0, 50.0));
+        assert_eq!(placements[0].size, Size::new(100.0, 50.0));
+    }
+
+    /// Flipping the flag re-enters the box and its second pass re-measures the child at the new size.
+    /// The state is read INSIDE the box's content, so the box's own group is the dependency target —
+    /// the child→parent dirty bubbling (materialize.rs:584-588) is a different path and is not what
+    /// this test pins.
+    #[test]
+    fn toggling_match_parent_size_re_measures_the_box() {
+        use crate::runtime::composer::Composer;
+        // A state read INSIDE the box's content is what makes the frame enter and rebuild the
+        // child's modifier; a value captured by an outer closure would be skipped.
+        let matching = crate::runtime::state::State::new(false);
+        let build = {
+            let matching = matching.clone();
+            move |ctx: &mut ComposeCtx| {
+                let matching = matching.clone();
+                Stack::new().build(ctx, move |ctx| {
+                    crate::components::Text::new("anchor")
+                        .modifier(Modifier::new().size(120.0, 40.0))
+                        .build(ctx);
+                    let m = Modifier::new().size(300.0, 200.0);
+                    let m = if matching.get() { m.match_parent_size() } else { m };
+                    Stack::new().modifier(m).build(ctx, |_ctx| {});
+                });
+            }
+        };
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(300.0, 200.0),
+            "without the flag the 300x200 child sizes the box"
+        );
+
+        matching.set(true);
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        // The root is re-read: a frame that rebuilds its tree can move it to a different arena slot.
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(120.0, 40.0),
+            "with the flag the box shrinks back to the anchor"
+        );
     }
 
     /// The public builder has to carry both new knobs into the policy: `Stack::propagate_min_constraints`
