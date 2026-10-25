@@ -50,6 +50,11 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     /// LazyRow starts at the right), and BOTH axes mirror the CROSS axis: `content_padding_cross`'s
     /// "before" is the start edge, which is the right one in RTL.
     pub rtl: bool,
+    /// The `reverse_layout` the caller asked for, before the direction is folded in — reported in the
+    /// layout info, where a caller wants the parameter and not only the effective mirror.
+    pub reverse_requested: bool,
+    /// Compose's `LazyListState.layoutInfo`: written at the end of every measure pass.
+    pub layout_info: crate::runtime::state::State<std::sync::Arc<super::LazyListLayoutInfo>>,
     /// Paging snap (from `snap_paging`): the step is written back only when every measured item
     /// measures at the viewport's main size, and `None` (no snapping) otherwise — with items of
     /// unequal size there is no snap position to speak of.
@@ -77,6 +82,69 @@ impl<A: LazyAxis> std::fmt::Debug for LazyListPolicy<A> {
     }
 }
 
+impl<A: LazyAxis> LazyListPolicy<A> {
+    /// Build the Compose-shaped layout snapshot for this pass.
+    ///
+    /// Item offsets are VIEWPORT coordinates, which is the arena position shifted by the render
+    /// translate: `-offset` for a straight list, `-(content - viewport - offset)` for a mirrored one
+    /// (`reverseLayout`, or RTL on a row). Sticky items are in `placements` too — their pinned
+    /// position is what a caller wants to see — so the list is sorted by index afterwards, because
+    /// the child order is "ordinary items, then sticky".
+    fn layout_info_snapshot(
+        &self,
+        placements: &[crate::layout::node::Placement],
+        measured: &[(f32, f32)],
+        content_h: f32,
+        vh: f32,
+        cross_extent: f32,
+    ) -> super::LazyListLayoutInfo {
+        let offset = self.state.offset.get();
+        let shift = if self.reverse {
+            content_h - vh - offset
+        } else {
+            offset
+        };
+        let viewport_start = -self.content_padding.0;
+        let viewport_end = vh + self.content_padding.1;
+        let mut visible = Vec::new();
+        for (i, placement) in placements.iter().enumerate() {
+            let size = measured.get(i).map(|(main, _)| *main).unwrap_or(0.0);
+            // The placement's position IS a Size here: main axis in one component, cross in the other.
+            let main = A::main_size(crate::unit::Size::new(
+                placement.position.x,
+                placement.position.y,
+            ));
+            let start = main - shift;
+            // Intersecting the viewport (Compose's `minMainAxisOffset`/`maxMainAxisOffset` check);
+            // the items composed by `beyond_bounds` but outside it are NOT visible.
+            if start < viewport_end && start + size > viewport_start {
+                let global = self.globals.get(i).copied().unwrap_or(i);
+                visible.push(super::LazyListItemInfo {
+                    index: global,
+                    key: self.keys.get(global).copied().unwrap_or(global as u64),
+                    offset: start,
+                    size,
+                });
+            }
+        }
+        visible.sort_by_key(|item| item.index);
+        let node_size = A::size(vh, cross_extent);
+        super::LazyListLayoutInfo {
+            visible_items: visible,
+            viewport_start_offset: viewport_start,
+            viewport_end_offset: viewport_end,
+            total_items: self.total,
+            viewport_size: (node_size.width, node_size.height),
+            vertical: A::VERTICAL,
+            reverse_layout: self.reverse_requested,
+            rtl: self.rtl,
+            before_content_padding: self.content_padding.0,
+            after_content_padding: self.content_padding.1,
+            spacing: self.spacing,
+        }
+    }
+
+}
 impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     fn measure(
         &self,
@@ -401,6 +469,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         }
 
         self.cache.set(cache);
+        // Compose's `layoutInfo`: what this pass actually placed, in viewport coordinates. Written
+        // before the policy returns so a reader woken by it sees the same numbers the frame draws.
+        let info = self.layout_info_snapshot(&placements, &measured, content_h, vh, cross_extent);
+        self.layout_info.set(std::sync::Arc::new(info));
         (A::size(vh, cross_extent), placements)
     }
 

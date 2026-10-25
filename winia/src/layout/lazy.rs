@@ -101,15 +101,18 @@ impl LazyAxis for crate::layout::axis::HorizontalAxis {
 }
 
 
+mod info;
 mod interval;
 mod list;
 mod policy;
 mod state;
 
+pub(crate) use info::*;
 pub(crate) use interval::*;
 pub(crate) use list::*;
 pub(crate) use policy::*;
 
+pub use info::{LazyListItemInfo, LazyListLayoutInfo};
 pub use list::{ItemHeightCache, LazyColumn, LazyList, LazyRow};
 pub use state::LazyListState;
 

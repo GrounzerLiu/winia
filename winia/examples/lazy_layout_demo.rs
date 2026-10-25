@@ -166,9 +166,13 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                     });
             });
 
-            // 4. The LTR control: nothing above may move a list that is not mirrored.
+            // 4. The LTR control: nothing above may move a list that is not mirrored. It also shows
+            //    its own `layoutInfo` — the visible range as the measure pass reported it, which is
+            //    Compose's `LazyListState.layoutInfo` read from a composable.
             card(ctx, "lazy-ltr-row-card", "4. LTR control (scroll it)", |ctx| {
+                let state = ctx.remember(|| LazyListState::new()).get();
                 LazyRow::new()
+                    .state(state.clone())
                     .modifier(
                         Modifier::new()
                             .fill_max_width()
@@ -178,6 +182,19 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                     .items(ITEMS, |i| i as u64, |ctx, i| {
                         tile(ctx, format!("lazy-ltr-item-{i}"), format!("{i}"), 100.0, 44.0, accent(i));
                     })
+                    .build(ctx);
+                // Rendered unconditionally: the first composition runs before the first measure, so
+                // the placeholder is what shows on frame one and the real range from frame two.
+                let info = state.layout_info();
+                let label = match (info.visible_items.first(), info.visible_items.last()) {
+                    (Some(first), Some(last)) => {
+                        format!("items {}-{} of {}", first.index, last.index, info.total_items)
+                    }
+                    _ => "items pending".to_string(),
+                };
+                Text::new(label)
+                    .modifier(Modifier::new().test_tag("lazy-ltr-info"))
+                    .font_size(11.0)
                     .build(ctx);
             });
         });

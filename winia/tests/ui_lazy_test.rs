@@ -116,13 +116,15 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
 
     // 7. The AMBIENT route, not just the modifier: flipping the window's direction mirrors the row
     //    that carries no direction of its own, which is the path an OS-level RTL switch takes.
+    //
+    // The ORDER is what flips: after the mirror, item 1 sits to the LEFT of item 0. Comparing their
+    // positions to each other keeps the assertion out of the render mirror's translate. This runs
+    // before the row is scrolled: after a drag both tiles are far from the viewport.
     let ltr_row_rect = app.expect_tag("lazy-ltr-row");
-    let before = app.expect_tag("lazy-ltr-item-0");
-    let before_next = app.expect_tag("lazy-ltr-item-1");
-    assert!(before_next.0 > before.0, "LTR: item 1 is right of item 0");
+    let item0_ltr = app.expect_tag("lazy-ltr-item-0");
+    let item1_ltr = app.expect_tag("lazy-ltr-item-1");
+    assert!(item1_ltr.0 > item0_ltr.0, "LTR: item 1 is right of item 0");
     app.set_layout_direction(LayoutDirection::Rtl);
-    // The ORDER is what flips: after the mirror, item 1 sits to the LEFT of item 0. Comparing
-    // positions relative to each other keeps the assertion out of the render mirror's translate.
     app.expect_eventually_timeout(
         "the LTR row mirrors with the window direction",
         Duration::from_secs(2),
@@ -140,4 +142,32 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         "and it keeps its width across the flip"
     );
     app.clear_layout_direction();
+
+    // 8. `layoutInfo` is live: the LTR card prints its visible range from `state.layout_info()`, and
+    //    scrolling the row must change that text — a measure-time write reaching a composable reader.
+    //    `all_texts` reports each node as `text(<content>)`, so the match is on containment.
+    app.expect_eventually_timeout("the layout-info label resolves", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.all_texts().iter().any(|text| text.contains("items 0-"))
+    });
+    let label_before = app
+        .all_texts()
+        .into_iter()
+        .find(|text| text.contains("items "))
+        .expect("the layout-info label");
+    let label_rect = app.expect_tag("lazy-ltr-info");
+    assert!(label_rect.3 > 0.0, "the label has a box: {label_rect:?}");
+    let ltr = app.expect_tag("lazy-ltr-row");
+    let ly = ltr.1 + ltr.3 / 2.0;
+    app.drag(ltr.0 + ltr.2 - 40.0, ly, ltr.0 + 40.0, ly);
+    app.expect_eventually_timeout(
+        "the layout-info label follows the scroll",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.all_texts()
+                .iter()
+                .any(|text| text.contains("items ") && *text != label_before)
+        },
+    );
 }

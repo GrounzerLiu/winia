@@ -62,6 +62,9 @@ pub struct LazyListState {
     pub first_visible_index: crate::runtime::state::State<usize>,
     /// Derived: the first visible item's offset (positive = how far it has scrolled out).
     pub first_visible_offset: crate::runtime::state::State<f32>,
+    /// What the last measure pass saw — Compose's `LazyListState.layoutInfo`. A fresh `Arc` per
+    /// measure, so a reader that tracks it is woken by every layout rather than by value equality.
+    pub(crate) layout_info: crate::runtime::state::State<std::sync::Arc<super::LazyListLayoutInfo>>,
 }
 
 impl LazyListState {
@@ -80,6 +83,9 @@ impl LazyListState {
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),
+            layout_info: crate::runtime::state::State::new(std::sync::Arc::new(
+                super::LazyListLayoutInfo::default(),
+            )),
         }
     }
 
@@ -92,6 +98,15 @@ impl LazyListState {
     /// How far the first visible item has been scrolled past, in pixels (`0.0` = its leading edge is
     /// at the viewport edge).
     pub fn first_visible_offset(&self) -> f32 { self.first_visible_offset.get() }
+
+    /// The layout information of the last measure pass — Compose's `LazyListState.layoutInfo`: the
+    /// visible items (index, key, main-axis offset and size), the viewport bounds and the list's
+    /// parameters. Empty until the first measure.
+    ///
+    /// The read is TRACKED: a caller that derives from it is woken when the visible set changes.
+    pub fn layout_info(&self) -> std::sync::Arc<super::LazyListLayoutInfo> {
+        self.layout_info.get()
+    }
 
     /// The viewport size along the main axis, as of the last measure (`0.0` before the first one).
     ///

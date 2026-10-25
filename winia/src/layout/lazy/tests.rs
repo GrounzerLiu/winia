@@ -1894,6 +1894,247 @@
         assert_eq!(children_positions(&composer, root)[0], (0.0, 80.0));
     }
 
+    // ── Layout info (Compose's LazyListLayoutInfo) ──
+
+    fn ten_item_column(ctx: &mut ComposeCtx) {
+        LazyColumn::new()
+            .items(10, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+            .build(ctx);
+    }
+
+    /// The snapshot a caller reads: which items are visible, where they start relative to the list,
+    /// how big they are, and the viewport bounds the visibility is measured against.
+    #[test]
+    fn layout_info_reports_the_visible_items() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(10, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        assert_eq!(info.total_items, 10);
+        assert_eq!((info.viewport_size.0, info.viewport_size.1), (200.0, 200.0));
+        assert!(info.vertical && !info.reverse_layout && !info.rtl && !info.mirrored());
+        assert_eq!(info.viewport_start_offset, 0.0);
+        assert_eq!(info.viewport_end_offset, 200.0);
+        let items: Vec<(usize, f32, f32)> =
+            info.visible_items.iter().map(|i| (i.index, i.offset, i.size)).collect();
+        assert_eq!(
+            items,
+            vec![(0, 0.0, 40.0), (1, 40.0, 40.0), (2, 80.0, 40.0), (3, 120.0, 40.0), (4, 160.0, 40.0)],
+            "five items fit, and the sixth starts exactly at the viewport's end"
+        );
+        assert!(info.is_fully_visible(160.0, 40.0), "160 + 40 is the viewport's end");
+        assert!(!info.is_fully_visible(200.0, 40.0), "an item starting at the end is not visible");
+    }
+
+    /// Scrolled past an item, its offset is NEGATIVE — that is Compose's contract, and it is what
+    /// makes "is the first item fully visible" answerable.
+    #[test]
+    fn layout_info_offsets_go_negative_once_scrolled() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(10, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        state.offset.set(60.0);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        // At offset 60 item 0 spans -60..-20, entirely above the viewport, so it is NOT visible:
+        // item 1 is the first one that still intersects, and it starts at -20.
+        assert_eq!(info.visible_items[0].index, 1);
+        assert_eq!(info.visible_items[0].offset, -20.0);
+        assert_eq!(info.visible_items[1].index, 2);
+        assert_eq!(info.visible_items[1].offset, 20.0);
+        assert!(
+            !info.is_fully_visible(-20.0, 40.0),
+            "a partially visible first item is not fully visible"
+        );
+        assert!(!info.visible_items.iter().any(|item| item.index == 0), "item 0 scrolled out");
+    }
+
+    /// `contentPadding` shifts the items AND the viewport bounds: Compose reports
+    /// `viewportStartOffset = -beforeContentPadding` so the padding area still counts as visible.
+    #[test]
+    fn layout_info_folds_in_the_content_padding() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .content_padding(20.0, 10.0)
+                .items(10, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        assert_eq!(info.viewport_start_offset, -20.0);
+        assert_eq!(info.viewport_end_offset, 210.0);
+        assert_eq!(info.before_content_padding, 20.0);
+        assert_eq!(info.after_content_padding, 10.0);
+        assert_eq!(info.visible_items[0].offset, 20.0, "the first item starts after the padding");
+    }
+
+    /// The composition window covers `beyond_bounds` extra items on each side; those are composed but
+    /// NOT visible, and the snapshot must not list them.
+    #[test]
+    fn layout_info_excludes_the_prefetch_window() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .beyond_bounds(8)
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        assert_eq!(
+            info.visible_items.len(),
+            5,
+            "five 40 dp items in a 200 dp viewport, prefetched neighbours excluded: {:?}",
+            info.visible_items.iter().map(|i| i.index).collect::<Vec<_>>()
+        );
+        assert_eq!(info.visible_items.last().map(|i| i.index), Some(4));
+    }
+
+    /// Keys come from the item's registration, so a caller can match a visible item back to its data.
+    #[test]
+    fn layout_info_carries_the_item_keys() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(10, |i| 1000 + i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let info = state.layout_info();
+        assert_eq!(
+            info.visible_items.iter().map(|i| i.key).collect::<Vec<_>>(),
+            vec![1000, 1001, 1002, 1003, 1004]
+        );
+    }
+
+    /// An RTL row is mirrored, so offsets are measured from the right: item 0 starts at
+    /// `viewport - width` and the LAST visible item starts at 0.
+    #[test]
+    fn an_rtl_row_reports_mirrored_offsets() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyRow::new()
+                .state(state.clone())
+                .modifier(Modifier::new().layout_direction(crate::layout::LayoutDirection::Rtl))
+                .items(4, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        assert!(!info.vertical && info.rtl && info.mirrored());
+        assert_eq!(
+            info.visible_items.iter().map(|i| (i.index, i.offset)).collect::<Vec<_>>(),
+            vec![(0, 150.0), (1, 100.0), (2, 50.0), (3, 0.0)],
+            "item 0 at the right edge, running leftward"
+        );
+    }
+
+    /// A reverse column lays its content out from the far end, so the LAST item sits at offset 0 and
+    /// item 0 near the viewport's end.
+    #[test]
+    fn a_reverse_column_reports_offsets_from_the_far_end() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .reverse_layout(true)
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        assert!(info.reverse_layout && info.mirrored());
+        assert_eq!(
+            info.visible_items.iter().map(|i| (i.index, i.offset)).collect::<Vec<_>>(),
+            vec![(0, 160.0), (1, 120.0), (2, 80.0)],
+            "the 120 dp of content sits against the far end of the 200 dp viewport"
+        );
+    }
+
+    /// Before the first measure there is nothing to report — an empty snapshot, not a panic.
+    #[test]
+    fn layout_info_is_empty_before_the_first_measure() {
+        let state = LazyListState::new();
+        let info = state.layout_info();
+        assert!(info.visible_items.is_empty());
+        assert_eq!(info.total_items, 0);
+        assert_eq!(info.viewport_size, (0.0, 0.0));
+    }
+
+    /// Scrolling re-writes the snapshot: the first visible index moves with the offset.
+    #[test]
+    fn layout_info_follows_the_scroll_offset() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(state.layout_info().visible_items[0].index, 0);
+        state.offset.set(400.0);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let info = state.layout_info();
+        assert_eq!(info.visible_items[0].index, 10, "offset 400 / 40 is item 10, at offset 0");
+        assert_eq!(info.visible_items[0].offset, 0.0);
+    }
+
+    /// A pinned sticky header is placed at the viewport's start, so it appears in the snapshot at
+    /// offset 0 even though its data position is far behind the anchor.
+    #[test]
+    fn a_pinned_sticky_header_appears_in_the_layout_info() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            let mut list = LazyColumn::new()
+                .state(state.clone())
+                .sticky_header(0, |ctx| sized_item(ctx, 0, 50.0, 40.0));
+            list = list.items(40, |i| 100 + i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0));
+            list.build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        state.offset.set(200.0);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        let header = info
+            .visible_items
+            .iter()
+            .find(|item| item.key == 0)
+            .expect("the pinned header is visible");
+        assert_eq!(header.offset, 0.0, "pinned at the viewport start");
+        assert_eq!(header.index, 0, "and it keeps its data index");
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

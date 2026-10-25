@@ -313,6 +313,33 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
 | `request_compose_after_layout` / `take_compose_after_layout` | core/composer.rs | A `MeasurePolicy` asks the frame to compose again after this layout (the window it was handed cannot fill the viewport it is measured in); thread-local, consumed and cleared by the frame handler |
 | same-frame convergence | app.rs | `PerWindow::recompose_layout_render` composes and lays out again while a request is outstanding (cap 8 passes) — see 2.9 |
 
+## 3a. layoutInfo (Compose's `LazyListState.layoutInfo`)
+
+```rust
+let info = state.layout_info();          // Arc<LazyListLayoutInfo>, tracked read
+for item in &info.visible_items {        // the items intersecting the viewport
+    // item.index, item.key, item.offset (viewport coords), item.size
+}
+info.viewport_start_offset;              // -before_content_padding
+info.viewport_end_offset;                // viewport main size + after_content_padding
+info.total_items;                        // the data count
+info.viewport_size;                      // (w, h) of the lazy node
+info.vertical; info.reverse_layout; info.rtl;
+info.mirrored();                         // reverse_layout ^ (horizontal && rtl)
+info.is_fully_visible(item.offset, item.size);
+```
+
+Compose's contract, kept as is: an item's `offset` is its main-axis start RELATIVE TO THE LIST, so it
+is negative once the item is scrolled past the leading edge, and `viewport_start_offset` is
+`-before_content_padding` so the padding area still counts as visible. Only the items that INTERSECT
+the viewport are listed — the composition window also covers `beyond_bounds` entries on each side, and
+those are not visible. A mirrored list (a `reverseLayout` column, an RTL row) reports MIRRORED offsets,
+which is what makes the list's own geometry answerable for custom snapping or a scrollbar.
+
+The snapshot is written at the end of every measure pass, so a composable that reads it is woken by a
+scroll; `cargo run -p winia --example lazy_layout_demo` card 4 prints its visible range from it, and
+`tests/ui_lazy_test.rs` asserts that the text changes after a drag.
+
 ## 3b. RTL, and the unbounded cross axis
 
 A HORIZONTAL list mirrors its main axis under RTL: `mirror = reverse_layout ^ rtl`, and the same

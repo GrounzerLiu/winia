@@ -828,6 +828,8 @@ impl<A: LazyAxis> LazyList<A> {
             pin,
             reverse: mirror,
             rtl,
+            reverse_requested: self.reverse,
+            layout_info: state.layout_info.clone(),
             snap_paging,
             fill_items,
             item_main_size: self.item_main_size,
