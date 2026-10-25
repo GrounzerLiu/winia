@@ -1533,6 +1533,367 @@
         );
     }
 
+    // ── RTL, the unbounded cross axis, and the defensive normalisation of the knobs ──
+
+    fn sized_item(ctx: &mut ComposeCtx, i: usize, w: f32, h: f32) {
+        crate::components::Text::new(format!("item {i}"))
+            .modifier(Modifier::new().size(w, h))
+            .build(ctx);
+    }
+
+    fn children_positions(composer: &crate::runtime::composer::Composer, root: usize) -> Vec<(f32, f32)> {
+        composer.arena_nodes()[root]
+            .children
+            .iter()
+            .map(|&c| {
+                let p = composer.arena_nodes()[c].position;
+                (p.x, p.y)
+            })
+            .collect()
+    }
+
+    /// Compose lays a LazyRow out from the RIGHT in RTL, so index 0 must sit at the right edge and
+    /// the items must run leftward. winia keeps one content coordinate system and mirrors it (the
+    /// policy mirrors the placement, the scroll modifier mirrors the translate), which is the same
+    /// pair of steps `reverseLayout` already used — `TabRow`'s scrollable does it with
+    /// `horizontal_scroll_reverse(is_rtl)`.
+    #[test]
+    fn an_rtl_row_runs_right_to_left() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyRow::new()
+                .modifier(Modifier::new().layout_direction(crate::layout::LayoutDirection::Rtl))
+                .items(4, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root),
+            vec![(150.0, 0.0), (100.0, 0.0), (50.0, 0.0), (0.0, 0.0)],
+            "item 0 at the right edge, running leftward, and the cross axis untouched"
+        );
+    }
+
+    /// The LTR control: nothing about the change above may move an LTR list.
+    #[test]
+    fn an_ltr_row_is_unchanged() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyRow::new()
+                .items(4, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root),
+            vec![(0.0, 0.0), (50.0, 0.0), (100.0, 0.0), (150.0, 0.0)]
+        );
+    }
+
+    /// `reverseLayout` alone still puts index 0 at the far end, and `reverseLayout` + RTL cancel —
+    /// the same XOR the scroll modifier gets, because both mirrorings have to agree or the content is
+    /// drawn a viewport away from where it was measured.
+    #[test]
+    fn a_reversed_row_mirrors_and_cancels_under_rtl() {
+        for (rtl, reverse, expected_first_x) in [(false, true, 150.0), (true, true, 0.0)] {
+            let direction = if rtl {
+                crate::layout::LayoutDirection::Rtl
+            } else {
+                crate::layout::LayoutDirection::Ltr
+            };
+            let mut composer = Composer::new();
+            composer.compose(crate::compose!(|ctx| {
+                LazyRow::new()
+                    .reverse_layout(reverse)
+                    .modifier(Modifier::new().layout_direction(direction))
+                    .items(4, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+            let root = composer.arena.root.expect("root");
+            let first = children_positions(&composer, root)[0];
+            assert_eq!(
+                first.0, expected_first_x,
+                "rtl={rtl} reverse={reverse}: item 0 at x={expected_first_x}"
+            );
+        }
+    }
+
+    /// A vertical list does not mirror its MAIN axis under RTL (the items still run downward), but
+    /// its CROSS axis is horizontal, so `content_padding_cross`'s "before" is the right edge and a
+    /// narrow item hugs it.
+    #[test]
+    fn an_rtl_column_right_aligns_its_items() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .content_padding_cross(10.0, 4.0)
+                .modifier(Modifier::new().layout_direction(crate::layout::LayoutDirection::Rtl))
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root),
+            vec![(140.0, 0.0), (140.0, 40.0), (140.0, 80.0)],
+            "x = 200 - 10 (the start padding, now on the right) - 50 (the item)"
+        );
+    }
+
+    /// A filling item covers the padded box on either side, so under RTL its x is the AFTER padding —
+    /// the mirrored form of the same box, not a different one.
+    #[test]
+    fn an_rtl_column_mirrors_the_cross_padding_for_a_filling_item() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .content_padding_cross(10.0, 4.0)
+                .modifier(Modifier::new().layout_direction(crate::layout::LayoutDirection::Rtl))
+                .items(2, |i| i as u64, |ctx, i| {
+                    crate::components::Text::new(format!("item {i}"))
+                        .modifier(Modifier::new().fill_max_width().height(40.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let positions = children_positions(&composer, root);
+        assert_eq!(positions[0], (4.0, 0.0), "the item spans [4, 190]: the padded box mirrored");
+        let widest = composer.arena_nodes()[composer.arena_nodes()[root].children[0]].measured_size;
+        assert_eq!(widest.width, 186.0, "200 - 10 - 4");
+    }
+
+    /// The unbounded cross axis must not leak the `f32::MAX` sentinel: a lazy column inside a
+    /// horizontal scroll reports its WIDEST item plus the cross content padding. Reporting 3.4e38
+    /// poisoned the scroll container's content width, hit testing and any scrollbar built on it.
+    #[test]
+    fn an_unbounded_cross_axis_reports_the_widest_item() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new()
+                .modifier(Modifier::new().horizontal_scroll(crate::modifier::ScrollState::new()))
+                .build(ctx, |ctx| {
+                    LazyColumn::new()
+                        .content_padding_cross(6.0, 4.0)
+                        .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let row = composer.arena.root.expect("root");
+        let column = composer.arena.root().expect("root").children[0];
+        let size = composer.arena_nodes()[column].measured_size;
+        assert_eq!(size.width, 60.0, "50 dp of item plus 6 + 4 of cross padding, not 3.4e38");
+        assert_eq!(size.height, 200.0, "the main axis still reports the viewport");
+        assert!(size.width.is_finite() && composer.arena_nodes()[row].measured_size.width.is_finite());
+    }
+
+    /// The mirror image of the case above: a LazyRow inside a vertical scroll has an unbounded
+    /// HEIGHT, and must report the tallest item instead of the sentinel.
+    #[test]
+    fn a_lazy_row_in_a_vertical_scroll_keeps_a_finite_height() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Column::new()
+                .modifier(Modifier::new().vertical_scroll(crate::modifier::ScrollState::new()))
+                .build(ctx, |ctx| {
+                    LazyRow::new()
+                        .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let column = composer.arena.root.expect("root");
+        let row = composer.arena_nodes()[column].children[0];
+        let size = composer.arena_nodes()[row].measured_size;
+        assert_eq!(size.height, 40.0, "the tallest item, not 3.4e38");
+        assert!(size.height.is_finite());
+    }
+
+    /// `visible_range` adds `beyond_bounds` to the end index; the knob is public, and a big enough
+    /// value overflowed `usize` (a debug panic). It saturates now.
+    #[test]
+    fn an_enormous_beyond_bounds_does_not_overflow() {
+        let cache = ItemHeightCache::default();
+        assert_eq!(
+            visible_range(&cache, 0, 0.0, 200.0, 0.0, 10, usize::MAX),
+            (0, 10),
+            "saturating, not wrapping"
+        );
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .beyond_bounds(usize::MAX)
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert!(!composer.arena_nodes()[root].children.is_empty());
+    }
+
+    /// A negative spacing would make `prefix_height` non-monotonic (the anchor recovery would land
+    /// on the wrong item), so the builder clamps it; the items then stack with no gap.
+    #[test]
+    fn a_negative_spacing_is_clamped_to_zero() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .spacing(-10.0)
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root),
+            vec![(0.0, 0.0), (0.0, 40.0), (0.0, 80.0)]
+        );
+    }
+
+    /// Negative content padding would let items grow outside the viewport and make the scroll extent
+    /// negative; it is clamped where it enters.
+    #[test]
+    fn negative_content_padding_is_clamped_to_zero() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .content_padding(-20.0, -20.0)
+                .items(2, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root),
+            vec![(0.0, 0.0), (0.0, 40.0)],
+            "the first item starts at the viewport edge, not 20 dp above it"
+        );
+    }
+
+    /// A NaN page size would be pushed straight into the item constraints and poison every
+    /// measurement; a non-finite size is ignored instead, and the items keep their own size.
+    #[test]
+    fn a_non_finite_item_main_size_is_ignored() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .item_main_size(f32::NAN)
+                .items(2, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let positions = children_positions(&composer, root);
+        assert_eq!(positions, vec![(0.0, 0.0), (0.0, 40.0)], "no NaN reached a placement");
+    }
+
+    /// An empty list has no items to place and must not panic or divide by zero.
+    #[test]
+    fn an_empty_lazy_list_lays_out_with_no_items() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .items(0, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert!(composer.arena_nodes()[root].children.is_empty());
+        assert_eq!(composer.arena_nodes()[root].measured_size, crate::unit::Size::new(200.0, 200.0));
+    }
+
+    /// `scroll_to_item` with a negative in-item offset must not write a negative pixel offset: the
+    /// animated path always clamped, the immediate one did not, and every later frame derives the
+    /// anchor from that offset.
+    #[test]
+    fn an_immediate_jump_is_clamped_like_the_animated_one() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(30, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        state.scroll_to_item(5, -500.0);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(state.offset(), 0.0, "a negative in-item offset cannot scroll above the start");
+
+        state.scroll_to_item(usize::MAX, 0.0);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let max_off = state.fling_limit.peek();
+        assert!(max_off.is_finite() && max_off > 0.0);
+        assert_eq!(state.offset(), max_off, "an out-of-range index lands at the content's end");
+    }
+
+    /// content padding larger than the viewport is legal (the list can scroll into it) and must not
+    /// panic or invert the scroll extent.
+    #[test]
+    fn content_padding_taller_than_the_viewport_stays_scrollable() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .content_padding(300.0, 300.0)
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let positions = children_positions(&composer, root);
+        assert_eq!(positions[0], (0.0, 300.0), "the first item starts below the 300 dp padding");
+        let max_off = state.fling_limit.peek();
+        assert_eq!(max_off, 300.0 + 120.0 + 300.0 - 200.0, "content minus the viewport");
+    }
+
+    /// Main-axis `content_padding` under RTL: "before" is the start of the content, which is the
+    /// RIGHT edge in an RTL row, so the first item is offset from the right.
+    #[test]
+    fn main_axis_content_padding_mirrors_with_an_rtl_row() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyRow::new()
+                // 20 + 3 x 50 + 30 == the 200 dp viewport, so the render mirror is the identity and
+                // the arena position IS the screen position.
+                .content_padding(20.0, 30.0)
+                .modifier(Modifier::new().layout_direction(crate::layout::LayoutDirection::Rtl))
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            children_positions(&composer, root)[0],
+            (130.0, 0.0),
+            "item 0 sits 20 dp in from the RIGHT edge"
+        );
+    }
+
+    /// `reverseLayout` plus `content_padding`: the padding stays the content's start, and the
+    /// mirrored content puts item 0 that far from the far end of the content.
+    #[test]
+    fn reverse_layout_keeps_the_content_padding_at_the_content_start() {
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .reverse_layout(true)
+                .content_padding(20.0, 0.0)
+                .items(3, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        // content = 20 + 3*40 = 140; item 0 sits at 140 - 20 - 40 = 80.
+        assert_eq!(children_positions(&composer, root)[0], (0.0, 80.0));
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

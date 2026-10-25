@@ -46,6 +46,10 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     /// Reverse layout (`reverseLayout`): a placement's content coordinate is
     /// `content_h - mirrored - item_size` (index 0 sits at the content's bottom).
     pub reverse: bool,
+    /// The resolved layout direction. A horizontal list mirrors its main axis under RTL (Compose's
+    /// LazyRow starts at the right), and BOTH axes mirror the CROSS axis: `content_padding_cross`'s
+    /// "before" is the start edge, which is the right one in RTL.
+    pub rtl: bool,
     /// Paging snap (from `snap_paging`): the step is written back only when every measured item
     /// measures at the viewport's main size, and `None` (no snapping) otherwise — with items of
     /// unequal size there is no snap position to speak of.
@@ -220,9 +224,14 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 );
             } else {
                 // Immediate jump: cancel a running fling and clear the scrolling flag.
+                //
+                // CLAMPED like the animated path: `scroll_to_item(0, -200)` or an index past the end
+                // produced a target outside `[0, max_off]`, and the pixel offset is what every later
+                // frame derives the anchor from — a negative one put the content above the viewport and
+                // an overshooting one left the list unable to scroll back.
                 crate::animation::cancel_animation(&self.state.offset);
                 self.is_scroll_in_progress.set(false);
-                self.state.offset.set(target);
+                self.state.offset.set(target.clamp(0.0, max_off));
             }
         }
         // Fling limit written back — both the input path's `ScrollState::fling` and the
@@ -318,6 +327,23 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         //   backward final(prev) = min(final(prev), final(next) - h(prev))
         //            — the previous header slides out while the next is within h(prev) of the top
         // The placement coordinate is `final + offset`; ordinary items keep their natural position.
+        // Cross-axis extent, and where the content starts on it.
+        //
+        // A lazy list FILLS its cross axis (that is what `fill_max_*` asks for), but an unbounded
+        // parent hands over the framework's `f32::MAX` sentinel — reporting it makes the node 3.4e38
+        // wide and poisons everything downstream (the scroll container's content width, hit testing,
+        // a scrollbar's geometry). Compose has no equivalent: its `Constraints.Infinity` is an int
+        // sentinel that never reaches a size computation. So an unbounded cross axis reports the
+        // WIDEST CHILD instead, floored by the incoming minimum and widened by the cross content
+        // padding, which is the same box a filling child would occupy.
+        let cross_max = A::cross_max(&constraints);
+        let widest_cross = measured.iter().map(|(_, cross)| *cross).fold(0.0f32, f32::max);
+        let cross_extent = if cross_max < f32::MAX {
+            cross_max
+        } else {
+            (widest_cross + cb + ca).max(A::cross_min(&constraints))
+        };
+
         let mut fin: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &ci in &self.sticky_children {
             let v = pad_before + prefix_height(&cache, self.globals[ci], self.spacing) - offset;
@@ -355,14 +381,27 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             // visible ranges and the pin walk keep their formulas in mirrored coordinates).
             let content_pos = if self.reverse { content_h - pos - h } else { pos };
             placements.push(crate::layout::node::Placement {
-                // The cross axis starts at `cross_before` (the cross-axis content padding).
-                position: A::point(content_pos, cb),
+                // The cross axis starts at `cross_before` — the START padding, so under RTL the item
+                // is mirrored to the far edge (Compose's `contentPadding` start/end follow the layout
+                // direction; a narrow item hugs the start edge, a filling one covers the padded box).
+                // Only a VERTICAL list mirrors its cross axis under RTL — there the cross axis is
+                // horizontal, so the "start" padding belongs on the right edge. A horizontal list's
+                // cross axis is vertical: RTL never flips it (the MAIN axis mirroring above already
+                // accounts for the direction).
+                position: A::point(
+                    content_pos,
+                    if self.rtl && A::VERTICAL {
+                        (cross_extent - cb - w).max(0.0)
+                    } else {
+                        cb
+                    },
+                ),
                 size: A::size(h, w),
             });
         }
 
         self.cache.set(cache);
-        (A::size(vh, A::cross_max(&constraints)), placements)
+        (A::size(vh, cross_extent), placements)
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {

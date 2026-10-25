@@ -98,14 +98,16 @@ impl<A: LazyAxis> LazyList<A> {
     /// scroll the content stops at the padding rather than against the viewport edge; a sticky header
     /// pins at `before`; the total content size is `before + items + after` (`max_offset` includes it).
     pub fn content_padding(mut self, before: f32, after: f32) -> Self {
-        self.content_padding = (before, after);
+        // Negative padding would let items grow OUTSIDE the viewport and make `max_off` negative;
+        // Compose's `PaddingValues` allows it, but the lazy arithmetic here does not, so it clamps.
+        self.content_padding = (before.max(0.0), after.max(0.0));
         self
     }
 
     /// Cross-axis content padding (start/end for a vertical list): shrinks the width an item may use
     /// and places items from `before` (the cross axis of Compose's `contentPadding`).
     pub fn content_padding_cross(mut self, before: f32, after: f32) -> Self {
-        self.cross_padding = (before, after);
+        self.cross_padding = (before.max(0.0), after.max(0.0));
         self
     }
 
@@ -153,7 +155,7 @@ impl<A: LazyAxis> LazyList<A> {
             (0.0..=1.0).contains(&threshold) && threshold.is_finite(),
             "snap_positional_threshold must be within 0.0..=1.0, got {threshold}"
         );
-        self.snap_positional_threshold = threshold;
+        self.snap_positional_threshold = if threshold.is_finite() { threshold.clamp(0.0, 1.0) } else { 0.5 };
         self
     }
 
@@ -184,7 +186,9 @@ impl<A: LazyAxis> LazyList<A> {
 
     /// Pin every item's main size instead of filling the viewport (`PageSize.Fixed`).
     pub fn item_main_size(mut self, size: f32) -> Self {
-        self.item_main_size = Some(size);
+        // Only a finite, positive page size is meaningful; anything else is ignored rather than
+        // pushed into the item constraints (a NaN there poisons every measurement).
+        self.item_main_size = (size.is_finite() && size > 0.0).then_some(size);
         self
     }
 
@@ -202,13 +206,15 @@ impl<A: LazyAxis> LazyList<A> {
 
     /// Where inside an item a snapping list comes to rest (`SnapPosition`).
     pub fn snap_offset(mut self, offset: f32) -> Self {
-        self.snap_offset = offset;
+        self.snap_offset = if offset.is_finite() { offset.max(0.0) } else { 0.0 };
         self
     }
 
     /// Spacing between items, along the main axis
     pub fn spacing(mut self, s: f32) -> Self {
-        self.spacing = s;
+        // Compose requires a non-negative spacing; a negative one would make `prefix_height`
+        // non-monotonic and the anchor recovery land on the wrong item, so it clamps to zero.
+        self.spacing = if s.is_finite() { s.max(0.0) } else { 0.0 };
         self
     }
 
@@ -517,7 +523,9 @@ pub(crate) fn visible_range(
         acc += cache.coverage_height(end) + spacing;
         end += 1;
     }
-    let end = (end + beyond).min(total);
+    // `saturating_add`: `beyond_bounds` is a public knob, and `end + beyond` overflows (panicking in
+    // debug) for a large enough value, which a caller tuning a huge prefetch would hit.
+    let end = end.saturating_add(beyond).min(total);
     (start, end)
 }
 
@@ -789,6 +797,19 @@ impl<A: LazyAxis> LazyList<A> {
                 globals.push(g);
             }
         }
+        // The direction the list lays out under. A `layout_direction` on the modifier wins over the
+        // ambient local, exactly as `Row`/`Column` resolve it (`layout/components.rs`).
+        let rtl = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or_else(crate::layout::direction::current)
+            == crate::layout::LayoutDirection::Rtl;
+        // What the CONTENT coordinates are mirrored by. `reverseLayout` flips the main axis; on a
+        // HORIZONTAL list RTL flips it too, because Compose's LazyRow starts at the right edge in RTL.
+        // The policy mirrors the item positions with it and the scroll modifier mirrors the translate
+        // with it, exactly as they already do for `reverseLayout` alone — the two have to agree, or the
+        // content is drawn shifted by one viewport.
+        let mirror = self.reverse ^ (!A::VERTICAL && rtl);
         let policy = LazyListPolicy::<A> {
             axis: PhantomData,
             cache: cache.clone(),
@@ -805,7 +826,8 @@ impl<A: LazyAxis> LazyList<A> {
             key_set,
             sticky_children,
             pin,
-            reverse: self.reverse,
+            reverse: mirror,
+            rtl,
             snap_paging,
             fill_items,
             item_main_size: self.item_main_size,
@@ -825,7 +847,11 @@ impl<A: LazyAxis> LazyList<A> {
         }
         let m = base
             .lazy_scroll(content_height.clone())
-            .lazy_scroll_reverse(self.reverse);
+            // The engine's mirror flag for a scroll container: `reverseLayout` flips the main axis,
+            // and on a HORIZONTAL list RTL does too (Compose's LazyRow starts at the right in RTL),
+            // so the flag is the XOR of the two. A vertical list ignores the direction here — its
+            // cross axis is mirrored in the policy instead.
+            .lazy_scroll_reverse(mirror);
         let m = m
             .then(self.modifier)
             .then(Modifier::new().with_item_animation_host(state.item_animations.clone()));

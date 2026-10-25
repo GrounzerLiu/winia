@@ -71,7 +71,7 @@ impl IntervalList {
         self.has_sticky = false;
         for iv in &self.intervals {
             self.starts.push(self.total);
-            self.total += iv.count;
+            self.total = self.total.saturating_add(iv.count);
             self.has_sticky |= iv.is_sticky_header;
         }
         // The key map. Keys must be unique across the whole list (Compose throws on a duplicate: a
