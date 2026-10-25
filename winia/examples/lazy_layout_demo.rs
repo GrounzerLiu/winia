@@ -1,14 +1,17 @@
-//! Lazy-list layout demo — the three cases the review fixed.
+//! Lazy-list layout demo — the three cases the review fixed, with lists long enough to scroll.
 //!
-//! 1. RTL: Compose lays a `LazyRow` out from the RIGHT in RTL, so index 0 must sit at the right
-//!    edge and the items must run leftward. winia's list mirrors its content coordinates (the
-//!    policy mirrors the placement, the scroll modifier mirrors the translate) — the same pair of
-//!    steps `reverseLayout` uses.
+//! 1. RTL: Compose lays a `LazyRow` out from the RIGHT in RTL, so index 0 sits at the right edge and
+//!    the items run leftward. winia's list mirrors its content coordinates (the policy mirrors the
+//!    placement, the scroll modifier mirrors the translate) — the same pair of steps
+//!    `reverseLayout` uses.
 //! 2. An RTL COLUMN keeps its main axis (a column must not scroll upward) but mirrors its CROSS
 //!    axis, so `content_padding_cross`'s "before" is the right edge and a narrow item hugs it.
 //! 3. A lazy list inside a horizontally unbounded parent reports its WIDEST item instead of the
 //!    `f32::MAX` sentinel (3.4e38 would poison the scroll container's content width, hit testing
 //!    and any scrollbar built on it).
+//!
+//! Every list here holds `ITEMS` entries, far more than fits: a lazy list that cannot scroll does
+//! not exercise the window, the anchor or the mirror translate.
 //!
 //! Run with `cargo run -p winia --example lazy_layout_demo`; the same UI is the `lazy_layout`
 //! fixture scenario driven by `tests/ui_lazy_test.rs`.
@@ -17,6 +20,9 @@ use winia::prelude::*;
 
 #[path = "common/settings.rs"]
 mod settings;
+
+/// Long enough to scroll in every card, small enough to stay cheap to build.
+const ITEMS: usize = 200;
 
 fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOnce(&mut ComposeCtx)) {
     Column::new()
@@ -37,7 +43,7 @@ fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOn
         });
 }
 
-fn tile(ctx: &mut ComposeCtx, tag: String, label: &str, w: f32, h: f32, color: Color) {
+fn tile(ctx: &mut ComposeCtx, tag: String, label: String, w: f32, h: f32, color: Color) {
     Stack::new()
         .content_alignment(ContentAlignment::CENTER)
         .modifier(
@@ -60,8 +66,12 @@ fn palette(i: usize) -> Color {
     }
 }
 
-fn accent() -> Color {
-    Color::from_argb(255, 220, 150, 90)
+fn accent(i: usize) -> Color {
+    if i % 2 == 0 {
+        Color::from_argb(255, 220, 150, 90)
+    } else {
+        Color::from_argb(255, 200, 110, 60)
+    }
 }
 
 #[composable]
@@ -81,33 +91,28 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                 .font_size(18.0)
                 .build(ctx);
 
-            // 1. RTL row: item 0 at the right edge, running leftward. The modifier carries the
-            // direction so the demo does not depend on the window's local (the shell can flip that
-            // too, and both routes end at the same resolution).
-            card(ctx, "lazy-rtl-row-card", "1. LazyRow under RTL", |ctx| {
-                // The row fills a FIXED 400 dp frame and its four 100 dp tiles fill the row exactly, so
-                // the render mirror translates by zero and the tree's positions ARE the screen
-                // positions (a narrower content would be shifted by `viewport - content`).
-                Stack::new()
-                    .modifier(Modifier::new().size(400.0, 60.0).test_tag("lazy-rtl-row"))
-                    .build(ctx, |ctx| {
-                        LazyRow::new()
+            // 1. RTL row: item 0 at the right edge at offset 0, running leftward, 200 tiles so it
+            // scrolls. The modifier carries the direction, so the demo does not depend on the
+            // window's local (the shell flips that too, and both routes end at the same resolution).
+            card(ctx, "lazy-rtl-row-card", "1. LazyRow under RTL (scroll it)", |ctx| {
+                LazyRow::new()
                     .modifier(
                         Modifier::new()
-                            .fill_max_size()
-                            .layout_direction(LayoutDirection::Rtl),
+                            .fill_max_width()
+                            .height(60.0)
+                            .layout_direction(LayoutDirection::Rtl)
+                            .test_tag("lazy-rtl-row"),
                     )
-                    .items(4, |i| i as u64, |ctx, i| {
-                        tile(ctx, format!("lazy-rtl-item-{i}"), &format!("{i}"), 100.0, 44.0, palette(i));
+                    .items(ITEMS, |i| i as u64, |ctx, i| {
+                        tile(ctx, format!("lazy-rtl-item-{i}"), format!("{i}"), 100.0, 44.0, palette(i));
                     })
                     .build(ctx);
-                    });
             });
 
             // 2. RTL column with cross content padding: the main axis still runs downward, the cross
             // axis mirrors (start padding 16 on the right, 4 on the left), so a 120 dp item hugs the
             // right edge.
-            card(ctx, "lazy-rtl-col-card", "2. LazyColumn under RTL", |ctx| {
+            card(ctx, "lazy-rtl-col-card", "2. LazyColumn under RTL (scroll it)", |ctx| {
                 LazyColumn::new()
                     .content_padding_cross(16.0, 4.0)
                     .modifier(
@@ -117,14 +122,22 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                             .layout_direction(LayoutDirection::Rtl)
                             .test_tag("lazy-rtl-column"),
                     )
-                    .items(3, |i| i as u64, |ctx, i| {
-                        tile(ctx, format!("lazy-rtl-col-item-{i}"), &format!("{i}"), 120.0, 36.0, palette(i));
+                    .items(ITEMS, |i| i as u64, |ctx, i| {
+                        tile(
+                            ctx,
+                            format!("lazy-rtl-col-item-{i}"),
+                            format!("{i}"),
+                            120.0,
+                            36.0,
+                            palette(i),
+                        );
                     })
                     .build(ctx);
             });
 
             // 3. Unbounded cross axis: the strip is a HORIZONTAL scroll, so the lazy column's width
-            // axis has no maximum (f32::MAX). It must report 50 + 6 + 4 = 60 dp, not 3.4e38.
+            // axis has no maximum (f32::MAX). It must report 50 + 6 + 4 = 60 dp, not 3.4e38. Three
+            // items are enough — this card is about measurement, not scrolling.
             card(ctx, "lazy-unbounded-card", "3. unbounded cross axis", |ctx| {
                 Row::new()
                     .modifier(
@@ -143,10 +156,10 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                                 tile(
                                     ctx,
                                     format!("lazy-unbounded-item-{i}"),
-                                    &format!("{i}"),
+                                    format!("{i}"),
                                     50.0,
                                     30.0,
-                                    accent(),
+                                    accent(i),
                                 );
                             })
                             .build(ctx);
@@ -154,17 +167,18 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
             });
 
             // 4. The LTR control: nothing above may move a list that is not mirrored.
-            card(ctx, "lazy-ltr-row-card", "4. LTR control", |ctx| {
-                Stack::new()
-                    .modifier(Modifier::new().size(400.0, 60.0).test_tag("lazy-ltr-row"))
-                    .build(ctx, |ctx| {
-                        LazyRow::new()
-                    .modifier(Modifier::new().fill_max_size())
-                    .items(4, |i| i as u64, |ctx, i| {
-                        tile(ctx, format!("lazy-ltr-item-{i}"), &format!("{i}"), 100.0, 44.0, accent());
+            card(ctx, "lazy-ltr-row-card", "4. LTR control (scroll it)", |ctx| {
+                LazyRow::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(60.0)
+                            .test_tag("lazy-ltr-row"),
+                    )
+                    .items(ITEMS, |i| i as u64, |ctx, i| {
+                        tile(ctx, format!("lazy-ltr-item-{i}"), format!("{i}"), 100.0, 44.0, accent(i));
                     })
                     .build(ctx);
-                    });
             });
         });
 }

@@ -327,9 +327,10 @@ An unbounded cross axis (a lazy column inside a horizontal scroll) reports the W
 cross content padding instead of the framework's `f32::MAX` sentinel: 3.4e38 poisoned the scroll
 container's content width, hit testing and any scrollbar built on it.
 
-Verification: `cargo run -p winia --example lazy_layout_demo`; the same UI is fixture scenario
-`lazy_layout`, driven by `tests/ui_lazy_test.rs` (RTL row/column geometry off the real window, the
-bounded width of the unbounded case, the ambient-direction flip), with unit pins in
+Verification: `cargo run -p winia --example lazy_layout_demo` — every list holds 200 entries, so it
+actually scrolls; the same UI is fixture scenario `lazy_layout`, driven by `tests/ui_lazy_test.rs`
+(RTL row/column geometry off the real window, the bounded width of the unbounded case, a drag on the
+row and on the column, and the ambient-direction flip), with unit pins in
 `layout::lazy::tests` (`an_rtl_row_runs_right_to_left`, `an_rtl_column_right_aligns_its_items`,
 `an_unbounded_cross_axis_reports_the_widest_item`, and the defensive normalisation cases).
 
