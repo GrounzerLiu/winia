@@ -13,12 +13,15 @@ mod item_animation;
 mod flex_layout;
 #[path = "../../examples/box_layout_demo.rs"]
 mod box_layout;
+#[path = "../../examples/lazy_layout_demo.rs"]
+mod lazy_layout;
 
 const SCENARIOS: &[(&str, fn())] = &[
     ("flow_features", flow_features::main),
     ("item_animation", item_animation::main),
     ("flex_layout", flex_layout::main),
     ("box_layout", box_layout::main),
+    ("lazy_layout", lazy_layout::main),
 ];
 
 fn main() {

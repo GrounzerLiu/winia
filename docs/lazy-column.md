@@ -313,6 +313,26 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
 | `request_compose_after_layout` / `take_compose_after_layout` | core/composer.rs | A `MeasurePolicy` asks the frame to compose again after this layout (the window it was handed cannot fill the viewport it is measured in); thread-local, consumed and cleared by the frame handler |
 | same-frame convergence | app.rs | `PerWindow::recompose_layout_render` composes and lays out again while a request is outstanding (cap 8 passes) — see 2.9 |
 
+## 3b. RTL, and the unbounded cross axis
+
+A HORIZONTAL list mirrors its main axis under RTL: `mirror = reverse_layout ^ rtl`, and the same
+value is used for the placement mirroring and for the scroll modifier's translate, because the two
+have to agree or the content is drawn a viewport away from where it was measured (Compose's LazyRow
+starts at the right edge in RTL; `TabRow`'s scrollable reaches the same flag through
+`horizontal_scroll_reverse(is_rtl)`). A VERTICAL list keeps its main axis — RTL must not reverse a
+column — but mirrors its CROSS axis, so `content_padding_cross`'s "before" is the right edge and a
+narrow item hugs it.
+
+An unbounded cross axis (a lazy column inside a horizontal scroll) reports the WIDEST CHILD plus the
+cross content padding instead of the framework's `f32::MAX` sentinel: 3.4e38 poisoned the scroll
+container's content width, hit testing and any scrollbar built on it.
+
+Verification: `cargo run -p winia --example lazy_layout_demo`; the same UI is fixture scenario
+`lazy_layout`, driven by `tests/ui_lazy_test.rs` (RTL row/column geometry off the real window, the
+bounded width of the unbounded case, the ambient-direction flip), with unit pins in
+`layout::lazy::tests` (`an_rtl_row_runs_right_to_left`, `an_rtl_column_right_aligns_its_items`,
+`an_unbounded_cross_axis_reports_the_widest_item`, and the defensive normalisation cases).
+
 ## 4. 与 Compose 的差异
 
 - winia's composition is imperative (`build` registers nodes outright), so there is no Compose
@@ -336,12 +356,10 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
 ## 5. 运行与测试
 
 ```bash
-cargo run -p winia --example lazy_column_demo
-cargo run -p winia --example lazy_row_demo
-cargo run -p winia --example sticky_header_demo
-cargo run -p winia --example reverse_list_demo
+cargo run -p winia --example lazy_layout_demo
 cargo test -p winia --lib layout::lazy
 # 集成（fixture 需 debug-server feature 构建）：
+cargo test -p winia --features debug-server --test ui_lazy_test
 cargo test -p winia --features debug-server --test ui_test
 ```
 
