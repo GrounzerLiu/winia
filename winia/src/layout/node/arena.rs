@@ -183,6 +183,13 @@ pub struct LayoutNode {
     /// node's origin, inset by the padding it can query). A container does not use this — it moves its
     /// children.
     pub content_box_override: Option<(f32, f32, f32, f32)>,
+    /// The padding this node RESOLVED during its last measurement — element padding plus window
+    /// insets, in `(start, top, end, bottom)` order, with the insets already consumed for the subtree.
+    ///
+    /// The engine needs it after the walk (outer size, placement shift) and the subcomposition
+    /// adoption path needs it too: it used to recompute `get_padding_sides()` from the modifier, which
+    /// drops the insets and re-resolves a dynamic dimension. This field is the single source.
+    pub resolved_padding: (f32, f32, f32, f32),
     /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
     pub children: Vec<usize>,
     /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
@@ -422,6 +429,7 @@ impl LayoutNode {
             minimum_interactive_painted: None,
             content_shift: None,
             content_box_override: None,
+            resolved_padding: (0.0, 0.0, 0.0, 0.0),
             children: Vec::new(),
             measure_policy,
             focused: false,
@@ -516,6 +524,7 @@ impl Default for LayoutNode {
             minimum_interactive_painted: None,
             content_shift: None,
             content_box_override: None,
+            resolved_padding: (0.0, 0.0, 0.0, 0.0),
             has_image_content: false,
             children: Vec::new(),
             measure_policy: None,

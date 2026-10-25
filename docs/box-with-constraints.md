@@ -98,3 +98,4 @@ custom `MeasurePolicy`.
 | `the_box_is_as_wide_as_its_widest_content_root` | multi-root content: the widest root defines the box |
 | `the_alignment_mirrors_under_rtl` | `BOTTOM_END` is the bottom-left in an RTL box |
 | `a_match_parent_child_inside_the_composed_content_fills_the_box` | a `match_parent_size` child in the composed content matches the box the content defines (the extra Box node is its parent) |
+| `a_window_inset_pads_the_box_like_element_padding` | the adoption path adds the padding the engine RESOLVED (element padding + window insets) and offsets the content by it |

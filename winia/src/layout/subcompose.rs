@@ -395,7 +395,9 @@ fn adopt_one(
         // The parent's padding: the engine shifted its `children` by it before adoption attached this
         // one, so the adopted root has to be moved by the same rule — otherwise a
         // `BoxWithConstraints` with `Modifier::padding` places its content on the unpadded edge.
-        let (pad_s, pad_t, pad_e, _pad_b) = arena.nodes[parent].modifier.get_padding_sides();
+        // The padding the engine RESOLVED for the parent (element padding + window insets, with
+        // the insets already consumed) — recomputing it from the modifier dropped the insets.
+        let (pad_s, pad_t, pad_e, _pad_b) = arena.nodes[parent].resolved_padding;
         arena.nodes[adopted_root].position.x += if rtl { pad_e } else { pad_s };
         arena.nodes[adopted_root].position.y += pad_t;
         if let Some((ox, oy)) = arena.nodes[adopted_root].modifier.get_offset() {
@@ -419,8 +421,9 @@ fn adopt_one(
     arena.nodes[parent].subcomposed_child = Some(adopted_root);
     if sized_by_content {
         // The padded OUTER size, not the content size: the policy measured the content against the
-        // box's inner constraints, and the engine's `size + padding` was overwritten above.
-        let (pad_s, pad_t, pad_e, pad_b) = arena.nodes[parent].modifier.get_padding_sides();
+        // box's inner constraints, and the engine's `size + padding` was overwritten above. The padding
+        // is the RESOLVED one, insets included.
+        let (pad_s, pad_t, pad_e, pad_b) = arena.nodes[parent].resolved_padding;
         arena.nodes[parent].measured_size = Size::new(
             inner_root_size.width + pad_s + pad_e,
             inner_root_size.height + pad_t + pad_b,

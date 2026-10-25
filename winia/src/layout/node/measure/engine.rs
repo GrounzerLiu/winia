@@ -614,6 +614,10 @@ pub(crate) fn measure_node_inner(
     let _inset_guard = crate::window::insets::ConsumeScope::enter(inset_consumed);
     let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
+    // The single source for this node's padding: the outer size and the placement shift below use
+    // it, and the subcomposition adoption path reads it instead of re-resolving the modifier (which
+    // drops the insets and re-evaluates a dynamic dimension).
+    nodes[idx].resolved_padding = (pad_start, pad_top, pad_end, pad_bottom);
 
     // 2b. `Modifier::paddingFrom` relaxes the MINIMUM on its line's axis before the content is
     // measured, the way Compose measures its child with `constraints.copy(minHeight = 0)`
@@ -990,7 +994,7 @@ pub(crate) fn measure_node_inner(
         );
         if dx != 0.0 || dy != 0.0 {
             if nodes[idx].children.is_empty() {
-                let (pad_s, pad_t, pad_e, _pad_b) = nodes[idx].modifier.get_padding_sides();
+                let (pad_s, pad_t, pad_e, _pad_b) = nodes[idx].resolved_padding;
                 let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
                 let left = if rtl { pad_e } else { pad_s };
                 nodes[idx].content_box_override = Some((left + dx, pad_t + dy, inner.width, inner.height));
@@ -1064,7 +1068,7 @@ pub(crate) fn measure_node_inner(
         // The content's box inside this node, tracked across the elements. A leaf's content is
         // whatever it draws itself, inset by its `padding`; a container's is its children, which move.
         if leaf_box.is_none() && nodes[idx].children.is_empty() {
-            let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
+            let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].resolved_padding;
             leaf_box = Some((
                 if nodes[idx].layout_direction == LayoutDirection::Rtl { pad_e } else { pad_s },
                 pad_t,

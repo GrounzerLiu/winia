@@ -748,6 +748,49 @@ mod tests {
         );
     }
 
+    /// A window inset pads the box like element padding, and the content sits inside it. The
+    /// adoption path used to recompute the padding from the modifier, which dropped the insets (the
+    /// box reported the bare content height); it now reads the padding the engine resolved.
+    #[test]
+    fn a_window_inset_pads_the_box_like_element_padding() {
+        let controller = crate::window::insets::current();
+        struct ResetInsets(crate::window::insets::WindowInsetsController);
+        impl Drop for ResetInsets {
+            fn drop(&mut self) {
+                self.0.set(crate::window::insets::WindowInsets::default());
+            }
+        }
+        let _reset = ResetInsets(controller.clone());
+        controller.set(crate::window::insets::WindowInsets {
+            status_bars: crate::window::insets::Insets::new(0.0, 24.0, 0.0, 0.0),
+            ..Default::default()
+        });
+
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().status_bars_padding())
+                .build(ctx, |ctx, _scope| {
+                    crate::components::Text::new("x")
+                        .modifier(Modifier::new().size(50.0, 20.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(50.0, 44.0),
+            "20 dp of content plus the 24 dp top inset"
+        );
+        let host = composer.arena.nodes[root].subcomposed_child.expect("content box");
+        assert_eq!(
+            composer.arena_nodes()[host].position,
+            Offset::new(0.0, 24.0),
+            "and the content starts below the inset"
+        );
+    }
+
     /// A match-parent child inside the content the box composes: the extra Box node the policy builds
     /// IS the child's parent, so `match_parent_size` works there exactly as it does in a hand-written
     /// `Stack` — and a regression that special-cased the subcomposed child would show up here.
