@@ -191,6 +191,7 @@ incoming
  → fixed（Fixed/Dp/Px 兼容分支）
  → aspectRatio（按当前约束推导尺寸，并把子约束 fixed 成它——Compose 的 `AspectRatioNode`）
  → padding（offset(pad)，子约束缩小）
+ → insets（windowInsetsPadding：按窗口状态求值并 consume，位置同 padding）
  → fill（min=max，scroll 前保存 viewport）
  → scroll（viewport 回写节点字段；lazy 不改无界，普通改无界）
  → policy.measure / 叶子分支

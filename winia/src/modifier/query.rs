@@ -38,34 +38,17 @@ impl Modifier {
     }
 
     /// 水平方向 padding——返回 (start, end)（各自独立，非对称时不同）
-    /// The window-inset padding elements on this chain, in order.
-    pub(crate) fn inset_padding_steps(
+    /// The inset element at a chain index — either kind — for the walk's `SizeStep::InsetPadding` /
+    /// `SizeStep::ConsumeInsets`. The controller is cloned out because the step list is `Copy`.
+    pub(crate) fn inset_at(
         &self,
-    ) -> Vec<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
-        self.elements
-            .iter()
-            .filter_map(|el| match el {
-                ModifierElement::WindowInsetsPadding { kind, controller } => {
-                    Some((*kind, controller.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The consume-only inset elements on this chain, in order.
-    pub(crate) fn inset_consume_steps(
-        &self,
-    ) -> Vec<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
-        self.elements
-            .iter()
-            .filter_map(|el| match el {
-                ModifierElement::ConsumeWindowInsets { kind, controller } => {
-                    Some((*kind, controller.clone()))
-                }
-                _ => None,
-            })
-            .collect()
+        index: usize,
+    ) -> Option<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
+        match self.elements.get(index)? {
+            ModifierElement::WindowInsetsPadding { kind, controller }
+            | ModifierElement::ConsumeWindowInsets { kind, controller } => Some((*kind, controller.clone())),
+            _ => None,
+        }
     }
 
     pub fn get_padding_horizontal(&self) -> (f32, f32) {
@@ -158,7 +141,7 @@ impl Modifier {
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let opt = |d: &Option<Dimension>| d.as_ref().map(resolve);
         let mut out = Vec::new();
-        for el in &self.elements {
+        for (index, el) in self.elements.iter().enumerate() {
             match el {
                 ModifierElement::Size { width, height } => {
                     let iw = matches!(width, SizeValue::Intrinsic(_));
@@ -218,6 +201,11 @@ impl Modifier {
                         min_height: opt(min_height),
                     })
                 }
+                // Insets are chain steps too: an inset has a position, and a size written inside
+                // it must see the deflated range (the reviewer's "one place the two kinds of padding
+                // differ"). The walk resolves the value; this only carries the element index.
+                ModifierElement::WindowInsetsPadding { .. } => out.push(SizeStep::InsetPadding(index)),
+                ModifierElement::ConsumeWindowInsets { .. } => out.push(SizeStep::ConsumeInsets(index)),
                 ModifierElement::PaddingSides { start, top, end, bottom } => {
                     out.push(SizeStep::Padding {
                         start: resolve(start),

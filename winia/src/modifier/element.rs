@@ -269,6 +269,13 @@ pub(crate) enum SizeStep {
     /// and `.size(300).padding(8)` must deflate afterwards. Emitted in chain order; the node's
     /// OUTER size still adds the total padding at the end.
     Padding { start: f32, top: f32, end: f32, bottom: f32 },
+    /// A `windowInsetsPadding` element: the inset is resolved from the window state DURING the walk,
+    /// at this element's chain position (it is consumed for the subtree there). Carries the element
+    /// index because the controller is not `Copy`.
+    InsetPadding(usize),
+    /// A consume-only `consumeWindowInsets` element, at its chain position: it pads by nothing and
+    /// only marks the inset as consumed for what follows.
+    ConsumeInsets(usize),
     /// `wrapContent*` — relax the incoming minimum (and max when unbounded) for what follows.
     Wrap {
         width: bool,

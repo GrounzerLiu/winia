@@ -572,6 +572,36 @@
         assert_eq!(size.width, 300.0, "the padded node stays at the tight size");
     }
 
+    /// Window insets are chain steps too: a size fixed INSIDE the inset is clamped into the
+    /// deflated range and the node grows by the inset, while a size OUTSIDE it absorbs the inset.
+    #[test]
+    fn window_inset_padding_is_a_chain_step() {
+        let controller = crate::window::insets::current();
+        struct ResetInsets(crate::window::insets::WindowInsetsController);
+        impl Drop for ResetInsets {
+            fn drop(&mut self) {
+                self.0.set(crate::window::insets::WindowInsets::default());
+            }
+        }
+        let _reset = ResetInsets(controller.clone());
+        controller.set(crate::window::insets::WindowInsets {
+            status_bars: crate::window::insets::Insets::new(0.0, 24.0, 0.0, 0.0),
+            ..Default::default()
+        });
+
+        // inset OUTSIDE the size: the size fixes inside the 24 dp shorter range, the node is 72 tall.
+        let m = Modifier::new().status_bars_padding().size(200.0, 48.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!((size.width, size.height), (200.0, 72.0));
+
+        // size OUTSIDE the inset: the 48 dp is fixed first and the inset comes out of it.
+        let m = Modifier::new().size(200.0, 48.0).status_bars_padding();
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!((size.width, size.height), (200.0, 48.0));
+    }
+
     /// The UNENFORCED pass: when no candidate satisfies the range, Compose still returns one
     /// ("the constraints will not be respected", `AspectRatio.kt:43-47`). winia then CLAMPS it
     /// (the derivation feeds `Constraints::fixed`, where Compose has an extra node), so the

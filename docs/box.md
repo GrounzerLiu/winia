@@ -58,10 +58,10 @@
   (`SizeStep::Padding`), so it deflates the constraints where it stands. `.padding(8).size(300)`
   fixes 300 inside the already-deflated range and reports a 316 dp node;
   `.size(300).padding(8)` absorbs the padding; `.padding(8).aspect_ratio(2.0)` derives from
-  the deflated range (284x142) and reports 300x158. Window-INSET padding is the exception: an inset
-  has no chain position, so it is applied after the walk — a size written inside an inset therefore
-  behaves the way element padding did before this change. Making insets chain steps needs the inset
-  consumers (scroll viewport, `padding_from`) re-ordered with them, so it is a separate job.
+  the deflated range (284x142) and reports 300x158. Window-INSET padding is a step too
+  (`SizeStep::InsetPadding`): each inset is resolved from the window state and consumed at its chain
+  position, so `.status_bars_padding().size(200,48)` reports 200x72 and the reverse order reports
+  200x48. Insets are still excluded from intrinsic answers, as before.
 - the two growth steps interact with a match-parent child differently, and both match Compose.
   `aspect_ratio` moved into the size walk (`SizeStep::AspectRatio`): the constraints are fixed to
   the derived size before the policy, as Compose's `AspectRatioNode` does, so the content — and a

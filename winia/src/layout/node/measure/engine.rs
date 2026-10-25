@@ -302,6 +302,11 @@ pub(crate) fn measure_node_inner(
     // not (the request decides first, the fill then fills the tight result).
     let mut intrinsic_incoming_width: Option<(f32, f32)> = None;
     let mut intrinsic_incoming_height: Option<(f32, f32)> = None;
+    // Window insets are resolved AT THEIR CHAIN POSITION (see `SizeStep::InsetPadding`): the walk
+    // consumes them in order, and these accumulators feed the outer size and the placement shift.
+    let mut inset_consumed = crate::window::insets::consumed();
+    let (mut inset_start, mut inset_end) = (0.0f32, 0.0f32);
+    let (mut inset_top, mut inset_bottom) = (0.0f32, 0.0f32);
     for step in nodes[idx].modifier.size_steps() {
         match step {
             SizeStep::Size { width, height } => {
@@ -377,6 +382,26 @@ pub(crate) fn measure_node_inner(
                     inner_constraints = Constraints::fixed(size.width, size.height);
                 }
             }
+            SizeStep::InsetPadding(index) => {
+                if let Some((kind, controller)) = nodes[idx].modifier.inset_at(index) {
+                    let window = controller.state().get();
+                    let value = crate::window::insets::remaining(kind, window, inset_consumed);
+                    inner_constraints =
+                        inner_constraints.offset(value.horizontal_sum(), value.vertical_sum());
+                    inset_start += value.left;
+                    inset_end += value.right;
+                    inset_top += value.top;
+                    inset_bottom += value.bottom;
+                    inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
+                }
+            }
+            SizeStep::ConsumeInsets(index) => {
+                // Consume-only: no padding, it only marks the inset for what follows it.
+                if let Some((kind, controller)) = nodes[idx].modifier.inset_at(index) {
+                    let window = controller.state().get();
+                    inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
+                }
+            }
             SizeStep::Padding {
                 start,
                 top,
@@ -388,10 +413,9 @@ pub(crate) fn measure_node_inner(
                 // inside the padding sees the deflated range. The node's OUTER size adds the total
                 // padding afterwards, which is why the step only shrinks what follows.
                 //
-                // WINDOW-INSET padding is deliberately NOT a step: an inset has no chain position, so
-                // it is applied after the walk (see the inset accumulators below). A size inside an
-                // inset therefore absorbs the inset instead of growing around it — the one place the
-                // two kinds of padding differ, and the reason `docs/box.md` lists it.
+                // WINDOW-INSET padding is a step of its own (`SizeStep::InsetPadding`): the inset is
+                // resolved and consumed at this element's position, so a size written inside it sees
+                // the deflated range exactly like element padding.
                 //
                 // The deflated value and the value added to the outer size are resolved separately
                 // (`size_steps` vs `get_padding_horizontal/vertical`); they agree for a static
@@ -576,41 +600,20 @@ pub(crate) fn measure_node_inner(
     }
 
     // 2. 应用 padding
-    let (mut pad_start, mut pad_end) = nodes[idx].modifier.get_padding_horizontal();
-    let (mut pad_top, mut pad_bottom) = nodes[idx].modifier.get_padding_vertical();
-    // The ELEMENT padding already deflated in the walk (`SizeStep::Padding`, chain order), so only
-    // the WINDOW-INSET padding is applied here: insets are not chain steps.
-    let (mut inset_start, mut inset_end) = (0.0f32, 0.0f32);
-    let (mut inset_top, mut inset_bottom) = (0.0f32, 0.0f32);
-    // Window-inset padding is resolved HERE, at measure time: the controller's state read registers a
-    // layout dependency (so an inset change re-measures just these nodes), and the insets it applies
-    // are consumed for the subtree. Consume-only elements mark them without padding.
-    let mut inset_consumed = crate::window::insets::consumed();
-    for (kind, controller) in nodes[idx].modifier.inset_padding_steps() {
-        let window = controller.state().get();
-        let value = crate::window::insets::remaining(kind, window, inset_consumed);
-        pad_start += value.left;
-        pad_end += value.right;
-        pad_top += value.top;
-        pad_bottom += value.bottom;
-        inset_start += value.left;
-        inset_end += value.right;
-        inset_top += value.top;
-        inset_bottom += value.bottom;
-        inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
-    }
-    for (kind, controller) in nodes[idx].modifier.inset_consume_steps() {
-        let window = controller.state().get();
-        inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
-    }
+    //
+    // BOTH kinds of padding deflated IN THE WALK, at their chain positions (element padding through
+    // `SizeStep::Padding`, window insets through `SizeStep::InsetPadding`). What is left here is the
+    // bookkeeping the pipeline needs afterwards: the totals for the OUTER size and for the placement
+    // shift, and the consumed set the subtree must inherit.
+    let (pad_start, pad_end) = nodes[idx].modifier.get_padding_horizontal();
+    let (pad_top, pad_bottom) = nodes[idx].modifier.get_padding_vertical();
+    let pad_start = pad_start + inset_start;
+    let pad_end = pad_end + inset_end;
+    let pad_top = pad_top + inset_top;
+    let pad_bottom = pad_bottom + inset_bottom;
     let _inset_guard = crate::window::insets::ConsumeScope::enter(inset_consumed);
     let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
-    let inset_x = inset_start + inset_end;
-    let inset_y = inset_top + inset_bottom;
-    if inset_x > 0.0 || inset_y > 0.0 {
-        inner_constraints = inner_constraints.offset(inset_x, inset_y);
-    }
 
     // 2b. `Modifier::paddingFrom` relaxes the MINIMUM on its line's axis before the content is
     // measured, the way Compose measures its child with `constraints.copy(minHeight = 0)`
