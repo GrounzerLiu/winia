@@ -73,11 +73,16 @@ impl SpecMode {
     }
 }
 
-fn button(ctx: &mut ComposeCtx, tag: &'static str, label: &str, on_click: impl Fn() + Send + Sync + 'static) {
+fn button(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    label: impl Into<String>,
+    on_click: impl Fn() + Send + Sync + 'static,
+) {
     Button::new()
         .modifier(Modifier::new().test_tag(tag))
         .on_click(on_click)
-        .build(ctx, |ctx| Text::new(label).font_size(12.0).build(ctx));
+        .build(ctx, |ctx| Text::new(label.into()).font_size(12.0).build(ctx));
 }
 
 /// The two colours a card alternates between, so a reorder is easy to follow.
@@ -183,8 +188,15 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                     }
                     k.set(out);
                 });
+                // The label names the contract that is ACTIVE (tapping cycles to the next one), so the
+                // button explains itself instead of needing the status line.
                 let m = mode.clone();
-                button(ctx, "lazy-anim-spec", "cycle spec", move || m.set(m.get().next()));
+                button(
+                    ctx,
+                    "lazy-anim-spec",
+                    format!("spec: {}", mode.get().label()),
+                    move || m.set(m.get().next()),
+                );
             });
 
             let spec = mode.get().spec();
