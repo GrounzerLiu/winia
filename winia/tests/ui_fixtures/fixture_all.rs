@@ -15,6 +15,8 @@ mod flex_layout;
 mod box_layout;
 #[path = "../../examples/lazy_layout_demo.rs"]
 mod lazy_layout;
+#[path = "../../examples/lazy_ops_demo.rs"]
+mod lazy_ops_demo;
 
 const SCENARIOS: &[(&str, fn())] = &[
     ("flow_features", flow_features::main),
@@ -22,7 +24,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("flex_layout", flex_layout::main),
     ("box_layout", box_layout::main),
     ("lazy_layout", lazy_layout::main),
-    ("lazy_ops", lazy_layout::ops_main),
+    ("lazy_ops", lazy_ops_demo::main),
 ];
 
 fn main() {

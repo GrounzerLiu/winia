@@ -409,7 +409,8 @@ row and on the column, and the ambient-direction flip), with unit pins in
 ## 5. 运行与测试
 
 ```bash
-cargo run -p winia --example lazy_layout_demo
+cargo run -p winia --example lazy_layout_demo   # RTL, the unbounded cross axis, an LTR control
+cargo run -p winia --example lazy_ops_demo      # one list driven by buttons: keys, jumps, snap, lock
 cargo test -p winia --lib layout::lazy
 # 集成（fixture 需 debug-server feature 构建）：
 cargo test -p winia --features debug-server --test ui_lazy_test
