@@ -98,8 +98,19 @@ assignment and the window:
 records each measured main size back into the cache, places by lane cursor, and reports the extent over
 the WHOLE data set — so the scroll range and the fling limit stay right with only a slice composed.
 
-Scope, recorded in the module header: `GridCells::Fixed` only (Adaptive needs the cross viewport before
-the first measure), and no item placement animation or sticky headers — as Compose's staggered grids.
+Limits, recorded here and in the module header:
+
+- **Item placement animation is missing.** Compose's staggered grid HAS it in 1.13
+  (`LazyStaggeredGridItemScope`); `stickyHeader` is genuinely absent in both.
+- **`GridCells::Adaptive` counts the lanes from the cross extent the measure writes back**, so the first
+  frame composes one lane and the next corrects it.
+- **The scroll position is a pixel offset, not a per-lane anchor.** A data change does not keep the
+  reading position the way the lazy lists do; Compose needs `LazyStaggeredGridLaneInfo` for that.
+- **Every build prices all items and re-runs the lane assignment** (O(total) per frame, and the key →
+  height map never shrinks). Compose measures outward from per-lane anchors instead.
+- **Two review findings are open**, recorded as ignored tests in `layout/lazy/staggered.rs`: with keys
+  that are not indices the extent still misses a tall measured item, and the Adaptive cross write-back
+  does not reach the next build.
 
 UI coverage: `tests/ui_lazy_grid_test.rs` (scenario `lazy_staggered`) asserts that both lanes open at
 the same offset, that items 2 and 3 continue their lanes downward, and that the lanes have DRIFTED
