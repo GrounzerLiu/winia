@@ -358,6 +358,8 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         let shared = ctx
             .remember(|| Arc::new(Mutex::new(Shared { heights: ItemHeightCache::new() })))
             .peek();
+        // The jump closure and the policy both need the cache; clone before the policy takes it.
+        let shared_for_jump = shared.clone();
         // The viewports are STATES, not Mutex fields: the policy writes them during measure and the
         // build READS them, so the write wakes this group. A Mutex field changes nothing the Skip
         // decision compares, and the recomputed window/lane count/extent were silently discarded
@@ -490,10 +492,46 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         };
         // A horizontal waterfall mirrors its MAIN axis under RTL, exactly as LazyRow does; a vertical
         // one keeps its main axis and mirrors the cross axis inside the policy.
+        let count_for_semantics = self.count;
+        let jump = {
+            let shared = shared_for_jump.clone();
+            let key = key.clone();
+            let state = state.clone();
+            let (spacing, lanes, pad) = (self.spacing, lanes, self.content_padding.0);
+            move |index: usize| {
+                // The item's estimated content start, from the same cache the window uses.
+                let heights: Vec<f32> = {
+                    let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    (0..index + 1)
+                        .map(|i| {
+                            shared
+                                .heights
+                                .height_keyed(key(i))
+                                .filter(|height| *height > 0.0)
+                                .unwrap_or(ESTIMATE)
+                        })
+                        .collect()
+                };
+                let (slots, _) = assign_lanes(lanes, &heights, spacing);
+                let start = slots.get(index).map(|slot| slot.main_start).unwrap_or(0.0);
+                state.offset.set((pad + start).max(0.0));
+            }
+        };
         let modifier = Modifier::new()
             .lazy_scroll(content_height)
             .lazy_scroll_reverse(rtl && !A::VERTICAL)
             .then(A::scroll(state.clone()))
+            // A reader hears a COLLECTION of `count` rows (or columns) and can ask it to bring an item
+            // into view — Compose's `LazyStaggeredGridSemantics`.
+            .then(Modifier::new().semantics(
+                crate::semantics::SemanticsConfig::new()
+                    .collection_info(if A::VERTICAL {
+                        crate::semantics::CollectionInfo::rows(count_for_semantics)
+                    } else {
+                        crate::semantics::CollectionInfo::columns(count_for_semantics)
+                    })
+                    .scroll_to_index_action(jump),
+            ))
             .then(self.modifier);
         build_container(ctx, modifier, policy, |ctx| {
             for index in window {
