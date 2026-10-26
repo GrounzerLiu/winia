@@ -108,9 +108,12 @@ Limits, recorded here and in the module header:
   reading position the way the lazy lists do; Compose needs `LazyStaggeredGridLaneInfo` for that.
 - **Every build prices all items and re-runs the lane assignment** (O(total) per frame, and the key →
   height map never shrinks). Compose measures outward from per-lane anchors instead.
-- **Two review findings are open**, recorded as ignored tests in `layout/lazy/staggered.rs`: with keys
-  that are not indices the extent still misses a tall measured item, and the Adaptive cross write-back
-  does not reach the next build.
+- **The viewports are States, not cache fields.** The policy writes them in measure and the build reads
+  them, which is what wakes the group: anything kept in the shared Mutex alone changes nothing the Skip
+  decision compares, and the recomputed window/lane count are discarded.
+- **The first frame assumes an 800 dp viewport** (it has no measured one yet), and the coverage check
+  asks for another compose PER LANE, so a 600 dp grid fills its viewport on the first frame instead of
+  leaving the bottom strip empty until a scroll.
 
 UI coverage: `tests/ui_lazy_grid_test.rs` (scenario `lazy_staggered`) asserts that both lanes open at
 the same offset, that items 2 and 3 continue their lanes downward, and that the lanes have DRIFTED
