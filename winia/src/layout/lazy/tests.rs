@@ -2370,6 +2370,71 @@
         );
     }
 
+    // ── Compose's IndexForKey ──
+
+    /// Compose's `IndexForKey`: a reader keeps its place by key, so the collection has to say which
+    /// index a key has now — including after items were inserted in front of it.
+    #[test]
+    fn index_for_key_maps_a_key_to_its_current_index() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let keys: Arc<Vec<u64>> = Arc::new((0..50).map(|i| 1000 + i as u64).collect());
+        let build = |composer: &mut Composer, keys: Arc<Vec<u64>>| {
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(state.clone())
+                    .items_from(keys, |k| *k, |ctx, i, _k| sized_item(ctx, i, 50.0, 40.0))
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        build(&mut composer, keys.clone());
+
+        let root = composer.arena.root.expect("root");
+        let action = semantics_of(&composer, root)
+            .iter()
+            .find_map(|node| node.index_for_key.clone())
+            .expect("the list offers IndexForKey");
+        assert_eq!(action.invoke(1000), Some(0));
+        assert_eq!(action.invoke(1042), Some(42));
+        assert_eq!(action.invoke(999), None, "a key that is not in the data has no index");
+
+        // Insert two items in front: every old key moves by two, and the lookup follows.
+        let shifted: Arc<Vec<u64>> =
+            Arc::new((0..2).map(|i| 5000 + i as u64).chain(keys.iter().copied()).collect());
+        build(&mut composer, shifted);
+        let root = composer.arena.root.expect("root");
+        let action = semantics_of(&composer, root)
+            .iter()
+            .find_map(|node| node.index_for_key.clone())
+            .expect("the rebuilt list offers it too");
+        assert_eq!(action.invoke(1000), Some(2), "the key kept its identity, the index moved");
+        assert_eq!(action.invoke(1042), Some(44));
+        assert_eq!(action.invoke(5000), Some(0));
+    }
+
+    /// A section without a key factory uses the index as its key, so the lookup answers the index
+    /// itself — the same rule `keys` follows everywhere else in the module.
+    #[test]
+    fn index_for_key_answers_the_index_for_unkeyed_sections() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items_plain(20, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let action = semantics_of(&composer, root)
+            .iter()
+            .find_map(|node| node.index_for_key.clone())
+            .expect("the list offers IndexForKey");
+        assert_eq!(action.invoke(7), Some(7));
+        assert_eq!(action.invoke(20), None, "past the end");
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

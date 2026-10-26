@@ -79,8 +79,9 @@ pub(crate) fn node_json(node: &SemanticsNode, out: &mut String) {
     // A capability flag, not an id: the closure is runtime state, and what a client needs to know is
     // whether asking this element to scroll an item into view would do anything.
     let scroll_to_index = node.scroll_to_index.is_some();
+    let index_for_key = node.index_for_key.is_some();
     out.push_str(&format!(
-        "{{{}}},\"actions\":[{actions}],\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"collection\":{collection},\"collectionItem\":{collection_item},\"scrollToIndex\":{scroll_to_index},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
+        "{{{}}},\"actions\":[{actions}],\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"collection\":{collection},\"collectionItem\":{collection_item},\"scrollToIndex\":{scroll_to_index},\"indexForKey\":{index_for_key},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
         state.join(","),
         node.clickable,
         node.focused,

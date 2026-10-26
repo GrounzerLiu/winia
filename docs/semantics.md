@@ -77,7 +77,7 @@ is Compose's distinction too.
 | `SemanticsPropertyKey` set (hundreds, custom keys) | role, name, state, click | An API that grows to fit real consumers beats one copied whole from a surface with no consumer here. |
 | `SemanticsActions` incl. `SetProgress`, `ScrollBy`, `SetText` | click only | Each action needs a platform pattern behind it (UIA invoke / range value); click is the one wired end to end. |
 | `customActions` | `SemanticsConfig::custom_action(label, f)` — listed on the tree node and invokable | The Windows bridge still exposes only Invoke: UIA has no generic custom-action pattern. |
-| Collections (`collectionInfo`, `indexForKey`), `heading`, `traversalIndex` | `collection_info` / `collection_item_info` declared, resolved into the tree and the debug JSON; the lazy lists set them | A reader can now announce "row 3 of 200" and skip by position. `indexForKey` and `heading` are still absent: nothing needs them yet, and the Windows bridge has no ItemContainer pattern behind them. |
+| Collections (`collectionInfo`, `indexForKey`), `heading`, `traversalIndex` | `collection_info` / `collection_item_info` / `index_for_key_action` declared, resolved into the tree and the debug JSON; the lazy lists set them | A reader can announce "row 3 of 200", skip by position, and find an item's index by key after the data changed. `heading` and `traversalIndex` are still absent: nothing needs them. |
 | `clearAndSetSemantics` | `Modifier::clear_and_set_semantics(config)` — replaces the declaration and hides the subtree | Implemented; an empty block hides the node (Compose's "invisible to the user"). The clickable flag is still taken from the modifier chain (Compose would drop it unless the block declares its own onClick action, which winia's config cannot express yet). |
 | `ContentDescription` and `Text` are separate properties | one `name` | One field until a consumer needs the distinction, which is what a screen reader's Name property resolves to anyway. |
 | Semantics merge during composition into a `SemanticsConfiguration` | merged at read time from the modifier chain | winia's modifier is plain data read per query; nothing has to be kept in sync. |
@@ -131,8 +131,22 @@ LIVE tree (a bridge's snapshot is one frame old) and invokes it. The debug chann
 queue with `si <index> [node]` — `node` omitted means "the window's first element that offers it",
 which is what a test can use.
 
-Still absent: `IndexForKey`, `heading`, `traversalIndex`, and the Windows bridge's item-container
-pattern — a UIA client can now read the collection and the capability, but no pattern invokes it yet.
+### IndexForKey
+
+Compose's other argument-taking action: a key back to its index.
+
+```rust
+SemanticsConfig::new().index_for_key_action(move |key| key_source.get(&key).copied())
+```
+
+The lazy list wires it to the key → index map it builds every frame (`IntervalList::rebuild`), shared
+behind an `Arc` so the closure captures a pointer, not a hundred thousand entries. A section without a
+key factory uses its index as the key, so the lookup answers the index itself — the same rule the key
+view follows everywhere else. Unlike ScrollToIndex it needs no dispatch: it is a pure query, so a
+bridge (or a test) calls it directly on the node, and the tree reports `"indexForKey": true`.
+
+Still absent: `heading`, `traversalIndex`, and the Windows bridge's item-container pattern — a UIA
+client can read the collection and both capabilities, but no UIA pattern invokes them yet.
 
 ### Collections in the bridge
 

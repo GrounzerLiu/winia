@@ -272,6 +272,40 @@ impl PartialEq for ScrollToIndexAction {
     }
 }
 
+/// Compose's `IndexForKey`: the collection maps an item KEY to its index (`-1`/none when the key is
+/// not in the data).
+///
+/// A screen reader uses it to keep its place: Android hands the service a key and asks where the item
+/// went after the data changed. A type of its own for the same reason as [`ScrollToIndexAction`] — it
+/// takes an argument.
+#[derive(Clone)]
+pub struct IndexForKeyAction {
+    pub(crate) action: std::sync::Arc<dyn Fn(u64) -> Option<usize> + Send + Sync>,
+}
+
+impl IndexForKeyAction {
+    pub fn new(action: impl Fn(u64) -> Option<usize> + Send + Sync + 'static) -> Self {
+        Self { action: std::sync::Arc::new(action) }
+    }
+
+    /// The index of `key`, or `None` when the data no longer holds it.
+    pub fn invoke(&self, key: u64) -> Option<usize> {
+        (self.action)(key)
+    }
+}
+
+impl std::fmt::Debug for IndexForKeyAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IndexForKeyAction")
+    }
+}
+
+impl PartialEq for IndexForKeyAction {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// Where an item sits in its collection — Compose's `CollectionItemInfo`.
 ///
 /// A one-dimensional list needs the zero-based position and, for a reader that asks, the span (one
@@ -361,6 +395,8 @@ pub struct SemanticsConfig {
     pub(crate) collection_item: Option<CollectionItemInfo>,
     /// The collection can be asked to bring an item into view — Compose's `ScrollToIndex` action.
     pub(crate) scroll_to_index: Option<ScrollToIndexAction>,
+    /// The collection can map a key back to its index — Compose's `IndexForKey`.
+    pub(crate) index_for_key: Option<IndexForKeyAction>,
 }
 
 impl SemanticsConfig {
@@ -492,6 +528,22 @@ impl SemanticsConfig {
         self.scroll_to_index.as_ref()
     }
 
+    /// Declare Compose's `IndexForKey`: a caller can ask which index a key now has. A lazy list wires
+    /// it to its key → index map; nothing else in the framework needs it, and it is what an
+    /// accessibility service restores a position with.
+    pub fn index_for_key_action(
+        mut self,
+        action: impl Fn(u64) -> Option<usize> + Send + Sync + 'static,
+    ) -> Self {
+        self.index_for_key = Some(IndexForKeyAction::new(action));
+        self
+    }
+
+    /// The index-for-key action, if this node declared one.
+    pub fn index_for_key_action_value(&self) -> Option<&IndexForKeyAction> {
+        self.index_for_key.as_ref()
+    }
+
     /// Fill every field this config leaves open from `fallback` — how a caller's declaration is
     /// folded into the one the component already made: what the caller sets wins, and what it does
     /// not mention keeps the component's value, so adding a content description does not wipe the
@@ -524,6 +576,7 @@ impl SemanticsConfig {
             collection: self.collection.or(fallback.collection),
             collection_item: self.collection_item.or(fallback.collection_item),
             scroll_to_index: self.scroll_to_index.or(fallback.scroll_to_index),
+            index_for_key: self.index_for_key.or(fallback.index_for_key),
         }
     }
 }
@@ -569,6 +622,8 @@ pub struct SemanticsNode {
     pub collection_item: Option<CollectionItemInfo>,
     /// This element can bring a collection item into view (Compose's `ScrollToIndex`).
     pub scroll_to_index: Option<ScrollToIndexAction>,
+    /// This element can map an item key back to its index (Compose's `IndexForKey`).
+    pub index_for_key: Option<IndexForKeyAction>,
     /// Absolute bounds in logical pixels: `(x, y, width, height)`, scroll offsets applied — the same
     /// space `hit_test` works in, so a platform bridge can hand these to the OS and an action can be
     /// fired by id without hit-testing.

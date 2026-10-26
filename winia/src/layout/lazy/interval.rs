@@ -32,7 +32,7 @@ pub(crate) struct IntervalList {
     pub(crate) total: usize,
     /// key → global index map, built during `rebuild` (a section without a key factory uses its
     /// index as the key).
-    pub(crate) key_index: std::collections::HashMap<u64, usize>,
+    pub(crate) key_index: std::sync::Arc<std::collections::HashMap<u64, usize>>,
     /// Whether any sticky-header interval exists (built during `rebuild`; `build` skips the
     /// walk-back when there is none).
     pub(crate) has_sticky: bool,
@@ -43,7 +43,7 @@ impl IntervalList {
     pub fn new() -> Self {
         Self {
             intervals: Vec::new(), starts: Vec::new(), total: 0,
-            key_index: std::collections::HashMap::new(),
+            key_index: std::sync::Arc::new(std::collections::HashMap::new()),
             has_sticky: false,
         }
     }
@@ -76,15 +76,18 @@ impl IntervalList {
         }
         // The key map. Keys must be unique across the whole list (Compose throws on a duplicate: a
         // conflict corrupts `LazyLayout`'s saved state, which is why the API requires uniqueness).
-        self.key_index.clear();
+        // A fresh map behind one Arc: the IndexForKey action holds the previous frame's map until
+        // this one replaces it, and nobody pays for a copy.
+        let mut key_index = std::collections::HashMap::with_capacity(self.total);
         for g in 0..self.total {
             let k = self.key_of_unchecked(g);
-            if let Some(prev) = self.key_index.insert(k, g) {
+            if let Some(prev) = key_index.insert(k, g) {
                 panic!(
                     "LazyColumn/LazyRow: duplicate key {k} — global index {g} collides with {prev}.                      Keys must be unique across the whole list (Compose throws IllegalStateException)"
                 );
             }
         }
+        self.key_index = std::sync::Arc::new(key_index);
     }
 
     pub fn total(&self) -> usize { self.total }
@@ -125,6 +128,11 @@ impl IntervalList {
 
     /// Key → global index (the HashMap built by `rebuild` — O(1), which is what Compose's
     /// `NearestRangeKeyIndexMap` is for: no linear scan on a large data set).
+    /// The key -> index map itself, cheap to clone: what the IndexForKey action captures.
+    pub(crate) fn key_index_arc(&self) -> std::sync::Arc<std::collections::HashMap<u64, usize>> {
+        self.key_index.clone()
+    }
+
     pub fn index_of_key(&self, key: u64) -> Option<usize> {
         self.key_index.get(&key).copied()
     }

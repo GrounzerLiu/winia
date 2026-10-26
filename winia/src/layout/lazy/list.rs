@@ -552,6 +552,9 @@ impl<A: LazyAxis> LazyList<A> {
         let mut intervals = self.intervals;
         intervals.rebuild();
         let total = intervals.total();
+        // The key → index map this frame, captured by the IndexForKey action below. Taken here
+        // because `intervals` is consumed by the composition further down.
+        let key_source = intervals.key_index_arc();
 
         // Remembered across frames: the height cache, the viewport extent, the scrolling flag, the
         // fling limit.
@@ -872,6 +875,9 @@ impl<A: LazyAxis> LazyList<A> {
                     // view, and the list answers with the same anchored jump a programmatic scroll
                     // uses — no separate path, so the semantics cannot drift from the API.
                     .scroll_to_index_action(move |index| jump.scroll_to_item(index, 0.0))
+                    // Compose's `IndexForKey`: the key → index map this frame built, shared behind
+                    // an Arc so the closure does not copy a hundred thousand entries.
+                    .index_for_key_action(move |key| key_source.get(&key).copied())
             }));
         // The registration order, taken out before the policy moves into the group (unreadable after).
         let child_globals = policy.globals.clone();

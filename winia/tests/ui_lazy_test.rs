@@ -208,4 +208,8 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         sem.contains("\"scrollToIndex\":true"),
         "and the lists offer ScrollToIndex"
     );
+    assert!(
+        sem.contains("\"indexForKey\":true"),
+        "and IndexForKey, so a reader can find an item by key after the data changes"
+    );
 }

@@ -35,7 +35,8 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             || !clear.custom_actions().is_empty()
             || clear.collection_info_value().is_some()
             || clear.collection_item_info_value().is_some()
-            || clear.scroll_to_index_action_value().is_some();
+            || clear.scroll_to_index_action_value().is_some()
+            || clear.index_for_key_action_value().is_some();
         if declared {
             out.push(SemanticsNode {
                 node_id: node.id,
@@ -50,6 +51,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
                 collection: clear.collection_info_value(),
                 collection_item: clear.collection_item_info_value(),
                 scroll_to_index: clear.scroll_to_index_action_value().cloned(),
+                index_for_key: clear.index_for_key_action_value().cloned(),
                 bounds,
                 children: Vec::new(),
             });
@@ -110,6 +112,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             collection: config.collection_info_value(),
             collection_item: config.collection_item_info_value(),
             scroll_to_index: config.scroll_to_index_action_value().cloned(),
+            index_for_key: config.index_for_key_action_value().cloned(),
             bounds,
             children: Vec::new(),
         });
@@ -135,6 +138,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
         // A scroll action is a declaration too: a list that only offers "bring item N into view"
         // must not be transparent.
         || config.scroll_to_index_action_value().is_some()
+        || config.index_for_key_action_value().is_some()
     {
         // A declared node keeps its place and its children (nothing was claimed).
         out.push(SemanticsNode {
@@ -150,6 +154,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             collection: config.collection_info_value(),
             collection_item: config.collection_item_info_value(),
             scroll_to_index: config.scroll_to_index_action_value().cloned(),
+            index_for_key: config.index_for_key_action_value().cloned(),
             bounds,
             children,
         });

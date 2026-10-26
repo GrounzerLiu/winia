@@ -352,9 +352,12 @@ reader asking "bring item 50 into view" takes exactly the path a programmatic ju
 queues `UiAction::ScrollToIndex { node, index }` and the frame loop invokes it off the live tree; the
 debug channel's `si <index>` drives the same path in tests.
 
-What is still missing for a full screen-reader experience: `IndexForKey` and the Windows bridge's
-item-container pattern (a UIA client can read the collection and the capability, but no pattern
-invokes it yet).
+The list also offers Compose's `IndexForKey` — a key → index query wired to the key map it rebuilds
+each frame, which is how a reader finds an item again after the data changed. Unlike ScrollToIndex it
+is a pure query: no dispatch, the caller invokes it on the node.
+
+What is still missing for a full screen-reader experience: the Windows bridge's item-container
+pattern (`FindItemByProperty`), so a client can find an item the list has not realized yet.
 
 ## 3b. RTL, and the unbounded cross axis
 

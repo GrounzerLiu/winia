@@ -209,6 +209,38 @@
     }
 
     #[test]
+    fn a_collection_can_map_a_key_back_to_its_index() {
+        let tree = tree_of(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new()
+                        .collection_info(CollectionInfo::rows(200))
+                        .index_for_key_action(|key| {
+                            if key >= 1000 {
+                                Some((key - 1000) as usize)
+                            } else {
+                                None
+                            }
+                        }),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("row 0").build(ctx);
+                });
+        });
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        let action = list
+            .index_for_key
+            .as_ref()
+            .expect("the list offers IndexForKey");
+        assert_eq!(action.invoke(1042), Some(42));
+        assert_eq!(action.invoke(7), None);
+        assert!(
+            semantics_json(&tree).contains("\"indexForKey\":true"),
+            "and the debug tree reports the capability"
+        );
+    }
+
+    #[test]
     fn the_structure_fingerprint_tracks_shape_not_content() {
         // Frames of ONE composer, which is what a bridge ever compares (a different composer means a
         // different window, and node ids come from a process-wide counter).
@@ -291,6 +323,7 @@
                 collection: None,
                 collection_item: None,
                 scroll_to_index: None,
+                index_for_key: None,
                 bounds: (0.0, 0.0, 50.0, 50.0),
                 children: Vec::new(),
             }],
