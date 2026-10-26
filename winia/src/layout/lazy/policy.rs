@@ -496,15 +496,36 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 .unwrap_or_else(|e| e.into_inner());
             anchor.take()
         };
+        let anchor_shift = {
+            let mut shift = self
+                .state
+                .anchor_shift
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let taken = *shift;
+            *shift = 0.0;
+            taken
+        };
         if let Some(anchor_key) = anchor {
             if let Some(i) = children.iter().enumerate().find_map(|(i, _c)| {
                 let global = self.globals.get(i).copied().unwrap_or(i);
                 (self.keys.get(global).copied().unwrap_or(global as u64) == anchor_key).then_some(i)
             }) {
                 let position = placements[i].position;
-                if let Some(last) = self.state.item_animations.remembered_position(anchor_key) {
-                    self.state.item_animations.rebase(position - last);
-                }
+                let delta = match self.state.item_animations.remembered_position(anchor_key) {
+                    // Exact: the anchor's own movement, applied per item to the rows that moved with it.
+                    Some(last) => position - last,
+                    // The anchor carries no marker, so there is no memory to compare against: fall back
+                    // to the correction's own delta, which is what the layout moved up to the estimate.
+                    None => {
+                        if A::VERTICAL {
+                            crate::unit::Offset::new(0.0, anchor_shift)
+                        } else {
+                            crate::unit::Offset::new(anchor_shift, 0.0)
+                        }
+                    }
+                };
+                self.state.item_animations.set_anchor_delta(delta);
             }
         }
         for (i, &c) in children.iter().enumerate() {

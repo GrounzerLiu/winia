@@ -88,7 +88,10 @@ struct HostState {
     frame: u64,
     items: HashMap<u64, ItemState>,
     next_place_order: u64,
-
+    /// The viewport's own movement this pass, declared by the container (a Lazy list's anchor
+    /// correction): an item whose content position moved by exactly this amount did not move on
+    /// screen and must not animate.
+    anchor_delta: Option<crate::unit::Offset>,
 }
 
 /// A cloneable host shared by a container and its measure policy.
@@ -405,17 +408,19 @@ impl ItemAnimationHost {
             .map(|item| item.last_position)
     }
 
-    /// Moves every item's remembered position by `shift`. A container whose viewport moved instead of
-    /// its items (a Lazy list's anchor correction after a data change) calls this so a row that did not
-    /// move on SCREEN does not animate.
-    pub(crate) fn rebase(&self, shift: crate::unit::Offset) {
-        if shift.x == 0.0 && shift.y == 0.0 {
-            return;
-        }
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        for item in state.items.values_mut() {
-            item.last_position = item.last_position + shift;
-        }
+    /// Declares the CONTENT-space movement the container applied by moving its viewport instead of its
+    /// items (a Lazy list's anchor correction after a data change), for this layout pass.
+    ///
+    /// It is applied PER ITEM, and only to an item whose content position moved by exactly that amount:
+    /// such an item did not move on screen and must not animate. An item that moved by a different
+    /// amount was moved by the layout itself and still animates — which is what makes this exact for an
+    /// insert in the middle, where a window can hold children above the insert (they do not move) as
+    /// well as children below it (they move with the viewport).
+    pub(crate) fn set_anchor_delta(&self, delta: crate::unit::Offset) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .anchor_delta = Some(delta);
     }
 
     /// Record an item and attach its paint channels. Returns true when the item has a declaration.
@@ -440,6 +445,7 @@ impl ItemAnimationHost {
         }
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let frame = state.frame;
+        let anchor_delta = state.anchor_delta;
 
         let order = state.next_place_order;
         state.next_place_order += 1;
@@ -499,6 +505,15 @@ impl ItemAnimationHost {
             // count as movement: a scroll re-lays out on every frame, and restarting from the current
             // offset each time throws the spring's velocity away, so the item crawls towards its slot
             // instead of settling (that is the "item animation gets slow while scrolling" report).
+            // An item that moved by exactly the viewport's own movement did not move on screen: adopt
+            // the new position as its reference and let it be, instead of animating a shift the scroll
+            // already made.
+            if let Some(delta) = anchor_delta {
+                let moved = position - item.last_position;
+                if (moved.x - delta.x).abs() < 0.01 && (moved.y - delta.y).abs() < 0.01 {
+                    item.last_position = position;
+                }
+            }
             let target_shift = item.last_position - position;
             let target_moved = target_shift.x.abs() > 0.01 || target_shift.y.abs() > 0.01;
             if target_moved {
@@ -569,6 +584,7 @@ impl ItemAnimationHost {
     /// layer when their picture from the previous render is available.
     pub(crate) fn finish_frame(&self, live_keys: Option<&HashSet<u64>>) {
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        state.anchor_delta = None;
         let frame = state.frame;
         let mut kept: Vec<(u64, ItemState)> = Vec::new();
         let mut offscreen: Vec<(u64, ItemState)> = Vec::new();

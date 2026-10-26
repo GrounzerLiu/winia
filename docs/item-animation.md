@@ -43,16 +43,20 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
 
   A data change that moves the VIEWPORT with the content does not animate: inserting a row at the head
   while the list is SCROLLED pushes every row down and the anchor correction scrolls the list by the
-  same amount, so nothing moves on screen. The correction therefore leaves the key it kept in place,
-  and the layout pass rebases every item's remembered position by THAT ITEM'S ACTUAL delta (Compose's
-  `applyScrollOffset`, computed from real placements). The actual delta matters: a build-time estimate of
-  the inserted row's height is off by the row spacing, and a shift derived from it left every row 8 dp
-  out — drawn 8 dp lower, then springing back.
+  same amount, so nothing moves on screen. The correction therefore leaves the key it kept in place;
+  the layout pass measures that item's ACTUAL movement (Compose's `applyScrollOffset`, but from real
+  placements) and declares it to the host, which applies it PER ITEM and only to a row whose content
+  position moved by exactly that amount. A row that moved by anything else — one above an insert in the
+  middle — still animates. The actual number matters: a build-time estimate of the inserted row's height
+  is off by the row spacing, and a shift derived from it left every row 8 dp out, drawn 8 dp lower and
+  then springing back. If the anchor row carries no `animate_item` marker there is no memory to compare
+  against, so the correction's own delta is used instead.
 
-  At the very TOP there is no reading position to preserve, so the correction is skipped there: the
-  viewport stays at 0, the new row is visible, and the rows below animate down into their new slots.
-  Compose anchors by key in that case too and silently scrolls the list past the new row; this is a
-  deliberate deviation (recorded here, not a gap).
+  At the very START (offset 0 — the top of a plain column, the bottom under `reverseLayout`, the right
+  edge of an RTL `LazyRow`) there is no reading position to preserve, so the correction is skipped
+  there: the viewport stays at 0, the new row is visible, and the rows below animate into their new
+  slots. Compose anchors by key in that case too and silently scrolls the list past the new row; this
+  is a deliberate deviation (recorded here, not a gap).
 
   One placement is NOT scroll-invariant and therefore does not fit this rule: a PINNED sticky header
   is re-placed every frame by the scroll offset itself. Give a sticky header no marker — a marker

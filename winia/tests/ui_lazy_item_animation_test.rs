@@ -181,3 +181,38 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "the placement still animates: {animations:?}"
     );
 }
+
+/// A head insert while the list is at the START (offset 0) reveals the new row at the first slot and
+/// animates the rows below down into their new slots. Compose would anchor by key and scroll the new
+/// row out of view; that deviation is recorded in `docs/item-animation.md`.
+#[test]
+fn a_head_insert_at_the_top_reveals_the_new_row() {
+    let mut app = UiTest::launch("lazy_item_animation");
+    app.expect_eventually_timeout("the list reports itself", Duration::from_secs(2), |app| {
+        app.refresh();
+        info(app).contains("12 items")
+    });
+
+    let first_before = app.expect_tag("lazy-anim-item-0");
+    click_tag(&mut app, "lazy-anim-insert-head");
+    app.refresh();
+    assert!(
+        info(&mut app).contains("13 items"),
+        "the list grew: {:?}",
+        info(&mut app)
+    );
+    let new_card = app.expect_tag("lazy-anim-item-12");
+    let first_after = app.expect_tag("lazy-anim-item-0");
+    assert!(
+        new_card.1 <= first_before.1 + 1.0,
+        "the new row takes the first slot: {new_card:?} vs {first_before:?}"
+    );
+    assert!(
+        first_after.1 > first_before.1,
+        "and the row it pushed down moved: {first_after:?} vs {first_before:?}"
+    );
+    assert!(
+        saw_animation(&mut app, "spring(stiffness=400", Some("components=2")),
+        "the rows below animate into their slots"
+    );
+}

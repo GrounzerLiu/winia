@@ -673,19 +673,14 @@ impl<A: LazyAxis> LazyList<A> {
         // And strictly AFTER the rebase: the offset calculation uses `prefix_height` over the height
         // cache MIGRATED BY KEY — before the rebase the index view still describes the old data, so the
         // prefix would be wrong and the offset misplaced.
-        // The anchor key belongs to THIS frame's layout pass: clearing it here means a frame that
-        // composes without laying out (or a correction that finds no anchor) cannot hand a stale delta
-        // to a later pass.
-        {
-            let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
-            *anchor = None;
-        }
         let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
-        // While the list sits at the very START there is no reading position to preserve: the new
-        // content belongs at the top, where the user is looking (Compose anchors by key here instead,
-        // which silently scrolls the list and hides the new row — this is a deliberate deviation, so
-        // an insert at the head still shows its item and animates the rows below).
+        // While the list sits at its START there is no reading position to preserve: the new content
+        // belongs where the user is looking (Compose anchors by key here instead, which silently
+        // scrolls the list and hides the new row — a deliberate deviation, so an insert at the head
+        // still shows its item and animates the rows below). "Start" and not "top": under
+        // reverseLayout, or on a horizontal LazyRow under RTL, offset 0 is the bottom or the right
+        // edge — the behaviour is the same one row away from the edge the user is at.
         let at_start = state.offset.get() <= 0.0;
         if total_changed {
             // The total is recorded either way: leaving it unset would make every later frame look
@@ -698,15 +693,22 @@ impl<A: LazyAxis> LazyList<A> {
                 if let Some(new_index) = intervals.index_of_key(last_key) {
                     // Preserve the anchor's position INSIDE the viewport: the correction moves the
                     // offset to where that key now starts, so the pixel offset it had must be added
-                    // back. Without it the anchor snaps to the top of the viewport and the whole
-                    // content jumps — measured at launch (offset 0, content padding 4): the first
-                    // insert moved the offset to 4 and the list scrolled up 4 px.
+                    // back. Without it the anchor snaps to the top of the viewport, and mid-scroll that
+                    // is a jump of up to a full row (measured: 20 dp into a row, the offset snapped from
+                    // 192 to a row boundary). At the very top this branch does not run at all.
                     let (_, item_offset) =
                         anchor_from_offset(&cache_ref, state.offset.get(), self.spacing, self.content_padding.0);
-                    let new_offset = (self.content_padding.0
+                    // Clamped the way the measure will clamp it: a correction that runs past the end
+                    // would otherwise be pulled back there, and the rebase below would then be off by
+                    // the difference.
+                    let last_max_off = fling_limit.get();
+                    let mut new_offset = self.content_padding.0
                         + prefix_height(&cache_ref, new_index, self.spacing)
-                        + item_offset)
-                        .max(0.0);
+                        + item_offset;
+                    if last_max_off > 0.0 && last_max_off < f32::MAX {
+                        new_offset = new_offset.min(last_max_off);
+                    }
+                    let previous = state.offset.get();
                     state.offset.set(new_offset);
                     // The placement animation compares CONTENT positions, so this correction has to be
                     // handed over too — otherwise the rows animate for a move the viewport already
@@ -715,6 +717,10 @@ impl<A: LazyAxis> LazyList<A> {
                     {
                         let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
                         *anchor = Some(last_key);
+                    }
+                    {
+                        let mut shift = state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
+                        *shift = new_offset - previous;
                     }
                 }
             }

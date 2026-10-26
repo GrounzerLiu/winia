@@ -70,6 +70,11 @@ pub struct LazyListState {
     /// moved because the correction moved the viewport do not animate — and an estimate that is off
     /// by a few pixels corrects itself instead of leaving a residual flash.
     pub(crate) anchor_key: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
+    /// The offset change that correction applied. Used only when the anchor item carries no
+    /// `animate_item` marker (a section header, say): there is no remembered position to compare
+    /// against, so the correction's own delta is the best available answer — it is what the layout
+    /// moved, up to the height-cache estimate.
+    pub(crate) anchor_shift: std::sync::Arc<std::sync::Mutex<f32>>,
     /// Whether this list has laid out at least once. A FLAG, not "known_keys is empty": a list whose
     /// data starts empty (an async load, a filter that transiently matches nothing) must still fade
     /// its first real content in, and every empty -> filled transition would otherwise look like a
@@ -101,6 +106,7 @@ impl LazyListState {
             pending_new: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             has_layout: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             anchor_key: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            anchor_shift: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),
