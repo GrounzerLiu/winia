@@ -567,6 +567,18 @@ impl Modifier {
             .any(|el| matches!(el, ModifierElement::MatchParentSize))
     }
 
+    /// A child's span and cell alignment inside a `Grid` — see [`Modifier::grid_item`]. Last wins.
+    pub fn get_grid_item(&self) -> Option<(u32, u32, Option<crate::layout::ContentAlignment>)> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::GridItem {
+                column_span,
+                row_span,
+                alignment,
+            } => Some((*column_span, *row_span, *alignment)),
+            _ => None,
+        })
+    }
+
     /// Whether this node is painted, hit-tested and exposed to accessibility — Compose's
     /// `Modifier.visible` (`Visible.kt:51`). Last value wins, and no `visible` in the chain means
     /// visible.

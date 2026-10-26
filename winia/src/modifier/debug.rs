@@ -52,6 +52,12 @@ impl Debug for ModifierElement {
             }
             Self::MatchParentSize => f.write_str("MatchParentSize"),
             Self::Visible { visible } => f.debug_struct("Visible").field("visible", visible).finish(),
+            Self::GridItem { column_span, row_span, alignment } => f
+                .debug_struct("GridItem")
+                .field("column_span", column_span)
+                .field("row_span", row_span)
+                .field("alignment", alignment)
+                .finish(),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::FillMaxRowHeight { fraction } => {
                 f.debug_struct("FillMaxRowHeight").field("fraction", fraction).finish()

@@ -19,6 +19,8 @@ mod lazy_layout;
 mod lazy_ops_demo;
 #[path = "../../examples/lazy_item_animation_demo.rs"]
 mod lazy_item_animation;
+#[path = "../../examples/grid_demo.rs"]
+mod grid_demo;
 
 const SCENARIOS: &[(&str, fn())] = &[
     ("flow_features", flow_features::main),
@@ -28,6 +30,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("lazy_layout", lazy_layout::main),
     ("lazy_ops", lazy_ops_demo::main),
     ("lazy_item_animation", lazy_item_animation::main),
+    ("grid", grid_demo::main),
 ];
 
 fn main() {

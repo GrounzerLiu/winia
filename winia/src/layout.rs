@@ -16,6 +16,7 @@ pub use sizing::{Dimension, IntrinsicSize, SizeValue};
 pub(crate) mod container;
 pub mod components;
 pub mod spacer;
+pub mod grid;
 pub mod box_with_constraints;
 /// The lazy lists — `LazyColumn` AND `LazyRow`, which share one axis-generic core.
 pub mod lazy;
@@ -43,6 +44,7 @@ pub use row::Row;
 pub use box_layout::Stack;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
+pub use grid::{Grid, GridFlow, GridLayout, GridTrackSpec};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy::{ItemHeightCache, LazyColumn, LazyList, LazyListState, LazyRow};
 pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};

@@ -368,6 +368,13 @@ pub(crate) enum ModifierElement {
     /// Compose's `BoxScope.matchParentSize`: the child does NOT take part in sizing its box and is
     /// then measured at the box's size. Only a `Box`/`Stack` reads it.
     MatchParentSize,
+    /// A grid item's span and cell alignment — Compose's `GridScope.Modifier.gridItem`
+    /// (`Grid.kt:158-230`). Only `Grid` reads it.
+    GridItem {
+        column_span: u32,
+        row_span: u32,
+        alignment: Option<crate::layout::ContentAlignment>,
+    },
     /// Compose's `Modifier.visible` (`Visible.kt:51`): while `false` the node is measured and keeps
     /// its space, but it is not painted, not hit-tested, not focusable and invisible to
     /// accessibility — `View.INVISIBLE`, not `View.GONE`.

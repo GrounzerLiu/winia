@@ -390,6 +390,31 @@ impl Modifier {
         self.push(ModifierElement::MatchParentSize)
     }
 
+    /// Declare this child's span inside a `Grid` — Compose's `GridScope.Modifier.gridItem`
+    /// (`Grid.kt:158`). The alignment inside the cell defaults to stretch.
+    pub fn grid_item(self, column_span: u32, row_span: u32) -> Self {
+        self.push(ModifierElement::GridItem {
+            column_span,
+            row_span,
+            alignment: None,
+        })
+    }
+
+    /// Like [`grid_item`](Self::grid_item), with the child aligned inside its cell instead of
+    /// stretched across it.
+    pub fn grid_item_aligned(
+        self,
+        column_span: u32,
+        row_span: u32,
+        alignment: crate::layout::ContentAlignment,
+    ) -> Self {
+        self.push(ModifierElement::GridItem {
+            column_span,
+            row_span,
+            alignment: Some(alignment),
+        })
+    }
+
     /// Hide this node without giving up its space — Compose's `Modifier.visible`
     /// (`Visible.kt:51`).
     ///
