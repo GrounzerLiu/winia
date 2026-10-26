@@ -337,6 +337,20 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             .map(|cursor| if cursor == f32::MAX { 0.0 } else { cursor })
             .collect();
 
+        // The container's parameters and the DATA SIGNATURE (the window's keys), declared before the
+        // group starts: without them a data change at a stable offset Skips the group and the previous
+        // frame's children stay on screen (measured: shrinking four items to one kept all four).
+        ctx.changed(&self.cells);
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.cross_spacing);
+        ctx.changed(&self.content_padding);
+        ctx.changed(&self.content_padding_cross);
+        let mut signature = 0u64;
+        for index in &window {
+            signature = signature.wrapping_mul(31).wrapping_add(key(*index));
+        }
+        ctx.changed(&signature);
+
         let policy = StaggeredPolicy::<A> {
             lanes,
             spacing: self.spacing,
@@ -426,6 +440,34 @@ mod tests {
             composer.arena_nodes()[items[3]].position,
             Offset::new(152.0, 44.0),
             "and the fourth follows the second"
+        );
+    }
+
+
+    /// A DATA change has to re-enter the container: the group compares parameters and a data signature,
+    /// so dropping items at a stable offset does not leave last frame's children behind (measured:
+    /// shrinking four items to one kept all four nodes until the signature was declared).
+    #[test]
+    fn a_data_change_re_enters_the_container() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        grid_frame(&mut composer, &state, 4, 40.0);
+        grid_frame(&mut composer, &state, 4, 40.0);
+        assert_eq!(
+            composer.layout_root().unwrap().children.len(),
+            4,
+            "four items compose"
+        );
+        grid_frame(&mut composer, &state, 1, 40.0);
+        grid_frame(&mut composer, &state, 1, 40.0);
+        assert_eq!(
+            composer.layout_root().unwrap().children.len(),
+            1,
+            "and shrinking to one leaves exactly one composed child"
         );
     }
 
