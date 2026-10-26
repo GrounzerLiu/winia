@@ -130,12 +130,12 @@ impl AlignmentLine {
     }
 }
 
-/// 布局树中的一个节点。
+/// One node of the layout tree.
 ///
-/// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
-/// 包含 modifier 链、子节点。
+/// Each LayoutNode is one measurable/layoutable cell of the UI tree and carries the modifier chain
+/// and its children.
 pub struct LayoutNode {
-    /// 唯一标识符（用于渲染阶段的精确查找）
+    /// The unique identifier (an exact lookup handle for the render pass).
     pub id: u64,
     pub modifier: Modifier,
     pub measured_size: Size,
@@ -190,48 +190,57 @@ pub struct LayoutNode {
     /// adoption path needs it too: it used to recompute `get_padding_sides()` from the modifier, which
     /// drops the insets and re-resolves a dynamic dimension. This field is the single source.
     pub resolved_padding: (f32, f32, f32, f32),
-    /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
+    /// The children's indices (an arena tree: the nodes live in `NodeArena.nodes` and survive
+    /// recomposition).
     pub children: Vec<usize>,
-    /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
+    /// The index of the measure policy in `NodeArena.policies` (a pool apart from the nodes, so the
+    /// two borrows cannot clash).
     pub measure_policy: Option<usize>,
-    /// 叶子节点是否包含 TextContent
+    /// Whether the leaf carries a TextContent.
     pub(crate) has_text_content: bool,
-    /// 叶子节点是否包含 RichTextContent
+    /// Whether the leaf carries a RichTextContent.
     pub(crate) has_richtext_content: bool,
-    /// 叶子节点是否包含 ImageContent（Image 组件）
+    /// Whether the leaf carries an ImageContent (the Image component).
     pub(crate) has_image_content: bool,
-    /// 是否获得焦点
+    /// Whether the node has focus.
     pub focused: bool,
-    /// 节点从布局树移除时调用（用于 Window 生命周期管理）
+    /// Called when the node leaves the layout tree (the Window lifecycle hooks in here).
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
-    /// 是否需要重新测量（clean slot 复用时为 false）
+    /// Whether the node has to measure again (false when a clean slot was reused).
     pub(crate) dirty: bool,
-    /// 布局级失效（两段式依赖：布局动画值变化只重测不重组——measure 后清除）
+    /// A layout-level invalidation (the two-stage dependency: a layout animation value re-measures
+    /// without recomposing; cleared once measured).
     pub(crate) layout_dirty: bool,
-    /// 上次测量时的约束（用于跳过常量布局的 re-measure）
+    /// The constraints of the last measure (lets a constant layout skip re-measuring).
     pub(crate) cached_constraints: Option<Constraints>,
-    /// 布局方向（组合期快照：modifier 覆盖 > CompositionLocal 默认）——
-    /// 测量/渲染期 padding start/end 镜像、文本对齐用
+    /// The layout direction, snapshotted during composition (an explicit modifier beats the
+    /// CompositionLocal default): measure and render use it to mirror padding start/end and to align
+    /// text.
     pub(crate) layout_direction: LayoutDirection,
-    /// composable 调用对应的 slot key（用于 replay 时子节点查找）
+    /// The slot key of the composable call that produced the node (used to find children on replay).
     pub(crate) slot_key: u64,
     /// Whether any of this node's children carries `Modifier::z_index`, recorded in the layout pass
     /// that already walks them. `false` — every node that does not use z-index — lets the renderer and
     /// the hit test skip the ordering work entirely.
     pub(crate) children_have_z: bool,
-    /// 测量阶段缓存的 Paragraph（避免渲染时重建）
+    /// The Paragraph cached by the measure phase, so the render pass does not rebuild it.
     pub(crate) cached_paragraph: std::cell::RefCell<Option<crate::text::Paragraph>>,
-    /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
+    /// A scroll container's viewport height (written by `measure_node` and read by
+    /// `apply_scroll_delta`).
     pub(crate) scroll_viewport_height: f32,
-    /// scroll 容器的 viewport 宽度（水平滚动用——同 scroll_viewport_height）
+    /// A scroll container's viewport width (horizontal scrolling; the twin of
+    /// `scroll_viewport_height`).
     pub(crate) scroll_viewport_width: f32,
-    /// scroll 容器的内容总高（lazy 列表用——apply_scroll_delta 计算 max_offset；0 = 未设置）
+    /// A scroll container's total content height (the lazy lists compute `max_offset` from it;
+    /// 0 means unset).
     pub(crate) scroll_content_height: f32,
-    /// lazy 列表反向布局（reverseLayout：render 滚动平移镜像为 content - vh - offset）
+    /// A lazy list's reverse layout (the render pass mirrors the scroll translate to
+    /// content - vh - offset).
     pub(crate) scroll_reverse: bool,
-    /// scroll 容器的内容总宽（水平滚动用——同 scroll_content_height）
+    /// A scroll container's total content width (horizontal scrolling; the twin of
+    /// `scroll_content_height`).
     pub(crate) scroll_content_width: f32,
-    /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
+    /// The parent's id, set by `add_child` (keyboard events bubble with it).
     pub(crate) parent_id: Option<u64>,
     /// The last `(x, y, width, height)` reported to this node's position callbacks, in window
     /// coordinates. `None` means "never reported", so the first placement always fires.
@@ -246,34 +255,36 @@ pub struct LayoutNode {
     /// Bumped whenever this node is measured, so the item exit-picture cache can tell that content
     /// under the same box may have changed.
     pub(crate) content_epoch: u64,
-    /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
+    /// The SelectionRegistrar of the CompositionLocal scope (Text nodes keep a reference to it).
     pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
-    /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
+    /// The text cursor's x offset (TextField; the render pass draws the bar when focused).
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
-    /// 光标字符索引（TextField 设置，render 用 TextLayout 精确计算位置）
+    /// The cursor's character index (set by TextField; the render pass locates it through TextLayout).
     pub(crate) cursor_index: std::cell::Cell<usize>,
-    /// 光标是否可见（闪烁 toggle，TextField 设置）
+    /// Whether the cursor is visible (the blink toggles it; TextField sets it).
     pub(crate) cursor_visible: std::cell::Cell<bool>,
-    /// 显示聚焦标记（text-field-v2 容器化：焦点在容器节点，输入子节点
-    /// 渲染光标/选区用此标记——组合期写入，回退 node.focused）
+    /// A display-focus flag (the text-field-v2 container move left focus on the CONTAINER, so an
+    /// input child renders its cursor and selection from this; written during composition, falling
+    /// back to `node.focused`).
     pub(crate) display_focused: std::cell::Cell<bool>,
-    /// 光标位置回调（TextField 点击后更新 selection 用）
+    /// The cursor-position callback (TextField updates its selection from it after a click).
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
-    /// IME 预输入回调（TextField 处理 Preedit 用）
+    /// The IME preedit callback (TextField handles Preedit with it).
     pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
-    /// IME 组合文本范围（供渲染画下划线）
+    /// The IME composing range (the render pass underlines it).
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
-    /// 焦点环颜色（组合期由组件从主题捕获写入——渲染期 CompositionLocal
-    /// 已退出，不能读主题；未设置时回退默认蓝色）
+    /// The focus ring's colour, captured from the theme during composition (the CompositionLocal is
+    /// gone by render time, so the theme cannot be read there); unset falls back to the default blue.
     pub(crate) focus_color: std::cell::Cell<crate::graphics::Color>,
-    /// IME 组合下划线颜色（组合期捕获主题 primary——渲染期不能读
-    /// CompositionLocal（Phase 4.2）；未设置时回退默认色）
+    /// The IME composing underline's colour, captured from the theme during composition (the
+    /// CompositionLocal is unreadable at render time); unset falls back to the default colour.
     pub(crate) composing_color: std::cell::Cell<crate::graphics::Color>,
-    /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
-    /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
-    /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
-    /// 复用命中必须从干净状态重建（协调器按 slot 回填）。
+    /// The shared-element flight (phase 2): while `Some`, the render pass morphs the node from its
+    /// start rectangle to its end one (offset, scale, fade, corner radii) and the hit test skips it.
+    /// The coordinator rewrites it every frame and clears it to `None` when the flight ends. It is
+    /// deliberately left out of the node cache — a flight is transient, and a reused node has to be
+    /// rebuilt from a clean state (the coordinator refills it by slot).
     pub(crate) transition: Option<crate::transition::TransitionVisual>,
     /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
     /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
@@ -413,8 +424,8 @@ impl Drop for LayoutNode {
 }
 
 impl LayoutNode {
-    /// 创建节点。`measure_policy` 为 NodeArena.policies 池中的策略索引
-    ///（由调用方先 `arena.alloc_policy(...)` 取得）；叶子节点传 `None`。
+    /// Creates a node. `measure_policy` is an index into `NodeArena.policies` (the caller obtains it
+    /// from `arena.alloc_policy(...)`); leaves pass `None`.
     pub fn new(modifier: Modifier, measure_policy: Option<usize>) -> Self {
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
@@ -469,19 +480,19 @@ impl LayoutNode {
         }
     }
 
-    /// 添加子节点（arena 化——子节点分配索引后挂入 children）
+    /// Adds a child: the arena allocates its index first, then it is attached to `children`.
     pub fn add_child(&mut self, child_idx: usize) {
-        // parent_id 由 NodeArena 在挂入时设置（需要父 id）
+        // `parent_id` is set by NodeArena when the child is attached (it needs the parent's id).
         self.children.push(child_idx);
     }
 
-    /// 创建叶子节点（无子节点）
+    /// Creates a leaf node (no children).
     pub fn leaf(modifier: Modifier) -> Self {
         LayoutNode::new(modifier, None)
     }
 
-    /// 创建容器节点（有子节点和布局策略）
-    /// 是否叶子节点
+    /// Creates a container node (children plus a measure policy).
+    /// Whether this is a leaf.
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty() && self.measure_policy.is_none()
     }
@@ -568,7 +579,7 @@ impl Default for LayoutNode {
     }
 }
 
-// ── NodeArena：布局树节点池（arena 索引树，节点跨重组复用）──
+// ── NodeArena: the layout-tree node pool (an index tree whose nodes survive recomposition) ──
 
 /// The hasher for maps keyed by `slot_key`.
 ///
@@ -672,8 +683,9 @@ impl NodeMarks {
     }
 }
 
-/// 布局树节点池：所有 LayoutNode 存于 `nodes`，树通过索引（`children: Vec<usize>`）
-/// 组织。节点**跨重组持久**（对象级复用——组合 diff 只更新内容，不重建对象）。
+/// The layout-tree node pool: every LayoutNode lives in `nodes` and the tree is expressed through
+/// indices (`children: Vec<usize>`). The nodes PERSIST across recomposition — the composition diff
+/// updates their contents instead of rebuilding the objects.
 pub struct NodeArena {
     pub(crate) nodes: Vec<LayoutNode>,
     pub(crate) policies: Vec<Box<dyn MeasurePolicy>>,
@@ -687,7 +699,8 @@ impl NodeArena {
         Self { nodes: Vec::new(), policies: Vec::new(), free_policies: Vec::new(), free: Vec::new(), root: None }
     }
 
-    /// 分配测量策略到池（优先复用回收槽），返回索引（供 LayoutNode.measure_policy 引用）
+    /// Allocates a measure policy in the pool (reusing a recycled slot first) and returns its index
+    /// for `LayoutNode::measure_policy`.
     pub fn alloc_policy(&mut self, policy: Box<dyn MeasurePolicy>) -> usize {
         if let Some(idx) = self.free_policies.pop() {
             self.policies[idx] = policy;
@@ -698,7 +711,8 @@ impl NodeArena {
         }
     }
 
-    /// 回收节点占用的 policy 槽（结构变化移除节点时——低频泄漏防护）
+    /// Recycles the policy slot a node held (when a structural change removes it — a low-frequency
+    /// leak guard).
     pub(crate) fn recycle_policy(&mut self, idx: usize) {
         if let Some(p) = self.nodes[idx].measure_policy.take() {
             self.free_policies.push(p);
@@ -718,7 +732,7 @@ impl NodeArena {
         self.nodes.reserve(additional);
     }
 
-    /// 分配/复用槽位（free 优先），返回索引
+    /// Allocates or reuses a slot (the free list first) and returns its index.
     pub fn alloc(&mut self, node: LayoutNode) -> usize {
         if let Some(idx) = self.free.pop() {
             self.nodes[idx] = node;
@@ -729,10 +743,10 @@ impl NodeArena {
         }
     }
 
-    /// 释放节点（含子树——递归释放 children，on_remove 触发）。
-    /// `skip`：本帧已复用的节点集合——复用节点已挂入本帧树，free 它会导致
-    /// 递归进本帧树形成环（无限递归栈溢出），必须跳过。
-    /// `visited`：防环防御（树异常成环时终止递归）。
+    /// Frees a node and its subtree (recursively, firing `on_remove`).
+    /// `skip` holds the nodes this frame reused: they are already attached to this frame's tree, so
+    /// freeing one would recurse into that tree, form a cycle and overflow the stack — they must be
+    /// skipped. `visited` is a defensive cycle check (a malformed tree terminates recursion).
     pub(crate) fn free_node_skip(
         &mut self,
         idx: usize,
@@ -741,11 +755,12 @@ impl NodeArena {
     ) {
         if !visited.insert(idx) { return; }
         if skip.contains(idx) { return; }
-        // 防御：被 free 的节点不应在本帧树中（复用节点在 skip；新建节点不在
-        // prev_node_by_key——若破坏该不变量会静默误 free 本帧节点）
+        // Defensive: a node being freed must not belong to this frame's tree (reused nodes are in
+        // `skip`, new ones are absent from `prev_node_by_key`; breaking that invariant would silently
+        // free a live node).
         debug_assert!(
             !self.nodes[idx].children.iter().any(|&c| c == idx),
-            "树环（自引用）——free 应终止"
+            "a cycle in the tree (self-reference) — free must terminate"
         );
         let children = std::mem::take(&mut self.nodes[idx].children);
         for c in children {
@@ -757,14 +772,15 @@ impl NodeArena {
         self.free.push(idx);
     }
 
-    /// 释放整棵根树（free_node 递归 + on_remove），root 置空
+    /// Frees the whole tree from the root (`free_node` recursion plus `on_remove`) and clears the
+    /// root.
     pub fn free_root(&mut self) {
         if let Some(r) = self.root.take() {
             self.free_node(r);
         }
     }
 
-    /// 释放节点（含子树——递归释放 children，on_remove 触发）
+    /// Frees a node and its subtree (recursively, firing `on_remove`).
     pub fn free_node(&mut self, idx: usize) {
         let children = std::mem::take(&mut self.nodes[idx].children);
         for c in children {
@@ -776,7 +792,8 @@ impl NodeArena {
         self.free.push(idx);
     }
 
-    /// 将子节点挂到父（子节点已在池中——start_node 时 alloc，这里只挂索引 + 设 parent_id）
+    /// Attaches a child to its parent (the child is already in the pool — `start_node` allocated it;
+    /// this only links the index and sets `parent_id`).
     pub fn add_child(&mut self, parent: usize, child_idx: usize) {
 
         self.nodes[parent].children.push(child_idx);
@@ -790,7 +807,7 @@ impl NodeArena {
     pub fn root_idx(&self) -> Option<usize> { self.root }
     pub fn set_root(&mut self, idx: usize) { self.root = Some(idx); }
 
-    /// 递归遍历（只读）——fn(arena, idx)
+    /// A read-only recursive walk — `fn(arena, idx)`.
     pub fn for_each(&self, mut f: impl FnMut(&NodeArena, usize)) {
         if let Some(r) = self.root {
             self.for_each_rec(r, &mut f);
