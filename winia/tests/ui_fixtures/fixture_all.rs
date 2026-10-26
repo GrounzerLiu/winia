@@ -22,6 +22,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("flex_layout", flex_layout::main),
     ("box_layout", box_layout::main),
     ("lazy_layout", lazy_layout::main),
+    ("lazy_ops", lazy_layout::ops_main),
 ];
 
 fn main() {

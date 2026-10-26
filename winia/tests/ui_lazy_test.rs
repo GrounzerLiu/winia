@@ -213,3 +213,143 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         "and IndexForKey, so a reader can find an item by key after the data changes"
     );
 }
+// ═══════════════════════════════════════════════════════════
+// The second scenario: one list, driven by buttons
+// ═══════════════════════════════════════════════════════════
+
+/// The label the ops page prints from `layout_info` and the state's accessors.
+fn ops_info(app: &mut UiTest) -> String {
+    app.all_texts()
+        .into_iter()
+        .find(|text| text.contains("items ") && text.contains(" of "))
+        .unwrap_or_default()
+}
+
+/// The last index the ops page reports as visible, parsed out of its label ("items A-B of N").
+fn visible_last(app: &mut UiTest) -> usize {
+    let info = ops_info(app);
+    let range = info
+        .split("items ")
+        .nth(1)
+        .and_then(|rest| rest.split(" of ").next())
+        .unwrap_or("");
+    range
+        .split('-')
+        .nth(1)
+        .and_then(|last| last.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn click_tag(app: &mut UiTest, tag: &str) {
+    let (x, y, w, h) = app.expect_tag(tag);
+    app.click(x + w / 2.0, y + h / 2.0);
+}
+
+/// Every button on the ops page does what its name says, and the page reports it: the data changes
+/// under stable keys, the jump moves the anchor, the toggles show up in the same label, and the
+/// locked list ignores a drag.
+#[test]
+fn lazy_ops_buttons_drive_the_list() {
+    let mut app = UiTest::launch("lazy_ops");
+
+    app.expect_text("Lazy Ops");
+    app.expect_tag("lazy-main-list");
+    app.expect_tag("lazy-main-header");
+
+    // Baseline: 50 DATA items — plus the sticky header, which is an item of the list too, so the
+    // collection reports 51 (Compose counts a stickyHeader the same way).
+    app.expect_eventually_timeout("the list reports itself", Duration::from_secs(2), |app| {
+        app.refresh();
+        let info = ops_info(app);
+        info.contains("of 51") && info.contains("first 0")
+    });
+    let baseline = ops_info(&mut app);
+    assert!(baseline.contains("forward true"), "there is room ahead: {baseline:?}");
+    assert!(baseline.contains("backward false"), "and none behind: {baseline:?}");
+
+    // The window starts at the head, so the item whose key is 24 is not composed yet.
+    assert!(
+        app.find_tag("lazy-main-item-24").is_none(),
+        "item 24 is far below the head of the list"
+    );
+
+    // JUMP: scroll_to_item asks for global index 25 — the sticky header occupies 0, so that is the
+    // data item whose key is 24, and it must become composed. (The page's `first` stays 0 by design:
+    // a pinned sticky header IS the first visible item, which is Compose's rule too.)
+    click_tag(&mut app, "lazy-jump-25");
+    app.expect_eventually_timeout("jump to 25", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("lazy-main-item-24").is_some() && visible_last(app) >= 25
+    });
+
+    // ADD at the head: the total grows by 5 and the anchor KEEPS its ITEM — its index moves (25 -> 30)
+    // because five items now sit in front of it, and its KEY is what stayed the same. That is the
+    // whole point of a stable key, and the tile tag proves which item is on screen.
+    click_tag(&mut app, "lazy-add-head");
+    app.expect_eventually_timeout("add 5 at the head", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("of 56")
+    });
+    assert!(
+        app.find_tag("lazy-main-item-24").is_some(),
+        "the item on screen is still key 24 — the anchor followed the KEY, not the index"
+    );
+
+    // REMOVE 5: back to 51 items (50 data + the header), anchor still on key 24.
+    click_tag(&mut app, "lazy-remove-head");
+    app.expect_eventually_timeout("remove 5", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("of 51") && app.find_tag("lazy-main-item-24").is_some()
+    });
+
+    // REVERSE: the label follows the toggle (the list is rebuilt mirrored).
+    click_tag(&mut app, "lazy-flip-reverse");
+    app.expect_eventually_timeout("reverse on", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("reverse true")
+    });
+
+    // LOCK: user_scroll(false) — a drag inside the list must not move it.
+    click_tag(&mut app, "lazy-toggle-lock");
+    app.expect_eventually_timeout("lock on", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("lock true")
+    });
+    let before = app.expect_tag("lazy-main-list");
+    let info_before = ops_info(&mut app);
+    app.drag(
+        before.0 + before.2 / 2.0,
+        before.1 + before.3 * 0.75,
+        before.0 + before.2 / 2.0,
+        before.1 + before.3 * 0.25,
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    app.refresh();
+    assert_eq!(
+        ops_info(&mut app),
+        info_before,
+        "a locked list ignores the gesture, so nothing about it changed"
+    );
+    click_tag(&mut app, "lazy-toggle-lock");
+    app.expect_eventually_timeout("lock off", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("lock false")
+    });
+
+    // PAGER: fill_items + snap_paging — "next page" lands on page 2 and that page is on screen.
+    app.expect_eventually_timeout("the pager reports page 1", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.all_texts().iter().any(|text| text.contains("page 1 of 5"))
+    });
+    click_tag(&mut app, "lazy-next-page");
+    app.expect_eventually_timeout("next page", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.all_texts().iter().any(|text| text.contains("page 2 of 5"))
+            && app.find_tag("lazy-page-1").is_some()
+    });
+    click_tag(&mut app, "lazy-first-page");
+    app.expect_eventually_timeout("first page", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.all_texts().iter().any(|text| text.contains("page 1 of 5"))
+    });
+}
