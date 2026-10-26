@@ -3135,6 +3135,67 @@
         );
         crate::animation::clear_all_animations();
     }
+    /// At the very BOTTOM the offset sits at `max_off`, and an insert at the head grows `max_off` by one
+    /// row — so the correction has exactly that much room and the rows must not move. Clamping the
+    /// correction to the PREVIOUS pass's limit (a stale value from before the insert) left the content
+    /// shifted by one row instead.
+    #[test]
+    fn an_insert_at_the_head_while_at_the_bottom_keeps_the_rows_still() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .spacing(8.0)
+                    .content_padding(4.0, 4.0)
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(48.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        };
+
+        build(&mut composer, Arc::new((0..19).collect()));
+        // Past the end: the measure clamps the offset to the real bottom.
+        state.offset.set(99999.0);
+        build(&mut composer, Arc::new((0..19).collect()));
+        build(&mut composer, Arc::new((0..19).collect()));
+        let bottom = state.offset();
+
+        let mut items: Vec<u64> = vec![99];
+        items.extend(0..19);
+        build(&mut composer, Arc::new(items));
+
+        assert!(
+            state.offset() >= bottom + 55.0,
+            "the correction follows the content down by one row: {} -> {}",
+            bottom,
+            state.offset()
+        );
+        let offsets: Vec<(u64, f32)> = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
+            .collect();
+        assert!(offsets.len() >= 3, "the rows carry paint channels: {offsets:?}");
+        assert!(
+            offsets.iter().all(|(_, y)| y.abs() < 0.5),
+            "the rows must not move when the whole list only scrolled: {offsets:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

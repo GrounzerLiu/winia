@@ -698,16 +698,15 @@ impl<A: LazyAxis> LazyList<A> {
                     // 192 to a row boundary). At the very top this branch does not run at all.
                     let (_, item_offset) =
                         anchor_from_offset(&cache_ref, state.offset.get(), self.spacing, self.content_padding.0);
-                    // Clamped the way the measure will clamp it: a correction that runs past the end
-                    // would otherwise be pulled back there, and the rebase below would then be off by
-                    // the difference.
-                    let last_max_off = fling_limit.get();
-                    let mut new_offset = self.content_padding.0
+                    // NOT clamped here: `fling_limit` still holds the PREVIOUS pass's limit, and at the
+                    // bottom of the list the insert has just grown it by a row. Clamping to the stale
+                    // value pinned the offset at the old end and shifted the whole content down by one
+                    // row (measured: 764 stayed 764 instead of 820). The measure clamps to the new
+                    // limit, and the rebase below uses the anchor's post-clamp delta, so the rows stay
+                    // still either way.
+                    let new_offset = self.content_padding.0
                         + prefix_height(&cache_ref, new_index, self.spacing)
                         + item_offset;
-                    if last_max_off > 0.0 && last_max_off < f32::MAX {
-                        new_offset = new_offset.min(last_max_off);
-                    }
                     let previous = state.offset.get();
                     state.offset.set(new_offset);
                     // The placement animation compares CONTENT positions, so this correction has to be
