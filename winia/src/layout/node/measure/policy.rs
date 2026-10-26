@@ -2,15 +2,15 @@ use super::*;
 
 // ── MeasurePolicy trait ──
 
-/// 测量和布局策略。
+/// The measure and layout policy — Compose's MeasurePolicy.
 ///
-/// 类似 Compose 的 MeasurePolicy。
-/// 实现此 trait 的类型定义了一个容器的布局逻辑。
+/// A type implementing this trait owns one container's layout logic.
+/// A type implementing this trait owns one container's layout logic.
 pub trait MeasurePolicy: std::fmt::Debug {
-    /// 测量阶段：给定约束，返回自身尺寸和子节点的放置方案。
-    /// arena 版：children 是子节点索引；nodes/policies 为拆分借用（policy 在
-    /// policies 池、节点在 nodes——字段级借用避免冲突）。实现内通过
-    /// `measure_node(nodes, policies, c, cc)` 递归测量子节点。
+/// The measure phase: given the constraints, return this node's size and the children's placements.
+/// Arena flavour: `children` holds child indices and nodes/policies are split borrows (the policy
+/// lives in the policies pool, the node in nodes, so field-level borrows cannot clash). An
+/// implementation measures its children through `measure_node(nodes, policies, c, cc)`.
     fn measure(
         &self,
         nodes: &mut Vec<LayoutNode>,
@@ -19,7 +19,7 @@ pub trait MeasurePolicy: std::fmt::Debug {
         constraints: Constraints,
     ) -> (Size, Vec<Placement>);
 
-    /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
+/// The layout phase: given the assigned size, place the children.
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
 
     /// Whether this policy composes content DURING measurement (`layout::subcompose`).

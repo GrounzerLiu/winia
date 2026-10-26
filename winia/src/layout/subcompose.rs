@@ -362,7 +362,7 @@ fn adopt_one(
     // Synthetic keys are derived from the parent's key and the node's offset, so every frame's
     // composition produces the SAME keys — correct for identity, but it means the old copy must be
     // gone before the new one is inserted, or `collect_node_keys` sees two nodes claiming one key
-    // (measured: `[dup-key] ... 覆盖了已有节点`, both carrying the adopted Text's key).
+    // (measured: the duplicate-key report named an existing node, both carrying the adopted Text's key).
     if let Some(previous) = arena.nodes[parent].subcomposed_child.take() {
         arena.nodes[parent].children.retain(|&c| c != previous);
         if previous < arena.nodes.len() {
@@ -373,7 +373,7 @@ fn adopt_one(
     // Give every adopted node a SYNTHETIC identity derived from its parent's key and its offset in
     // the subtree. The inner composition's own keys come from the same call site as the component
     // (its content is written at that call site), so adopting them unchanged collides with the
-    // component's own node — measured: `[dup-key] ... node idx=2 ... 覆盖了已有节点 idx=1`, both
+    // component's own node — measured: the duplicate-key report named node idx=2 over existing idx=1, both
     // carrying the Text's key. This is the case `ctx.key(id, ...)` / `start_scope_keyed` exist for:
     // explicit identity for content whose call site cannot supply a distinct one.
     let parent_key = arena.nodes[parent].slot_key;

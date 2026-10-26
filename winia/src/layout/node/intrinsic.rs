@@ -393,7 +393,7 @@ pub(crate) fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: Int
             // `para.max_intrinsic_width().ceil()`): the paragraph's own width is fractional, while what the
             // text needs when it lays out is that width rounded up. Answering with the raw fraction made a
             // parent that shrinks to the intrinsic (`width(IntrinsicSize.Max)`) hand the label 28.2 and watch
-            // it wrap into two lines needing 29.0 — measured in a dropdown menu item ("复制" in `label_large`).
+            // it wrap into two lines needing 29.0 — measured in a dropdown menu item ("Copy" in `label_large`).
             IntrinsicQuery::MinWidth => para.min_intrinsic_width().ceil(),
             IntrinsicQuery::MaxWidth => para.max_intrinsic_width().ceil(),
             // The paragraph was laid out at `other` (the width the parent asked about), so its

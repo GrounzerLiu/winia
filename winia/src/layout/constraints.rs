@@ -1,9 +1,9 @@
-//! 布局约束模型 — 类似 Jetpack Compose 的 Constraints
+//! The layout constraint model — Jetpack Compose's Constraints.
 //!
-//! Constraints 定义了父节点给予子节点的可用空间范围。
-//! 子节点必须遵守这些约束（不能超出），但可以在范围内自由选择尺寸。
+//! Constraints describe the space a parent offers its child: the child must stay inside them
+//! but is free to choose any size within the range.
 
-/// 布局约束：父节点告诉子节点的可用空间范围
+/// Layout constraints: the space a parent offers its child.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Constraints {
     pub min_width: f32,
@@ -13,7 +13,7 @@ pub struct Constraints {
 }
 
 impl Constraints {
-    /// 无限制约束（子节点自由决定尺寸）
+/// An unbounded constraint (the child decides its own size).
     pub const UNBOUNDED: Constraints = Constraints {
         min_width: 0.0,
         max_width: f32::INFINITY,
@@ -21,7 +21,7 @@ impl Constraints {
         max_height: f32::INFINITY,
     };
 
-    /// 创建固定尺寸的约束
+/// A constraint of a fixed size.
     pub fn fixed(width: f32, height: f32) -> Self {
         Constraints {
             min_width: width,
@@ -31,7 +31,7 @@ impl Constraints {
         }
     }
 
-    /// 创建指定范围的约束
+/// A constraint over a range.
     pub fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
         Constraints {
             min_width,
@@ -41,7 +41,7 @@ impl Constraints {
         }
     }
 
-    /// 约束一个尺寸值到合法范围内
+/// Clamps a size value into the legal range.
     pub fn constrain_width(&self, width: f32) -> f32 {
         width.clamp(self.min_width, self.max_width)
     }
@@ -50,17 +50,17 @@ impl Constraints {
         height.clamp(self.min_height, self.max_height)
     }
 
-    /// 是否在宽度上有确定的值（min == max）
+/// Whether the width is exact (min == max).
     pub fn has_fixed_width(&self) -> bool {
         self.min_width == self.max_width
     }
 
-    /// 是否在高度上有确定的值（min == max）
+/// Whether the height is exact (min == max).
     pub fn has_fixed_height(&self) -> bool {
         self.min_height == self.max_height
     }
 
-    /// 宽松化：将 min 设为 0，保留 max
+/// Loosens the constraint: min becomes 0, max is kept.
     /// Loosen only the height — Compose's `constraints.copy(minHeight = 0)`, which is what a container
     /// measuring a small overlay does when it wants the overlay's own height but still respects the width
     /// its parent demanded (`material3/Badge.kt:86-88`).
@@ -82,7 +82,7 @@ impl Constraints {
         }
     }
 
-    /// 收紧宽度
+/// Tightens the width.
     pub fn tighten_width(&self, width: f32) -> Constraints {
         Constraints {
             min_width: width,
@@ -92,7 +92,7 @@ impl Constraints {
         }
     }
 
-    /// 收紧高度
+/// Tightens the height.
     pub fn tighten_height(&self, height: f32) -> Constraints {
         Constraints {
             min_width: self.min_width,
@@ -102,7 +102,7 @@ impl Constraints {
         }
     }
 
-    /// 偏移：减去已使用的空间（用于测量剩余子节点）
+/// Deflates by the space already used (for measuring the remaining children).
     pub fn offset(&self, dx: f32, dy: f32) -> Constraints {
         Constraints {
             min_width: (self.min_width - dx).max(0.0),

@@ -1,4 +1,4 @@
-//! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
+//! Layout nodes — LayoutNode and the size/position/arrangement/alignment types around it.
 
 use crate::modifier::{Modifier, ModifierElement};
 use crate::layout::{IntrinsicSize};
@@ -12,12 +12,12 @@ use crate::unit::{Offset, Size};
 use crate::transition::{FlightMeasure, FlightMeasureFrame};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 全局节点 ID 生成器
+/// The global node id generator.
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
 
 
-/// 检查 modifier 中是否包含 TextContent
+/// Whether the modifier carries a TextContent.
 pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
@@ -85,12 +85,12 @@ pub(crate) fn text_content_matches(modifier: &Modifier, snap: &TextSnapshot) -> 
     })
 }
 
-/// 检查 modifier 中是否包含 RichTextContent
+/// Whether the modifier carries a RichTextContent.
 pub(crate) fn modifier_has_richtext(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
 }
 
-/// 检查 modifier 中是否包含 ImageContent（Image 组件）
+/// Whether the modifier carries an ImageContent (the Image component).
 pub(crate) fn modifier_has_image(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::ImageContent { .. }))
 }

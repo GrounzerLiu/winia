@@ -321,7 +321,7 @@ mod tests {
     use super::*;
     use crate::runtime::density::with_density;
 
-    /// Dp → 逻辑像素 = dp 值；Px → 逻辑像素 = px/density. The `Px` arm reads the ambient density,
+    /// Dp -> logical pixels is the dp value itself; Px -> logical pixels is px / density. The `Px` arm reads the ambient density,
     /// so this is the module that supplies it — the assertion used to sit in `unit.rs`, which must
     /// not name the runtime layer for it.
     #[test]

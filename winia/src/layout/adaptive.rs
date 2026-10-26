@@ -1,9 +1,9 @@
-//! 窗口自适应基础设施——WindowSizeClass（对齐 androidx WindowSizeClass 断点）。
+//! Window-adaptivity plumbing — WindowSizeClass, matching androidx's breakpoints.
 //!
-//! Winia 的窗口尺寸由每个 Composer 的 adaptive context 持有；Composer
-//! compose/layout 期间将该 context 注入当前运行帧。组合期读
-//! [`window_width_size_class`] 等即可做自适应布局。窗口 resize 由 app 层触发
-//! 重组（SurfaceResized → request_recomposition），尺寸类随之刷新。
+//! winia keeps the window size in each Composer's adaptive context and injects that context into
+//! the running frame while it composes and lays out, so composition can read
+//! [`window_width_size_class`] and lay out adaptively. A window resize triggers recomposition
+//! from the app layer (SurfaceResized -> request_recomposition) and the size classes follow.
 
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
@@ -73,8 +73,8 @@ impl Drop for AdaptiveContextGuard {
     }
 }
 
-/// 注入当前窗口逻辑尺寸。Composer 外调用时更新兼容 fallback；Composer
-/// compose/layout 内调用时更新当前 Composer 的上下文。
+/// Injects the current window's logical size. Called outside a Composer it updates the fallback
+/// used by tests and legacy call sites; inside compose/layout it updates that Composer's context.
 pub fn set_window_size(width: f32, height: f32) {
     if let Some(context) = active_context() {
         context.set_size(width, height);
@@ -83,8 +83,8 @@ pub fn set_window_size(width: f32, height: f32) {
     }
 }
 
-/// 挂载窗口尺寸的响应式 State。Composer 上下文内只绑定当前 Composer，
-/// Composer 外保留测试/旧调用方的 fallback 语义。
+/// Mounts the window size as a reactive State. Inside a Composer it binds to that Composer only;
+/// outside one it keeps the fallback semantics of tests and old callers.
 pub fn set_window_size_state(state: State<(f32, f32)>) {
     if let Some(context) = active_context() {
         context.set_size_state(state);
@@ -100,7 +100,8 @@ pub fn sync_window_size_state(state: &Backchannel<(f32, f32)>, size: (f32, f32))
     state.set(size);
 }
 
-/// 当前窗口逻辑尺寸。挂载了 State 时走 `get()` 注册当前 Composer 依赖。
+/// The current window's logical size. With a mounted State the read registers the current
+/// Composer as a dependent.
 pub fn window_size() -> (f32, f32) {
     let (size, state) = if let Some(context) = active_context() {
         (
@@ -113,7 +114,7 @@ pub fn window_size() -> (f32, f32) {
     state.map(|state| state.get()).unwrap_or(size)
 }
 
-/// 测试隔离：清除 fallback 尺寸 State。
+/// Test isolation: clears the fallback size State.
 #[cfg(test)]
 pub(crate) fn reset_window_size_state() {
     FALLBACK_WINDOW_SIZE_STATE.with(|state| *state.borrow_mut() = None);
@@ -122,7 +123,7 @@ pub(crate) fn reset_window_size_state() {
     }
 }
 
-/// 宽度尺寸类（androidx WindowWidthSizeClass 断点：<600 / 600–840 / ≥840）
+/// Width size class (androidx WindowWidthSizeClass breakpoints: <600 / 600-840 / >=840).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidthSizeClass {
     Compact,
@@ -130,7 +131,7 @@ pub enum WidthSizeClass {
     Expanded,
 }
 
-/// 高度尺寸类（androidx WindowHeightSizeClass 断点：<480 / 480–900 / ≥900）
+/// Height size class (androidx WindowHeightSizeClass breakpoints: <480 / 480-900 / >=900).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeightSizeClass {
     Compact,

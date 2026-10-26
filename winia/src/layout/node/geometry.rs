@@ -2,29 +2,30 @@ use super::*;
 
 // ── LayoutDirection ──
 
-/// 布局方向——控制 Row 等水平布局的 Start/End 语义。
+/// The layout direction — it decides what Start/End mean for Row and the other horizontal layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutDirection {
-    /// 从左到右（拉丁语系）
+    /// Left to right (Latin scripts).
     Ltr,
-    /// 从右到左（阿拉伯语、希伯来语等）
+    /// Right to left (Arabic, Hebrew, and others).
     Rtl,
 }
 
 // ── Placement ──
 
-/// 子节点在父节点中的放置结果（测量阶段产出尺寸，布局阶段产出位置）
+/// Where a child ended up in its parent: the measure phase produces the size, the layout phase the
+/// position.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placement {
-    /// 分配给子节点的尺寸
+    /// The size given to the child.
     pub size: Size,
-    /// 子节点在父节点中的位置
+    /// The child's position inside its parent.
     pub position: Offset,
 }
 
 // ── Arrangement ──
 
-/// 主轴排列方式（类似 Compose 的 Arrangement）
+/// Main-axis arrangement (Compose's Arrangement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arrangement {
     Start,
@@ -37,7 +38,7 @@ pub enum Arrangement {
 
 // ── Alignment ──
 
-/// 交叉轴对齐方式（类似 Compose 的 `Alignment.Horizontal` / `Alignment.Vertical`）
+/// Cross-axis alignment (Compose's `Alignment.Horizontal` / `Alignment.Vertical`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
     Start,

@@ -1,8 +1,8 @@
 use super::*;
 
-// ── 焦点遍历 ──
+// ── Focus traversal ──
 
-/// 收集树中所有可聚焦节点的 id（arena 版）
+/// Collects the ids of every focusable node in the tree (arena flavour).
 pub fn collect_focusable_ids(nodes: &[LayoutNode], root: usize, list: &mut Vec<u64>) {
     if has_focusable_modifier(&nodes[root]) {
         list.push(nodes[root].id);
@@ -13,8 +13,8 @@ pub fn collect_focusable_ids(nodes: &[LayoutNode], root: usize, list: &mut Vec<u
     }
 }
 
-/// 收集所有可聚焦节点及其**视觉中心**（绝对坐标，含祖先 scroll 偏移——
-/// 与 hit_test 同路径）——方向键焦点导航用。
+/// Collects every focusable node together with its VISUAL CENTRE (absolute coordinates, ancestors'
+/// scroll offsets included — the same path hit_test takes); arrow-key focus navigation uses it.
 pub fn collect_focus_candidates(nodes: &[LayoutNode], root: usize) -> Vec<(u64, f32, f32)> {
     let mut out = Vec::new();
     collect_focus_candidates_rec(nodes, root, 0.0, 0.0, &mut out);
@@ -45,7 +45,7 @@ pub(crate) fn collect_focus_candidates_rec(
     }
 }
 
-/// 通过 node.id 查找节点，返回 arena 索引（不可变）
+/// Looks a node up by `id` and returns its arena index (immutable).
 pub fn find_node_by_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<usize> {
     if nodes[root].id == id { return Some(root); }
     let children = nodes[root].children.clone();
@@ -123,7 +123,7 @@ pub(crate) fn restore_focus_group_memory(
     candidate
 }
 
-/// 移动到下一个可聚焦节点，返回是否成功
+/// Moves focus to the next focusable node and reports whether it moved.
 pub fn focus_next(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
     let ids: Vec<u64> = {
         let mut ids = Vec::new();
@@ -144,7 +144,7 @@ pub fn focus_next(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
     true
 }
 
-/// 焦点移到上一个 focusable 节点（Shift+Tab）
+/// Moves focus to the previous focusable node (Shift+Tab).
 pub fn focus_prev(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
     let ids: Vec<u64> = {
         let mut ids = Vec::new();
@@ -222,8 +222,8 @@ pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64)
     true
 }
 
-/// 点击时聚焦指定节点（target 为 arena 索引）
-// ── FocusRequester 全局注册表 ──
+/// Focuses the given node on click (`target` is an arena index).
+// ── The FocusRequester global registry ──
 
 /// Focus exactly this node id, refusing WITHOUT touching the current focus when the node is
 /// missing or declares `focusProperties { canFocus = false }`. Clearing first and discovering the
@@ -240,7 +240,7 @@ pub fn focus_node_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64
     set_focus_by_id(nodes, root, target_id)
 }
 
-/// 通过 FocusRequester ID 设置焦点
+/// Sets focus through a FocusRequester id.
 pub fn focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, focus_requester_id: u64) -> bool {
     match find_node_id_by_focus_requester(nodes, root, focus_requester_id) {
         Some(id) => focus_node_by_id(nodes, root, id),
@@ -248,7 +248,7 @@ pub fn focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, focus_requester_id:
     }
 }
 
-/// 内部辅助：按 FocusRequesterId 查找节点 id（arena 版）
+/// Internal: finds a node id by FocusRequesterId (arena flavour).
 pub fn find_node_id_by_focus_requester(nodes: &[LayoutNode], root: usize, requester_id: u64) -> Option<u64> {
     if has_focus_id(&nodes[root], requester_id) {
         return Some(nodes[root].id);
@@ -262,7 +262,7 @@ pub fn find_node_id_by_focus_requester(nodes: &[LayoutNode], root: usize, reques
     None
 }
 
-/// 按 slot_key 查找节点 ID（slot_key 跨重组稳定）
+/// Finds a node id by slot_key (a slot_key is stable across recomposition).
 pub fn find_node_id_by_slot_key(nodes: &[LayoutNode], root: usize, slot_key: u64) -> Option<u64> {
     if nodes[root].slot_key == slot_key { return Some(nodes[root].id); }
     let children = nodes[root].children.clone();
@@ -278,7 +278,7 @@ pub(crate) fn has_focus_id(node: &LayoutNode, id: u64) -> bool {
     node.modifier.elements().iter().any(|el| matches!(el, crate::modifier::ModifierElement::FocusRequesterId { id: fid } if *fid == id))
 }
 
-/// 找到树中第一个焦点节点的 FocusRequesterId（用于持久化）
+/// Finds the FocusRequesterId of the tree's first focused node (used for persistence).
 pub fn get_focus_id(nodes: &[LayoutNode], root: usize) -> Option<u64> {
     if nodes[root].focused {
         return Some(nodes[root].id);
