@@ -148,7 +148,7 @@ impl MeasurePolicy for FlowColumnLayout {
             };
             let position = nodes[c].position;
             self.item_animations
-                .place(nodes, c, key, position, &spec);
+                .place(nodes, c, key, position, &spec, true);
         }
         self.item_animations.finish_frame(None);
     }

@@ -88,6 +88,7 @@ struct HostState {
     frame: u64,
     items: HashMap<u64, ItemState>,
     next_place_order: u64,
+
 }
 
 /// A cloneable host shared by a container and its measure policy.
@@ -157,13 +158,13 @@ mod tests {
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf(), leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
-        host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
+        host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec, true);
         let live = HashSet::from([1u64, 2]);
         host.finish_frame(Some(&live));
 
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.finish_frame(Some(&live));
         assert!(
             host.store.lock().unwrap_or_else(|e| e.into_inner()).exits.is_empty(),
@@ -171,7 +172,7 @@ mod tests {
         );
 
         host.begin_frame();
-        host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec);
+        host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec, true);
         host.finish_frame(Some(&live));
         let paint = nodes[1].item_paint.as_ref().expect("the returned item is painted");
         assert_eq!(paint.alpha.peek(), 1.0, "a window return must not replay a fade-in");
@@ -185,7 +186,7 @@ mod tests {
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         assert_eq!(host.inner.lock().unwrap_or_else(|e| e.into_inner()).items.len(), 1);
 
         host.retire(7);
@@ -225,7 +226,7 @@ mod tests {
         ));
         let mut nodes = vec![leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         let paint = nodes[0].item_paint.as_ref().expect("the valid placement is kept");
         assert!(paint.fade_out.is_none(), "the unsupported fade is dropped");
     }
@@ -242,7 +243,7 @@ mod tests {
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         host.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -284,11 +285,11 @@ mod tests {
         let mut nodes = vec![leaf()];
         host.begin_frame();
         for key in 1..=300u64 {
-            host.place(&mut nodes, 0, key, Offset::ZERO, &spec);
+            host.place(&mut nodes, 0, key, Offset::ZERO, &spec, true);
         }
         host.finish_frame(None);
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         let live: HashSet<u64> = (1..=300u64).collect();
         host.finish_frame(Some(&live));
         let state = host.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -315,12 +316,12 @@ mod tests {
             .fade_in(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf(), leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.finish_frame(None);
 
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec);
-        host.place(&mut nodes, 1, 2, Offset::ZERO, &spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
+        host.place(&mut nodes, 1, 2, Offset::ZERO, &spec, true);
         host.finish_frame(None);
         let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
         assert!(paint.alpha.peek() < 0.001, "the new key starts transparent");
@@ -338,11 +339,11 @@ mod tests {
         let default_spec = ItemAnimationSpec::new();
         let mut nodes = vec![leaf(), leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec, true);
         host.finish_frame(None);
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec);
-        host.place(&mut nodes, 1, 2, Offset::ZERO, &default_spec);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec, true);
+        host.place(&mut nodes, 1, 2, Offset::ZERO, &default_spec, true);
         host.finish_frame(None);
         let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
         assert!(
@@ -357,10 +358,10 @@ mod tests {
         let no_fade = ItemAnimationSpec::new().without_fade_in().without_fade_out();
         let mut nodes = vec![leaf(), leaf()];
         host.begin_frame();
-        host.place(&mut nodes, 0, 1, Offset::ZERO, &no_fade);
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &no_fade, true);
         host.finish_frame(None);
         host.begin_frame();
-        host.place(&mut nodes, 1, 2, Offset::ZERO, &no_fade);
+        host.place(&mut nodes, 1, 2, Offset::ZERO, &no_fade, true);
         host.finish_frame(None);
         let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
         assert_eq!(paint.alpha.peek(), 1.0, "without_fade_in starts opaque");
@@ -386,6 +387,7 @@ pub(crate) fn wrapper_item_spec(
 
 impl ItemAnimationHost {
     /// Start one placement pass. Layout policies call this once before walking their items.
+    /// Starts a layout pass.
     pub(crate) fn begin_frame(&self) {
         self.inner
             .lock()
@@ -401,6 +403,11 @@ impl ItemAnimationHost {
         key: u64,
         position: Offset,
         spec: &ItemAnimationSpec,
+        // Whether this key is new to the container's DATA, as opposed to merely new to the composed
+        // window. A Lazy list decides per key — scrolling composes keys that have been in the data all
+        // along, and fading those in makes a scroll look like a strobe (measured: a jump to offset
+        // 4000 composed keys 35..39 at alpha 0). A container that composes every child passes `true`.
+        new_in_data: bool,
     ) -> bool {
         let sanitized = if spec.is_valid() { None } else { Some(spec.sanitized()) };
         let spec = sanitized.as_ref().unwrap_or(spec);
@@ -410,6 +417,7 @@ impl ItemAnimationHost {
         }
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let frame = state.frame;
+
         let order = state.next_place_order;
         state.next_place_order += 1;
         let is_new = !state.items.contains_key(&key);
@@ -446,7 +454,10 @@ impl ItemAnimationHost {
             crate::animation::cancel_animation(&item.offset);
             crate::animation::cancel_animation(&item.alpha);
             item.offset.set(Offset::ZERO);
-            if is_new && frame > 1 {
+            // A key new to the WINDOW is not a new item: a scroll composes keys that have always been
+            // in the data, and fading them in makes the scroll look like a strobe. The container
+            // answers whether its data changed.
+            if is_new && frame > 1 && new_in_data {
                 if let Some(fade) = &spec.fade_in {
                     item.alpha.set(0.0);
                     crate::animation::push_animatable(

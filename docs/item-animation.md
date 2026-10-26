@@ -30,7 +30,14 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
 
 - **Placement**: the item keeps its last position by key; a reflow turns the difference into a paint
   offset that travels to zero with the placement curve.
-- **Fade-in**: a key first seen after the host's first layout starts at alpha 0 and animates to 1.
+- **Fade-in**: a key that is new to the container's DATA starts at alpha 0 and animates to 1. A key
+  that is merely new to the composed WINDOW is not an appearance: scrolling a Lazy list composes keys
+  that have been in the data all along, and fading those in makes a scroll look like a strobe
+  (measured: a jump to offset 4000 composed keys 35..39 at alpha 0). The list decides per key — it
+  keeps the set of keys it has seen, queues the difference, and the policy consumes one key per place,
+  so a fade starts exactly once even when a frame takes several compose passes. A container that
+  composes every child (a Flow) has no window to scroll through, so every new key there is a data
+  change. The FIRST layout never fades: the list's initial content appears at once.
 - **Fade-out**: while a key is rendered, the renderer captures its frame as a Skia picture and
   refreshes it when the item moves or fades; after removal the owning container draws that picture
   while the fade-out curve runs. This is why removal does not depend on the layout node surviving,

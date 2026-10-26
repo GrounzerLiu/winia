@@ -46,6 +46,12 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     /// Reverse layout (`reverseLayout`): a placement's content coordinate is
     /// `content_h - mirrored - item_size` (index 0 sits at the content's bottom).
     pub reverse: bool,
+    /// Keys that are new to the DATA and have not been placed yet. A key that is new to the composed
+    /// window because the user scrolled is NOT in here, so it does not fade in: fading it makes a
+    /// scroll look like a strobe (measured: a jump to offset 4000 composed keys 35..39 at alpha 0).
+    /// Each key is removed on its first place, so a fade starts once even across the several compose
+    /// passes a frame may take.
+    pub pending_new: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
     /// The resolved layout direction. A horizontal list mirrors its main axis under RTL (Compose's
     /// LazyRow starts at the right), and BOTH axes mirror the CROSS axis: `content_padding_cross`'s
     /// "before" is the start edge, which is the right one in RTL.
@@ -493,9 +499,16 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 continue;
             };
             let position = nodes[c].position;
+            // Consumed exactly once: an item that is first composed in a later pass of the same frame
+            // still fades in, and one that was already placed does not start a second fade.
+            let new_in_data = self
+                .pending_new
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&key);
             self.state
                 .item_animations
-                .place(nodes, c, key, position, &spec);
+                .place(nodes, c, key, position, &spec, new_in_data);
         }
         self.state.item_animations.finish_frame(Some(&self.key_set));
     }

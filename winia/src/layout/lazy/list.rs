@@ -618,7 +618,28 @@ impl<A: LazyAxis> LazyList<A> {
         // cache migrates by item key.
         let mut sig = 0xcbf29ce484222325u64;
         for &k in &keys { sig ^= k; sig = sig.wrapping_mul(0x100000001b3); }
-        if data_sig.get() != sig {
+        let data_changed = data_sig.get() != sig;
+        // Which keys are new to the DATA (not merely to the composed window)? Scrolling composes keys
+        // that have been in the data all along, and fading those in makes a scroll look like a strobe.
+        // The difference is kept PENDING until the policy places the item, so a fade starts exactly
+        // once even when the frame takes several compose passes (the second pass would otherwise see
+        // the key as already known and skip the fade).
+        {
+            let mut known = state.known_keys.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pending = state.pending_new.lock().unwrap_or_else(|e| e.into_inner());
+            // The FIRST layout is not an appearance: the list's initial content does not fade in, and
+            // leaving its keys pending would make them fade the first time a scroll composed them.
+            let first_layout = known.is_empty();
+            if !first_layout {
+                for key in &key_set {
+                    if !known.contains(key) {
+                        pending.insert(*key);
+                    }
+                }
+            }
+            known.extend(key_set.iter().copied());
+        }
+        if data_changed {
             data_sig.set(sig);
             let mut c = cache.get();
             c.rebase(&keys);
@@ -841,6 +862,7 @@ impl<A: LazyAxis> LazyList<A> {
             snap_animation_spec: self.snap_animation_spec.clone(),
             snap_max_pages: self.snap_max_pages,
             beyond_bounds: self.beyond_bounds,
+            pending_new: state.pending_new.clone(),
             state: state.clone(),
         };
         // `userScroll(false)` drops the wheel/drag channel but keeps the offset itself, so

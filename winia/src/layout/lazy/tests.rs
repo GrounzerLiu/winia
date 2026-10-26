@@ -2527,6 +2527,107 @@
         );
     }
 
+    /// A key that is new to the composed WINDOW is not a new item. Scrolling into fresh territory
+    /// composes keys that were always in the data; fading them in makes a scroll look like a strobe
+    /// (measured before the fix: a jump to offset 4000 composed keys 35..39 at alpha 0).
+    #[test]
+    fn a_scroll_does_not_fade_items_in() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..40).collect());
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(200.0))
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(56.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        };
+        let alphas = |composer: &Composer| -> Vec<(u64, f32)> {
+            let mut rows: Vec<(u64, f32)> = composer
+                .arena_nodes()
+                .iter()
+                .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.alpha.peek())))
+                .collect();
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            rows
+        };
+
+        build(&mut composer, items.clone());
+        assert!(
+            alphas(&composer).iter().all(|(_, alpha)| *alpha == 1.0),
+            "the first frame shows every item at full alpha"
+        );
+
+        // Scroll far enough that keys the window never held are composed for the first time.
+        state.offset.set(4000.0);
+        build(&mut composer, items);
+        let after = alphas(&composer);
+        assert!(!after.is_empty(), "the far window is composed: {after:?}");
+        assert!(
+            after.iter().all(|(_, alpha)| *alpha == 1.0),
+            "a scroll must not fade the items it reveals in: {after:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// The other half of the rule: when the DATA changed, the new key still fades in.
+    #[test]
+    fn an_insert_fades_the_new_item_in() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(200.0))
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(56.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        };
+
+        build(&mut composer, Arc::new((0..8).collect()));
+        let mut items: Vec<u64> = vec![999];
+        items.extend(0..8);
+        build(&mut composer, Arc::new(items));
+        let inserted = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref())
+            .find(|paint| paint.key == 999)
+            .expect("the inserted item is painted");
+        assert!(
+            inserted.alpha.peek() < 0.001,
+            "an inserted key fades in from transparent, got {}",
+            inserted.alpha.peek()
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

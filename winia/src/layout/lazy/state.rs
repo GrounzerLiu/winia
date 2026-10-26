@@ -58,6 +58,13 @@ pub struct LazyListState {
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     /// Per-item placement/fade animations (keyed by item key), shared with the measure policy.
     pub(crate) item_animations: crate::layout::item_animation::ItemAnimationHost,
+    /// Every key the data has held so far, so the next build can tell a key that is new to the DATA
+    /// from one that is merely new to the composed window (scrolling composes the latter, and fading
+    /// those in makes a scroll look like a strobe).
+    pub(crate) known_keys: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
+    /// Keys that are new to the data and have not been placed yet; the policy takes one per place, so
+    /// a fade starts exactly once even when a frame takes several compose passes.
+    pub(crate) pending_new: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
     /// Derived: the first visible item's index (updated after every `build`).
     pub first_visible_index: crate::runtime::state::State<usize>,
     /// Derived: the first visible item's offset (positive = how far it has scrolled out).
@@ -80,6 +87,8 @@ impl LazyListState {
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             item_animations: crate::layout::item_animation::ItemAnimationHost::default(),
+            known_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            pending_new: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),
