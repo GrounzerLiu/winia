@@ -110,6 +110,12 @@ state.animate_scroll_to_item(50, 0.0);
 
 - `item/items/items_from` 注册为区间（count + key 工厂 + 内容闭包）；
 - 全局 index 经区间定位转段内局部 index（对齐 Compose LazyListIntervalContent）；
+- The key FACTORY and the content closure both receive the index INSIDE their own section (Compose's
+  `items(count, key = { index -> … })`). A section registered after a sticky header therefore still
+  hands them 0, 1, 2 … — a factory that indexes its data by that number works in any position, which
+  it did not while the framework passed the GLOBAL index (measured: a sticky header before an
+  `items_from` panicked with "the len is 50 but the index is 50"). A section WITHOUT a factory keys
+  its items by their global index, so "the position is the key" stays unique across sections.
 - key 查询：`key_of(global)` / `index_of_key(key)`——rebuild 时构建
   key→index HashMap，O(1) 反查（对齐 Compose NearestRangeKeyIndexMap 的
   查询语义）。

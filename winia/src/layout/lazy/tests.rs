@@ -51,10 +51,13 @@
         assert_eq!(il.locate(3), Some((1, 0)));
         assert_eq!(il.locate(4), Some((1, 1)));
         assert_eq!(il.locate(5), None);
-        // Keys: a section without a factory uses its index; one with a factory uses it.
+        // Keys: a section WITHOUT a factory uses its global index; a section WITH one is handed the
+        // index inside that section (Compose's `items(count, key = { index -> … })`, and what every
+        // data-driven factory assumes), so the second section answers 100 and 101 for its two items.
         assert_eq!(il.key_of(2), Some(2));
-        assert_eq!(il.key_of(3), Some(103));
-        assert_eq!(il.index_of_key(103), Some(3));
+        assert_eq!(il.key_of(3), Some(100));
+        assert_eq!(il.key_of(4), Some(101));
+        assert_eq!(il.index_of_key(100), Some(3));
         assert_eq!(il.index_of_key(2), Some(2));
         assert_eq!(il.index_of_key(999), None);
     }
@@ -202,7 +205,8 @@
         // 10 items (keys 100..109) go in front, so the original 100 (keys 0..99) now occupy the
         // global indices 10..109 — the item whose key is 50 sits at index 60.
         il2.add(10, Some(Arc::new(|g| (100 + g) as u64)), c.clone(), false);
-        il2.add(100, Some(Arc::new(|g| (g - 10) as u64)), c.clone(), false);
+        // The second section's factory gets ITS OWN index 0..99, which is the original key.
+        il2.add(100, Some(Arc::new(|g| g as u64)), c.clone(), false);
         il2.rebuild();
         assert_eq!(il2.total(), 110);
         // The key=50 item is now at index 60.
@@ -2433,6 +2437,51 @@
             .expect("the list offers IndexForKey");
         assert_eq!(action.invoke(7), Some(7));
         assert_eq!(action.invoke(20), None, "past the end");
+    }
+
+    /// A key FACTORY gets the index inside its own section, and so does the content closure — Compose
+    /// hands `items(count, key = { index -> … })` a section index. A sticky header registered first
+    /// shifts every GLOBAL index by one, which used to make `items_from` index its data out of bounds
+    /// ("the len is 50 but the index is 50", measured in the demo).
+    #[test]
+    fn a_section_after_a_sticky_header_still_sees_its_own_indices() {
+        let state = LazyListState::new();
+        let data: Arc<Vec<u64>> = Arc::new((100..110).collect());
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .sticky_header(u64::MAX, |ctx| sized_item(ctx, 0, 50.0, 20.0))
+                .items_from(data.clone(), |key| *key, |ctx, index, key| {
+                    assert_eq!(
+                        *key,
+                        100 +
+                            index as u64,
+                        "the content closure gets the section-local index"
+                    );
+                    sized_item(ctx, index, 50.0, 40.0);
+                })
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let info = state.layout_info();
+        let keys: Vec<u64> = info.visible_items.iter().map(|item| item.key).collect();
+        assert_eq!(
+            keys.first().copied(),
+            Some(u64::MAX),
+            "the header keeps its own key: {keys:?}"
+        );
+        assert_eq!(keys.get(1).copied(), Some(100), "and the first item its data key: {keys:?}");
+
+        // The global position is still what the collection reports: the header occupies index 0.
+        let root = composer.arena.root.expect("root");
+        let action = semantics_of(&composer, root)
+            .iter()
+            .find_map(|node| node.index_for_key.clone())
+            .expect("the list offers IndexForKey");
+        assert_eq!(action.invoke(100), Some(1));
+        assert_eq!(action.invoke(109), Some(10));
     }
 
     // ── Duplicate-key detection (Compose throws on a key conflict) ──

@@ -897,7 +897,7 @@ impl<A: LazyAxis> LazyList<A> {
                 for g in child_globals {
                     let item_key = intervals.key_of(g).unwrap_or(g as u64);
                     let ik = ctx.next_key() ^ (item_key.wrapping_mul(MIX));
-                    if let Some((iv_idx, _local)) = intervals.locate(g) {
+                    if let Some((iv_idx, local)) = intervals.locate(g) {
                         let content = intervals.intervals[iv_idx].content.clone();
                         // The item's position in the collection — a reader says "3 of 200" from these
                         // two declarations (the count on the list node above, the index here).
@@ -909,7 +909,10 @@ impl<A: LazyAxis> LazyList<A> {
                         match ctx.start_restartable_group(ik, item_modifier, BoxLayout::new()) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
-                                content(ctx, g);
+                                // The section-LOCAL index, matching the key factory above and
+                                // Compose's `itemContent`: a section that starts at global 1 (after a
+                                // sticky header) still hands its content 0, 1, 2 …
+                                content(ctx, local);
                             }
                         }
                         ctx.end_restartable_group();

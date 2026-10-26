@@ -16,9 +16,15 @@ pub(crate) struct Interval {
 impl Interval {
     /// The key for a global index inside this interval (the index itself when there is no factory —
     /// the position IS the key).
-    pub fn key_of(&self, global_index: usize) -> u64 {
+    /// The key of one item.
+    ///
+    /// A key FACTORY receives the index inside its own section — Compose's `items(count, key = { index
+    /// -> … })` hands out a section index, and every factory here (a data lookup, an arithmetic key)
+    /// assumes that. The section-LESS case keeps the global index, because "the position is the key"
+    /// has to stay unique across sections.
+    pub fn key_of(&self, global_index: usize, local_index: usize) -> u64 {
         match &self.key {
-            Some(f) => f(global_index),
+            Some(f) => f(local_index),
             None => global_index as u64,
         }
     }
@@ -114,7 +120,7 @@ impl IntervalList {
             let start = self.starts[i];
             let count = self.intervals[i].count;
             if global >= start && global < start + count {
-                return self.intervals[i].key_of(global);
+                return self.intervals[i].key_of(global, global - start);
             }
         }
         global as u64
