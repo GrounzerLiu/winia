@@ -66,9 +66,21 @@ Grid::new(vec![
 - **No intrinsic track** (`GridTrackSpec.FitContent` / `GridTrackSize.Auto`): every track is fixed,
   percentage or weighted. An intrinsic track needs a second measurement pass over the children.
 - **No named areas** (`areaId`): a child declares its span directly.
+- **Intrinsic queries fall back to the `MeasurePolicy` default** (a measure-based approximation),
+  where Compose overrides all four to size its intrinsic tracks (`Grid.kt:2007-2078`). Since winia
+  has no intrinsic tracks there is nothing to be exact about, but a `Grid` under a
+  `Modifier.width(IntrinsicSize.Min)` parent therefore reports the largest child, not the resolved
+  track sum.
 - **No `GridItemSpan` max-line helper**; a span is a plain `u32` and is clamped to the column count.
 - **Implicit-row sizing is simplified**: a multi-row child sizes only the last row it covers instead
   of being distributed across them.
+- **A child in an IMPLICIT row is measured against the container's own maximum height**, not against
+  infinity, so a `fill_max_height` child there grows the row to the container's height. Compose hands
+  an auto row `Constraints(maxHeight = Infinity)`, which makes such a child wrap; winia avoids the
+  infinity because its own `fill_max_height` treats `f32::MAX` as a real bound.
+- **A column flow that runs out of declared cells keeps placing into implicit ROWS** below the
+  declared ones; Compose would add implicit COLUMNS to the right instead. Both keep every child in its
+  own cell.
 - A cell's default alignment is Compose's `Alignment.TopStart`; winia adds the `STRETCH` value on
   top of it, which Compose expresses with `fillMaxSize()` inside the item instead.
 
@@ -88,6 +100,9 @@ Grid::new(vec![
 | `column_flow_fills_a_column_first` | column-major order, wrapping at the declared rows |
 | `rtl_mirrors_the_columns` | RTL mirroring (stretched children, so the assertion is about the tracks) |
 | `a_cell_alignment_places_the_child_inside_its_cell` | centred, the TopStart default and an explicit STRETCH |
+| `a_span_wider_than_the_grid_is_clamped` | a 5-column span inside a 2-column grid |
+| `a_negative_gap_is_clamped_in_measure` | a negative gap set straight on the public field |
+| `more_children_than_declared_cells_never_overlap` | a column flow past the declared cell count (the regression behind the review) |
 | `an_empty_grid_is_zero` | an empty grid |
 
 UI (`winia/tests/ui_grid_test.rs`, fixture scenario `grid`, driven by `tests/ui_fixtures/fixture_all.rs`)

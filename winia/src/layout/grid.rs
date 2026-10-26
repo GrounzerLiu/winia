@@ -284,6 +284,7 @@ fn place_cells(
             columns,
             flow.by_column(),
             row_bound,
+            spans.len(),
         );
         occupancy.reserve(row, column, row_span, column_span);
         out.push(Cell { column, column_span, row, row_span });
@@ -307,6 +308,7 @@ fn find_cell(
     columns: usize,
     by_column: bool,
     row_bound: usize,
+    children: usize,
 ) -> (usize, usize) {
     let mut k = 0usize;
     // In a column flow the rows are a fixed set that the scan wraps around; in a row flow they grow.
@@ -335,9 +337,21 @@ fn find_cell(
             break;
         }
     }
-    // Only reachable for a span that cannot fit the grid at all; the caller clamps the span, so
-    // this is a defensive fallback rather than a normal path.
-    (row_bound, 0)
+    // The flow-order scan gave up: every cell of the declared grid is taken, which a column flow with
+    // more children than cells reaches. Fall back to the first FREE cell instead of a fixed position —
+    // two children must never land on the same cell. Scanning `children` extra rows is enough, since
+    // each child occupies at least one cell.
+    let last_row = row_bound + children + 1;
+    for row in 0..=last_row {
+        for column in 0..columns {
+            if column + column_span <= columns
+                && occupancy.fits(row, column, row_span, column_span, columns)
+            {
+                return (row, column);
+            }
+        }
+    }
+    (last_row + 1, 0)
 }
 
 impl MeasurePolicy for GridLayout {
@@ -357,6 +371,11 @@ impl MeasurePolicy for GridLayout {
         // 1. The column widths. They do not depend on the children (no intrinsic tracks in v1).
         let widths = resolve_tracks(&self.columns, constraints.max_width, self.column_gap);
 
+        // The gap fields are public, so a caller can set a negative one without going through the
+        // builder's clamp. Normalise once here: a negative gap would otherwise make tracks overlap.
+        let column_gap = self.column_gap.max(0.0);
+        let row_gap = self.row_gap.max(0.0);
+
         // 2. Where every child goes.
         let spans: Vec<(u32, u32)> = children
             .iter()
@@ -374,22 +393,22 @@ impl MeasurePolicy for GridLayout {
         // 3. The row tracks: declared ones resolve from their specs, implicit ones start at zero and
         // grow to the tallest child that spans exactly them (step 4).
         let row_count = cells.iter().map(|c| c.row + c.row_span).max().unwrap_or(0);
-        let declared_heights = resolve_tracks(&self.rows, constraints.max_height, self.row_gap);
-        let declared_table = offset_table(&declared_heights, self.row_gap);
+        let declared_heights = resolve_tracks(&self.rows, constraints.max_height, row_gap);
+        let declared_table = offset_table(&declared_heights, row_gap);
 
         // 4. Measure each child at its cell's width, and at its row's height when that row is declared
         // (an implicit row has no height until the children say what it is, so the container's own
         // maximum is the limit there).
-        let column_offsets = offset_table(&widths, self.column_gap);
+        let column_offsets = offset_table(&widths, column_gap);
         let mut child_sizes = Vec::with_capacity(n);
         for (i, &child) in children.iter().enumerate() {
             let cell = cells[i];
             let left = column_offsets[cell.column];
-            let width = (column_offsets[cell.column + cell.column_span] - left - self.column_gap)
+            let width = (column_offsets[cell.column + cell.column_span] - left - column_gap)
                 .max(0.0);
             let last_declared = cell.row + cell.row_span <= declared_heights.len();
             let height = if last_declared {
-                (declared_table[cell.row + cell.row_span] - declared_table[cell.row] - self.row_gap)
+                (declared_table[cell.row + cell.row_span] - declared_table[cell.row] - row_gap)
                     .max(0.0)
             } else {
                 constraints.max_height
@@ -413,17 +432,17 @@ impl MeasurePolicy for GridLayout {
         }
 
         // 6. Place: the cell's origin, then the child's alignment inside it, then the RTL mirror.
-        let row_offsets = offset_table(&heights, self.row_gap);
-        let total_width = column_offsets[columns] - self.column_gap;
-        let total_height = row_offsets[row_count] - self.row_gap;
+        let row_offsets = offset_table(&heights, row_gap);
+        let total_width = column_offsets[columns] - column_gap;
+        let total_height = row_offsets[row_count] - row_gap;
         let mut placements = Vec::with_capacity(n);
         for (i, cell) in cells.iter().enumerate() {
             let cell_width = column_offsets[cell.column + cell.column_span]
                 - column_offsets[cell.column]
-                - self.column_gap;
+                - column_gap;
             let cell_height = row_offsets[cell.row + cell.row_span]
                 - row_offsets[cell.row]
-                - self.row_gap;
+                - row_gap;
             // Compose's `gridItem` defaults to `Alignment.TopStart` (Grid.kt:158-226): a child that
             // does not fill its cell sits at the cell's top-left, and a `fill_max_size` in the chain is
             // what stretches it.
@@ -788,6 +807,64 @@ mod tests {
         assert_eq!(placements[0].size, Size::new(100.0, 10.0), "STRETCH fills the cell width");
     }
 
+
+
+    /// A span wider than the grid is clamped to it instead of being pushed outside.
+    #[test]
+    fn a_span_wider_than_the_grid_is_clamped() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
+        let mut nodes = vec![spanning_leaf(10.0, 10.0, 5, 1)];
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size.width, 100.0);
+        assert_eq!(placements[0].size.width, 10.0, "the child keeps its own size (TopStart)");
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
+    }
+
+    /// The gap fields are public, so a negative gap can bypass the builder's clamp; the measure has to
+    /// normalise it, or the tracks would overlap.
+    #[test]
+    fn a_negative_gap_is_clamped_in_measure() {
+        let mut policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
+        policy.column_gap = -20.0;
+        policy.row_gap = -20.0;
+        let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(size, Size::new(100.0, 10.0), "the negative gap behaves as 0");
+        assert_eq!(placements[1].position.x, 50.0);
+    }
+
+    /// A column flow with more children than declared cells must keep going into implicit rows — and
+    /// two children must NEVER share a cell.
+    #[test]
+    fn more_children_than_declared_cells_never_overlap() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)])
+            .rows(vec![GridTrackSpec::fixed(20.0), GridTrackSpec::fixed(20.0)])
+            .flow(GridFlow::Column);
+        let mut nodes: Vec<LayoutNode> = (0..6).map(|_| make_leaf(10.0, 10.0)).collect();
+        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 300.0));
+        let mut cells: Vec<(i32, i32)> = placements
+            .iter()
+            .map(|p| (p.position.x as i32, p.position.y as i32))
+            .collect();
+        cells.sort_unstable();
+        let unique = cells.len();
+        cells.dedup();
+        assert_eq!(cells.len(), unique, "every child sits in its own cell: {cells:?}");
+        assert!(
+            placements.iter().any(|p| p.position.y >= 40.0),
+            "the extra children wrap into implicit rows: {placements:?}"
+        );
+    }
+
+    /// A column list is required; without one the grid measures to nothing rather than panicking.
+    #[test]
+    fn a_grid_without_columns_measures_zero() {
+        let policy = GridLayout::new(Vec::new());
+        let mut nodes = vec![make_leaf(10.0, 10.0)];
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size, Size::ZERO);
+        assert!(placements.is_empty(), "the children are not placed at all");
+    }
 
     #[test]
     fn an_empty_grid_is_zero() {
