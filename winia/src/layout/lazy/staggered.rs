@@ -19,6 +19,11 @@
 //!
 //! - `GridCells::Fixed` only (Adaptive needs the cross viewport before the first measure).
 //! - No item placement animation and no sticky headers, as Compose's staggered grids.
+//! - A data change does not re-anchor by KEY: the scroll position is a plain pixel offset, so an
+//!   insertion above the viewport moves the content instead of keeping the reading position (the lazy
+//!   lists' anchor correction needs a per-item "first visible key", which a per-LANE waterfall does not
+//!   have — Compose resolves it with `LazyStaggeredGridLaneInfo`, and `layout::staggered::lane_anchors`
+//!   is the piece that would feed it).
 
 use super::{GridCells, ItemHeightCache, LazyAxis};
 use crate::layout::axis::Axis as _;
@@ -56,6 +61,8 @@ struct StaggeredPolicy<A: LazyAxis> {
     lanes_of: Vec<usize>,
     /// Every lane's cursor at the first composed item of that lane.
     start_cursors: Vec<f32>,
+    /// The main-axis content padding used by this frame (`content_padding`).
+    main_before: f32,
     /// The content extent over the whole data set.
     extent: f32,
     shared: Arc<Mutex<Shared>>,
@@ -105,7 +112,7 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             };
             let (size, _) = crate::layout::measure_node(nodes, policies, child, cc);
             let lane = self.lanes_of.get(slot).copied().unwrap_or(0).min(lanes - 1);
-            let main = cursors[lane];
+            let main = self.main_before + cursors[lane];
             let main_size = if A::VERTICAL { size.height } else { size.width };
             cursors[lane] = main + main_size + self.spacing;
             let cross = self.cross_before + lane as f32 * (cell + self.cross_spacing);
@@ -337,14 +344,16 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
                 .map(|height| height.unwrap_or(estimate))
                 .collect()
         };
-        let (slots, extent) = assign_lanes(lanes, &heights, self.spacing);
+        let (slots, deepest) = assign_lanes(lanes, &heights, self.spacing);
+        let extent = self.content_padding.0 + deepest + self.content_padding.1;
         let viewport = {
             let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
             shared.viewport
         };
         let offset = state.offset.get();
-        let window_start = (offset - self.beyond_bounds).max(0.0);
-        let window_end = offset + viewport + self.beyond_bounds;
+        let content_offset = (offset - self.content_padding.0).max(0.0);
+        let window_start = (content_offset - self.beyond_bounds).max(0.0);
+        let window_end = content_offset + viewport + self.beyond_bounds;
         let mut window: Vec<usize> = Vec::new();
         let mut lanes_of: Vec<usize> = Vec::new();
         let mut start_cursors = vec![f32::MAX; lanes];
@@ -385,6 +394,7 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             cross_spacing: self.cross_spacing,
             cross_before: self.content_padding_cross.0,
             cross_after: self.content_padding_cross.1,
+            main_before: self.content_padding.0,
             window: window.clone(),
             lanes_of,
             start_cursors,
@@ -473,6 +483,47 @@ mod tests {
     }
 
 
+
+
+    /// The main-axis content padding moves the first item down and counts towards the extent (it used
+    /// to be stored and never applied).
+    #[test]
+    fn the_main_content_padding_offsets_the_items() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyVerticalStaggeredGrid::new()
+                    .lanes(GridCells::Fixed(2))
+                    .content_padding(30.0, 10.0)
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(200.0))
+                    .items(2, |ctx, index| {
+                        Stack::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(10.0, 40.0)
+                                    .test_tag(format!("pad-item-{index}")),
+                            )
+                            .build(ctx, |_| {});
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        }
+        let root = composer.layout_root().unwrap();
+        let items: Vec<usize> = root.children.clone();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            composer.arena_nodes()[items[0]].position.y, 30.0,
+            "the content starts 30 dp in"
+        );
+    }
 
     /// The offset is clamped into the range the extent allows. Without the clamp a programmatic
     /// `offset.set(10000)` stayed 10000 and the grid composed nothing, forever (measured).
