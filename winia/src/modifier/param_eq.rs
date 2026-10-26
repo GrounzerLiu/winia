@@ -194,7 +194,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
-        (AnimateItem(as_), AnimateItem(bs)) => format!("{as_:?}") == format!("{bs:?}"),
+        // Compared by VALUE, not by Debug: a caller may rebuild the spec (fresh Arc<dyn Interpolator>)
+        // every frame, and the comparison runs once per item per frame.
+        (AnimateItem(as_), AnimateItem(bs)) => as_.same_parameter(bs),
         (ItemAnimationHost(_), ItemAnimationHost(_)) => true,
         (
             InnerShadow { shape: as_, color: ac, blur: ab, offset_x: ax, offset_y: ay },

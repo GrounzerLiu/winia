@@ -25,6 +25,38 @@
         assert!(!one.param_eq(&two), "a 1-D and a 2-D alignment are different declarations");
     }
 
+    /// The item-animation contract is a parameter like any other: two specs with the same curves
+    /// must compare equal (the comparison runs per item per frame), and a changed curve must re-enter.
+    #[test]
+    fn param_eq_compares_the_item_animation_spec_by_value() {
+        use crate::animation::item::ItemAnimationSpec;
+        use crate::animation::interpolator::Linear;
+        use crate::animation::{SpringSpec, TweenSpec};
+        use std::time::Duration;
+
+        let build = || {
+            Modifier::new().animate_item_with(
+                ItemAnimationSpec::new()
+                    .placement(SpringSpec::default())
+                    .fade_in(TweenSpec::new(Duration::from_millis(300), Linear::new())),
+            )
+        };
+        let a = build();
+        let b = build();
+        assert!(a.param_eq(&b), "a rebuilt spec with the same curves must compare equal");
+
+        let slower = Modifier::new().animate_item_with(
+            ItemAnimationSpec::new()
+                .placement(SpringSpec::default())
+                .fade_in(TweenSpec::new(Duration::from_millis(400), Linear::new())),
+        );
+        assert!(!a.param_eq(&slower), "a changed fade curve must re-enter");
+
+        // The default marker and a spec-less modifier are different declarations.
+        assert!(!Modifier::new().animate_item().param_eq(&Modifier::new()));
+        assert!(Modifier::new().animate_item().param_eq(&Modifier::new().animate_item()));
+    }
+
     #[test]
     fn param_eq_detects_size_change() {
         let a = Modifier::new().width(200.0);

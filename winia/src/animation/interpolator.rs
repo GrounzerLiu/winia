@@ -3,6 +3,16 @@ pub fn linear(x: f32) -> f32 { x }
 
 pub trait Interpolator : Sync + Send + std::fmt::Debug {
     fn interpolate(&self, x: f32) -> f32;
+
+    /// Value equality across INSTANCES. An animation spec stores its interpolator as
+    /// `Arc<dyn Interpolator>`, which cannot derive `PartialEq`, and a caller may rebuild the
+    /// whole spec (fresh `Arc`s) on every frame — so parameter comparison has to answer by VALUE:
+    /// two interpolators that draw the same curve compare equal even though they are different
+    /// objects.
+    fn same_parameter(&self, other: &dyn Interpolator) -> bool;
+
+    /// Downcast hook for [`Interpolator::same_parameter`] implementations.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
@@ -32,6 +42,14 @@ impl From<Linear> for std::sync::Arc<dyn Interpolator> {
 impl Interpolator for Linear {
     fn interpolate(&self, x: f32) -> f32 {
         x
+    }
+
+    fn same_parameter(&self, other: &dyn Interpolator) -> bool {
+        other.as_any().downcast_ref::<Linear>().is_some()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -81,6 +99,17 @@ macro_rules! interpolator {
             }
         }
         impl Interpolator for $name {
+            fn same_parameter(&self, other: &dyn Interpolator) -> bool {
+                // The table is a COMPILE-TIME constant of this type (nothing here is configurable),
+                // so "same type" already means "same curve" — no need to walk the points, and this
+                // comparison runs once per item per frame.
+                other.as_any().downcast_ref::<$name>().is_some()
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
             fn interpolate(&self, x: f32) -> f32 {
                 if x < 0.0 {
                     return 0.0;
@@ -1331,6 +1360,19 @@ impl CubicBezier {
 }
 
 impl Interpolator for CubicBezier {
+    fn same_parameter(&self, other: &dyn Interpolator) -> bool {
+        other.as_any().downcast_ref::<CubicBezier>().is_some_and(|other| {
+            other.p1x == self.p1x
+                && other.p1y == self.p1y
+                && other.p2x == self.p2x
+                && other.p2y == self.p2y
+        })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn interpolate(&self, x: f32) -> f32 {
         if x <= 0.0 { return 0.0; }
         if x >= 1.0 { return 1.0; }
@@ -1364,6 +1406,17 @@ impl PathEasing {
 }
 
 impl Interpolator for PathEasing {
+    fn same_parameter(&self, other: &dyn Interpolator) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<PathEasing>()
+            .is_some_and(|other| other.points == self.points)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn interpolate(&self, x: f32) -> f32 {
         if x <= 0.0 { return 0.0; }
         if x >= 1.0 { return 1.0; }
@@ -1389,6 +1442,32 @@ mod tests {
     /// `fast_out_slow_in()` really is Compose's `CubicBezierEasing(0.4, 0.0, 0.2, 1.0)` and not M3's
     /// emphasized curve `(0.2, 0, 0, 1)` the two components used to pass under this name.
     ///
+    /// Two interpolators built SEPARATELY must compare equal: a caller rebuilding an animation spec
+    /// every frame gets fresh `Arc`s, and parameter comparison would otherwise never match — the
+    /// item would re-enter composition on every frame instead of Skipping.
+    #[test]
+    fn separately_built_interpolators_compare_by_curve() {
+        let a: std::sync::Arc<dyn Interpolator> = EaseInSine::new().into();
+        let b: std::sync::Arc<dyn Interpolator> = EaseInSine::new().into();
+        assert!(a.same_parameter(b.as_ref()), "the same curve, different objects");
+        let other: std::sync::Arc<dyn Interpolator> = EaseOutSine::new().into();
+        assert!(!a.same_parameter(other.as_ref()), "a different table is a different curve");
+        let linear: std::sync::Arc<dyn Interpolator> = Linear::new().into();
+        let linear2: std::sync::Arc<dyn Interpolator> = Linear::new().into();
+        assert!(linear.same_parameter(linear2.as_ref()), "linear equals linear");
+        assert!(!linear.same_parameter(a.as_ref()), "linear is not an ease");
+
+        let bez: std::sync::Arc<dyn Interpolator> = CubicBezier::new(0.4, 0.0, 0.2, 1.0).into();
+        let bez2: std::sync::Arc<dyn Interpolator> = CubicBezier::new(0.4, 0.0, 0.2, 1.0).into();
+        let bez3: std::sync::Arc<dyn Interpolator> = CubicBezier::new(0.2, 0.0, 0.0, 1.0).into();
+        assert!(bez.same_parameter(bez2.as_ref()));
+        assert!(!bez.same_parameter(bez3.as_ref()), "a different control point set is a different curve");
+
+        let path: std::sync::Arc<dyn Interpolator> = PathEasing::new(vec![(0.0, 0.0), (1.0, 1.0)]).into();
+        let path2: std::sync::Arc<dyn Interpolator> = PathEasing::new(vec![(0.0, 0.0), (1.0, 1.0)]).into();
+        assert!(path.same_parameter(path2.as_ref()));
+        assert!(!path.same_parameter(linear.as_ref()));
+    }
     /// The expected values are solved here independently (bisection on the bezier's x, then y), so this
     /// does not just re-run the implementation.
     #[test]

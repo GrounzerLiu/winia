@@ -104,6 +104,22 @@ impl ItemAnimationSpec {
         self
     }
 
+    /// Value equality for parameter comparison: two specs built separately (fresh "Arc"s in their
+    /// interpolators) compare equal when they describe the same curves. This is what lets an item
+    /// whose spec is rebuilt inline every frame still Skip.
+    pub fn same_parameter(&self, other: &Self) -> bool {
+        fn channel(a: &Option<AnimationSpec>, b: &Option<AnimationSpec>) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_parameter(b),
+                _ => false,
+            }
+        }
+        channel(&self.placement, &other.placement)
+            && channel(&self.fade_in, &other.fade_in)
+            && channel(&self.fade_out, &other.fade_out)
+    }
+
     /// True when the item has no channel at all, so a layout can skip its bookkeeping.
     pub fn is_inert(&self) -> bool {
         self.placement.is_none() && self.fade_in.is_none() && self.fade_out.is_none()
@@ -119,6 +135,29 @@ mod tests {
     #[should_panic(expected = "item fade_out must settle")]
     fn a_decaying_item_fade_is_rejected() {
         let _ = ItemAnimationSpec::new().fade_out(crate::animation::DecaySpec::new(4.2, 0.1));
+    }
+
+    /// The demo builds its spec inline every frame; two such specs must compare equal, or every item
+    /// re-enters composition on every frame.
+    #[test]
+    fn an_inline_rebuilt_item_spec_compares_equal() {
+        let build = || {
+            ItemAnimationSpec::new()
+                .placement(crate::animation::SpringSpec::default())
+                .fade_in(crate::animation::TweenSpec::default())
+                .fade_out(crate::animation::TweenSpec::default())
+        };
+        assert!(build().same_parameter(&build()), "same channels, same curves");
+        let slower = ItemAnimationSpec::new()
+            .placement(crate::animation::SpringSpec::default())
+            .fade_in(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(400),
+                crate::animation::interpolator::Linear::new(),
+            ))
+            .fade_out(crate::animation::TweenSpec::default());
+        assert!(!build().same_parameter(&slower), "a different fade curve is a different contract");
+        let no_fade = ItemAnimationSpec::new().placement(crate::animation::SpringSpec::default());
+        assert!(!build().same_parameter(&no_fade), "adding or dropping a channel re-enters");
     }
 
     #[test]

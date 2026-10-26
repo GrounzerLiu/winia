@@ -444,3 +444,113 @@ impl AnimatableValue for crate::graphics::Color {
     fn supports_spring() -> bool { true }
 }
 
+
+// ── Value equality ───────────────────────────────────────────────────────────────────────────────
+//
+// `AnimationSpec` cannot derive `PartialEq`: a tween and a keyframes spec hold their interpolator as
+// `Arc<dyn Interpolator>`, and an `Arc` compares by identity. Parameter comparison needs a VALUE
+// answer instead (a caller may rebuild the spec, with fresh `Arc`s, on every frame), which is what
+// `Interpolator::same_parameter` provides.
+
+impl TweenSpec {
+    /// Same duration, same delay, and an interpolator that draws the same curve.
+    pub fn same_parameter(&self, other: &Self) -> bool {
+        self.duration == other.duration
+            && self.delay == other.delay
+            && self.interpolator.same_parameter(other.interpolator.as_ref())
+    }
+}
+
+impl KeyframesSpec {
+    /// Same duration and the same frame list, compared by value.
+    pub fn same_parameter(&self, other: &Self) -> bool {
+        self.duration == other.duration
+            && self.frames.len() == other.frames.len()
+            && self.frames.iter().zip(other.frames.iter()).all(|(a, b)| {
+                a.0 == b.0 && a.1 == b.1 && a.2.same_parameter(b.2.as_ref())
+            })
+    }
+}
+
+impl RepeatableSpec {
+    /// Same iteration count, mode, cycle curve and initial start offset.
+    pub fn same_parameter(&self, other: &Self) -> bool {
+        self.iterations == other.iterations
+            && self.mode == other.mode
+            && self.base.same_parameter(&other.base)
+            && self.start_offset == other.start_offset
+            && self.start_offset_type == other.start_offset_type
+    }
+}
+
+impl AnimationSpec {
+    /// Value equality for parameter comparison (see the note above).
+    pub fn same_parameter(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AnimationSpec::Spring(a), AnimationSpec::Spring(b)) => a == b,
+            (AnimationSpec::Tween(a), AnimationSpec::Tween(b)) => a.same_parameter(b),
+            (AnimationSpec::Keyframes(a), AnimationSpec::Keyframes(b)) => a.same_parameter(b),
+            (AnimationSpec::Repeatable(a), AnimationSpec::Repeatable(b)) => a.same_parameter(b),
+            (AnimationSpec::Snap(a), AnimationSpec::Snap(b)) => a == b,
+            (AnimationSpec::Decay(a), AnimationSpec::Decay(b)) => {
+                a.friction == b.friction && a.threshold == b.threshold
+            }
+            _ => false,
+        }
+    }
+}
+#[cfg(test)]
+mod same_parameter_tests {
+    use super::*;
+    use crate::animation::interpolator::{EaseInSine, EaseOutSine, Linear};
+    use std::time::Duration;
+
+    /// A spec rebuilt every frame holds fresh `Arc`s; equality has to be by VALUE or a container can
+    /// never Skip past an unchanged spec.
+    #[test]
+    fn tween_specs_compare_by_value_not_by_arc_identity() {
+        let a = TweenSpec::new(Duration::from_millis(300), Linear::new());
+        let b = TweenSpec::new(Duration::from_millis(300), Linear::new());
+        assert!(a.same_parameter(&b));
+        assert!(!a.same_parameter(&TweenSpec::new(Duration::from_millis(301), Linear::new())));
+        assert!(!a.same_parameter(&TweenSpec::new(Duration::from_millis(300), EaseInSine::new())));
+        let delayed = TweenSpec::new(Duration::from_millis(300), Linear::new()).delay(Duration::from_millis(50));
+        assert!(!a.same_parameter(&delayed), "a delay is part of the spec");
+    }
+
+    #[test]
+    fn keyframes_compare_by_their_frames() {
+        let a = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+        let b = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+        assert!(a.same_parameter(&b));
+        let c = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.5), (1.0, 1.0)]);
+        assert!(!a.same_parameter(&c), "a moved keyframe is a different curve");
+        let d = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (1.0, 1.0)]);
+        assert!(!a.same_parameter(&d), "a shorter frame list is a different curve");
+    }
+
+    #[test]
+    fn a_repeatable_compares_its_cycle_curve_and_offset() {
+        let base = DurationSpec::Tween(TweenSpec::new(Duration::from_millis(200), Linear::new()));
+        let a = RepeatableSpec::new(3, RepeatMode::Restart, base.clone());
+        let b = RepeatableSpec::new(3, RepeatMode::Restart, base.clone());
+        assert!(a.same_parameter(&b));
+        let more = RepeatableSpec::new(4, RepeatMode::Restart, base.clone());
+        assert!(!a.same_parameter(&more));
+        let reversed = RepeatableSpec::new(3, RepeatMode::Reverse, base);
+        assert!(!a.same_parameter(&reversed), "the mode decides where the last iteration ends");
+    }
+
+    #[test]
+    fn animation_spec_variants_do_not_mix() {
+        let spring = AnimationSpec::Spring(SpringSpec::default());
+        let tween = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), Linear::new()));
+        assert!(!spring.same_parameter(&tween));
+        assert!(spring.same_parameter(&AnimationSpec::Spring(SpringSpec::default())));
+        let stiffer = SpringSpec { stiffness: 300.0, ..SpringSpec::default() };
+        assert!(!spring.same_parameter(&AnimationSpec::Spring(stiffer)), "a stiffer spring is a different curve");
+        let a = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseInSine::new()));
+        let b = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutSine::new()));
+        assert!(!a.same_parameter(&b));
+    }
+}
