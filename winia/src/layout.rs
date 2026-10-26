@@ -17,6 +17,7 @@ pub(crate) mod container;
 pub mod components;
 pub mod spacer;
 pub mod grid;
+pub mod staggered;
 pub mod box_with_constraints;
 /// The lazy lists — `LazyColumn` AND `LazyRow`, which share one axis-generic core.
 pub mod lazy;
@@ -45,6 +46,7 @@ pub use box_layout::Stack;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
 pub use grid::{Grid, GridArea, GridFlow, GridLayout, GridTrackSpec};
+pub use staggered::{assign_lanes, lane_anchors, LaneSlot};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy::{
     GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyList, LazyListState, LazyRow,
