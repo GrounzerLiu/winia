@@ -4,8 +4,8 @@
 //! (`tests/ui_fixtures/fixture_all.rs`, scenario `grid`), so this drives the same UI a human sees with
 //! `cargo run -p winia --example grid_demo`.
 //!
-//! The cells are SMALLER than their tracks on purpose: a grid child stretches to its cell by default,
-//! so a tag's rect is the resolved track, which is exactly what these assertions read.
+//! The demo's cells request `ContentAlignment::STRETCH` explicitly (the default is Compose's
+//! TopStart), so a tag's rect is the resolved track — exactly what these assertions read.
 
 #[path = "ui/support.rs"]
 mod ui;

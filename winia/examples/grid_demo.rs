@@ -1,9 +1,9 @@
 //! Grid demo — the four things the layout does: fixed tracks, weighted tracks, spans, dense flow.
 //!
 //! Each card is one case, and every cell carries a `test_tag` so the UI suite can read the geometry
-//! off the real window (`tests/ui_grid_test.rs`, fixture scenario `grid`). The cells are sized
-//! smaller than their track on purpose: the default cell alignment STRETCHES a grid child to its
-//! cell, so the tag's rect reveals the resolved track, not the child's own size.
+//! off the real window (`tests/ui_grid_test.rs`, fixture scenario `grid`). The cells ask for
+//! `ContentAlignment::STRETCH` explicitly — Compose's `gridItem` default is TopStart, so a child that
+//! says nothing keeps its own size — which makes a tag's rect the resolved track.
 //!
 //! Run with `cargo run -p winia --example grid_demo`.
 

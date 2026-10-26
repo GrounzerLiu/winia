@@ -40,15 +40,17 @@ Grid::new(vec![
 
 ## Layout
 
-1. **Columns** resolve from their specs. A fixed track is its value, a percentage track is that
-   fraction of the container's maximum on the axis, and a weighted track shares what the fixed and
-   percentage tracks plus the gaps leave over. On an UNBOUNDED axis the percentage and weight tracks
-   are 0, as in Compose.
+1. **Columns** resolve from their specs. A fixed track is its value; a percentage track is that
+   fraction of Compose's `availableTrackSpace` — the axis minus the gaps BETWEEN the tracks — and a
+   weighted track shares what the fixed and percentage tracks leave of that same space, so a
+   two-half-width grid with a gap fills its axis exactly. On an UNBOUNDED axis the percentage and
+   weight tracks are 0 (see the differences below; Compose falls back to intrinsic sizes there).
 2. **Placement** walks the cells in the flow's order: row-major for `Row`/`RowDense`, column-major
    for `Column`/`ColumnDense`. A `Dense` flow restarts the scan for every child, so a hole a span left
-   behind is filled by a later child; a sparse flow never goes back. A `Column` flow wraps at the
-   DECLARED row count — with no declared rows the column never fills up and every child keeps going
-   down it, which is what Compose does too.
+   behind is filled by a later child; a sparse flow never goes back. (Dense is winia's extension —
+   Compose's `GridFlow` has only `Row` and `Column`.) A `Column` flow wraps at the DECLARED row count
+   and clamps a row span to it; with NO declared rows it never wraps at all, so every child keeps
+   going down the same column however tall the ones before it were (`Grid.kt:1301-1309`).
 3. **Children** are measured at their CELL's width and, when the row is declared, at that row's
    height. A child is then placed inside the cell by its alignment — the default is Compose's
    `Alignment.TopStart`, so a child that does not fill its cell keeps its own size and hugs the
@@ -57,18 +59,24 @@ Grid::new(vec![
 4. **Rows**: a declared row keeps its track spec; an IMPLICIT row (one the children need but
    `rows` does not declare) is as tall as the tallest child that spans exactly that one row. A child
    spanning several implicit rows contributes to the LAST of them.
-5. **Size**: the tracks plus the gaps between them, floored by the incoming minimum and never clamped
-   to the maximum (a child that overflows its cell grows nothing, but a declared track larger than the
-   container is reported as-is — Compose's grid behaves the same way). Declared tracks count even when
+5. **Size**: the tracks plus the gaps between them, clamped into the incoming range the way Compose's
+   `constrainWidth`/`constrainHeight` do (`Grid.kt:898-899`) — three 80 dp columns with two 8 dp gaps in
+   a 200 dp parent report 200, not 256. Declared tracks count even when
    no child reaches them: a grid of three 80 dp columns is 240 wide with no items, and a declared row
    nobody fills still contributes its height. Under RTL the mirror lands inside the REPORTED width, so
    an incoming minimum wider than the tracks shifts the whole grid instead of leaving it off-centre.
 
 ## Differences from Compose
 
+- **`GridFlow::RowDense` / `ColumnDense` are winia's extension**: Compose's `GridFlow` has only
+  `Row` and `Column` (`Grid.kt:531-536`).
 - **No intrinsic track** (`GridTrackSpec.FitContent` / `GridTrackSize.Auto`): every track is fixed,
   percentage or weighted. An intrinsic track needs a second measurement pass over the children.
 - **No named areas** (`areaId`): a child declares its span directly.
+- **On an UNBOUNDED axis a percentage or weighted track is 0.** Compose falls back to the items'
+  max intrinsic width for a percentage track and to min-content for a weight track
+  (`Grid.kt:1645-1663`); that needs intrinsic tracks, which v1 does not have. A grid inside a
+  horizontally scrolling parent therefore gives a percentage column no width.
 - **Intrinsic queries fall back to the `MeasurePolicy` default** (a measure-based approximation),
   where Compose overrides all four to size its intrinsic tracks (`Grid.kt:2007-2078`). Since winia
   has no intrinsic tracks there is nothing to be exact about, but a `Grid` under a
@@ -89,7 +97,7 @@ Grid::new(vec![
 
 ## Tests
 
-`winia/src/layout/grid.rs` (`layout::grid::tests`, 11 cases):
+`winia/src/layout/grid.rs` (`layout::grid::tests`, 23 cases):
 
 | test | pins |
 | --- | --- |
@@ -107,6 +115,12 @@ Grid::new(vec![
 | `a_negative_gap_is_clamped_in_measure` | a negative gap set straight on the public field |
 | `more_children_than_declared_cells_never_overlap` | a column flow past the declared cell count (the regression behind the review) |
 | `a_grid_without_children_reports_its_declared_tracks` | the tracks of an empty grid |
+| `a_percentage_grid_with_gaps_fills_its_axis` | the percentage basis excluding the gaps |
+| `an_overflowing_grid_is_clamped_to_the_axis` | 3 x 80 + 2 x 8 inside a 200 dp parent |
+| `a_column_flow_without_declared_rows_never_wraps` | a column flow past a tall child |
+| `a_column_flow_clamps_a_span_to_the_declared_rows` | a span taller than the declared rows |
+| `an_extreme_row_span_is_clamped` | `grid_item(1, u32::MAX)` staying finite |
+| `an_unbounded_axis_gives_percent_and_weight_nothing` | the documented unbounded rule |
 | `an_unused_declared_row_still_counts` | a declared row no child reaches |
 | `a_grid_without_columns_places_every_child` | one placement per child even with no columns (the engine calls `place` unconditionally) |
 | `a_tall_row_span_does_not_swallow_a_later_child` | the placement fallback walking past an eight-row span |

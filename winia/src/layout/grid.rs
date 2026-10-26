@@ -5,9 +5,10 @@
 //! tracks left over; a child may span several tracks, and the gaps between tracks are separate
 //! values per axis.
 //!
-//! Auto-placement follows Compose's `GridFlow` (`Grid.kt:527`): `Row` fills one row at a time,
-//! `Column` one column at a time, and the `Dense` variants restart the scan for every child so holes
-//! left by a span get filled by a later, smaller one.
+//! Auto-placement follows Compose's `GridFlow` (`Grid.kt:527-560`): `Row` fills one row at a time and
+//! `Column` one column at a time. Compose has only those two; the `Dense` variants are winia's
+//! extension, and they restart the scan for every child so a hole a span left is filled by a later,
+//! smaller one.
 //!
 //! # v1 scope (differences from Compose, recorded here and in `docs/grid.md`)
 //!
@@ -158,13 +159,20 @@ impl GridLayout {
 
 /// Resolves one axis's tracks into absolute sizes.
 ///
-/// `available` is the container's maximum on that axis; an unbounded axis leaves the
-/// percentage and weight tracks at zero, the way Compose gives a weighted track nothing when the
-/// axis is infinite.
+/// `available` is the container's maximum on that axis. Compose's `availableTrackSpace` is that
+/// minus the gaps BETWEEN the tracks (`Grid.kt:634-639`), and both the percentage and the weight
+/// tracks size against it — a two-half-width grid with a 10 px gap therefore fills its axis exactly
+/// instead of overflowing by the gap.
+///
+/// An unbounded axis (a scroll container hands its content `f32::MAX`) gives the percentage and
+/// weight tracks ZERO. Compose falls back to the items' max intrinsic width for a percentage track
+/// and to min-content for a weight track; winia has no intrinsic tracks in v1, and measuring children
+/// against `f32::MAX` would let a `fill_max_width` child explode. Recorded as a difference in
+/// `docs/grid.md`.
 fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32> {
     let gaps = gap * specs.len().saturating_sub(1) as f32;
     let bounded = available < f32::MAX;
-    let basis = if bounded { available } else { 0.0 };
+    let basis = if bounded { (available - gaps).max(0.0) } else { 0.0 };
     let mut fixed_total = 0.0f32;
     let mut percent_total = 0.0f32;
     let mut weight_total = 0.0f32;
@@ -176,7 +184,7 @@ fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32>
         }
     }
     let remaining = if bounded {
-        (available - fixed_total - percent_total * basis - gaps).max(0.0)
+        (basis - fixed_total - percent_total * basis).max(0.0)
     } else {
         0.0
     };
@@ -195,6 +203,9 @@ fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32>
         })
         .collect()
 }
+
+/// A defensive ceiling on a row span inside a grid with implicit rows (see `place_cells`).
+const MAX_IMPLICIT_ROW_SPAN: usize = 4096;
 
 /// One child's occupied cells, in track indices.
 #[derive(Debug, Clone, Copy)]
@@ -267,14 +278,28 @@ fn place_cells(
     // A column flow wraps at the DECLARED row count; with no declared rows the rows are unbounded
     // and every child keeps filling the current column. A row flow grows rows freely either way, so
     // the bound there only caps the defensive scan.
-    let row_bound = match declared_rows {
-        Some(rows) if flow.by_column() => rows.max(1),
+    let declared = declared_rows.map(|rows| rows.max(1));
+    let row_bound = match declared {
+        Some(rows) if flow.by_column() => rows,
         _ => spans.len() + 1,
     };
+    // A column flow wraps at the DECLARED row count only. Without declared rows the rows are
+    // unbounded — Compose's `explicitRowCount == 0` branch never wraps (`Grid.kt:1301-1309`) — so a
+    // child keeps going DOWN the same column however tall the children before it were.
+    let row_wrap = if flow.by_column() { declared } else { None };
     for &(column_span, row_span) in spans {
-        // A span wider than the grid is clamped instead of pushed out of it.
+        // A span wider than the grid is clamped instead of pushed out of it, and a row span can never
+        // usefully exceed the cells that exist: an unclamped `u32::MAX` made `fits` walk billions of
+        // rows and `reserve` allocate them (a public API, so it has to be defensive).
         let column_span = (column_span.max(1) as usize).min(columns);
-        let row_span = row_span.max(1) as usize;
+        let row_span = (row_span.max(1) as usize).min(match declared {
+            // Never taller than the rows that exist.
+            Some(rows) => rows,
+            // With implicit rows a tall span is legitimate (one card spanning a column's worth of
+            // rows), so the cap is only a guard against `u32::MAX`: unclamped it made `fits` walk
+            // billions of rows and `reserve` allocate them.
+            None => MAX_IMPLICIT_ROW_SPAN,
+        });
         let start = if flow.dense() { (0, 0) } else { cursor };
         let (row, column) = find_cell(
             &occupancy,
@@ -283,7 +308,7 @@ fn place_cells(
             column_span,
             columns,
             flow.by_column(),
-            row_bound,
+            row_wrap,
             spans.len(),
         );
         occupancy.reserve(row, column, row_span, column_span);
@@ -298,8 +323,8 @@ fn place_cells(
 }
 
 /// Scans for the first free rectangle of `row_span` x `column_span` cells, starting at `start` and
-/// walking in the flow's order. Falls back to the first free cell in the last row when the bounded
-/// scan finds nothing (only reachable with a span wider than the grid, which the builder rejects).
+/// walking in the flow's order. When the flow-order scan runs out (a column flow with more children
+/// than declared cells, which is a normal path), it falls back to the first genuinely free cell.
 fn find_cell(
     occupancy: &Occupancy,
     start: (usize, usize),
@@ -307,33 +332,44 @@ fn find_cell(
     column_span: usize,
     columns: usize,
     by_column: bool,
-    row_bound: usize,
+    // For a column flow: the declared row count the scan wraps at, or `None` when the rows are
+    // unbounded (no declared rows — the scan then never wraps).
+    row_wrap: Option<usize>,
     children: usize,
 ) -> (usize, usize) {
     let mut k = 0usize;
-    // In a column flow the rows are a fixed set that the scan wraps around; in a row flow they grow.
-    let row_mod = if by_column { row_bound.max(1) } else { row_bound + 1 };
     loop {
         let (row, column) = if by_column {
-            // Column-major: walk the rows of one column, then the next column.
-            let linear = start.0 + k;
-            let column = start.1 + linear / row_mod;
-            let row = linear % row_mod;
-            (row, column)
+            match row_wrap {
+                // Column-major, wrapping at the declared row count: walk one column, then the next.
+                Some(rows) => {
+                    let linear = start.0 + k;
+                    (linear % rows, start.1 + linear / rows)
+                }
+                // Column-major with unbounded rows: keep going down the same column.
+                None => (start.0 + k, start.1),
+            }
         } else {
             // Row-major: walk the columns of one row, then the next row.
             let linear = start.1 + k;
-            let row = start.0 + linear / columns;
-            let column = linear % columns;
-            (row, column)
+            (start.0 + linear / columns, linear % columns)
+        };
+        let inside_rows = match row_wrap {
+            Some(rows) => row + row_span <= rows,
+            None => true,
         };
         if column + column_span <= columns
+            && inside_rows
             && occupancy.fits(row, column, row_span, column_span, columns)
         {
             return (row, column);
         }
         k += 1;
-        if k > (row_mod + 1) * columns {
+        let cap = match row_wrap {
+            Some(rows) => (rows + 1) * columns,
+            None => children + 1024,
+        };
+        if k > cap {
             break;
         }
     }
@@ -341,7 +377,7 @@ fn find_cell(
     // more children than cells reaches. Fall back to the first genuinely FREE cell — two children must
     // never land on the same cell, which a fixed position did. Rows are unbounded, so walking them
     // upward always finds one; the cap only stops a malformed occupancy map from looping forever.
-    let row_cap = row_bound + children + 1024;
+    let row_cap = row_wrap.unwrap_or(children) + children + 1024;
     let mut row = 0;
     while row < row_cap {
         for column in 0..columns {
@@ -497,9 +533,11 @@ impl MeasurePolicy for GridLayout {
             placements.push(Placement { size, position: Offset::new(x, y) });
         }
 
+        // Compose constrains the grid's own size (`Grid.kt:898-899`): the tracks may add up to more
+        // than the parent offered, and the parent has to hear about the smaller box it actually got.
         let measured = Size::new(
-            total_width.max(constraints.min_width),
-            total_height.max(constraints.min_height),
+            total_width.clamp(constraints.min_width, constraints.max_width),
+            total_height.clamp(constraints.min_height, constraints.max_height),
         );
         // The mirror above ran against `total_width` because that is where the tracks end. A minimum
         // wider than the tracks leaves the grid occupying a wider box, so shift the whole result by the
@@ -709,9 +747,10 @@ mod tests {
         assert_eq!(placements[2].position.x, 300.0);
     }
 
-    /// An unbounded axis gives the percentage and weight tracks nothing, as Compose does.
+    /// An unbounded axis gives the percentage and weight tracks nothing. Compose falls back to max
+    /// intrinsic / min content there; winia has no intrinsic tracks in v1 (see `resolve_tracks`).
     #[test]
-    fn an_unbounded_axis_leaves_percent_and_weight_at_zero() {
+    fn an_unbounded_axis_gives_percent_and_weight_nothing() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(40.0), GridTrackSpec::weight(1.0)]);
         let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
         let (size, placements) = run(&policy, &mut nodes, Constraints::UNBOUNDED);
@@ -965,6 +1004,88 @@ mod tests {
     }
 
     /// A declared row the children never reach still takes its space.
+
+    /// The percentage basis excludes the gaps between tracks (Compose's `availableTrackSpace`,
+    /// `Grid.kt:634-639`), so two half-width tracks plus a gap fill the axis exactly instead of
+    /// overflowing by the gap.
+    #[test]
+    fn a_percentage_grid_with_gaps_fills_its_axis() {
+        let policy = GridLayout::new(vec![
+            GridTrackSpec::percent(0.5),
+            GridTrackSpec::percent(0.5),
+        ])
+        .column_gap(10.0);
+        let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 100.0, "45 + 10 + 45, not 50 + 10 + 50");
+        assert_eq!(placements[1].position.x, 55.0);
+    }
+
+    /// A column flow without declared rows never wraps: the column keeps growing downward, as Compose's
+    /// `explicitRowCount == 0` branch does (`Grid.kt:1301-1309`).
+    #[test]
+    fn a_column_flow_without_declared_rows_never_wraps() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)])
+            .flow(GridFlow::Column);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(10.0, 10.0).grid_item(1, 5)),
+            make_leaf(10.0, 10.0),
+        ];
+        nodes[0].measured_size = Size::new(10.0, 10.0);
+        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        assert_eq!(
+            placements[1].position.x, 0.0,
+            "the second child stays in the same column, below the five rows the first one covers: {:?}",
+            placements[1].position
+        );
+    }
+
+    /// A grid whose tracks add up to more than the parent offers reports the parent's maximum, as
+    /// Compose's `constrainWidth`/`constrainHeight` do (`Grid.kt:898-899`).
+    #[test]
+    fn an_overflowing_grid_is_clamped_to_the_axis() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(80.0); 3]).column_gap(8.0);
+        let mut nodes: Vec<LayoutNode> = (0..3).map(|_| make_leaf(10.0, 10.0)).collect();
+        let (size, _) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size.width, 200.0, "3 x 80 + 2 x 8 = 256, reported as the 200 the parent allows");
+    }
+
+    /// In a column flow a row span is clamped to the declared rows, so a child never spills into an
+    /// implicit row that the flow is not supposed to create (Compose: `Grid.kt:1217-1223`).
+    #[test]
+    fn a_column_flow_clamps_a_span_to_the_declared_rows() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)])
+            .rows(vec![GridTrackSpec::fixed(20.0), GridTrackSpec::fixed(20.0)])
+            .flow(GridFlow::Column);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(10.0, 10.0).grid_item(1, 3)),
+            make_leaf(10.0, 10.0),
+        ];
+        nodes[0].measured_size = Size::new(10.0, 10.0);
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        assert_eq!(size.height, 40.0, "two declared rows of 20, no implicit third");
+        assert_eq!(
+            placements[1].position,
+            Offset::new(50.0, 0.0),
+            "the span was clamped to the two rows, so the next child starts the second column"
+        );
+    }
+
+    /// A `u32::MAX` row span used to make the placement walk billions of rows and allocate them. The
+    /// public `u32` API has to survive it.
+    #[test]
+    fn an_extreme_row_span_is_clamped() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0)]);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(10.0, 10.0).grid_item(1, u32::MAX)),
+            make_leaf(10.0, 10.0),
+        ];
+        nodes[0].measured_size = Size::new(10.0, 10.0);
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        assert_eq!(placements.len(), 2);
+        assert!(size.height.is_finite(), "no runaway span: {size:?}");
+    }
+
     #[test]
     fn an_unused_declared_row_still_counts() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0)])

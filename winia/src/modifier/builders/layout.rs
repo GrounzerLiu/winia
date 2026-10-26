@@ -401,8 +401,8 @@ impl Modifier {
         })
     }
 
-    /// Like [`grid_item`](Self::grid_item), with the child aligned inside its cell instead of
-    /// stretched across it.
+    /// Like [`grid_item`](Self::grid_item), with the child placed by `alignment` inside its cell instead
+    /// of at the cell's top-left.
     pub fn grid_item_aligned(
         self,
         column_span: u32,
