@@ -58,7 +58,10 @@ fn card(ctx: &mut ComposeCtx, tag: &str, title: &str, body: impl FnOnce(&mut Com
             Modifier::new()
                 .fill_max_width()
                 .padding(12.0)
-                .background(Color { r: 0xF2, g: 0xF3, b: 0xF7, a: 255 }, Shape::Rectangle)
+                // A TRANSLUCENT tint rather than a solid surface: the settings sheet switches the
+                // example between the light and the dark theme, and an opaque light card becomes a
+                // white slab in dark mode. `lazy_kit::card` uses the same trick.
+                .background(Color::from_argb(20, 60, 90, 140), Shape::rounded(8.0))
                 .test_tag(tag),
         )
         .spacing(8.0)
