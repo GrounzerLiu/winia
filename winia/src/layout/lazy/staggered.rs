@@ -40,15 +40,13 @@ use std::sync::{Arc, Mutex};
 
 /// The main size an unmeasured item is priced at.
 const ESTIMATE: f32 = 120.0;
+/// What the window assumes the viewport is before the first measure has written one back.
+const FIRST_FRAME_VIEWPORT: f32 = 800.0;
 
 /// What the build and the policy share between frames.
 #[derive(Debug)]
 struct Shared {
     heights: ItemHeightCache,
-    /// The main viewport from the last measure (0 before the first one).
-    viewport: f32,
-    /// The cross viewport from the last measure — what `GridCells::Adaptive` counts lanes with.
-    viewport_cross: f32,
 }
 
 struct StaggeredPolicy<A: LazyAxis> {
@@ -75,6 +73,9 @@ struct StaggeredPolicy<A: LazyAxis> {
     extent: f32,
     shared: Arc<Mutex<Shared>>,
     content_height: Backchannel<f32>,
+    /// The viewports, written for the next build (and to wake it: they are States).
+    viewport_main: crate::runtime::state::State<f32>,
+    viewport_cross: crate::runtime::state::State<f32>,
     /// The scroll position: the measure clamps its offset and writes its fling limit.
     state: ScrollState,
     marker: PhantomData<A>,
@@ -104,7 +105,7 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         let viewport = if main_max < f32::MAX {
             main_max
         } else {
-            self.shared.lock().unwrap_or_else(|e| e.into_inner()).viewport
+            self.viewport_main.peek()
         };
         let lanes = self.lanes.max(1);
         let usable = (cross_max
@@ -125,21 +126,26 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             };
             let (size, _) = crate::layout::measure_node(nodes, policies, child, cc);
             let lane = self.lanes_of.get(slot).copied().unwrap_or(0).min(lanes - 1);
-            let main = self.main_before + cursors[lane];
+            // The cursors stay in CONTENT coordinates; the padding is added to the placement only, or
+            // every item after the first in a lane would be padded again (30 dp padding, item 2 at 104
+            // instead of 74 — found by the review).
+            let main = cursors[lane];
             let main_size = if A::VERTICAL { size.height } else { size.width };
             cursors[lane] = main + main_size + self.spacing;
             let lane_offset = lane as f32 * (cell + self.cross_spacing);
-            // A vertical waterfall mirrors its CROSS axis under RTL: lane 0 moves to the right.
-            let cross = if self.rtl {
-                (self.cross_extent - self.cross_before - self.cross_after) - lane_offset - cell
-                    + self.cross_before
+            // Only a VERTICAL waterfall mirrors its CROSS axis under RTL (lane 0 on the right); a
+            // horizontal one mirrors its main axis, which the scroll modifier does. The item keeps its
+            // own cross size, so the RTL anchor is the cell's far edge minus that size.
+            let cross_size = if A::VERTICAL { size.width } else { size.height };
+            let cross = if self.rtl && A::VERTICAL {
+                cross_max - self.cross_after - lane_offset - cross_size
             } else {
                 self.cross_before + lane_offset
             };
             let position = if A::VERTICAL {
-                Offset::new(cross, main)
+                Offset::new(cross, self.main_before + main)
             } else {
-                Offset::new(main, cross)
+                Offset::new(self.main_before + main, cross)
             };
             placements.push(Placement { size, position });
             if let Some(&key) = self.keys.get(slot) {
@@ -147,9 +153,14 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             }
         }
         {
+            if self.viewport_main.peek() != viewport {
+                self.viewport_main.set(viewport);
+            }
+            let cross = if cross_max < f32::MAX { cross_max } else { 0.0 };
+            if self.viewport_cross.peek() != cross {
+                self.viewport_cross.set(cross);
+            }
             let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
-            shared.viewport = viewport;
-            shared.viewport_cross = if cross_max < f32::MAX { cross_max } else { 0.0 };
             for (key, main_size) in measured {
                 shared.heights.record_keyed(key, main_size);
             }
@@ -164,17 +175,19 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         self.state.fling_limit.set(max_off);
         if viewport > 0.0 {
             let current = self.state.offset.peek();
-            if current > max_off {
-                self.state.offset.set(max_off);
+            let clamped = current.clamp(0.0, max_off);
+            if clamped != current {
+                self.state.offset.set(clamped);
             }
         }
         // The window came from ESTIMATES: when the measured block stops short of the viewport's far
         // edge, ask for one more compose — the lazy list's convergence, and the only thing that fills
         // the strip an estimate left empty on a static screen.
         let offset = self.state.offset.peek();
-        if viewport > 0.0 {
-            let covered = cursors.iter().copied().fold(0.0f32, f32::max) >= offset + viewport;
-            if !covered && self.extent > offset + viewport {
+        if viewport > 0.0 && self.extent > offset + viewport {
+            let target = offset + viewport;
+            let covered = cursors.iter().copied().all(|cursor| cursor >= target);
+            if !covered {
                 crate::runtime::composer::request_compose_after_layout();
             }
         }
@@ -332,18 +345,15 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         // The container OWNS this state, so it is a plain remember (docs/state-handles.md 7.4); the
         // scroll modifier and the policy of every frame share the same handles.
         let shared = ctx
-            .remember(|| {
-                Arc::new(Mutex::new(Shared {
-                    heights: ItemHeightCache::new(),
-                    viewport: 0.0,
-                    viewport_cross: 0.0,
-                }))
-            })
+            .remember(|| Arc::new(Mutex::new(Shared { heights: ItemHeightCache::new() })))
             .peek();
-        let cached_cross = {
-            let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-            shared.viewport_cross
-        };
+        // The viewports are STATES, not Mutex fields: the policy writes them during measure and the
+        // build READS them, so the write wakes this group. A Mutex field changes nothing the Skip
+        // decision compares, and the recomputed window/lane count/extent were silently discarded
+        // (that was the root cause of both ignored tests).
+        let viewport_main = ctx.remember(|| crate::runtime::state::State::new(0.0f32)).peek();
+        let viewport_cross = ctx.remember(|| crate::runtime::state::State::new(0.0f32)).peek();
+        let cached_cross = viewport_cross.get();
         let lanes = match self.cells {
             GridCells::Fixed(cells) => cells.max(1),
             // The same two-phase rule as the main viewport: the cross extent is known after the first
@@ -395,12 +405,13 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         };
         let (slots, deepest) = assign_lanes(lanes, &heights, self.spacing);
         let extent = self.content_padding.0 + deepest + self.content_padding.1;
-        let viewport = {
-            let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-            shared.viewport
-        };
+        let viewport = viewport_main.get();
         let offset = state.offset.get();
         let content_offset = (offset - self.content_padding.0).max(0.0);
+        // Before the first measure there is no viewport to window against: compose a generous default
+        // instead of a zero-height strip, or the bottom of the grid stays empty until a scroll forces
+        // another build (measured on the demo: ~450 dp of content for a 600 dp viewport).
+        let viewport = if viewport > 0.0 { viewport } else { FIRST_FRAME_VIEWPORT };
         let window_start = (content_offset - self.beyond_bounds).max(0.0);
         let window_end = content_offset + viewport + self.beyond_bounds;
         let mut window: Vec<usize> = Vec::new();
@@ -453,7 +464,7 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             cross_after: self.content_padding_cross.1,
             main_before: self.content_padding.0,
             rtl,
-            cross_extent: cached_cross.max(0.0),
+            cross_extent: cached_cross,
             window: window.clone(),
             keys,
             lanes_of,
@@ -461,6 +472,8 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             extent,
             shared,
             content_height: content_height.clone(),
+            viewport_main: viewport_main.clone(),
+            viewport_cross: viewport_cross.clone(),
             state: state.clone(),
             marker: PhantomData,
         };
@@ -557,7 +570,7 @@ mod tests {
     /// index never hit and every item stayed priced at the estimate (so the extent, and the scroll
     /// range, were wrong).
     #[test]
-    #[ignore = "open: with keys that are not indices the extent still misses a tall measured item (the policy records by key now, but the probe reports a 40 dp range instead of 800)"]
+
     fn a_key_that_is_not_an_index_still_feeds_the_cache() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
@@ -601,7 +614,7 @@ mod tests {
     /// `GridCells::Adaptive` counts the lanes from the cross extent the last measure wrote back, so the
     /// first frame composes one lane and the next corrects it.
     #[test]
-    #[ignore = "open: the cross write-back does not reach the next build (three frames still compose ONE lane)"]
+
     fn adaptive_lanes_come_from_the_measured_cross_extent() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()

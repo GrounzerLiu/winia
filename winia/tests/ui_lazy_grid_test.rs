@@ -97,4 +97,21 @@ fn a_staggered_grid_drifts_its_lanes() {
         (i2.1 - i3.1).abs() > 1.0,
         "the lanes have drifted apart, which a line grid could not express: {i2:?} {i3:?}"
     );
+
+    // The grid is 600 dp tall: its first frame has to COMPOSE down to the far edge. The window comes
+    // from an estimate and an unknown viewport, so it used to stop at ~450 dp and the bottom strip
+    // stayed empty until a scroll re-entered (reported from the running demo).
+    let mut top = f32::MAX;
+    let mut bottom = 0.0f32;
+    for index in 0..20 {
+        if let Some(rect) = app.find_tag(&format!("stagger-item-{index}")) {
+            top = top.min(rect.1);
+            bottom = bottom.max(rect.1 + rect.3);
+        }
+    }
+    assert!(
+        bottom - top > 550.0,
+        "the 600 dp grid composes down to its far edge: top {top}, bottom {bottom}"
+    );
 }
+
