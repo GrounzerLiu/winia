@@ -159,8 +159,15 @@ pub(crate) static ACTIONS: std::sync::Mutex<Option<Vec<(u64, UiAction)>>> = std:
 
 /// Queue an action for a window's next frame.
 pub fn request_action(window_id: u64, action: UiAction) {
-    let mut store = ACTIONS.lock().unwrap();
-    store.get_or_insert_with(Default::default).push((window_id, action));
+    {
+        let mut store = ACTIONS.lock().unwrap();
+        store.get_or_insert_with(Default::default).push((window_id, action));
+    }
+    // The queue is drained from the event loop's `about_to_wait`, and a provider is called on a
+    // thread the application does not control — so nothing else would wake the loop and the action
+    // would wait for the next mouse move. Measured from a real UIA client: `ScrollIntoView` did
+    // nothing until the window was touched.
+    crate::runtime::state::wake_loop();
 }
 
 /// Whether anything is queued — the event loop checks this before walking its windows.

@@ -144,10 +144,28 @@ never runs application code, and naming the collection means a window with sever
 right one. The nearest ancestor that declares the action is resolved from the snapshot at query time —
 a path-prefix walk, no store to keep in sync.
 
-Still missing on this side: **ItemContainerPattern** (`FindItemByProperty`, so a client can find an
-item UIA has not realized), and a real-client verification pass — the pattern implementations are
-covered by unit tests (`cargo test -p winia --features accessibility --lib accessibility`), but
-Narrator/Inspect still has to be run against a built app (`tools/verify_uia.ps1`).
+**Verified against a real UIA client** (PowerShell's `UIAutomationClient` against
+`cargo run -p winia --example lazy_layout_demo --features accessibility`): the raw-view walk reports
+`List 'RTL row'` with `ListItem` children carrying `patterns=ScrollItem`, and
+`ScrollItemPattern.ScrollIntoView()` on item 4 jumps the list so that item lands inside the viewport
+(`0@550 1@400 … 8@-650` before, `4@550` inside `[88,700]` after; the realized window grows from 9 to
+13 items). Invoking the Settings button through `InvokePattern` opens the sheet the same way.
+
+Two fixes came out of that run, both only visible with a real client:
+
+- **A queued action did not wake the event loop.** `request_action` only pushed onto the queue; the
+  loop drains it in `about_to_wait`, which needs an event. From a client, `ScrollIntoView` and
+  `Invoke` therefore did nothing until the window was touched. `request_action` wakes the loop now,
+  for every action (`Invoke`, `Focus`, `ScrollToIndex`).
+- **A container with no name answered "not supported"**, so UIA fell back to concatenating its
+  children's names and the list announced as "0 1 2 3 4 5 6 7 8". A container now answers an empty
+  string, and the honest fix is for the caller to name the list — the demo does
+  (`Modifier::semantics(SemanticsConfig::new().content_description("RTL row"))`), which is what
+  Compose expects too.
+
+Still missing on this side: **ItemContainerPattern** (`FindItemByProperty`), so a client can ask for an
+item the list has not realized — today only the composed window is visible, which is why the probe
+picks an off-screen but realized item.
 
 ## The Windows bridge (feature `accessibility`)
 

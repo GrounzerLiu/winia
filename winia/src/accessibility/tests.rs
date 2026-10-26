@@ -14,6 +14,7 @@
             clickable,
             focused: false,
             live_region: crate::semantics::LiveRegionMode::Off,
+            has_children: false,
             collection: false,
             collection_index: None,
             scroll_owner: None,

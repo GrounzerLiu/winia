@@ -57,6 +57,7 @@ impl Provider {
             clickable: node.clickable,
             focused: node.focused,
             live_region: node.live_region,
+            has_children: !node.children.is_empty(),
             collection: node.collection.is_some(),
             collection_index: node.collection_item.map(|info| info.index),
             scroll_owner,
@@ -136,6 +137,9 @@ pub(crate) struct ElementData {
     pub(crate) clickable: bool,
     pub(crate) focused: bool,
     pub(crate) live_region: crate::semantics::LiveRegionMode,
+    /// Whether this element has any children — what makes UIA's name fallback (join the children)
+    /// apply, so a container with no name of its own answers an empty string instead.
+    pub(crate) has_children: bool,
     /// Whether this element is a COLLECTION (Compose's `CollectionInfo`): a lazy list.
     pub(crate) collection: bool,
     /// This element's position in its enclosing collection, when it is an item of one.
@@ -586,6 +590,11 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             UIA_ControlTypePropertyId => Ok(variant_i32(control_type_for(&node).0)),
             UIA_NamePropertyId => match node.name.as_deref() {
                 Some(name) if !name.is_empty() => Ok(variant_bstr(name)),
+                // A CONTAINER with no name answers an empty string, not "not supported": UIA's
+                // fallback for an unnamed container is to concatenate its children's names, which
+                // made a lazy list announce as "0 1 2 3 4 5 6 7 8". Compose leaves such a name to
+                // the caller and never joins children, so an empty answer is the closer behaviour.
+                _ if node.has_children => Ok(variant_bstr("")),
                 _ => Ok(variant_not_supported()),
             },
             UIA_IsEnabledPropertyId => Ok(variant_bool(node.state.enabled_value().unwrap_or(true))),

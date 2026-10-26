@@ -58,6 +58,13 @@ fn tile(ctx: &mut ComposeCtx, tag: String, label: String, w: f32, h: f32, color:
 }
 
 // `Color::from_argb` is not a `const fn`, so the palette is a function, not constants.
+/// A reader announces a collection by the name the caller gives it; the component only declares the
+/// item count ("RTL row, list, 200 items"). A container with no name of its own gets UIA's fallback,
+/// which concatenates the children's names into "0 1 2 3 …".
+fn list_name(label: &str) -> Modifier {
+    Modifier::new().semantics(SemanticsConfig::new().content_description(label))
+}
+
 fn palette(i: usize) -> Color {
     if i % 2 == 0 {
         Color::from_argb(255, 90, 160, 220)
@@ -101,7 +108,8 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                             .fill_max_width()
                             .height(60.0)
                             .layout_direction(LayoutDirection::Rtl)
-                            .test_tag("lazy-rtl-row"),
+                            .test_tag("lazy-rtl-row")
+                            .then(list_name("RTL row")),
                     )
                     .items(ITEMS, |i| i as u64, |ctx, i| {
                         tile(ctx, format!("lazy-rtl-item-{i}"), format!("{i}"), 100.0, 44.0, palette(i));
@@ -120,7 +128,8 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                             .fill_max_width()
                             .height(150.0)
                             .layout_direction(LayoutDirection::Rtl)
-                            .test_tag("lazy-rtl-column"),
+                            .test_tag("lazy-rtl-column")
+                            .then(list_name("RTL column")),
                     )
                     .items(ITEMS, |i| i as u64, |ctx, i| {
                         tile(
@@ -177,7 +186,8 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                         Modifier::new()
                             .fill_max_width()
                             .height(60.0)
-                            .test_tag("lazy-ltr-row"),
+                            .test_tag("lazy-ltr-row")
+                            .then(list_name("LTR row")),
                     )
                     .items(ITEMS, |i| i as u64, |ctx, i| {
                         tile(ctx, format!("lazy-ltr-item-{i}"), format!("{i}"), 100.0, 44.0, accent(i));
