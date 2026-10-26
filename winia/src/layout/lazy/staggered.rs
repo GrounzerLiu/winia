@@ -69,6 +69,10 @@ struct StaggeredPolicy<A: LazyAxis> {
     start_cursors: Vec<f32>,
     /// The main-axis content padding used by this frame (`content_padding`).
     main_before: f32,
+    /// The trailing main-axis padding, and the item count: together with the placements they tell the
+    /// measure the REAL content bottom when the window reaches the last item.
+    main_after: f32,
+    count: usize,
     /// Whether the layout direction mirrors the CROSS axis (lane 0 on the right for RTL).
     rtl: bool,
     /// The cross extent the lanes are laid out in, for that mirror.
@@ -205,8 +209,29 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         // The scroll range covers the whole data set, not the composed window — and the offset is
         // CLAMPED into it, the way the lazy list's policy does: without the clamp a programmatic
         // `offset.set(10000)` stayed 10000 (measured), leaving the grid composing nothing forever.
-        let max_off = (self.extent - viewport).max(0.0);
-        self.content_height.set(self.extent);
+        // The last item's measured bottom is the true content end; the estimated extent is only an
+        // upper bound until then. Reporting the estimate at the end let the user scroll PAST the
+        // content (an over-scroll with blank space under the last tile).
+        let placed_bottom = placements
+            .iter()
+            .map(|placement| {
+                let main = if A::VERTICAL { placement.position.y } else { placement.position.x };
+                let size = if A::VERTICAL { placement.size.height } else { placement.size.width };
+                main + size
+            })
+            .fold(0.0f32, f32::max);
+        let reaches_end = self
+            .window
+            .last()
+            .map(|last| *last + 1 >= self.count)
+            .unwrap_or(false);
+        let extent = if reaches_end && self.count > 0 {
+            (placed_bottom + self.main_after).max(0.0)
+        } else {
+            self.extent
+        };
+        let max_off = (extent - viewport).max(0.0);
+        self.content_height.set(extent);
         // The INPUT path (drag, wheel, fling) reads `ScrollState::fling_limit`, not a channel of our
         // own: writing a private Backchannel left the real limit untouched.
         self.state.fling_limit.set(max_off);
@@ -550,6 +575,8 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             cross_before: self.content_padding_cross.0,
             cross_after: self.content_padding_cross.1,
             main_before: self.content_padding.0,
+            main_after: self.content_padding.1,
+            count: self.count,
             rtl,
             cross_extent: cached_cross,
             window: window.clone(),
@@ -840,6 +867,36 @@ mod tests {
     }
 
 
+
+
+    /// At the BOTTOM the scroll range must end where the content does: the estimated extent is an
+    /// upper bound, and reporting it let the view scroll past the last tile (blank space below it).
+    #[test]
+    fn the_scroll_range_ends_at_the_last_tile() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            grid_frame(&mut composer, &state, 40, 40.0);
+        }
+        state.offset.set(1.0e9);
+        for _ in 0..3 {
+            grid_frame(&mut composer, &state, 40, 40.0);
+        }
+        let root = composer.layout_root().unwrap();
+        let bottom = root.children.iter().fold(0.0f32, |bottom, child| {
+            let node = &composer.arena_nodes()[*child];
+            bottom.max(node.position.y + node.measured_size.height)
+        });
+        let offset = state.offset.get();
+        assert!(
+            (bottom - (offset + 200.0)).abs() <= 1.0,
+            "the last tile ends exactly at the viewport bottom: bottom {bottom}, offset {offset}"
+        );
+    }
 
     /// A COLD JUMP: the window is chosen from estimated tops, and before the anchors were recorded the
     /// composed block could land hundreds of dp away from the viewport and show a blank frame.
