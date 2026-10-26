@@ -21,8 +21,9 @@
 //! - `GridScope.gridItem(areaId, alignment)` (named areas) is not implemented; a child declares its
 //!   span with `Modifier::grid_item(column_span, row_span)`.
 //! - A child is measured at its CELL's width and, for a declared row, at that row's height; it is then
-//!   aligned inside the cell with `Modifier::grid_item_aligned` (default: stretch both axes, as Compose's
-//!   `Alignment.TopStart` default is replaced here by the grid's own fill behaviour).
+//!   aligned inside the cell with `Modifier::grid_item_aligned`. The default is Compose's
+//!   `Alignment.TopStart` (`Grid.kt:158-226`), so a child that does not fill its cell sits at the
+//!   cell's top-left unless its own chain says otherwise.
 
 use super::container::build_container;
 use super::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
@@ -423,7 +424,10 @@ impl MeasurePolicy for GridLayout {
             let cell_height = row_offsets[cell.row + cell.row_span]
                 - row_offsets[cell.row]
                 - self.row_gap;
-            let default_alignment = ContentAlignment::STRETCH;
+            // Compose's `gridItem` defaults to `Alignment.TopStart` (Grid.kt:158-226): a child that
+            // does not fill its cell sits at the cell's top-left, and a `fill_max_size` in the chain is
+            // what stretches it.
+            let default_alignment = ContentAlignment::TOP_START;
             let alignment = nodes[children[i]]
                 .modifier
                 .get_grid_item()
@@ -657,7 +661,9 @@ mod tests {
             .column_gap(10.0);
         let mut nodes = vec![spanning_leaf(40.0, 20.0, 2, 1), make_leaf(10.0, 10.0)];
         let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(placements[0].size, Size::new(130.0, 20.0), "stretched across 50 + 10 + 70");
+        // The default alignment is TopStart, so the child keeps its own size inside the wide cell.
+        assert_eq!(placements[0].size, Size::new(40.0, 20.0), "the child keeps its own size in the cell");
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "and sits at the cell's top-left");
         assert_eq!(placements[1].position, Offset::new(0.0, 20.0), "the next child starts a new row");
     }
 
@@ -732,7 +738,19 @@ mod tests {
     fn rtl_mirrors_the_columns() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(70.0)])
             .direction(LayoutDirection::Rtl);
-        let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
+        // Stretch explicitly: the mirror is about the TRACKS, and the default TopStart would leave the
+        // children at their own 10 dp width.
+        let mut nodes: Vec<LayoutNode> = (0..2)
+            .map(|_| {
+                let mut node = LayoutNode::leaf(
+                    Modifier::new()
+                        .size(10.0, 10.0)
+                        .grid_item_aligned(1, 1, ContentAlignment::STRETCH),
+                );
+                node.measured_size = Size::new(10.0, 10.0);
+                node
+            })
+            .collect();
         let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
         assert_eq!(size.width, 120.0);
         assert_eq!(placements[0].position.x, 70.0, "the first column is the rightmost");
@@ -753,9 +771,21 @@ mod tests {
         assert_eq!(placements[0].size, Size::new(20.0, 10.0), "a centred child keeps its size");
         assert_eq!(placements[0].position, Offset::new(40.0, 0.0), "centred in the 100-wide cell");
 
-        let mut stretched = vec![make_leaf(20.0, 10.0)];
+        // The default is Compose's TopStart: a child that does not fill its cell keeps its own size and
+        // hugs the top-left corner, while an explicit STRETCH fills the cell.
+        let mut top_start = vec![make_leaf(20.0, 10.0)];
+        let (_, placements) = run(&policy, &mut top_start, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(placements[0].size, Size::new(20.0, 10.0), "TopStart keeps the child's size");
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
+
+        let mut stretched = vec![LayoutNode::leaf(
+            Modifier::new()
+                .size(20.0, 10.0)
+                .grid_item_aligned(1, 1, ContentAlignment::STRETCH),
+        )];
+        stretched[0].measured_size = Size::new(20.0, 10.0);
         let (_, placements) = run(&policy, &mut stretched, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].size, Size::new(100.0, 10.0), "the default stretches the cell width");
+        assert_eq!(placements[0].size, Size::new(100.0, 10.0), "STRETCH fills the cell width");
     }
 
 

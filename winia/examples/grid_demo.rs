@@ -24,11 +24,28 @@ fn palette(i: usize) -> Color {
     COLORS[i % COLORS.len()]
 }
 
-fn cell(ctx: &mut ComposeCtx, tag: &str, width: f32, height: f32, color: Color) {
+/// One stretched cell: Compose's `gridItem` default is TopStart, so a cell that is meant to fill its
+/// track says so with an explicit STRETCH (and then a tag's rect is the resolved track, which is what
+/// the UI test reads).
+fn cell(ctx: &mut ComposeCtx, tag: &str, height: f32, color: Color) {
     Stack::new()
         .modifier(
             Modifier::new()
-                .size(width, height)
+                .size(10.0, height)
+                .grid_item_aligned(1, 1, ContentAlignment::STRETCH)
+                .background(color, Shape::Rectangle)
+                .test_tag(tag),
+        )
+        .build(ctx, |_| {});
+}
+
+/// A stretched cell spanning `columns` columns.
+fn wide_cell(ctx: &mut ComposeCtx, tag: &str, columns: u32, color: Color) {
+    Stack::new()
+        .modifier(
+            Modifier::new()
+                .size(10.0, 30.0)
+                .grid_item_aligned(columns, 1, ContentAlignment::STRETCH)
                 .background(color, Shape::Rectangle)
                 .test_tag(tag),
         )
@@ -73,7 +90,7 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                     .gap(8.0)
                     .build(ctx, |ctx| {
                         for i in 0..6 {
-                            cell(ctx, &format!("grid-fixed-{i}"), 40.0, 40.0, palette(i));
+                            cell(ctx, &format!("grid-fixed-{i}"), 40.0, palette(i));
                         }
                     });
             });
@@ -89,7 +106,7 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                 .gap(8.0)
                 .build(ctx, |ctx| {
                     for i in 0..3 {
-                        cell(ctx, &format!("grid-weight-{i}"), 40.0, 40.0, palette(i));
+                        cell(ctx, &format!("grid-weight-{i}"), 40.0, palette(i));
                     }
                 });
             });
@@ -104,17 +121,9 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                 ])
                 .gap(6.0)
                 .build(ctx, |ctx| {
-                    cell(ctx, "grid-span-0", 40.0, 30.0, palette(0));
-                    Stack::new()
-                        .modifier(
-                            Modifier::new()
-                                .size(40.0, 30.0)
-                                .grid_item(2, 1)
-                                .background(palette(1), Shape::Rectangle)
-                                .test_tag("grid-span-2col"),
-                        )
-                        .build(ctx, |_| {});
-                    cell(ctx, "grid-span-1", 40.0, 30.0, palette(2));
+                    cell(ctx, "grid-span-0", 30.0, palette(0));
+                    wide_cell(ctx, "grid-span-2col", 2, palette(1));
+                    cell(ctx, "grid-span-1", 30.0, palette(2));
                 });
             });
 
@@ -126,25 +135,9 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                     .gap(6.0)
                     .flow(GridFlow::RowDense)
                     .build(ctx, |ctx| {
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .size(40.0, 30.0)
-                                    .grid_item(2, 1)
-                                    .background(palette(0), Shape::Rectangle)
-                                    .test_tag("grid-dense-0"),
-                            )
-                            .build(ctx, |_| {});
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .size(40.0, 30.0)
-                                    .grid_item(2, 1)
-                                    .background(palette(1), Shape::Rectangle)
-                                    .test_tag("grid-dense-1"),
-                            )
-                            .build(ctx, |_| {});
-                        cell(ctx, "grid-dense-2", 30.0, 30.0, palette(2));
+                        wide_cell(ctx, "grid-dense-0", 2, palette(0));
+                        wide_cell(ctx, "grid-dense-1", 2, palette(1));
+                        cell(ctx, "grid-dense-2", 30.0, palette(2));
                     });
             });
 

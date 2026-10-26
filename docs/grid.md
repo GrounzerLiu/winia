@@ -17,6 +17,9 @@ Compose foundation `Grid` (`reference/compose/foundation-layout-1.13.0-beta01/co
 
 ## API
 
+The cells in the demo stretch explicitly (`grid_item_aligned(…, ContentAlignment::STRETCH)`), because
+a tag's rect is then the resolved track — which is what the UI test reads.
+
 ```rust
 Grid::new(vec![
     GridTrackSpec::fixed(90.0),      // a fixed 90 dp column
@@ -47,8 +50,10 @@ Grid::new(vec![
    DECLARED row count — with no declared rows the column never fills up and every child keeps going
    down it, which is what Compose does too.
 3. **Children** are measured at their CELL's width and, when the row is declared, at that row's
-   height. A child is then placed inside the cell by its alignment (default: stretch both axes), and
-   the whole grid is mirrored on x under RTL.
+   height. A child is then placed inside the cell by its alignment — the default is Compose's
+   `Alignment.TopStart`, so a child that does not fill its cell keeps its own size and hugs the
+   cell's top-left, while `ContentAlignment::STRETCH` (or a `fill_max_size` in the child's chain)
+   fills it — and the whole grid is mirrored on x under RTL.
 4. **Rows**: a declared row keeps its track spec; an IMPLICIT row (one the children need but
    `rows` does not declare) is as tall as the tallest child that spans exactly that one row. A child
    spanning several implicit rows contributes to the LAST of them.
@@ -64,8 +69,8 @@ Grid::new(vec![
 - **No `GridItemSpan` max-line helper**; a span is a plain `u32` and is clamped to the column count.
 - **Implicit-row sizing is simplified**: a multi-row child sizes only the last row it covers instead
   of being distributed across them.
-- Cell alignment defaults to STRETCH on both axes here; Compose's `gridItem` defaults to
-  `Alignment.TopStart` (top-left), so a child with no explicit alignment behaves differently.
+- A cell's default alignment is Compose's `Alignment.TopStart`; winia adds the `STRETCH` value on
+  top of it, which Compose expresses with `fillMaxSize()` inside the item instead.
 
 ## Tests
 
@@ -77,12 +82,12 @@ Grid::new(vec![
 | `gaps_sit_between_the_tracks` | per-axis gaps, and that they do not count at the edges |
 | `percent_and_weight_share_the_bounded_axis` | 100 fixed + 50 % + weight in a 400 box |
 | `an_unbounded_axis_leaves_percent_and_weight_at_zero` | the unbounded rule |
-| `a_spanning_child_covers_the_tracks_it_spans` | a two-column span's width and the next child's row |
+| `a_spanning_child_covers_the_tracks_it_spans` | a two-column span keeps the child's size (TopStart) and the next child's row |
 | `implicit_rows_size_to_their_tallest_child` | implicit row heights |
 | `dense_flow_fills_the_hole_a_span_left` | dense vs sparse placement |
 | `column_flow_fills_a_column_first` | column-major order, wrapping at the declared rows |
-| `rtl_mirrors_the_columns` | RTL mirroring |
-| `a_cell_alignment_places_the_child_inside_its_cell` | centred vs stretched children |
+| `rtl_mirrors_the_columns` | RTL mirroring (stretched children, so the assertion is about the tracks) |
+| `a_cell_alignment_places_the_child_inside_its_cell` | centred, the TopStart default and an explicit STRETCH |
 | `an_empty_grid_is_zero` | an empty grid |
 
 UI (`winia/tests/ui_grid_test.rs`, fixture scenario `grid`, driven by `tests/ui_fixtures/fixture_all.rs`)
