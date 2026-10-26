@@ -474,49 +474,24 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         };
         let (slots, deepest) = assign_lanes(lanes, &heights, self.spacing);
         let extent = self.content_padding.0 + deepest + self.content_padding.1;
-        // Per-lane item order and the tops the window is selected by. The tops are seeded from the
-        // anchors the last measure recorded, so the estimate chain only has to be accurate NEAR the
-        // anchor instead of across the whole data set (a cold jump used to land the composed block
-        // hundreds of dp away from the viewport).
+        // The tops the window is selected by. The GEOMETRY comes from assign_lanes — deterministic and
+        // identical between frames — and a SINGLE scalar shift from one measured anchor moves the whole
+        // waterfall. Seeding each lane from its OWN anchor (what this did before) let the lanes drift
+        // apart while scrolling: a left/right pair's y difference changed from frame to frame.
         let anchors = {
             let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
             shared.anchors.clone()
         };
-        let mut lane_items: Vec<Vec<usize>> = vec![Vec::new(); lanes];
-        for (index, slot) in slots.iter().enumerate() {
-            lane_items[slot.lane].push(index);
-        }
-        let mut tops: Vec<f32> = vec![0.0; self.count];
-        for lane in 0..lanes {
-            let items = &lane_items[lane];
-            let anchor = anchors.get(lane).and_then(|anchor| *anchor).and_then(|(index, top)| {
-                items.iter().position(|item| *item == index).map(|position| (position, top))
-            });
-            match anchor {
-                Some((position, top)) => {
-                    // Forward from the anchor with the cached sizes...
-                    let mut cursor = top + self.spacing;
-                    for item in items.iter().skip(position + 1) {
-                        tops[*item] = cursor;
-                        cursor += heights[*item] + self.spacing;
-                    }
-                    // ...and backwards for the items above it.
-                    let mut cursor = top;
-                    for item in items.iter().take(position).rev() {
-                        cursor = (cursor - heights[*item] - self.spacing).max(0.0);
-                        tops[*item] = cursor;
-                    }
-                    tops[items[position]] = top;
-                }
-                None => {
-                    let mut cursor = 0.0;
-                    for item in items {
-                        tops[*item] = cursor;
-                        cursor += heights[*item] + self.spacing;
-                    }
-                }
+        let mut shift = 0.0f32;
+        if let Some((index, top)) = anchors.iter().flatten().min_by_key(|(index, _)| *index).copied() {
+            if let Some(slot) = slots.get(index) {
+                shift = top - slot.main_start;
             }
         }
+        let tops: Vec<f32> = slots
+            .iter()
+            .map(|slot| (slot.main_start + shift).max(0.0))
+            .collect();
         let viewport = viewport_main.get();
         let offset = state.offset.get();
         let content_offset = (offset - self.content_padding.0).max(0.0);
@@ -868,6 +843,72 @@ mod tests {
 
 
 
+
+
+    /// The waterfall's GEOMETRY must not move while scrolling: with uniform tiles in two lanes, items
+    /// 2i and 2i+1 share a content y and the ladder steps by one tile plus one gap, at ANY offset. Before
+    /// the single-shift anchor each lane was seeded from its own anchor, so a left/right pair's y
+    /// difference drifted as the user scrolled.
+    #[test]
+    fn the_content_geometry_does_not_drift_while_scrolling() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer, state: &ScrollState| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyVerticalStaggeredGrid::new()
+                    .lanes(GridCells::Fixed(2))
+                    .spacing(8.0)
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(200.0))
+                    .items(12, |ctx, _index| {
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_width().height(40.0))
+                            .build(ctx, |_| {});
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        for _ in 0..2 {
+            frame(&mut composer, &state);
+        }
+        let ladder = |composer: &Composer| -> Vec<f32> {
+            let root = composer.layout_root().unwrap();
+            root.children
+                .iter()
+                .map(|child| composer.arena_nodes()[*child].position.y)
+                .collect()
+        };
+        let at_top = ladder(&composer);
+        assert!(at_top.len() >= 4, "a window of tiles: {at_top:?}");
+        assert!(
+            (at_top[0] - at_top[1]).abs() < 0.5,
+            "the first two tiles open both lanes at the same y: {at_top:?}"
+        );
+        assert!(
+            (at_top[2] - at_top[0] - 48.0).abs() < 0.5,
+            "the ladder steps by one tile plus one gap: {at_top:?}"
+        );
+
+        state.offset.set(150.0);
+        for _ in 0..2 {
+            frame(&mut composer, &state);
+        }
+        let scrolled = ladder(&composer);
+        assert!(
+            (scrolled[0] - scrolled[1]).abs() < 0.5,
+            "the lanes stay level after scrolling: {scrolled:?}"
+        );
+        assert!(
+            (scrolled[2] - scrolled[0] - 48.0).abs() < 0.5,
+            "and the ladder step is unchanged: {scrolled:?}"
+        );
+    }
 
     /// At the BOTTOM the scroll range must end where the content does: the estimated extent is an
     /// upper bound, and reporting it let the view scroll past the last tile (blank space below it).
