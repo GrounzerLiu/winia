@@ -1,10 +1,10 @@
 use super::*;
 
-/// 构建普通文本段落（测量与绘制共用——单一事实来源）。
+/// Builds a plain text paragraph — the single source shared by measure and draw.
 ///
-/// 从 TextStyle 参数构造 skia Paragraph（含 max_lines/ellipsis/justify/字重/倾斜），
-/// 并按 soft_wrap 决定布局宽度。测量期（node.rs）与绘制兜底（render.rs）都调此函数，
-/// 避免两处独立构造导致样式不一致。
+/// Builds a skia Paragraph from the TextStyle parameters (max_lines, ellipsis, justify, weight,
+/// slant) and picks the layout width from soft_wrap. Both the measure path (node.rs) and the draw
+/// fallback (render.rs) call it, so the two cannot drift apart in style.
 pub(crate) fn build_plain_paragraph(
     content: &str,
     font_size: f32,
@@ -23,12 +23,12 @@ pub(crate) fn build_plain_paragraph(
 
     let mut para_style = ParagraphStyle::new();
 
-    // max_lines：限制行数
+    // max_lines caps the line count
     if max_lines < usize::MAX {
         para_style.set_max_lines(max_lines);
     }
 
-    // ellipsis overflow：超出时显示省略号
+    // ellipsis overflow: show an ellipsis when the text does not fit
     if overflow == crate::text::TextOverflow::Ellipsis {
         para_style.set_ellipsis("\u{2026}");
     }
@@ -38,27 +38,28 @@ pub(crate) fn build_plain_paragraph(
         para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
     }
 
-    // soft_wrap=false: 无限宽度排版，不换行
+    // soft_wrap = false lays out at an infinite width, so nothing wraps
     let layout_width = if soft_wrap { max_width } else { f32::MAX };
 
     let mut text_style = skia_safe::textlayout::TextStyle::new();
     text_style.set_font_size(font_size);
-    // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
+    // IMPORTANT: set the text colour (Skia's TextStyle defaults to white, which is invisible on a
+    // white background)
     text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
-    // 字间距（对标 Compose TextStyle.letterSpacing——逻辑像素）
+    // Letter spacing (Compose's TextStyle.letterSpacing, in logical pixels)
     if letter_spacing != 0.0 {
         text_style.set_letter_spacing(letter_spacing);
     }
-    // 行高（对标 Compose TextStyle.lineHeight——固定 px；skia 是倍数语义，
-    // set_height(multiplier) + set_height_override(true)——override 才强制
-    // 行高生效（与 RichText 路径 node.rs:1284 一致，否则被字体默认行高覆盖））
+    // Line height (Compose's TextStyle.lineHeight, a fixed pixel value; skia speaks in multipliers,
+    // so set_height(multiplier) plus set_height_override(true) — only the override makes it stick,
+    // matching the RichText path, otherwise the font's default height wins)
     if let Some(lh) = line_height {
         if lh > 0.0 && font_size > 0.0 {
             text_style.set_height(lh / font_size);
             text_style.set_height_override(true);
         }
     }
-    // 设置字重和倾斜
+    // Weight and slant
     if font_weight != crate::text::FontWeight::NORMAL || font_style != crate::text::FontSlant::Upright {
         use skia_safe::FontStyle;
         use crate::text::FontSlant;
@@ -124,11 +125,11 @@ pub(crate) fn supporting_text_height(node: &LayoutNode) -> f32 {
     }
 }
 
-/// 合并的文本测量 + Paragraph 缓存。
+/// The combined text measure and Paragraph cache.
 ///
-/// 从 TextContent modifier 中提取所有参数（font_size、max_lines、overflow、align），
-/// 在 ParagraphStyle 上正确设置后一次创建 Paragraph，测量尺寸并缓存供渲染复用。
-/// 消除旧代码中 `measurer.measure()` + `cache_text_paragraph()` 重复创建的开销。
+/// Pulls every parameter out of the TextContent modifier (font_size, max_lines, overflow, align),
+/// applies them to a ParagraphStyle, builds the Paragraph ONCE, measures it and caches it for the
+/// render pass. The old code built it twice (measure + cache_text_paragraph).
 pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
     let Some(para) = build_text_paragraph(node, max_width) else {
         return Size::ZERO;
@@ -143,11 +144,11 @@ pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size 
     size
 }
 
-/// 富文本测量 + 缓存（含内联 drawable）。
+/// The rich-text measure and cache, inline drawables included.
 ///
-/// 从 RichTextContent modifier 中提取内容文本、内联元素列表和每段样式，
-/// 使用 Skia ParagraphBuilder 构建带 U+FFFC 占位符的段落，
-/// 对每个片段应用对应的样式后缓存 Paragraph 和 drawables 供渲染复用。
+/// Pulls the content text, the inline elements and the per-span styles out of the RichTextContent
+/// modifier, builds a paragraph whose inline elements sit behind U+FFFC placeholders, applies each
+/// span's style and caches the Paragraph and the drawables for the render pass.
 pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     use skia_safe::textlayout::{ParagraphStyle, PlaceholderAlignment, TextBaseline};
     
@@ -159,16 +160,16 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             let para_style = ParagraphStyle::new();
             let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
 
-            // 按 span 迭代 + drawable 范围
+            // Walk the spans, tracking the drawable ranges
             let chars: Vec<char> = content.chars().collect();
             let mut di = 0usize;
             let mut span_idx = 0usize;
             let total = chars.len();
             let mut ci = 0usize;
             while ci < total {
-                // 是否在 drawable 范围内
+                // Whether this character belongs to a drawable
                 if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
-                    // 占位符（只对范围起点做一次 add_placeholder，跳过剩余字符）
+                    // Placeholder: add it once at the start of the range and skip the rest of it
                     if ci == drawable_ranges[di].start {
                         if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
                             builder.push_style(&to_sktextstyle(s));
@@ -182,7 +183,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     continue;
                 }
 
-                // 文本：先查 span
+                // Text: look the span up first
                 while span_idx < spans.len() && spans[span_idx].end <= ci { span_idx += 1; }
                 if span_idx < spans.len() && spans[span_idx].start <= ci && ci < spans[span_idx].end {
                     let run_end = spans[span_idx].end.min(total);
@@ -196,7 +197,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     continue;
                 }
 
-                // 无样式文本
+                // Text with no span
                 builder.add_text(&chars[ci].to_string());
                 ci += 1;
             }
@@ -214,13 +215,13 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
     Size::ZERO
 }
 
-/// 将 RichSpanStyle 转为 Skia TextStyle
+/// Converts a RichSpanStyle into a Skia TextStyle.
 pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     let mut ts = SkTextStyle::new();
     ts.set_font_size(s.font_size);
     ts.set_color(skia_safe::Color::from_argb(s.color.a, s.color.r, s.color.g, s.color.b));
 
-    // 字重/字型/字宽
+    // Weight, slant, width
     let slant = match s.font_style {
         FontSlant::Upright => skia_safe::font_style::Slant::Upright,
         FontSlant::Italic => skia_safe::font_style::Slant::Italic,
@@ -228,7 +229,7 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     };
     ts.set_font_style(SkFontStyle::new(s.font_weight.value().into(), s.font_width.into(), slant));
 
-    // 装饰线
+    // Decoration
     let mut deco: skia_safe::textlayout::TextDecoration = skia_safe::textlayout::TextDecoration::default();
     if s.underline { deco |= skia_safe::textlayout::TextDecoration::UNDERLINE; }
     if s.overline { deco |= skia_safe::textlayout::TextDecoration::OVERLINE; }
@@ -257,23 +258,23 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_mode(sk);
     }
 
-    // 基线偏移（shift = font_size * multiplier）
+    // Baseline shift (shift = font_size * multiplier)
     if s.baseline_shift != 0.0 {
         ts.set_baseline_shift(s.baseline_shift * s.font_size);
     }
 
-    // 间距
+    // Spacing
     if s.letter_spacing != 0.0 { ts.set_letter_spacing(s.letter_spacing); }
     if s.word_spacing != 0.0 { ts.set_word_spacing(s.word_spacing); }
     if s.height_multiple != 0.0 { ts.set_height(s.height_multiple); ts.set_height_override(true); }
     if s.half_leading { ts.set_half_leading(true); }
 
-    // 字体族
+    // Font family
     if !s.font_families.is_empty() {
         ts.set_font_families(&s.font_families.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     }
 
-    // 渲染精度
+    // Render hinting
     if let Some(e) = s.font_edging {
         use crate::text::FontEdge;
         let sk = match e {
@@ -295,7 +296,7 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     }
     if s.subpixel { ts.set_subpixel(true); }
 
-    // 前景/背景
+    // Foreground and background
     if let Some(fg) = &s.foreground_color {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(fg.a, fg.r, fg.g, fg.b));
@@ -317,10 +318,10 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     ts
 }
 
-// ── 主轴间距计算（Column/Row 共用）──
+// ── Main-axis spacing (shared by Column and Row) ──
 
-/// 计算 Arrangement 的间距分配：返回 (元素间额外间距, 首/尾 leading offset)。
-/// Column 垂直主轴 / Row 水平主轴——由调用方（measure_flex）确定主轴分量。
+/// Computes an Arrangement's spacing: returns (extra gap between items, the leading offset at
+/// either end). Column passes the vertical main axis, Row the horizontal one — measure_flex decides.
 pub fn compute_spacing(
     arrangement: crate::layout::Arrangement,
     remaining: f32,
@@ -344,7 +345,7 @@ pub fn compute_spacing(
         crate::layout::Arrangement::SpaceAround => {
             if gap_count > 0 {
                 let space = remaining / (gap_count + 1) as f32;
-                (space, space / 2.0) // (元素间间距, 首/尾边缘间距 = 一半)
+                (space, space / 2.0) // (gap between items, half of it at either edge)
             } else {
                 (0.0, remaining / 2.0)
             }
@@ -356,7 +357,7 @@ pub fn compute_spacing(
                 // trailing gap out — measured on the docked picker's month list, whose four 36 dp
                 // rows came out at leading 47.75 / pitch 47.75 / trailing 0 in a 335 dp panel.
                 let space = remaining / (gap_count + 2) as f32;
-                (space, space) // 元素间与边缘间距相等
+                (space, space) // the same gap between items and at the edges
             } else {
                 (0.0, remaining / 2.0)
             }

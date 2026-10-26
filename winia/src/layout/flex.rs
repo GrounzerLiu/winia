@@ -1,8 +1,8 @@
-//! Flex 布局 — 参数化 Column/Row 的共同逻辑
+//! Flex layout — the logic Column and Row share.
 //!
-//! Column (垂直主轴) 和 Row (水平主轴) 的 measure 算法结构完全一致，
-//! 仅在主轴/交叉轴的坐标映射上有差异。FlexAxis trait 将差异抽象为
-//! 编译期泛型参数，消除两处 ~140 行的重复代码。
+//! Column (vertical main axis) and Row (horizontal main axis) measure with the same algorithm; they
+//! differ only in how a main/cross coordinate maps onto x/y. The FlexAxis trait turns that difference
+//! into a compile-time type parameter, which removes ~140 duplicated lines.
 
 use super::constraints::Constraints;
 use crate::unit::Size;
@@ -10,7 +10,8 @@ use super::node::*;
 
 // ── FlexAxis trait ──
 
-/// 主轴/交叉轴的抽象映射。所有方法均为关联函数，编译期单态化零开销。
+/// The main/cross-axis mapping. Every method is an associated function, so monomorphisation makes
+/// it free at run time.
 ///
 /// The questions both container families ask live in [`Axis`]; this adds what only the flex
 /// algorithm needs.
@@ -18,13 +19,15 @@ pub(crate) trait FlexAxis: super::axis::Axis {
     /// Whether this axis is horizontal; used where a generic flow helper must choose the row vs
     /// column fill element without a second boolean parameter.
     const HORIZONTAL: bool;
-    // ── 约束构造 ──
+    // ── Building constraints ──
     fn constrain_main(c: &Constraints, v: f32) -> f32;
     fn constrain_cross(c: &Constraints, v: f32) -> f32;
 
-    /// 构造 Constraints：cross 轴用完整父约束，main 轴 min=0, max=remaining
+    /// Builds Constraints for a phase-1 child: the cross axis keeps the parent's full range, the main
+    /// axis gets min = 0 and max = whatever is left.
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints;
-    /// 构造 Constraints：main 轴固定=allocated，cross 轴: min 由 stretch 决定, max=父约束
+    /// Builds Constraints for a phase-2 (weighted) child: the main axis is fixed to `allocated`, the
+    /// cross axis keeps the parent's max with a min that Stretch decides.
     ///
     /// `fill_main` is Compose's `LayoutWeightParentData.fill`: the share is an exact main-axis size
     /// when true and only a MAXIMUM when false — `createConstraints(mainAxisMin = if
@@ -61,16 +64,16 @@ pub(crate) trait FlexAxis: super::axis::Axis {
         cross: f32,
     ) -> Constraints;
 
-    // ── 值构造 ──
+    // ── Building sizes ──
     // `size` / `point` are on `Axis`.
 
     // ── RTL ──
-    /// RTL 镜像时的容器宽度（x 轴范围）——水平主轴用行自身测量宽度，
-    /// 垂直主轴（Column）用交叉轴宽度
+    /// The container width used when mirroring for RTL: a horizontal main axis uses the row's own
+    /// measured width, a vertical one uses the cross-axis width.
     fn rtl_container_width(measured_main: f32, cross_size: f32) -> f32;
 }
 
-// ── 实现：垂直主轴 (Column) ──
+// ── Vertical main axis (Column) ──
 
 impl FlexAxis for super::axis::VerticalAxis {
     const HORIZONTAL: bool = false;
@@ -80,8 +83,8 @@ impl FlexAxis for super::axis::VerticalAxis {
     #[inline]
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints {
         Constraints {
-            // 交叉轴松 min（对齐 Compose Column：子节点不继承父 tight 宽度——
-            // 否则 fill_max_size 父把 tight 传给所有子，子宽度被强制撑满）
+            // Loosen the cross-axis minimum, as Compose's Column does: a child must not inherit the
+            // parent's tight width, or a fill_max_size parent would force every child to fill it.
             min_width: 0.0,
             max_width: c.max_width,
             min_height: 0.0,
@@ -129,7 +132,7 @@ impl FlexAxis for super::axis::VerticalAxis {
     }
 }
 
-// ── 实现：水平主轴 (Row) ──
+// ── Horizontal main axis (Row) ──
 
 impl FlexAxis for super::axis::HorizontalAxis {
     const HORIZONTAL: bool = true;
@@ -141,7 +144,8 @@ impl FlexAxis for super::axis::HorizontalAxis {
         Constraints {
             min_width: 0.0,
             max_width: main_remaining.max(0.0),
-            // 交叉轴松 min（对齐 Compose Row：子节点不继承父 tight 高度）
+            // Loosen the cross-axis minimum, as Compose's Row does: a child must not inherit the
+            // parent's tight height.
             min_height: 0.0,
             max_height: c.max_height,
         }
@@ -187,9 +191,9 @@ impl FlexAxis for super::axis::HorizontalAxis {
     }
 }
 
-// ── 参数化 measure ──
+// ── The parameterised measure ──
 
-/// 参数化 flex 测量。Column 和 Row 的 `MeasurePolicy::measure` 直接委托到此函数。
+/// The parameterised flex measure. Column's and Row's `MeasurePolicy::measure` delegate straight here.
 pub(crate) fn measure_flex<A: FlexAxis>(
     arrangement: Arrangement,
     alignment: Alignment,
@@ -211,7 +215,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         );
     }
 
-    // ── per-child 属性 ──
+    // ── Per-child attributes ──
     let weights: Vec<Option<f32>> = children
         .iter()
         .map(|&c| {
@@ -239,7 +243,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         .map(|&c| nodes[c].modifier.get_align_self().unwrap_or(alignment))
         .collect();
 
-    // ── Phase 1: 无 weight 子节点 ──
+    // ── Phase 1: the children without a weight ──
     let mut child_sizes: Vec<Size> = vec![Size::ZERO; n];
     // Main-axis size a WEIGHTED child is placed at. The parent allocates that share
     // (Compose measures a weighted child with fixed main constraints and keeps the
@@ -287,7 +291,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         charged_spacing += last_gap;
     }
 
-    // 剩余空间
+    // What is left over
     //
     // A main axis is unbounded when it carries EITHER sentinel: `f32::INFINITY`
     // (`Constraints::UNBOUNDED`) or `f32::MAX` (what a scroll container writes for its content —
@@ -318,7 +322,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let fixed_space = total_fixed_main + charged_spacing;
     let remaining = (target_main - fixed_space - arrangement_spacing_total).max(0.0);
 
-    // ── Phase 2: weight 子节点 ──
+    // ── Phase 2: the weighted children ──
     for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             // `remaining * (w / total_weight)`, not `remaining * w / total_weight`: two finite
@@ -347,7 +351,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         }
     }
 
-    // ── Phase 3: 尺寸与布局 ──
+    // ── Phase 3: the size and the layout ──
     //
     // Compose's `fixedSpace + weightedSpace`:
     //   fixedSpace    = the non-weighted children plus their capped gaps (`charged_spacing`)
@@ -403,7 +407,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let (spacing_extra, leading_space) = compute_spacing(arrangement, remaining_main, gap_count);
     let effective_spacing = spacing + spacing_extra;
 
-    // ── 交叉轴最终尺寸 ──
+    // ── The final cross-axis size ──
     //
     // Compose's alignment-line pass (`RowColumnMeasurePolicy.kt:228-251`) runs before the size is
     // taken: a child aligned by one of its lines contributes that line's distance from its own top
@@ -440,7 +444,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
             .max(A::cross_min(constraints))
     };
 
-    // 放置子节点
+    // Place the children
     let mut placements = Vec::with_capacity(n);
     let mut main_offset = leading_space;
 
@@ -477,7 +481,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         main_offset += child_main + effective_spacing;
     }
 
-    // ── RTL 镜像 ──
+    // ── Mirroring for RTL ──
     if direction == LayoutDirection::Rtl {
         let container_x = A::rtl_container_width(measured_main, cross_size);
         for p in &mut placements {
@@ -488,20 +492,22 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     (A::size(measured_main, cross_size), placements)
 }
 
-// ── 固有尺寸（Compose 的 IntrinsicMeasureBlocks）──
+// ── Intrinsic sizes (Compose's IntrinsicMeasureBlocks) ──
 //
-// Row/Column 是 Compose 里唯一不用 `MeasurePolicy` 默认近似、而是四个查询全覆写的容器：
-// `weight` 需要与测量相位同一套算术（RowColumnImpl.kt:371-452）。下面两个函数就是那段的移植，
-// 查询面由 row.rs / column.rs 按 IntrinsicMeasureBlocks 的对应表传入
+// Row/Column is the only Compose container that overrides all four intrinsic queries instead of
+// falling back to the MeasurePolicy default: `weight` needs the same arithmetic as the measure phases
+// (RowColumnImpl.kt:371-452). The two functions below are that port; row.rs and column.rs pass the
+// query surface in, following IntrinsicMeasureBlocks' table.
 // （RowColumnImpl.kt:261-369）。
 
-/// Compose 的 `intrinsicMainAxisSize`（RowColumnImpl.kt:371-394）。
+/// Compose's `intrinsicMainAxisSize` (RowColumnImpl.kt:371-394).
 ///
-/// 无 weight 的子节点贡献自己的主轴固有尺寸；有 weight 的子节点**没有**固有尺寸——它由父节点
-/// 分配一份空间——所以容器改为给"加权集合"定价：最大的 weight 单位（该子节点主轴尺寸 / 它的
-/// weight）乘以总 weight。这正是 `weight(1f)` 的标签在 Column 里仍能报出有限固有高度的原因：
-/// 少了这段算术，标签会把约束原样报回，容器于是报最大值而不是内容宽度
-/// （菜单的两遍测量当年正是踩了这个坑，见 `docs/dropdown-menu.md` §4.2）。
+/// A child without a weight contributes its own main-axis intrinsic size; a weighted child HAS none —
+/// the parent hands it a share — so the container prices the weighted set instead: the largest weight
+/// unit (that child's main size divided by its weight) times the total weight. This is why a
+/// `weight(1f)` label inside a Column still reports a finite intrinsic height: without the arithmetic
+/// the label echoes the constraints back and the container reports the maximum rather than the content
+/// width (the two-pass dropdown measurement walked into exactly that; see docs/dropdown-menu.md 4.2).
 pub(crate) fn flex_intrinsic_main(
     ctx: &mut IntrinsicCtx<'_>,
     children: &[usize],
@@ -528,12 +534,14 @@ pub(crate) fn flex_intrinsic_main(
     weight_unit_space * total_weight + fixed_space + spacing * (children.len() as f32 - 1.0).max(0.0)
 }
 
-/// Compose 的 `intrinsicCrossAxisSize`（RowColumnImpl.kt:396-452）。
+/// Compose's `intrinsicCrossAxisSize` (RowColumnImpl.kt:396-452).
 ///
-/// 交叉轴答案必须先知道每个子节点的**主轴**空间：子节点的交叉尺寸是按它将占用的主轴空间定价的。
-/// 无 weight 的子节点取"无界主轴固有尺寸"与容器剩余空间的较小者；有 weight 的子节点各占一个
-/// weight 单位。这里的 `main_query` 是主轴的 **Max** 查询——Compose 的每个交叉轴块都拿主轴
-/// `maxIntrinsic*` 配对（RowColumnImpl.kt:281-355），因为拿到更多空间的子节点也可能在交叉轴上变大。
+/// The cross-axis answer needs each child's MAIN-axis space first: a child's cross size is priced by
+/// the main space it will occupy. A child without a weight takes the smaller of its unbounded
+/// main-axis intrinsic size and the container's remaining space; a weighted child takes one weight
+/// unit each. `main_query` here is the main axis's MAX query — every Compose cross-axis block pairs
+/// with `maxIntrinsic*` (RowColumnImpl.kt:281-355), because a child given more space can also grow on
+/// the cross axis.
 pub(crate) fn flex_intrinsic_cross(
     ctx: &mut IntrinsicCtx<'_>,
     children: &[usize],
@@ -562,7 +570,7 @@ pub(crate) fn flex_intrinsic_cross(
             total_weight += weight;
             continue;
         }
-        // 问子节点想要多少主轴空间——但绝不会超过剩余可用空间。
+        // Ask the child how much main-axis space it wants, never more than what is left.
         let remaining = if unbounded {
             f32::MAX
         } else {
@@ -573,7 +581,8 @@ pub(crate) fn flex_intrinsic_cross(
         cross_axis_max = cross_axis_max.max(ctx.child_intrinsic(c, cross_query, main_axis_space));
     }
 
-    // weight=1 代表多少主轴空间（无界时 Compose 用 Infinity → 交叉轴按无界问）。
+    // How much main-axis space one weight unit is worth (unbounded: Compose uses Infinity, so the
+    // cross axis is asked as unbounded).
     let weight_unit_space = if total_weight == 0.0 {
         0.0
     } else if unbounded {

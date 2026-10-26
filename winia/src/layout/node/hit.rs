@@ -1,6 +1,6 @@
 use super::*;
 
-// ── 命中测试 ──
+// ── Hit testing ──
 
 /// Children in PAINT order: tree order, except that a child carrying `Modifier::z_index` moves after
 /// the ones with a lower z (stable, so equal z keeps tree order).
@@ -19,13 +19,13 @@ pub fn paint_order(nodes: &[LayoutNode], children: &[usize]) -> Vec<usize> {
     order
 }
 
-/// 命中测试：返回从根到叶的节点索引链（arena 版）
+/// Hit test: returns the chain of node indices from the root down to the leaf (arena flavour).
 ///
-/// 坐标空间 = 布局空间（场景坐标）。只处理 scroll 偏移（布局层位移）；
-/// **不处理 graphics_layer 变换**——图形层只影响绘制、不影响命中
-/// （对标 Compose graphicsLayer：点击区域始终是布局 bounds，变换后
-/// 视觉超出/缩进的部分不改变命中范围）。波纹按压点本地坐标换算
-/// （scene_to_node_local）与此保持一致。
+/// The coordinate space is the layout space (scene coordinates). Only scroll offsets are handled —
+/// they move the layout; **graphics_layer transforms are not** — a layer changes what is drawn, not
+/// what is hit (as in Compose's graphicsLayer: the touch area stays the layout bounds, and a visual
+/// overhang or inset after a transform does not change it). The ripple press point's local-coordinate
+/// conversion (scene_to_node_local) keeps the same rule.
 pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize> {
     let mut path = Vec::new();
     hit_test_recursive(nodes, root, x, y, 0.0, 0.0, &mut path);
@@ -306,8 +306,9 @@ pub(crate) fn hit_test_recursive(
     let ny = parent_y + node.position.y;
     let mut nw = node.content_box().width;
     let mut nh = node.content_box().height;
-    // scroll 容器：命中范围按可视 viewport 计——measured_size 是内容全高，
-    // 否则滚动内容会在视口外拦截本应命中后续兄弟的点击/滚轮
+    // A scroll container is hit over its VISIBLE viewport: measured_size is the full content height,
+    // and using it would let scrolled-out content swallow clicks and wheel events meant for the
+    // siblings that follow.
     if node.scroll_viewport_height > 0.0 {
         nh = node.scroll_viewport_height;
     }
@@ -341,27 +342,27 @@ pub(crate) fn hit_test_recursive(
         None => (x, y),
     };
 
-    // 检查是否在节点范围内
+    // Is the point inside the node?
     if x < nx || x > nx + nw || y < ny || y > ny + nh {
         return false;
     }
 
     path.push(idx);
 
-    // 计算 scroll 偏移（渲染时 canvas.translate(-offset)）
+    // The scroll offset (the render pass translates by -offset)
     let (scroll_dx, scroll_dy) = scroll_offset_for_node(node);
 
-    // 子节点坐标 = 父节点坐标 + scroll 偏移
+    // Child coordinates = parent coordinates + the scroll offset
     let child_px = nx - scroll_dx;
     let child_py = ny - scroll_dy;
 
-    // 深度优先：先检查子节点（子节点在父节点上方）；
-    // ⚠ 兄弟节点**倒序**遍历——绘制按 PAINT 顺序（后画在上层），
-    // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
-    // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）。
-    // PAINT 顺序 = 树顺序，除非有子节点设了 `Modifier::z_index`
-    // （`paint_order`；z 高的画在后、命中也优先——Compose 同语义），
-    // 所以这里按 paint_order 倒序遍历，常见情形（无 z）与原来完全一致。
+    // Depth first: children before the node itself (a child paints above its parent).
+    // The siblings are walked in REVERSE: painting follows PAINT order (later paints higher), so the
+    // hit test has to prefer the later one (z-order semantics). Walking forwards made an upper sibling
+    // (a rectangle over a full-screen image, say) unreachable — the image underneath kept the hit.
+    // PAINT order equals tree order unless a child sets `Modifier::z_index` (`paint_order`; a higher z
+    // paints later and is hit first, as in Compose), so the walk goes through paint_order in reverse,
+    // which is the old behaviour whenever no z is used.
     let ordered;
     let order: &[usize] = if node.children_have_z {
         ordered = paint_order(nodes, &node.children);
@@ -384,25 +385,26 @@ pub(crate) fn hit_test_recursive(
         }
     }
 
-    // 没有命中子节点，停在当前节点
+    // No child matched, so the walk stops at this node
     true
 }
 
-/// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
+/// Scene coordinates to the target node's local coordinates (relative to its top-left corner).
 ///
-/// 与 `hit_test_recursive` 走同一条路径：从根累加 position，并减去
-/// 祖先 scroll 偏移（渲染时 scroll 容器 translate(-offset)）。用于
-/// 波纹按压点存储——对标 Compose `PressInteraction.Press.pressPosition`
-/// 的本地坐标语义（绘制时加回布局原点，滚动/图形层变换后波纹跟随节点）。
-/// graphics_layer 变换暂不计——与命中测试行为一致（命中本身未反变换 GL）。
+/// Takes the same path `hit_test_recursive` does: accumulate `position` from the root and subtract
+/// the ancestors' scroll offsets (the render pass translates a scroll container by -offset). The
+/// ripple stores its press point this way, matching Compose's `PressInteraction.Press.pressPosition`
+/// (the draw pass adds the layout origin back, so the ripple follows the node through scrolling).
+/// graphics_layer transforms are not undone — same as the hit test, which does not invert them
+/// either.
 ///
-/// ⚠ `node_abs_position`（app.rs）与 `hit_test` 也走同一坐标空间——修 scroll
-/// 时须同步（多行 TextField 点击定位依赖一致的"滚动画布坐标"）。
-/// scroll 容器的滚动偏移量（场景坐标 → 内容坐标转换用）。
+/// `node_abs_position` (app.rs) and `hit_test` use the same space: a change to one has to change the
+/// other (multi-line TextField click positioning depends on the two agreeing).
+/// A scroll container's offset (converts scene coordinates into content coordinates).
 ///
-/// ⚠ RTL（scroll_reverse）：render 平移是 `off = content_w - viewport_w - offset`
-///（render.rs:746-748 镜像），hit_test 的坐标转换必须用同一个 off——否则
-/// 点击检测位置错位（用户实测：RTL 下滚动 tab 点击触发位置不对）。
+/// RTL (scroll_reverse): the render pass translates by `off = content_w - viewport_w - offset`
+/// (render.rs:746-748 mirrors it), so the hit test must use the same off — otherwise clicks land in
+/// the wrong place (measured: a scrolled RTL tab row reacted off-target).
 pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
@@ -413,9 +415,9 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     }
     if let Some(state) = node.modifier.horizontal_scroll_state() {
         dx += if node.scroll_reverse {
-            // RTL：offset 语义被镜像——内容平移量 = 总宽 - 视口 - offset
-            //（content_w 首帧可能未回写为 0，此时退化为 -offset→max(0)=0，
-            // 与 render 首帧行为一致）
+            // RTL: the offset's meaning is mirrored — the content translation is total - viewport -
+            // offset (content_w is 0 before the first write-back, which degrades to -offset clamped at
+            // 0, matching what the render pass does on that frame)
             let content_w = if node.scroll_content_width > 0.0 { node.scroll_content_width } else { 0.0 };
             (content_w - node.scroll_viewport_width - state.offset.peek()).max(0.0)
         } else {
@@ -502,7 +504,7 @@ pub(crate) fn collect_position_callbacks_at(
     }
 }
 
-/// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
+/// Scene coordinates to the target node's local coordinates (relative to its top-left corner).
 pub(crate) fn scene_to_node_local(
     nodes: &[LayoutNode],
     path: &[usize],
