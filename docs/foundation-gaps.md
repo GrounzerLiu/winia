@@ -59,16 +59,19 @@ empty `remember` slots. That is what `remember_saveable` fixes — see [saveable
 
 ### 3. The scroll-container family
 
-`winia/src/layout/` contains `lazy.rs` and nothing else in that family.
+Most of the family shipped since this document was written: `LazyRow` is the same axis-generic
+`LazyList` as `LazyColumn` (`layout/lazy/list.rs`), `LazyVerticalGrid`/`LazyHorizontalGrid` are one
+axis-generic `LazyGrid` (`layout/lazy/grid.rs`, see [lazy-grid.md](lazy-grid.md)), and `Pager` lives in
+`components/pager.rs`. What is left is the STAGGERED family and the generic lazy layout API.
 
 | Missing | Compose equivalent | Consequence |
 | --- | --- | --- |
-| `LazyRow` | `foundation.lazy.LazyRow` | horizontal card strips are hand-rolled |
-| `LazyVerticalGrid` / `LazyHorizontalGrid` | `foundation.lazy.grid` | photo grids, keypads, galleries |
-| `Pager` + `PagerState` | `foundation.pager` | onboarding, carousels, page snapping |
+| `LazyVerticalStaggeredGrid` / horizontal | `foundation.lazy.staggeredgrid` | waterfall feeds |
+| Generic `LazyLayout` API | `foundation.lazy.LazyLayout` | a custom lazy layout cannot reuse the window, the anchor model or item recycling |
+| `LazyListPrefetchStrategy` | `foundation.lazy.LazyListPrefetchStrategy` | winia widens the window with `beyond_bounds(n)` instead of a per-frame prefetch budget |
 
-This is the most *user-visible* gap in the list: it cannot be papered over inside a component the way
-a semantics attribute can.
+The staggered grid is the most *user-visible* gap left: it cannot be papered over inside a component
+the way a semantics attribute can.
 
 ### 4. ~~AnchoredDraggable~~ — already shared
 
@@ -136,8 +139,8 @@ single-threaded composer does not need. What shipped instead is write batches pl
 it does not delete the three approximations, it gives them something to stand on.
 See [snapshot-feasibility.md](snapshot-feasibility.md).
 
-**LazyRow and Pager are the highest-visibility items.** They are additive, touch nothing existing, and
-unblock whole categories of screens.
+**The staggered lazy grid is the highest-visibility item left in the container family.** Like the grids
+before it, it is additive and touches nothing existing.
 
 ## Re-checking this document
 
