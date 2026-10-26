@@ -2846,6 +2846,7 @@
             .iter()
             .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
             .collect();
+        assert!(offsets.len() >= 5, "the rows carry paint channels: {offsets:?}");
         assert!(
             offsets.iter().all(|(_, y)| y.abs() < 0.5),
             "no row may animate when the whole list only scrolled: {offsets:?}"
@@ -2947,6 +2948,7 @@
             .iter()
             .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
             .collect();
+        assert!(offsets.len() >= 5, "the rows carry paint channels: {offsets:?}");
         assert!(
             offsets.iter().all(|(_, y)| y.abs() < 0.5),
             "no row may flash when the whole list only scrolled: {offsets:?}"
@@ -3009,6 +3011,7 @@
         // The rows really do have paint channels (so "the host did nothing" cannot pass this), and
         // none of them is out of place.
         assert!(offsets.len() >= 5, "the rows carry paint channels: {offsets:?}");
+        assert!(offsets.len() >= 5, "the rows carry paint channels: {offsets:?}");
         assert!(
             offsets.iter().all(|(_, y)| y.abs() < 0.5),
             "no row may animate when the whole list only scrolled: {offsets:?}"
@@ -3016,6 +3019,63 @@
         crate::animation::clear_all_animations();
     }
 
+    /// The anchor row does not have to carry the marker: a list that marks most rows but not the one
+    /// that happens to be first visible (a section header, say) has no remembered position for it, and
+    /// the correction's own delta is used instead. Without that fallback the whole correction was
+    /// silently dropped and the rows flashed.
+    #[test]
+    fn the_anchor_without_its_own_marker_still_rebases_the_rows() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .spacing(8.0)
+                    .content_padding(4.0, 4.0)
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        // Key 3 is the row the scroll below leaves first: no marker on purpose.
+                        let modifier = if *k == 3 {
+                            Modifier::new().fill_max_width().height(48.0)
+                        } else {
+                            Modifier::new().animate_item().fill_max_width().height(48.0)
+                        };
+                        crate::layout::Column::new().modifier(modifier).build(ctx, |ctx| {
+                            crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                        });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        state.scroll_to_item(3, 20.0);
+        build(&mut composer, Arc::new((0..20).collect()));
+        build(&mut composer, Arc::new((0..20).collect()));
+
+        let mut items: Vec<u64> = vec![99];
+        items.extend(0..20);
+        build(&mut composer, Arc::new(items));
+
+        let offsets: Vec<(u64, f32)> = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
+            .collect();
+        assert!(offsets.len() >= 5, "the marked rows have paint channels: {offsets:?}");
+        assert!(
+            offsets.iter().all(|(_, y)| y.abs() < 0.5),
+            "the fallback delta keeps the rows still: {offsets:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]
