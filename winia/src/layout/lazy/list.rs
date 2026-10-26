@@ -624,7 +624,9 @@ impl<A: LazyAxis> LazyList<A> {
         // The difference is kept PENDING until the policy places the item, so a fade starts exactly
         // once even when the frame takes several compose passes (the second pass would otherwise see
         // the key as already known and skip the fade).
-        {
+        // Only when the data changed: on a scroll the key set is the same, and walking it every frame
+        // would cost O(data) per layout pass for nothing.
+        if data_changed {
             let mut known = state.known_keys.lock().unwrap_or_else(|e| e.into_inner());
             let mut pending = state.pending_new.lock().unwrap_or_else(|e| e.into_inner());
             // The FIRST layout is not an appearance: the list's initial content does not fade in, and
