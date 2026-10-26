@@ -72,11 +72,21 @@ new item and the old one exits.
 ## Demo
 
 ```bash
-cargo run -p winia --example item_animation_demo
+cargo run -p winia --example item_animation_demo        # a plain column: add / tap to remove
+cargo run -p winia --example lazy_item_animation_demo   # a LazyColumn: insert, shuffle, remove
 ```
 
-The demo adds and removes cards: a new card fades in, the removed card keeps its captured frame
-while it fades out, and the container height follows through `AnimatedSize`.
+The first demo adds and removes cards on a plain column: a new card fades in, the removed card
+keeps its captured frame while it fades out, and the container height follows through
+`AnimatedSize`.
+
+The second is the VIRTUALIZED case (`tests/ui_lazy_item_animation_test.rs`, fixture scenario
+`lazy_item_animation`): insert at the head or in the middle, shuffle (same keys, new slots — pure
+placement), remove from the middle or by tapping a card, and cycle the contract between Compose's
+default, a placement-only one (`without_fade_in().without_fade_out()`) and a slower custom one, so
+the three channels are visible side by side. It also exercises the window: the list is longer than
+the viewport, so items leave and re-enter the composed range while the animation state follows the
+key.
 
 ## Input during a placement animation
 
