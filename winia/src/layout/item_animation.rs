@@ -472,11 +472,18 @@ impl ItemAnimationHost {
                 item.alpha.set(1.0);
             }
         } else {
-            let delta = item.last_position + item.offset.peek() - position;
-            if delta.x.abs() > 0.01 || delta.y.abs() > 0.01 {
+            // Only a TARGET that moved starts a new placement animation. The in-flight offset must not
+            // count as movement: a scroll re-lays out on every frame, and restarting from the current
+            // offset each time throws the spring's velocity away, so the item crawls towards its slot
+            // instead of settling (that is the "item animation gets slow while scrolling" report).
+            let target_shift = item.last_position - position;
+            let target_moved = target_shift.x.abs() > 0.01 || target_shift.y.abs() > 0.01;
+            if target_moved {
                 if let Some(placement) = &spec.placement {
+                    // Keep the item where it is drawn and animate from there to the new slot.
+                    let visual = item.offset.peek() + target_shift;
                     crate::animation::cancel_animation(&item.offset);
-                    item.offset.set(delta);
+                    item.offset.set(visual);
                     crate::animation::push_animatable_restart(
                         item.offset.clone(),
                         Offset::ZERO,

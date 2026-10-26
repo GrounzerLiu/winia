@@ -29,7 +29,11 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
 ## What moves
 
 - **Placement**: the item keeps its last position by key; a reflow turns the difference into a paint
-  offset that travels to zero with the placement curve.
+  offset that travels to zero with the placement curve. Only a TARGET that MOVED starts a new
+  animation: a scroll re-lays out on every frame, and treating the in-flight offset as movement
+  restarts the spring each frame with zero velocity, so the item crawls towards its slot instead of
+  settling (measured on an item 48 dp out of place: ten 16 ms frames of scrolling left it at 48 dp
+  with the old rule, and at 7.7 dp now).
 - **Fade-in**: a key that is new to the container's DATA starts at alpha 0 and animates to 1. A key
   that is merely new to the composed WINDOW is not an appearance: scrolling a Lazy list composes keys
   that have been in the data all along, and fading those in makes a scroll look like a strobe

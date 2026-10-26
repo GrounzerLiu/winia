@@ -2628,6 +2628,70 @@
         );
         crate::animation::clear_all_animations();
     }
+    /// A re-layout that does not move the item must not restart its placement animation: a scroll
+    /// re-lays out on every frame, and restarting from the in-flight offset throws the spring's
+    /// velocity away — the item then crawls towards its slot instead of settling (the "item
+    /// animation gets slow while scrolling" report).
+    #[test]
+    fn a_relayout_that_does_not_move_the_item_keeps_its_placement_animation() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(48.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+        let offset_of = |composer: &Composer, key: u64| -> f32 {
+            composer
+                .arena_nodes()
+                .iter()
+                .filter_map(|n| n.item_paint.as_ref())
+                .find(|paint| paint.key == key)
+                .map(|paint| paint.offset.peek().y)
+                .unwrap_or(0.0)
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        // Insert in the middle: everything below moves down one row and starts a placement animation.
+        let mut items: Vec<u64> = (0..10).collect();
+        items.push(999);
+        items.extend(10..20);
+        let items = Arc::new(items);
+        build(&mut composer, items.clone());
+        let start = offset_of(&composer, 15);
+        assert!(start.abs() > 10.0, "the shift started an animation: {start}");
+
+        // Ten frames of a SCROLL: the offset changes (so the list re-lays out every frame) while the
+        // item's slot in the content does not move at all.
+        let mut scrolled = 0.0f32;
+        for _ in 0..10 {
+            scrolled += 1.0;
+            state.offset.set(scrolled);
+            clock.advance(std::time::Duration::from_millis(16));
+            crate::animation::update_animations();
+            build(&mut composer, items.clone());
+        }
+        let after = offset_of(&composer, 15);
+        assert!(
+            after.abs() < start.abs() * 0.6,
+            "the animation keeps progressing across scroll re-layouts: {start} -> {after}"
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]
