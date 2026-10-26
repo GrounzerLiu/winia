@@ -19,7 +19,9 @@
 //!   children need but `Grid::rows` does not declare) is sized by the tallest child that spans exactly
 //!   that one row. A child spanning several implicit rows contributes to the LAST of them, which is a
 //!   simplification of Compose's distribution.
-//! - `GridScope.gridItem(areaId, alignment)` (named areas) is not implemented; a child declares its
+//! - Named areas ARE implemented (`Grid::areas` + `Modifier::grid_item_in_area`); the Compose form with
+//!   a per-item `alignment` inside the area is not — pass the alignment through `grid_item_aligned`.
+//! - A child declares its
 //!   span with `Modifier::grid_item(column_span, row_span)`.
 //! - A child is measured at its CELL's width and, for a declared row, at that row's height; it is then
 //!   aligned inside the cell with `Modifier::grid_item_aligned`. The default is Compose's
@@ -1064,6 +1066,14 @@ impl Grid {
     /// `layout_weight` in it can still take effect.
     pub fn modifier(mut self, m: Modifier) -> Self {
         self.modifier = self.modifier.then(m);
+        self
+    }
+
+    /// Declares NAMED AREAS (Compose's `area(areaId, rows, columns)`): the cells are reserved before
+    /// auto-placement runs, so the other children flow around them. A child names one with
+    /// `Modifier::grid_item_in_area(id)`.
+    pub fn areas(mut self, areas: Vec<GridArea>) -> Self {
+        self.areas = areas;
         self
     }
 

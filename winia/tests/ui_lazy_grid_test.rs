@@ -110,8 +110,29 @@ fn a_staggered_grid_drifts_its_lanes() {
         }
     }
     assert!(
-        bottom - top > 550.0,
-        "the 600 dp grid composes down to its far edge: top {top}, bottom {bottom}"
+        bottom - top > 400.0,
+        "the 460 dp grid composes down to its far edge: top {top}, bottom {bottom}"
     );
+
+    // The controls drive the grid: a third lane puts the first three tiles on one row, and "end" jumps
+    // to the last item (which the clamped offset must be able to reach).
+    assert!(
+        app.expect_tag("stagger-status").2 > 0.0,
+        "the status line is laid out"
+    );
+    app.click_tag("lanes-more");
+    app.refresh();
+    let l0 = app.expect_tag("stagger-item-0");
+    let l1 = app.expect_tag("stagger-item-1");
+    let l2 = app.expect_tag("stagger-item-2");
+    assert!(
+        (l0.1 - l1.1).abs() <= 1.0 && (l1.1 - l2.1).abs() <= 1.0,
+        "three lanes put the first three tiles on one row: {l0:?} {l1:?} {l2:?}"
+    );
+    app.click_tag("jump-end");
+    app.expect_eventually_timeout("end jumps to the last item", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("stagger-item-39").is_some()
+    });
 }
 

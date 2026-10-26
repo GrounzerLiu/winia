@@ -1,9 +1,10 @@
-//! Grid demo — the four things the layout does: fixed tracks, weighted tracks, spans, dense flow.
+//! Grid demo — every knob live: track presets, gaps, flow, spans, cell alignment, areas and RTL.
 //!
-//! Each card is one case, and every cell carries a `test_tag` so the UI suite can read the geometry
-//! off the real window (`tests/ui_grid_test.rs`, fixture scenario `grid`). The cells ask for
-//! `ContentAlignment::STRETCH` explicitly — Compose's `gridItem` default is TopStart, so a child that
-//! says nothing keeps its own size — which makes a tag's rect the resolved track.
+//! The controls drive a static `Grid`: "tracks" swaps the column presets (fixed / weighted /
+//! mixed / intrinsic), "flow" walks Row / Column / RowDense / ColumnDense, "align" re-places the cells,
+//! "cells +" grows the set, the switches give cell 0 a two-column span, reserve a named area for cell 1
+//! and mirror the grid. Every cell carries `grid-cell-N` and the controls carry their own tags, so
+//! `tests/ui_grid_test.rs` drives them through fixture scenario `grid`.
 //!
 //! Run with `cargo run -p winia --example grid_demo`.
 
@@ -24,152 +25,161 @@ fn palette(i: usize) -> Color {
     COLORS[i % COLORS.len()]
 }
 
-/// One stretched cell: Compose's `gridItem` default is TopStart, so a cell that is meant to fill its
-/// track says so with an explicit STRETCH (and then a tag's rect is the resolved track, which is what
-/// the UI test reads).
-fn cell(ctx: &mut ComposeCtx, tag: &str, height: f32, color: Color) {
-    Stack::new()
-        .modifier(
-            Modifier::new()
-                .size(10.0, height)
-                .grid_item_aligned(1, 1, ContentAlignment::STRETCH)
-                .background(color, Shape::Rectangle)
-                .test_tag(tag),
-        )
-        .build(ctx, |_| {});
+/// The column presets the "tracks" button cycles.
+fn tracks(preset: u32) -> Vec<GridTrackSpec> {
+    match preset % 4 {
+        0 => vec![GridTrackSpec::fixed(90.0); 3],
+        1 => vec![GridTrackSpec::weight(1.0); 3],
+        2 => vec![
+            GridTrackSpec::fixed(80.0),
+            GridTrackSpec::weight(1.0),
+            GridTrackSpec::percent(0.25),
+        ],
+        _ => vec![
+            GridTrackSpec::FitContent,
+            GridTrackSpec::FitContent,
+            GridTrackSpec::fixed(90.0),
+        ],
+    }
 }
 
-/// A stretched cell spanning `columns` columns.
-fn wide_cell(ctx: &mut ComposeCtx, tag: &str, columns: u32, color: Color) {
-    Stack::new()
-        .modifier(
-            Modifier::new()
-                .size(10.0, 30.0)
-                .grid_item_aligned(columns, 1, ContentAlignment::STRETCH)
-                .background(color, Shape::Rectangle)
-                .test_tag(tag),
-        )
-        .build(ctx, |_| {});
+fn flow_of(index: u32) -> GridFlow {
+    match index % 4 {
+        0 => GridFlow::Row,
+        1 => GridFlow::Column,
+        2 => GridFlow::RowDense,
+        _ => GridFlow::ColumnDense,
+    }
 }
 
-fn card(ctx: &mut ComposeCtx, tag: &str, title: &str, body: impl FnOnce(&mut ComposeCtx)) {
-    Column::new()
-        .modifier(
-            Modifier::new()
-                .fill_max_width()
-                .padding(12.0)
-                // A TRANSLUCENT tint rather than a solid surface: the settings sheet switches the
-                // example between the light and the dark theme, and an opaque light card becomes a
-                // white slab in dark mode. `lazy_kit::card` uses the same trick.
-                .background(Color::from_argb(20, 60, 90, 140), Shape::rounded(8.0))
-                .test_tag(tag),
-        )
-        .spacing(8.0)
-        .build(ctx, |ctx| {
-            Text::new(title).font_size(13.0).build(ctx);
-            body(ctx);
-        });
+fn alignment_of(index: u32) -> ContentAlignment {
+    match index % 4 {
+        0 => ContentAlignment::TOP_START,
+        1 => ContentAlignment::CENTER,
+        2 => ContentAlignment::STRETCH,
+        _ => ContentAlignment::BOTTOM_END,
+    }
 }
 
 #[composable]
 fn grid_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let preset = ctx.remember(|| State::new(0u32)).get();
+    let gap = ctx.remember(|| State::new(8.0f32)).get();
+    let flow = ctx.remember(|| State::new(0u32)).get();
+    let span = ctx.remember(|| State::new(false)).get();
+    let align = ctx.remember(|| State::new(2u32)).get();
+    let area = ctx.remember(|| State::new(false)).get();
+    let rtl = ctx.remember(|| State::new(false)).get();
+    let count = ctx.remember(|| State::new(12usize)).get();
 
     Column::new()
-        .modifier(
-            Modifier::new()
-                .fill_max_size()
-                .padding(16.0)
-                .vertical_scroll(scroll),
-        )
-        .spacing(14.0)
+        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("Grid").font_size(18.0).build(ctx);
+            Text::new("Grid — every knob live").font_size(18.0).build(ctx);
+            Text::new(format!(
+                "tracks {} | gap {:.0} | flow {} | span {} | align {} | areas {} | {} | {} cells",
+                preset.get() % 4,
+                gap.get(),
+                flow.get() % 4,
+                if span.get() { "2" } else { "1" },
+                align.get() % 4,
+                if area.get() { "on" } else { "off" },
+                if rtl.get() { "RTL" } else { "LTR" },
+                count.get()
+            ))
+            .font_size(11.0)
+            .modifier(Modifier::new().test_tag("grid-status"))
+            .build(ctx);
 
-            // 1. Three fixed 80 dp columns: each cell lands one track apart, and the fourth child
-            //    starts the second (implicit) row.
-            card(ctx, "grid-fixed-card", "1. Fixed tracks (80 dp, gap 8)", |ctx| {
-                Grid::new(vec![GridTrackSpec::fixed(80.0); 3])
-                    .gap(8.0)
-                    .build(ctx, |ctx| {
-                        for i in 0..6 {
-                            cell(ctx, &format!("grid-fixed-{i}"), 40.0, palette(i));
-                        }
-                    });
+            Row::new().spacing(6.0).build(ctx, |ctx| {
+                let s = preset.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("tracks"))
+                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .build(ctx, |ctx| Text::new("tracks").font_size(11.0).build(ctx));
+                let s = flow.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("flow"))
+                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .build(ctx, |ctx| Text::new("flow").font_size(11.0).build(ctx));
+                let s = align.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("align"))
+                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .build(ctx, |ctx| Text::new("align").font_size(11.0).build(ctx));
+                let s = count.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("cells-more"))
+                    .on_click(move || s.set((s.get() + 3).min(24)))
+                    .build(ctx, |ctx| Text::new("cells +").font_size(11.0).build(ctx));
+            });
+            Row::new().spacing(6.0).build(ctx, |ctx| {
+                let s = span.clone();
+                Switch::new(span.get())
+                    .modifier(Modifier::new().test_tag("span"))
+                    .on_checked_change(move |value| s.set(value))
+                    .build(ctx, |_| {});
+                Text::new("span 2").font_size(11.0).build(ctx);
+                let s = area.clone();
+                Switch::new(area.get())
+                    .modifier(Modifier::new().test_tag("areas"))
+                    .on_checked_change(move |value| s.set(value))
+                    .build(ctx, |_| {});
+                Text::new("areas").font_size(11.0).build(ctx);
+                let s = rtl.clone();
+                Switch::new(rtl.get())
+                    .modifier(Modifier::new().test_tag("rtl"))
+                    .on_checked_change(move |value| s.set(value))
+                    .build(ctx, |_| {});
+                Text::new("RTL").font_size(11.0).build(ctx);
+            });
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                Text::new("gap").font_size(11.0).build(ctx);
+                let s = gap.clone();
+                Slider::new(gap.get())
+                    .modifier(Modifier::new().test_tag("gap"))
+                    .value_range(0.0, 24.0)
+                    .on_value_change(move |value| s.set(value))
+                    .build(ctx);
             });
 
-            // 2. A fixed column and two weighted ones: the weight shares what the 90 dp track and
-            //    the gaps leave over, so the second column is half the third.
-            card(ctx, "grid-weight-card", "2. Fixed + weights (90 | 1 | 2)", |ctx| {
-                Grid::new(vec![
-                    GridTrackSpec::fixed(90.0),
-                    GridTrackSpec::weight(1.0),
-                    GridTrackSpec::weight(2.0),
-                ])
-                .gap(8.0)
+            Grid::new(tracks(preset.get()))
+                .gap(gap.get())
+                .flow(flow_of(flow.get()))
+                .areas(if area.get() {
+                    vec![GridArea::new(7, (0, 1), (1, 2))]
+                } else {
+                    Vec::new()
+                })
+                // `test_tag` carries the CHILD-shape switches on purpose: a child's span is not a Grid
+                // parameter, so the grid's Skip decision cannot see it — the modifier is part of that
+                // decision, so keying it on the switches forces the re-entry a real app would get from
+                // its own data signature.
+                .modifier(Modifier::new()
+                    .fill_max_width()
+                    .test_tag(format!("grid-shape-{}-{}", span.get(), area.get()))
+                    .layout_direction(if rtl.get() {
+                    LayoutDirection::Rtl
+                } else {
+                    LayoutDirection::Ltr
+                }))
                 .build(ctx, |ctx| {
-                    for i in 0..3 {
-                        cell(ctx, &format!("grid-weight-{i}"), 40.0, palette(i));
+                    for index in 0..count.get() {
+                        let mut modifier = Modifier::new()
+                            .test_tag(format!("grid-cell-{index}"))
+                            .height(48.0)
+                            .background(palette(index), Shape::rounded(6.0));
+                        if index == 0 {
+                            modifier = modifier.grid_item(if span.get() { 2 } else { 1 }, 1);
+                        }
+                        if area.get() && index == 1 {
+                            modifier = modifier.grid_item_in_area(7);
+                        }
+                        modifier = modifier.grid_item_aligned(1, 1, alignment_of(align.get()));
+                        Stack::new().modifier(modifier).build(ctx, |_| {});
                     }
                 });
-            });
-
-            // 3. A span: the child covers two columns, so it is measured at their combined width and
-            //    the cell after it moves past both.
-            card(ctx, "grid-span-card", "3. A child spanning two columns", |ctx| {
-                Grid::new(vec![
-                    GridTrackSpec::fixed(70.0),
-                    GridTrackSpec::fixed(70.0),
-                    GridTrackSpec::fixed(70.0),
-                ])
-                .gap(6.0)
-                .build(ctx, |ctx| {
-                    cell(ctx, "grid-span-0", 30.0, palette(0));
-                    wide_cell(ctx, "grid-span-2col", 2, palette(1));
-                    cell(ctx, "grid-span-1", 30.0, palette(2));
-                });
-            });
-
-            // 4. Dense flow: the second child needs two of the three columns, so it drops to the next
-            //    row and leaves the last cell of row 0 free. The third child is single-cell, and a
-            //    DENSE scan sends it back to fill that hole.
-            card(ctx, "grid-dense-card", "4. Dense flow fills the hole", |ctx| {
-                Grid::new(vec![GridTrackSpec::fixed(70.0); 3])
-                    .gap(6.0)
-                    .flow(GridFlow::RowDense)
-                    .build(ctx, |ctx| {
-                        wide_cell(ctx, "grid-dense-0", 2, palette(0));
-                        wide_cell(ctx, "grid-dense-1", 2, palette(1));
-                        cell(ctx, "grid-dense-2", 30.0, palette(2));
-                    });
-            });
-
-            // 5. A cell alignment: a centred child keeps its own size inside the cell.
-            card(ctx, "grid-align-card", "5. A centred child inside its cell", |ctx| {
-                Grid::new(vec![GridTrackSpec::fixed(120.0)])
-                    .build(ctx, |ctx| {
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .size(30.0, 30.0)
-                                    .grid_item_aligned(1, 1, ContentAlignment::CENTER)
-                                    .background(palette(3), Shape::Rectangle)
-                                    .test_tag("grid-align-center"),
-                            )
-                            .build(ctx, |_| {});
-                    });
-            });
-
-            // 6. An intrinsic column: it hugs the widest cell, so the fixed 60 dp track starts right
-            //    after the content instead of at a guessed width.
-            card(ctx, "grid-fit-card", "6. An intrinsic column beside a fixed one", |ctx| {
-                Grid::new(vec![GridTrackSpec::FitContent, GridTrackSpec::fixed(60.0)])
-                    .gap(6.0)
-                    .build(ctx, |ctx| {
-                        cell(ctx, "grid-fit-0", 30.0, palette(4));
-                        cell(ctx, "grid-fit-1", 30.0, palette(5));
-                    });
-            });
         });
 }
 
@@ -177,7 +187,7 @@ pub fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(460.0, 860.0)
+                .size(560.0, 860.0)
                 .title("Grid demo")
                 .build(ctx, |ctx| {
                     settings::shell("Grid", ctx, grid_demo);
