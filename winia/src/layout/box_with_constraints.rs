@@ -664,6 +664,63 @@ mod tests {
         );
     }
 
+    /// The alignment has to survive a frame the box did NOT measure — the adoption path re-applies the
+    /// geometry it recorded, and if it re-applied the padding/offset a second time the content would
+    /// drift by the padding every frame instead of staying in the corner. The sibling test
+    /// ('the_box_keeps_its_adopted_child_across_a_frame_it_did_not_measure') asserts the child COUNT
+    /// across such a frame; this one asserts the POSITION, and runs the box at three frames.
+    #[test]
+    fn the_alignment_survives_a_frame_the_box_did_not_measure() {
+        const PAD: f32 = 10.0;
+        let mut composer = Composer::new();
+        // A closure the frame loop re-runs, exactly like a real build.
+        let build = |ctx: &mut ComposeCtx| {
+            BoxWithConstraints::new()
+                .content_alignment(ContentAlignment::BOTTOM_END)
+                .modifier(Modifier::new().padding(PAD).size(400.0, 400.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::components::Text::new("content")
+                        .modifier(Modifier::new().size(100.0, 50.0))
+                        .build(ctx);
+                });
+        };
+
+        // The invariant every frame must hold: the content sits in the bottom-right corner, PAD away
+        // from the box's edges. Absolute coordinates, so an accumulated adoption offset shows up as a
+        // mismatch rather than being cancelled by a relative comparison.
+        let assert_corner = |composer: &Composer, frame: &str| {
+            let root = composer.arena.root.expect("root");
+            let nodes = composer.arena_nodes();
+            let host = nodes[root].subcomposed_child.expect("the content box is adopted");
+            let content = *nodes[host].children.first().expect("content under the box");
+            let abs_x = nodes[host].position.x + nodes[content].position.x;
+            let abs_y = nodes[host].position.y + nodes[content].position.y;
+            let (w, h) = (nodes[root].measured_size.width, nodes[root].measured_size.height);
+            assert!(
+                (abs_x + nodes[content].measured_size.width + PAD - w).abs() < 0.5,
+                "{frame}: the content is PAD from the right edge (abs_x={abs_x}, box_w={w})"
+            );
+            assert!(
+                (abs_y + nodes[content].measured_size.height + PAD - h).abs() < 0.5,
+                "{frame}: and PAD from the bottom edge (abs_y={abs_y}, box_h={h})"
+            );
+        };
+
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+        assert_corner(&composer, "frame 1 (measured)");
+
+        // Frame 2: nothing dirtied it, so the box folds and the recorded geometry is REPLAYED.
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+        assert_corner(&composer, "frame 2 (replayed, not measured)");
+
+        // Frame 3: measured again at the same size — the replay must not have corrupted the record.
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+        assert_corner(&composer, "frame 3 (measured again)");
+    }
+
     /// The box's PADDING is part of its outer size, and the content sits inside it. Adoption used to
     /// overwrite the padded size with the content size and leave the adopted root at the origin, so a
     /// padded box reported itself 20 dp too small and painted its content on the unpadded edge.
