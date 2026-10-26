@@ -157,6 +157,58 @@
     }
 
     #[test]
+    fn a_collection_can_be_asked_to_scroll_an_item_into_view() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let asked = Arc::new(AtomicUsize::new(usize::MAX));
+        let asked_build = asked.clone();
+        let tree = tree_of(move |ctx| {
+            Column::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new()
+                        .collection_info(CollectionInfo::rows(200))
+                        .scroll_to_index_action(move |index| {
+                            asked_build.store(index, Ordering::SeqCst);
+                        }),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("row 0").build(ctx);
+                });
+        });
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        let action = list
+            .scroll_to_index
+            .as_ref()
+            .expect("the list offers ScrollToIndex");
+        action.invoke(42);
+        assert_eq!(asked.load(Ordering::SeqCst), 42, "the closure receives the index");
+        assert!(
+            semantics_json(&tree).contains("\"scrollToIndex\":true"),
+            "and the debug tree says the capability is there"
+        );
+    }
+
+    #[test]
+    fn a_scroll_action_is_a_declaration_of_its_own() {
+        let tree = tree_of(|ctx| {
+            // Nothing else declared: no role, no name, no collection — the action alone has to keep
+            // the element in the tree, or a list offering only "jump to item" would vanish.
+            Column::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new().scroll_to_index_action(|_| {}),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("row 0").build(ctx);
+                });
+        });
+        assert!(
+            tree.iter().any(|node| node.scroll_to_index.is_some()),
+            "an element that only offers ScrollToIndex is still an element: {:?}",
+            names(&tree)
+        );
+    }
+
+    #[test]
     fn the_structure_fingerprint_tracks_shape_not_content() {
         // Frames of ONE composer, which is what a bridge ever compares (a different composer means a
         // different window, and node ids come from a process-wide counter).
@@ -238,6 +290,7 @@
                 selectable_group: false,
                 collection: None,
                 collection_item: None,
+                scroll_to_index: None,
                 bounds: (0.0, 0.0, 50.0, 50.0),
                 children: Vec::new(),
             }],

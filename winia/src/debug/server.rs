@@ -747,6 +747,24 @@ pub fn start_stdin_channel() {
                 "sem" => {
                     println!("SEMANTICS:{}", semantics_json(target_window));
                 }
+                // si <index> [node]: invoke Compose's ScrollToIndex — the same action a platform
+                // bridge queues — on the window's first element that offers it, or on `node` when
+                // given. A test has no node id to hand, so the unambiguous single-list case needs
+                // only the index.
+                "si" if parts.len() >= 2 => {
+                    let index: usize = parts[1].parse().unwrap_or(0);
+                    let node: Option<u64> = parts.get(2).and_then(|s| s.parse().ok());
+                    let id = if target_window == 0 {
+                        legacy_target().unwrap_or(0)
+                    } else {
+                        target_window
+                    };
+                    crate::semantics::request_action(
+                        id,
+                        crate::semantics::UiAction::ScrollToIndex { node, index },
+                    );
+                    wake();
+                }
                 // px <x> <y>: one pixel of the last captured frame, as TEXT. The binary `p` frame only
                 // travels over the WebSocket; this line form is what the UI-test harness (stdin/stdout)
                 // can read, so a test can assert on what was actually drawn — the only way to see a

@@ -347,8 +347,14 @@ a `LazyRow`, counted from the data total) and every composed row declares `Colle
 data index, so a reader announces "row 3 of 200" instead of walking an anonymous stack. The declarations
 travel through the semantics tree and the debug JSON; see `docs/semantics.md` §Collections.
 
-What is still missing for a full screen-reader experience: the `ScrollToIndex` action (a reader asking
-the list to jump), `IndexForKey`, and the Windows bridge's item-container pattern.
+The list also offers Compose's `ScrollToIndex` (`ScrollToIndexAction`), wired to `scroll_to_item` — so a
+reader asking "bring item 50 into view" takes exactly the path a programmatic jump does. A bridge
+queues `UiAction::ScrollToIndex { node, index }` and the frame loop invokes it off the live tree; the
+debug channel's `si <index>` drives the same path in tests.
+
+What is still missing for a full screen-reader experience: `IndexForKey` and the Windows bridge's
+item-container pattern (a UIA client can read the collection and the capability, but no pattern
+invokes it yet).
 
 ## 3b. RTL, and the unbounded cross axis
 

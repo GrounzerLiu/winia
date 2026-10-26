@@ -110,6 +110,30 @@ The debug channel's `sem` command resolves the tree for the app's window (`0` me
 window", like every other debug command — reading the published snapshot), and
 `tests/ui_lazy_test.rs` asserts the collections straight off a running window.
 
+### ScrollToIndex
+
+Compose's `ScrollToIndex` is the one accessibility action that takes an ARGUMENT, so it is a type of
+its own rather than a `custom_action` with a faked closure:
+
+```rust
+SemanticsConfig::new().scroll_to_index_action(move |index| state.scroll_to_item(index, 0.0))
+```
+
+A node that declares only this action is still an element (the "declares nothing is transparent" rule
+would otherwise drop a list whose only statement is "I can jump"). The tree carries it as
+`SemanticsNode::scroll_to_index` and the debug JSON as `"scrollToIndex": true` — a capability flag,
+because the closure is runtime state and what a client needs to know is whether asking would do
+anything.
+
+A bridge does not call it directly: UIA providers run on a thread the application does not control, so
+they queue `UiAction::ScrollToIndex { node, index }` and the frame loop resolves the action off the
+LIVE tree (a bridge's snapshot is one frame old) and invokes it. The debug channel reaches the same
+queue with `si <index> [node]` — `node` omitted means "the window's first element that offers it",
+which is what a test can use.
+
+Still absent: `IndexForKey`, `heading`, `traversalIndex`, and the Windows bridge's item-container
+pattern — a UIA client can now read the collection and the capability, but no pattern invokes it yet.
+
 ## The Windows bridge (feature `accessibility`)
 
 ```bash

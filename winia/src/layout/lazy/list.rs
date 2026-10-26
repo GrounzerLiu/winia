@@ -860,13 +860,19 @@ impl<A: LazyAxis> LazyList<A> {
             // Accessibility: the list is a COLLECTION of `total` items, and each item below declares
             // its own position in it. Without both, a reader walks the visible rows as an anonymous
             // stack instead of announcing "item 3 of 200" (Compose's `LazyListSemantics`).
-            .then(Modifier::new().semantics(
-                crate::semantics::SemanticsConfig::new().collection_info(if A::VERTICAL {
-                    crate::semantics::CollectionInfo::rows(total)
-                } else {
-                    crate::semantics::CollectionInfo::columns(total)
-                }),
-            ));
+            .then(Modifier::new().semantics({
+                let jump = state.clone();
+                crate::semantics::SemanticsConfig::new()
+                    .collection_info(if A::VERTICAL {
+                        crate::semantics::CollectionInfo::rows(total)
+                    } else {
+                        crate::semantics::CollectionInfo::columns(total)
+                    })
+                    // Compose's `ScrollToIndex`: a reader asks the collection to bring an item into
+                    // view, and the list answers with the same anchored jump a programmatic scroll
+                    // uses — no separate path, so the semantics cannot drift from the API.
+                    .scroll_to_index_action(move |index| jump.scroll_to_item(index, 0.0))
+            }));
         // The registration order, taken out before the policy moves into the group (unreadable after).
         let child_globals = policy.globals.clone();
         // The item children MUST be registered AFTER `start_restartable_group` (so they attach under

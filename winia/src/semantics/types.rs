@@ -236,6 +236,42 @@ impl CollectionInfo {
     }
 }
 
+/// Compose's `ScrollToIndex` action: "bring item `index` into view".
+///
+/// The one accessibility action that takes an ARGUMENT — a reader asks the collection to jump, and
+/// the platform supplies the index. `SemanticsAction` is a label plus a no-argument closure, so this
+/// is a type of its own rather than a custom action with a faked closure.
+///
+/// Two declarations compare equal, like `SemanticsAction`: the closure is runtime state rebuilt every
+/// composition, and what makes two parameters the same is that both offer the action at all.
+#[derive(Clone)]
+pub struct ScrollToIndexAction {
+    pub(crate) action: std::sync::Arc<dyn Fn(usize) + Send + Sync>,
+}
+
+impl ScrollToIndexAction {
+    pub fn new(action: impl Fn(usize) + Send + Sync + 'static) -> Self {
+        Self { action: std::sync::Arc::new(action) }
+    }
+
+    /// Bring `index` into view — what a platform bridge calls when a client asks for it.
+    pub fn invoke(&self, index: usize) {
+        (self.action)(index);
+    }
+}
+
+impl std::fmt::Debug for ScrollToIndexAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScrollToIndexAction")
+    }
+}
+
+impl PartialEq for ScrollToIndexAction {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// Where an item sits in its collection — Compose's `CollectionItemInfo`.
 ///
 /// A one-dimensional list needs the zero-based position and, for a reader that asks, the span (one
@@ -323,6 +359,8 @@ pub struct SemanticsConfig {
     pub(crate) collection: Option<CollectionInfo>,
     /// This node is an ITEM of an enclosing collection — Compose's `CollectionItemInfo`.
     pub(crate) collection_item: Option<CollectionItemInfo>,
+    /// The collection can be asked to bring an item into view — Compose's `ScrollToIndex` action.
+    pub(crate) scroll_to_index: Option<ScrollToIndexAction>,
 }
 
 impl SemanticsConfig {
@@ -442,6 +480,18 @@ impl SemanticsConfig {
         self.collection_item
     }
 
+    /// Declare Compose's `ScrollToIndex`: the collection can bring an item into view. The closure
+    /// receives the index the platform asks for; a lazy list wires it to `scroll_to_item`.
+    pub fn scroll_to_index_action(mut self, action: impl Fn(usize) + Send + Sync + 'static) -> Self {
+        self.scroll_to_index = Some(ScrollToIndexAction::new(action));
+        self
+    }
+
+    /// The scroll-to-index action, if this node declared one.
+    pub fn scroll_to_index_action_value(&self) -> Option<&ScrollToIndexAction> {
+        self.scroll_to_index.as_ref()
+    }
+
     /// Fill every field this config leaves open from `fallback` — how a caller's declaration is
     /// folded into the one the component already made: what the caller sets wins, and what it does
     /// not mention keeps the component's value, so adding a content description does not wipe the
@@ -473,6 +523,7 @@ impl SemanticsConfig {
             // collection (a filtered list, say) must not end up with two.
             collection: self.collection.or(fallback.collection),
             collection_item: self.collection_item.or(fallback.collection_item),
+            scroll_to_index: self.scroll_to_index.or(fallback.scroll_to_index),
         }
     }
 }
@@ -516,6 +567,8 @@ pub struct SemanticsNode {
     pub collection: Option<CollectionInfo>,
     /// This element's position in its enclosing collection (Compose's `CollectionItemInfo`).
     pub collection_item: Option<CollectionItemInfo>,
+    /// This element can bring a collection item into view (Compose's `ScrollToIndex`).
+    pub scroll_to_index: Option<ScrollToIndexAction>,
     /// Absolute bounds in logical pixels: `(x, y, width, height)`, scroll offsets applied — the same
     /// space `hit_test` works in, so a platform bridge can hand these to the OS and an action can be
     /// fired by id without hit-testing.

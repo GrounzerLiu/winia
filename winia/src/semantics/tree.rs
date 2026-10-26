@@ -34,7 +34,8 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             || clear.live_region_mode() != LiveRegionMode::Off
             || !clear.custom_actions().is_empty()
             || clear.collection_info_value().is_some()
-            || clear.collection_item_info_value().is_some();
+            || clear.collection_item_info_value().is_some()
+            || clear.scroll_to_index_action_value().is_some();
         if declared {
             out.push(SemanticsNode {
                 node_id: node.id,
@@ -48,6 +49,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
                 selectable_group: clear.is_selectable_group(),
                 collection: clear.collection_info_value(),
                 collection_item: clear.collection_item_info_value(),
+                scroll_to_index: clear.scroll_to_index_action_value().cloned(),
                 bounds,
                 children: Vec::new(),
             });
@@ -107,6 +109,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             selectable_group: config.is_selectable_group(),
             collection: config.collection_info_value(),
             collection_item: config.collection_item_info_value(),
+            scroll_to_index: config.scroll_to_index_action_value().cloned(),
             bounds,
             children: Vec::new(),
         });
@@ -129,6 +132,9 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
         // the position, and both have to survive into the tree or the reader sees an anonymous stack.
         || config.collection_info_value().is_some()
         || config.collection_item_info_value().is_some()
+        // A scroll action is a declaration too: a list that only offers "bring item N into view"
+        // must not be transparent.
+        || config.scroll_to_index_action_value().is_some()
     {
         // A declared node keeps its place and its children (nothing was claimed).
         out.push(SemanticsNode {
@@ -143,6 +149,7 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             selectable_group: config.is_selectable_group(),
             collection: config.collection_info_value(),
             collection_item: config.collection_item_info_value(),
+            scroll_to_index: config.scroll_to_index_action_value().cloned(),
             bounds,
             children,
         });

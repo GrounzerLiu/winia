@@ -147,6 +147,12 @@ pub enum UiAction {
     Invoke(u64),
     /// Move the keyboard focus to the node.
     Focus(u64),
+    /// Compose's `ScrollToIndex`: bring item `index` into view in a collection.
+    ///
+    /// `node` names the element that declared the action (a platform bridge knows which element it
+    /// is answering for); `None` means "the window's first collection that offers it", which is what
+    /// the debug channel uses — a test has no node id to hand.
+    ScrollToIndex { node: Option<u64>, index: usize },
 }
 
 pub(crate) static ACTIONS: std::sync::Mutex<Option<Vec<(u64, UiAction)>>> = std::sync::Mutex::new(None);

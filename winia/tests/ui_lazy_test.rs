@@ -114,7 +114,16 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
             && (1..8).any(|i| app.find_tag(&format!("lazy-rtl-item-{i}")).is_some())
     });
 
-    // 7. The AMBIENT route, not just the modifier: flipping the window's direction mirrors the row
+    // 7. Compose's `ScrollToIndex` — the action a screen reader uses ("bring item 50 into view") —
+    //    through the same queue a platform bridge uses. The first element that offers it in the
+    //    window is card 1's row, so the row's own tiles prove it moved.
+    app.send("si 50");
+    app.expect_eventually_timeout("ScrollToIndex jumps the row", Duration::from_secs(3), |app| {
+        app.refresh();
+        app.find_tag("lazy-rtl-item-50").is_some() && app.find_tag("lazy-rtl-item-0").is_none()
+    });
+
+    // 8. The AMBIENT route, not just the modifier: flipping the window's direction mirrors the row
     //    that carries no direction of its own, which is the path an OS-level RTL switch takes.
     //
     // The ORDER is what flips: after the mirror, item 1 sits to the LEFT of item 0. Comparing their
@@ -194,5 +203,9 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
     assert!(
         sem.contains("\"collectionItem\":{\"index\":0,\"span\":1}"),
         "and every row declares its position"
+    );
+    assert!(
+        sem.contains("\"scrollToIndex\":true"),
+        "and the lists offer ScrollToIndex"
     );
 }

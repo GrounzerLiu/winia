@@ -2290,6 +2290,86 @@
         );
     }
 
+    /// Compose's `ScrollToIndex`: the list answers a reader's "bring item N into view" with the
+    /// same anchored jump `scroll_to_item` performs, and the item really is visible on the next frame.
+    #[test]
+    fn the_list_offers_scroll_to_index_and_it_jumps() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let list = tree.iter().find(|node| node.collection.is_some()).expect("collection");
+        let action = list
+            .scroll_to_index
+            .as_ref()
+            .expect("the list offers ScrollToIndex")
+            .clone();
+
+        // Invoke it the way a platform bridge would, then run a real frame.
+        action.invoke(50);
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(200, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+
+        assert_eq!(state.first_visible(), 50, "the jump lands on the requested index");
+        let info = state.layout_info();
+        assert_eq!(
+            info.visible_items.first().map(|item| item.index),
+            Some(50),
+            "and the first visible item is the one asked for"
+        );
+        assert!(info.is_fully_visible(info.visible_items[0].offset, info.visible_items[0].size));
+    }
+
+    /// An out-of-range request is clamped like any other jump, not dropped: a reader asking for an
+    /// index past the end should land at the end.
+    #[test]
+    fn scroll_to_index_past_the_end_lands_at_the_end() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(20, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let tree = semantics_of(&composer, root);
+        let action = tree
+            .iter()
+            .find(|node| node.collection.is_some())
+            .and_then(|node| node.scroll_to_index.clone())
+            .expect("the list offers ScrollToIndex");
+        action.invoke(9999);
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .items(20, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let info = state.layout_info();
+        assert_eq!(
+            info.visible_items.last().map(|item| item.index),
+            Some(19),
+            "the request is clamped to the last item: {:?}",
+            info.visible_items.iter().map(|i| i.index).collect::<Vec<_>>()
+        );
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

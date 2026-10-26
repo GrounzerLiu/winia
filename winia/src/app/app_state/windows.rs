@@ -29,6 +29,30 @@ impl AppState {
                         log::debug!("[accessibility] focus: node {node_id} cannot take focus");
                     }
                 }
+                crate::semantics::UiAction::ScrollToIndex { node, index } => {
+                    // Resolve the action off the LIVE tree rather than a cached snapshot: the tree a
+                    // bridge saw is one frame old by the time this runs.
+                    let Some(root) = pw.composer.layout_root_idx() else { continue };
+                    let tree = crate::semantics::semantics_tree(pw.composer.arena_nodes(), root);
+                    let mut found: Option<crate::semantics::ScrollToIndexAction> = None;
+                    for element in &tree {
+                        element.walk(&mut |candidate| {
+                            if found.is_some() {
+                                return;
+                            }
+                            if node.is_none_or(|id| candidate.node_id == id) {
+                                found = candidate.scroll_to_index.clone();
+                            }
+                        });
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(action) => action.invoke(index),
+                        None => log::debug!("[accessibility] scroll_to_index: no element offers it"),
+                    }
+                }
             }
         }
         if let Some(ref sw) = pw.skia_window {
