@@ -13,6 +13,7 @@ Compose foundation `Grid` (`reference/compose/foundation-layout-1.13.0-beta01/co
 | `GridConfigurationScope.gap/columnGap/rowGap` (`:444-474`) | `Grid::gap` / `column_gap` / `row_gap` |
 | `GridFlow` (`:527-560`) | `GridFlow` |
 | `GridScope.Modifier.gridItem(columnSpan, rowSpan, alignment)` (`:158-226`) | `Modifier::grid_item` / `grid_item_aligned` |
+| `GridConfigurationScope.area(areaId, rows, columns)` (`:399-440`) | `Grid::areas(vec![GridArea::new(...)])` + `Modifier::grid_item_in_area(id)` |
 | `GridMeasurePolicy` (`:850-925`) | `GridLayout` (`layout/grid.rs`) |
 
 ## API
@@ -25,10 +26,12 @@ Grid::new(vec![
     GridTrackSpec::fixed(90.0),      // a fixed 90 dp column
     GridTrackSpec::weight(1.0),      // one share of what is left
     GridTrackSpec::weight(2.0),      // two shares
+    GridTrackSpec::FitContent,       // as wide as the widest item in it
 ])
 .rows(vec![GridTrackSpec::fixed(48.0)])   // optional: declared rows, otherwise implicit
 .gap(8.0)
 .flow(GridFlow::Row)                       // Row | Column | RowDense | ColumnDense
+.areas(vec![GridArea::new(7, (0, 1), (0, 1))])   // rows 0..=1, columns 0..=1, reserved first
 .modifier(Modifier::new().fill_max_width())
 .build(ctx, |ctx| {
     Card::new().build(ctx);                                        // cell (0, 0)
@@ -40,11 +43,13 @@ Grid::new(vec![
 
 ## Layout
 
-1. **Columns** resolve from their specs. A fixed track is its value; a percentage track is that
-   fraction of Compose's `availableTrackSpace` — the axis minus the gaps BETWEEN the tracks — and a
-   weighted track shares what the fixed and percentage tracks leave of that same space, so a
-   two-half-width grid with a gap fills its axis exactly. On an UNBOUNDED axis the percentage and
-   weight tracks are 0 (see the differences below; Compose falls back to intrinsic sizes there).
+1. **Columns** resolve from their specs. A fixed track is its value; an INTRINSIC
+   (`GridTrackSpec::FitContent`) track is as wide as the widest MAX intrinsic size among the items that
+   occupy exactly it; a percentage track is that fraction of Compose's `availableTrackSpace` — the axis
+   minus the gaps BETWEEN the tracks — and a weighted track shares what the fixed, percentage and
+   intrinsic tracks leave of that same space, so a two-half-width grid with a gap fills its axis
+   exactly. On an UNBOUNDED axis (a grid inside a horizontal scroll, say) a percentage track falls back
+   to its items' max intrinsic width and a weighted one to their min content, as Compose does.
 2. **Placement** walks the cells in the flow's order: row-major for `Row`/`RowDense`, column-major
    for `Column`/`ColumnDense`. A `Dense` flow restarts the scan for every child, so a hole a span left
    behind is filled by a later child; a sparse flow never goes back. (Dense is winia's extension —
@@ -72,7 +77,6 @@ Grid::new(vec![
   `Row` and `Column` (`Grid.kt:531-536`).
 - **No intrinsic track** (`GridTrackSpec.FitContent` / `GridTrackSize.Auto`): every track is fixed,
   percentage or weighted. An intrinsic track needs a second measurement pass over the children.
-- **No named areas** (`areaId`): a child declares its span directly.
 - **On an UNBOUNDED axis a percentage or weighted track is 0.** Compose falls back to the items'
   max intrinsic width for a percentage track and to min-content for a weight track
   (`Grid.kt:1645-1663`); that needs intrinsic tracks, which v1 does not have. A grid inside a
@@ -97,7 +101,7 @@ Grid::new(vec![
 
 ## Tests
 
-`winia/src/layout/grid.rs` (`layout::grid::tests`, 23 cases):
+`winia/src/layout/grid.rs` (`layout::grid::tests`, 27 cases):
 
 | test | pins |
 | --- | --- |
@@ -116,11 +120,15 @@ Grid::new(vec![
 | `more_children_than_declared_cells_never_overlap` | a column flow past the declared cell count (the regression behind the review) |
 | `a_grid_without_children_reports_its_declared_tracks` | the tracks of an empty grid |
 | `a_percentage_grid_with_gaps_fills_its_axis` | the percentage basis excluding the gaps |
+| `a_fit_content_column_sizes_to_its_items` | an intrinsic track taking the widest item |
+| `a_named_area_reserves_its_cells` | an area placed before auto-placement flows around it |
+| `an_unknown_area_id_falls_back_to_auto_placement` | an id the grid does not know |
+| `an_unbounded_axis_sizes_percentage_and_weight_tracks_from_content` | the unbounded fallback |
+| `a_multi_row_span_splits_its_height_between_implicit_rows` | a two-row child sharing its rows |
 | `an_overflowing_grid_is_clamped_to_the_axis` | 3 x 80 + 2 x 8 inside a 200 dp parent |
 | `a_column_flow_without_declared_rows_never_wraps` | a column flow past a tall child |
 | `a_column_flow_clamps_a_span_to_the_declared_rows` | a span taller than the declared rows |
 | `an_extreme_row_span_is_clamped` | `grid_item(1, u32::MAX)` staying finite |
-| `an_unbounded_axis_gives_percent_and_weight_nothing` | the documented unbounded rule |
 | `an_unused_declared_row_still_counts` | a declared row no child reaches |
 | `a_grid_without_columns_places_every_child` | one placement per child even with no columns (the engine calls `place` unconditionally) |
 | `a_tall_row_span_does_not_swallow_a_later_child` | the placement fallback walking past an eight-row span |

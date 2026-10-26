@@ -52,6 +52,9 @@ impl Debug for ModifierElement {
             }
             Self::MatchParentSize => f.write_str("MatchParentSize"),
             Self::Visible { visible } => f.debug_struct("Visible").field("visible", visible).finish(),
+            Self::GridItemArea { area_id } => {
+                f.debug_struct("GridItemArea").field("area_id", area_id).finish()
+            }
             Self::GridItem { column_span, row_span, alignment } => f
                 .debug_struct("GridItem")
                 .field("column_span", column_span)

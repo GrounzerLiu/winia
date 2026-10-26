@@ -159,6 +159,17 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                             .build(ctx, |_| {});
                     });
             });
+
+            // 6. An intrinsic column: it hugs the widest cell, so the fixed 60 dp track starts right
+            //    after the content instead of at a guessed width.
+            card(ctx, "grid-fit-card", "6. An intrinsic column beside a fixed one", |ctx| {
+                Grid::new(vec![GridTrackSpec::FitContent, GridTrackSpec::fixed(60.0)])
+                    .gap(6.0)
+                    .build(ctx, |ctx| {
+                        cell(ctx, "grid-fit-0", 30.0, palette(4));
+                        cell(ctx, "grid-fit-1", 30.0, palette(5));
+                    });
+            });
         });
 }
 

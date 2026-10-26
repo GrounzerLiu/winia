@@ -44,8 +44,15 @@ pub enum GridTrackSpec {
     /// `column(0.5f)` / `row(0.5f)`.
     Percent(f32),
     /// A share of the space the fixed and percentage tracks left over — Compose's
-    /// `column(1.fr)`. On an unbounded axis (or one with nothing left over) a weighted track is 0.
+    /// `column(1.fr)`. On a bounded axis it takes a share of what is left over; on an UNBOUNDED axis
+    /// it falls back to its items' smallest intrinsic size (Compose starts a flex track at
+    /// min-content, `Grid.kt:1833-1845`).
     Weight(f32),
+    /// Sized by the items in the track — Compose's intrinsic (auto) track, `GridTrackSize` with no
+    /// fixed value. Its width is the largest MAX intrinsic width among the items that occupy exactly
+    /// that track (an item spanning several tracks does not size them, which is the v1 rule recorded in
+    /// the module header).
+    FitContent,
 }
 
 impl GridTrackSpec {
@@ -92,6 +99,29 @@ impl GridFlow {
     }
 }
 
+// ── Named areas ──
+
+/// A named block of cells — Compose's `GridConfigurationScope.area(areaId, rows, columns)`
+/// (`Grid.kt:399-440`). Both ranges are INCLUSIVE, as Compose's `IntRange` is.
+///
+/// A child declares the area with `Modifier::grid_item_in_area(id)`; the grid reserves the cells before
+/// auto-placement runs, so the rest of the children flow around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridArea {
+    /// The identifier a child names through `Modifier::grid_item_in_area`.
+    pub id: u64,
+    /// The first and last row, inclusive.
+    pub rows: (u32, u32),
+    /// The first and last column, inclusive.
+    pub columns: (u32, u32),
+}
+
+impl GridArea {
+    pub fn new(id: u64, rows: (u32, u32), columns: (u32, u32)) -> Self {
+        GridArea { id, rows, columns }
+    }
+}
+
 // ── The policy ──
 
 /// Grid's measure policy (Compose's `GridMeasurePolicy`, `Grid.kt:850-925`).
@@ -105,6 +135,8 @@ pub struct GridLayout {
     pub row_gap: f32,
     /// The gap between columns, in logical pixels.
     pub column_gap: f32,
+    /// Named areas, reserved before auto-placement runs.
+    pub areas: Vec<GridArea>,
     /// Where auto-placement looks next.
     pub flow: GridFlow,
     /// The direction the final placements are mirrored for.
@@ -119,6 +151,7 @@ impl GridLayout {
             rows: Vec::new(),
             row_gap: 0.0,
             column_gap: 0.0,
+            areas: Vec::new(),
             flow: GridFlow::Row,
             direction: LayoutDirection::Ltr,
         }
@@ -151,6 +184,11 @@ impl GridLayout {
         self
     }
 
+    pub fn areas(mut self, areas: Vec<GridArea>) -> Self {
+        self.areas = areas;
+        self
+    }
+
     pub fn direction(mut self, direction: LayoutDirection) -> Self {
         self.direction = direction;
         self
@@ -170,6 +208,17 @@ impl GridLayout {
 /// against `f32::MAX` would let a `fill_max_width` child explode. Recorded as a difference in
 /// `docs/grid.md`.
 fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32> {
+    resolve_axis(specs, available, gap, |_| (0.0, 0.0))
+}
+
+/// Resolves one axis with an intrinsic fallback: `intrinsic(i)` answers `(max, min)` for track `i`,
+/// taken from the items that occupy exactly it.
+fn resolve_axis(
+    specs: &[GridTrackSpec],
+    available: f32,
+    gap: f32,
+    intrinsic: impl Fn(usize) -> (f32, f32),
+) -> Vec<f32> {
     let gaps = gap * specs.len().saturating_sub(1) as f32;
     let bounded = available < f32::MAX;
     let basis = if bounded { (available - gaps).max(0.0) } else { 0.0 };
@@ -181,27 +230,85 @@ fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32>
             GridTrackSpec::Fixed(px) => fixed_total += px.max(0.0),
             GridTrackSpec::Percent(fraction) => percent_total += fraction.max(0.0),
             GridTrackSpec::Weight(weight) => weight_total += weight.max(0.0),
+            // An intrinsic track sizes from its items, so it takes nothing out of the axis up front.
+            GridTrackSpec::FitContent => {}
+        }
+    }
+    // Fixed, percentage and intrinsic tracks first: the weights share whatever they leave over.
+    let mut sizes = vec![0.0f32; specs.len()];
+    let mut intrinsic_total = 0.0f32;
+    for (i, spec) in specs.iter().enumerate() {
+        match *spec {
+            GridTrackSpec::Fixed(px) => sizes[i] = px.max(0.0),
+            GridTrackSpec::Percent(fraction) => {
+                sizes[i] = if bounded {
+                    fraction.max(0.0) * basis
+                } else {
+                    // Compose sizes a percentage track by its items' max intrinsic width when the axis
+                    // is unbounded (`Grid.kt:1645-1663`).
+                    intrinsic(i).0.max(0.0)
+                };
+            }
+            GridTrackSpec::Weight(_) => {
+                if !bounded {
+                    // ... and starts a flex track at min-content (`Grid.kt:1833-1845`).
+                    sizes[i] = intrinsic(i).1.max(0.0);
+                }
+            }
+            GridTrackSpec::FitContent => {
+                sizes[i] = intrinsic(i).0.max(0.0);
+                intrinsic_total += sizes[i];
+            }
         }
     }
     let remaining = if bounded {
-        (basis - fixed_total - percent_total * basis).max(0.0)
+        (basis - fixed_total - percent_total * basis - intrinsic_total).max(0.0)
     } else {
         0.0
     };
-    specs
-        .iter()
-        .map(|spec| match *spec {
-            GridTrackSpec::Fixed(px) => px.max(0.0),
-            GridTrackSpec::Percent(fraction) => fraction.max(0.0) * basis,
-            GridTrackSpec::Weight(weight) => {
-                if weight_total > 0.0 {
-                    remaining * (weight.max(0.0) / weight_total)
-                } else {
-                    0.0
-                }
+    if weight_total > 0.0 && bounded {
+        for (i, spec) in specs.iter().enumerate() {
+            if let GridTrackSpec::Weight(weight) = *spec {
+                sizes[i] = remaining * (weight.max(0.0) / weight_total);
             }
-        })
-        .collect()
+        }
+    }
+    sizes
+}
+
+/// The `(max, min)` intrinsic of the items that occupy exactly one track of the given axis.
+fn track_intrinsic(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    children: &[usize],
+    cells: &[Cell],
+    track: usize,
+    by_row: bool,
+    other: impl Fn(&Cell) -> f32,
+) -> (f32, f32) {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let (max_query, min_query) = if by_row {
+        (IntrinsicQuery::MaxHeight, IntrinsicQuery::MinHeight)
+    } else {
+        (IntrinsicQuery::MaxWidth, IntrinsicQuery::MinWidth)
+    };
+    let mut max = 0.0f32;
+    let mut min = 0.0f32;
+    for (i, &child) in children.iter().enumerate() {
+        let cell = cells[i];
+        let single = if by_row {
+            cell.row_span == 1 && cell.row == track
+        } else {
+            cell.column_span == 1 && cell.column == track
+        };
+        if !single {
+            continue;
+        }
+        let other_value = other(&cell);
+        max = max.max(intrinsic_size_of(nodes, policies, child, max_query, other_value));
+        min = min.max(intrinsic_size_of(nodes, policies, child, min_query, other_value));
+    }
+    (max, min)
 }
 
 /// A defensive ceiling on a row span inside a grid with implicit rows (see `place_cells`).
@@ -271,9 +378,26 @@ fn place_cells(
     columns: usize,
     flow: GridFlow,
     declared_rows: Option<usize>,
+    areas: &[GridArea],
+    area_ids: &[Option<u64>],
 ) -> Vec<Cell> {
     let mut occupancy = Occupancy::new();
-    let mut out = Vec::with_capacity(spans.len());
+    let mut out: Vec<Cell> = Vec::with_capacity(spans.len());
+    // Named areas claim their cells FIRST, so everything auto-placed flows around them.
+    let mut claimed: Vec<Option<Cell>> = vec![None; spans.len()];
+    for (i, area_id) in area_ids.iter().enumerate() {
+        let Some(id) = area_id else { continue };
+        let Some(area) = areas.iter().find(|area| area.id == *id) else {
+            continue; // An unknown id falls back to auto-placement.
+        };
+        let column = (area.columns.0 as usize).min(columns.saturating_sub(1));
+        let last_column = (area.columns.1 as usize).min(columns.saturating_sub(1));
+        let column_span = last_column.saturating_sub(column) + 1;
+        let row = area.rows.0 as usize;
+        let row_span = (area.rows.1 as usize).saturating_sub(row) + 1;
+        occupancy.reserve(row, column, row_span, column_span);
+        claimed[i] = Some(Cell { column, column_span, row, row_span });
+    }
     let mut cursor = (0usize, 0usize);
     // A column flow wraps at the DECLARED row count; with no declared rows the rows are unbounded
     // and every child keeps filling the current column. A row flow grows rows freely either way, so
@@ -287,7 +411,11 @@ fn place_cells(
     // unbounded — Compose's `explicitRowCount == 0` branch never wraps (`Grid.kt:1301-1309`) — so a
     // child keeps going DOWN the same column however tall the children before it were.
     let row_wrap = if flow.by_column() { declared } else { None };
-    for &(column_span, row_span) in spans {
+    for (index, &(column_span, row_span)) in spans.iter().enumerate() {
+        if let Some(cell) = claimed[index] {
+            out.push(cell);
+            continue;
+        }
         // A span wider than the grid is clamped instead of pushed out of it, and a row span can never
         // usefully exceed the cells that exist: an unclamped `u32::MAX` made `fits` walk billions of
         // rows and `reserve` allocate them (a public API, so it has to be defensive).
@@ -436,10 +564,8 @@ impl MeasurePolicy for GridLayout {
             );
         }
 
-        // 1. The column widths. They do not depend on the children (no intrinsic tracks in v1).
-        let widths = resolve_tracks(&self.columns, constraints.max_width, column_gap);
-
-        // 2. Where every child goes.
+        // 1. Where every child goes. The cells depend only on the spans and the flow, so they come
+        // first — the intrinsic tracks need to know who sits in them.
         let spans: Vec<(u32, u32)> = children
             .iter()
             .map(|&c| {
@@ -450,30 +576,63 @@ impl MeasurePolicy for GridLayout {
                     .unwrap_or((1, 1))
             })
             .collect();
+        let area_ids: Vec<Option<u64>> = children
+            .iter()
+            .map(|&c| nodes[c].modifier.get_grid_item_area())
+            .collect();
         let declared_rows = if self.rows.is_empty() { None } else { Some(self.rows.len()) };
-        let cells = place_cells(&spans, columns, self.flow, declared_rows);
+        let cells = place_cells(&spans, columns, self.flow, declared_rows, &self.areas, &area_ids);
 
-        // 3. The row tracks: declared ones resolve from their specs, implicit ones start at zero and
-        // grow to the tallest child that spans exactly them (step 4). A declared row the children do
-        // not reach still takes its space — the grid declares it, so the grid is that tall.
+        // 2. The column widths: fixed and percentage tracks resolve against the axis, intrinsic tracks
+        // ask their items, and on an unbounded axis the percentage/weight tracks fall back to intrinsic
+        // sizes instead of collapsing to zero.
+        let column_intrinsic: Vec<(f32, f32)> = (0..columns)
+            .map(|track| {
+                track_intrinsic(nodes, policies, children, &cells, track, false, |_| {
+                    constraints.max_height
+                })
+            })
+            .collect();
+        let widths = resolve_axis(&self.columns, constraints.max_width, column_gap, |i| {
+            column_intrinsic[i]
+        });
+        let column_offsets = offset_table(&widths, column_gap);
+
+        // 3. The row tracks: declared ones resolve from their specs, intrinsic ones ask the items at the
+        // width their cell gives them; implicit rows start at zero and grow in step 4.
+        let declared_heights = {
+            let cell_width = |cell: &Cell| -> f32 {
+                (column_offsets[cell.column + cell.column_span]
+                    - column_offsets[cell.column]
+                    - column_gap)
+                    .max(0.0)
+            };
+            let row_intrinsic: Vec<(f32, f32)> = (0..self.rows.len())
+                .map(|track| {
+                    track_intrinsic(nodes, policies, children, &cells, track, true, cell_width)
+                })
+                .collect();
+            resolve_axis(&self.rows, constraints.max_height, row_gap, |i| {
+                row_intrinsic[i]
+            })
+        };
+        let declared_table = offset_table(&declared_heights, row_gap);
         let row_count = cells
             .iter()
             .map(|c| c.row + c.row_span)
             .max()
             .unwrap_or(0)
             .max(self.rows.len());
-        let declared_heights = resolve_tracks(&self.rows, constraints.max_height, row_gap);
-        let declared_table = offset_table(&declared_heights, row_gap);
 
         // 4. Measure each child at its cell's width, and at its row's height when that row is declared
         // (an implicit row has no height until the children say what it is, so the container's own
         // maximum is the limit there).
-        let column_offsets = offset_table(&widths, column_gap);
         let mut child_sizes = Vec::with_capacity(n);
         for (i, &child) in children.iter().enumerate() {
             let cell = cells[i];
-            let left = column_offsets[cell.column];
-            let width = (column_offsets[cell.column + cell.column_span] - left - column_gap)
+            let width = (column_offsets[cell.column + cell.column_span]
+                - column_offsets[cell.column]
+                - column_gap)
                 .max(0.0);
             let last_declared = cell.row + cell.row_span <= declared_heights.len();
             let height = if last_declared {
@@ -487,17 +646,23 @@ impl MeasurePolicy for GridLayout {
             child_sizes.push(size);
         }
 
-        // 5. The row heights: the declared tracks, then the implicit rows from their children.
+        // 5. The row heights: the declared tracks, then the implicit rows from their children. A child
+        // spanning several implicit rows splits its height between them, so a card two rows tall does
+        // not make only the last row carry it.
         let mut heights = declared_heights.clone();
         heights.resize(row_count, 0.0);
         for (i, cell) in cells.iter().enumerate() {
-            if cell.row + cell.row_span <= self.rows.len() {
+            let implicit: Vec<usize> = (cell.row..cell.row + cell.row_span)
+                .filter(|row| *row >= self.rows.len())
+                .collect();
+            if implicit.is_empty() {
                 // A declared row keeps its track spec; a child taller than it overflows the cell.
                 continue;
             }
-            // A child spanning several implicit rows contributes to the LAST one (module docs).
-            let target = cell.row + cell.row_span - 1;
-            heights[target] = heights[target].max(child_sizes[i].height);
+            let share = child_sizes[i].height / implicit.len() as f32;
+            for row in implicit {
+                heights[row] = heights[row].max(share);
+            }
         }
 
         // 6. Place: the cell's origin, then the child's alignment inside it, then the RTL mirror.
@@ -588,6 +753,7 @@ fn offset_table(sizes: &[f32], gap: f32) -> Vec<f32> {
 pub struct Grid {
     columns: Vec<GridTrackSpec>,
     rows: Vec<GridTrackSpec>,
+    areas: Vec<GridArea>,
     row_gap: f32,
     column_gap: f32,
     flow: GridFlow,
@@ -600,6 +766,7 @@ impl Grid {
         Grid {
             columns,
             rows: Vec::new(),
+            areas: Vec::new(),
             row_gap: 0.0,
             column_gap: 0.0,
             flow: GridFlow::Row,
@@ -652,6 +819,7 @@ impl Grid {
         ctx.changed(&self.row_gap);
         ctx.changed(&self.column_gap);
         ctx.changed(&self.flow);
+        ctx.changed(&self.areas);
         let direction = self
             .modifier
             .get_layout_direction()
@@ -662,6 +830,7 @@ impl Grid {
             self.modifier,
             GridLayout::new(self.columns)
                 .rows(self.rows)
+                .areas(self.areas)
                 .row_gap(self.row_gap)
                 .column_gap(self.column_gap)
                 .flow(self.flow)
@@ -745,17 +914,6 @@ mod tests {
         assert_eq!(placements[0].position.x, 0.0);
         assert_eq!(placements[1].position.x, 100.0);
         assert_eq!(placements[2].position.x, 300.0);
-    }
-
-    /// An unbounded axis gives the percentage and weight tracks nothing. Compose falls back to max
-    /// intrinsic / min content there; winia has no intrinsic tracks in v1 (see `resolve_tracks`).
-    #[test]
-    fn an_unbounded_axis_gives_percent_and_weight_nothing() {
-        let policy = GridLayout::new(vec![GridTrackSpec::fixed(40.0), GridTrackSpec::weight(1.0)]);
-        let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::UNBOUNDED);
-        assert_eq!(size.width, 40.0);
-        assert_eq!(placements[1].position.x, 40.0);
     }
 
     /// A child that spans two columns is measured at their combined width and sits across both.
@@ -1008,6 +1166,85 @@ mod tests {
     /// The percentage basis excludes the gaps between tracks (Compose's `availableTrackSpace`,
     /// `Grid.kt:634-639`), so two half-width tracks plus a gap fill the axis exactly instead of
     /// overflowing by the gap.
+
+    /// An intrinsic (FitContent) track takes the widest MAX intrinsic of the items in it, so a column
+    /// of labels is as wide as the longest one without any fixed size.
+
+    /// A named area reserves its cells BEFORE auto-placement, so the rest of the children flow around
+    /// it instead of landing inside (Compose's `area(...)` + `gridItem(areaId)`).
+    #[test]
+    fn a_named_area_reserves_its_cells() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0); 2])
+            .areas(vec![GridArea::new(7, (0, 1), (0, 1))]);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(10.0, 10.0).grid_item_in_area(7)),
+            make_leaf(10.0, 10.0),
+        ];
+        nodes[0].measured_size = Size::new(10.0, 10.0);
+        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "the area starts at its first row and column");
+        assert_eq!(
+            placements[1].position,
+            Offset::new(0.0, 10.0),
+            "the auto-placed child wraps below the reserved 2x2 block"
+        );
+    }
+
+    /// An unknown area id falls back to auto-placement instead of dropping the child.
+    #[test]
+    fn an_unknown_area_id_falls_back_to_auto_placement() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0)]);
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().size(10.0, 10.0).grid_item_in_area(99),
+        )];
+        nodes[0].measured_size = Size::new(10.0, 10.0);
+        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn a_fit_content_column_sizes_to_its_items() {
+        let policy = GridLayout::new(vec![
+            GridTrackSpec::FitContent,
+            GridTrackSpec::fixed(40.0),
+        ]);
+        let mut nodes = vec![make_leaf(70.0, 10.0), make_leaf(10.0, 10.0), make_leaf(30.0, 10.0)];
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(size.width, 110.0, "70 from the widest item + 40 fixed");
+        assert_eq!(placements[1].position.x, 70.0, "the fixed track starts after the intrinsic one");
+        assert_eq!(placements[2].position.x, 0.0, "the third child wraps to the next row");
+    }
+
+    /// On an UNBOUNDED axis a percentage track falls back to its items' max intrinsic width and a
+    /// weighted one to their min content, instead of collapsing to zero (`Grid.kt:1645-1663`,
+    /// `:1833-1845`).
+    #[test]
+    fn an_unbounded_axis_sizes_percentage_and_weight_tracks_from_content() {
+        let policy = GridLayout::new(vec![
+            GridTrackSpec::percent(0.5),
+            GridTrackSpec::weight(1.0),
+        ]);
+        let mut nodes = vec![make_leaf(60.0, 10.0), make_leaf(80.0, 10.0)];
+        let (size, placements) = run(&policy, &mut nodes, Constraints::UNBOUNDED);
+        assert_eq!(size.width, 140.0, "60 max-intrinsic for the percentage track, 80 min-content for the weight");
+        assert_eq!(placements[1].position.x, 60.0);
+    }
+
+    /// A child spanning several IMPLICIT rows splits its height between them instead of charging the
+    /// last one only, so a two-row card shares the row it sits in with anything beside it.
+    #[test]
+    fn a_multi_row_span_splits_its_height_between_implicit_rows() {
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(10.0, 40.0).grid_item(1, 2)),
+            make_leaf(10.0, 10.0),
+        ];
+        nodes[0].measured_size = Size::new(10.0, 40.0);
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        assert_eq!(size.height, 40.0, "20 + 20, not 10 + 40");
+        assert_eq!(placements[1].position, Offset::new(50.0, 0.0), "the sibling sits in the first row");
+    }
+
     #[test]
     fn a_percentage_grid_with_gaps_fills_its_axis() {
         let policy = GridLayout::new(vec![

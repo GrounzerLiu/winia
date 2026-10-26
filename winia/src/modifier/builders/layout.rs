@@ -390,6 +390,13 @@ impl Modifier {
         self.push(ModifierElement::MatchParentSize)
     }
 
+    /// Place this child into a NAMED area of a `Grid` — Compose's `GridScope.Modifier.gridItem(areaId)`.
+    /// The area is declared on the grid (`Grid::areas`); an id the grid does not know falls back to
+    /// auto-placement.
+    pub fn grid_item_in_area(self, area_id: u64) -> Self {
+        self.push(ModifierElement::GridItemArea { area_id })
+    }
+
     /// Declare this child's span inside a `Grid` — Compose's `GridScope.Modifier.gridItem`
     /// (`Grid.kt:158`). The alignment inside the cell defaults to Compose's `TopStart`; use
     /// [`grid_item_aligned`](Self::grid_item_aligned) to centre, stretch or bottom-align the child.

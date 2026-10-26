@@ -368,6 +368,9 @@ pub(crate) enum ModifierElement {
     /// Compose's `BoxScope.matchParentSize`: the child does NOT take part in sizing its box and is
     /// then measured at the box's size. Only a `Box`/`Stack` reads it.
     MatchParentSize,
+    /// A grid item placed into a NAMED area — Compose's `GridScope.Modifier.gridItem(areaId)`
+    /// (`Grid.kt:226`). Only `Grid` reads it; an unknown id falls back to auto-placement.
+    GridItemArea { area_id: u64 },
     /// A grid item's span and cell alignment — Compose's `GridScope.Modifier.gridItem`
     /// (`Grid.kt:158-230`). Only `Grid` reads it.
     GridItem {

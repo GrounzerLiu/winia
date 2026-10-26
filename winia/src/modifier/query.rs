@@ -567,6 +567,15 @@ impl Modifier {
             .any(|el| matches!(el, ModifierElement::MatchParentSize))
     }
 
+    /// The named area a child asks for inside a `Grid` — see [`Modifier::grid_item_in_area`]. Last
+    /// wins, and no such element means "auto-place me".
+    pub fn get_grid_item_area(&self) -> Option<u64> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::GridItemArea { area_id } => Some(*area_id),
+            _ => None,
+        })
+    }
+
     /// A child's span and cell alignment inside a `Grid` — see [`Modifier::grid_item`]. Last wins.
     pub fn get_grid_item(&self) -> Option<(u32, u32, Option<crate::layout::ContentAlignment>)> {
         self.elements.iter().rev().find_map(|el| match el {

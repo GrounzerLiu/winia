@@ -85,6 +85,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (ContentAlignSelf { alignment: aa }, ContentAlignSelf { alignment: ba }) => aa == ba,
         (MatchParentSize, MatchParentSize) => true,
         (Visible { visible: a }, Visible { visible: b }) => a == b,
+        (GridItemArea { area_id: a }, GridItemArea { area_id: b }) => a == b,
         (
             GridItem { column_span: ac, row_span: ar, alignment: aa },
             GridItem { column_span: bc, row_span: br, alignment: ba },
