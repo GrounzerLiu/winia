@@ -30,7 +30,7 @@ use crate::layout::axis::Axis as _;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
 use crate::layout::staggered::assign_lanes;
 use crate::layout::container::build_container;
-use crate::layout::{Constraints, LayoutDirection};
+use crate::layout::{Constraints, LayoutDirection, Stack};
 use crate::modifier::{Modifier, ScrollState};
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::Backchannel;
@@ -47,6 +47,10 @@ const FIRST_FRAME_VIEWPORT: f32 = 800.0;
 #[derive(Debug)]
 struct Shared {
     heights: ItemHeightCache,
+    /// Per lane: the first item the last measure placed and its MEASURED content top. The next build
+    /// lays that lane out from here instead of from the estimate chain, which is what keeps a cold
+    /// jump (or a fast fling) from landing the composed block away from the viewport.
+    anchors: Vec<Option<(usize, f32)>>,
 }
 
 struct StaggeredPolicy<A: LazyAxis> {
@@ -162,6 +166,28 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             if let Some(&key) = self.keys.get(slot) {
                 measured.push((key, main_size));
             }
+        }
+        // Record each lane's first placed item and its content top: the anchor the next build starts
+        // the lane from.
+        {
+            let mut anchors = vec![None; lanes];
+            for (slot, placement) in placements.iter().enumerate() {
+                let lane = self.lanes_of.get(slot).copied().unwrap_or(0).min(lanes - 1);
+                if anchors[lane].is_none() {
+                    if let Some(&index) = self.window.get(slot) {
+                        // CONTENT coordinates: the placement carries the main content padding, and the
+                        // anchor is fed back into a build that adds it again.
+                        let main = if A::VERTICAL {
+                            placement.position.y
+                        } else {
+                            placement.position.x
+                        };
+                        anchors[lane] = Some((index, (main - self.main_before).max(0.0)));
+                    }
+                }
+            }
+            let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            shared.anchors = anchors;
         }
         {
             if self.viewport_main.peek() != viewport {
@@ -356,7 +382,12 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         // The container OWNS this state, so it is a plain remember (docs/state-handles.md 7.4); the
         // scroll modifier and the policy of every frame share the same handles.
         let shared = ctx
-            .remember(|| Arc::new(Mutex::new(Shared { heights: ItemHeightCache::new() })))
+            .remember(|| {
+                Arc::new(Mutex::new(Shared {
+                    heights: ItemHeightCache::new(),
+                    anchors: Vec::new(),
+                }))
+            })
             .peek();
         // The jump closure and the policy both need the cache; clone before the policy takes it.
         let shared_for_jump = shared.clone();
@@ -418,6 +449,49 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         };
         let (slots, deepest) = assign_lanes(lanes, &heights, self.spacing);
         let extent = self.content_padding.0 + deepest + self.content_padding.1;
+        // Per-lane item order and the tops the window is selected by. The tops are seeded from the
+        // anchors the last measure recorded, so the estimate chain only has to be accurate NEAR the
+        // anchor instead of across the whole data set (a cold jump used to land the composed block
+        // hundreds of dp away from the viewport).
+        let anchors = {
+            let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
+            shared.anchors.clone()
+        };
+        let mut lane_items: Vec<Vec<usize>> = vec![Vec::new(); lanes];
+        for (index, slot) in slots.iter().enumerate() {
+            lane_items[slot.lane].push(index);
+        }
+        let mut tops: Vec<f32> = vec![0.0; self.count];
+        for lane in 0..lanes {
+            let items = &lane_items[lane];
+            let anchor = anchors.get(lane).and_then(|anchor| *anchor).and_then(|(index, top)| {
+                items.iter().position(|item| *item == index).map(|position| (position, top))
+            });
+            match anchor {
+                Some((position, top)) => {
+                    // Forward from the anchor with the cached sizes...
+                    let mut cursor = top + self.spacing;
+                    for item in items.iter().skip(position + 1) {
+                        tops[*item] = cursor;
+                        cursor += heights[*item] + self.spacing;
+                    }
+                    // ...and backwards for the items above it.
+                    let mut cursor = top;
+                    for item in items.iter().take(position).rev() {
+                        cursor = (cursor - heights[*item] - self.spacing).max(0.0);
+                        tops[*item] = cursor;
+                    }
+                    tops[items[position]] = top;
+                }
+                None => {
+                    let mut cursor = 0.0;
+                    for item in items {
+                        tops[*item] = cursor;
+                        cursor += heights[*item] + self.spacing;
+                    }
+                }
+            }
+        }
         let viewport = viewport_main.get();
         let offset = state.offset.get();
         let content_offset = (offset - self.content_padding.0).max(0.0);
@@ -432,7 +506,7 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         let mut lanes_of: Vec<usize> = Vec::new();
         let mut start_cursors = vec![f32::MAX; lanes];
         for (index, slot) in slots.iter().enumerate() {
-            let top = slot.main_start;
+            let top = tops[index];
             let bottom = top + heights[index];
             if bottom < window_start || top > window_end {
                 continue;
@@ -540,7 +614,16 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
                 // remembered values, effects and focus), instead of following its data key.
                 let item_key = key(index).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 let group = ctx.next_key() ^ item_key;
-                ctx.key(group, |ctx| content(ctx, index));
+                ctx.key(group, |ctx| {
+                    // The item's position in the collection, so a reader says "3 of 40" instead of
+                    // walking anonymous children (Compose's CollectionItemInfo on ogni item).
+                    Stack::new()
+                        .modifier(Modifier::new().semantics(
+                            crate::semantics::SemanticsConfig::new()
+                                .collection_item_info(crate::semantics::CollectionItemInfo::new(index)),
+                        ))
+                        .build(ctx, |ctx| content(ctx, index));
+                });
             }
         });
     }
@@ -754,6 +837,36 @@ mod tests {
             root.measured_size
         );
         assert!(!root.children.is_empty(), "the window composes under an unbounded parent");
+    }
+
+
+
+    /// A COLD JUMP: the window is chosen from estimated tops, and before the anchors were recorded the
+    /// composed block could land hundreds of dp away from the viewport and show a blank frame.
+    #[test]
+    fn a_cold_jump_lands_the_composed_block_in_the_viewport() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            grid_frame(&mut composer, &state, 200, 40.0);
+        }
+        // Jump far past everything that has been measured so far.
+        state.offset.set(4000.0);
+        grid_frame(&mut composer, &state, 200, 40.0);
+        grid_frame(&mut composer, &state, 200, 40.0);
+        let root = composer.layout_root().unwrap();
+        let (top, bottom) = root.children.iter().fold((f32::MAX, 0.0f32), |(top, bottom), child| {
+            let node = &composer.arena_nodes()[*child];
+            (top.min(node.position.y), bottom.max(node.position.y + node.measured_size.height))
+        });
+        assert!(
+            top <= 4000.0 && bottom >= 4200.0,
+            "the composed block spans the 200 dp viewport at the 4000 dp offset: {top}..{bottom}"
+        );
     }
 
     /// The main-axis content padding moves the first item down and counts towards the extent (it used
