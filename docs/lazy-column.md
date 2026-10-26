@@ -427,3 +427,18 @@ pad_after、sticky 钉在 pad_before、交叉轴压缩项）；reverseLayout 像
 越界 clamp 两端）；animateScrollToItem（spring 收敛到 scroll_to_item 同一目标）；
 重复 key 检测（rebuild panic）；集成：横向滚轮（`s dx dy`）与横向拖拽 +
 fling（fixture_scroll）。
+
+## 6. Sources
+
+The Compose files this module mirrors (all under
+`reference/compose/foundation-1.13.0-beta01/commonMain/androidx/compose/foundation/lazy/`):
+
+| Compose | what it decides here |
+| --- | --- |
+| `LazyList.kt` | the builder surface: `items`/`itemsIndexed`/`stickyHeader`, content padding, reverse layout, `userScrollEnabled` |
+| `LazyListMeasure.kt` | the anchor model, the sticky walk-back, the placement rules, the snap step |
+| `LazyListState.kt` | `firstVisibleItemIndex`/`Offset`, `scrollToItem`, `animateScrollToItem`, `canScrollForward/Backward`, `layoutInfo` |
+| `LazyListItemProvider.kt` / `LazyListIntervalContent.kt` | the interval list and the key factory |
+| `LazyListLayoutInfo.kt` / `LazyListItemInfo.kt` | `LazyListLayoutInfo` and `LazyListItemInfo` |
+| `LazyListSemantics.kt` / `layout/LazyLayoutSemantics.kt` | `CollectionInfo`, `ScrollToIndex`, `IndexForKey` |
+| `LazyListPrefetchStrategy.kt` | not implemented — the window is widened by `beyond_bounds` instead (section 4) |

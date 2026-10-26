@@ -95,8 +95,8 @@ target** for everything it reads.
 - **Why:** a `State::get()` written at the top of the content closure belongs to whoever composed
   it. With a scope in between it registers on the container instead, the parent Skips, and the
   change never re-runs the content - that is how the checkbox demo's select-all stopped
-  propagating. Every other component that composes a restartable group IS `#[composable]` (34 of
-  the 39 that do), because its content is composed by the component, not passed through. The full
+  propagating. Every other component that composes a restartable group IS `#[composable]` (39 of
+  the 45 that do, measured), because its content is composed by the component, not passed through. The full
   rule and the current exclusion list are in `docs/key-system-design.md` section 7.1-7.2.
 
 The distinction is about the closure, not the shape: a container that passes the caller's closure
@@ -268,6 +268,12 @@ them and the declaration carries the rest - know which channel you are using: `M
 and `TextField` relies on that for its visual parameters (`text_field.rs:909-916`); everything the
 chain cannot express - closures, flag-shaped branch controls, values passed outside the modifier -
 has to go through `ctx.changed`, or a Clean slot Skips past it.
+
+**A container whose CONTENT changes without any parameter changing** declares a SIGNATURE of that
+content instead of a parameter: a lazy list compares the sequence of item KEYS (`docs/lazy-column.md`
+section 2.2), because the item closures are registered inside the body and cannot be compared. The
+signature is a normal `ctx.changed` parameter — what makes it special is that it is derived from the
+data, not carried by the builder, so a caller cannot pass it wrong.
 
 **The caller has the same obligation**, and it is easier to get wrong there: a value read in the
 parent and captured into a container's content closure is invisible to that container's Skip
@@ -553,13 +559,18 @@ serialisation that only works if every animation-driving test takes it (see
 3. the public types in the prelude's component block in `winia/src/lib.rs`
 4. `docs/<kebab-case>.md` (section 12) and, if it is a control, a row in `docs/semantics.md`
 
+A LAYOUT-LEVEL container (`Row`, `Column`, `Stack`, `Flow*`, the lazy lists) lives in
+`winia/src/layout/` instead: the module is declared in `winia/src/layout.rs` and its types are
+re-exported from there and from the prelude. Steps 2-3 are the same obligation, a different file.
+
 ## 12. Documentation
 
 Every NEW component ships `docs/<component>.md` with these sections, in this order (existing docs are
-converted when they are edited for another reason - 1 of 37 had all six when this was written).
+converted when they are edited for another reason - 5 of the 95 docs have all six, measured).
 Layout primitives (`Column`, `Row`, `Stack`, `FlowRow`, `FlowColumn`) are not components in this
-sense: their docs use the shorter Sources / API and semantics / Differences / Tests shape, of
-which `docs/flow-layout.md` is the model.
+sense, and neither are the container families built on them (the lazy lists, `docs/lazy-column.md`):
+their docs use the shorter Sources / API and semantics / Differences / Tests shape, of which
+`docs/flow-layout.md` is the model.
 
 1. **Sources** - the Compose files it mirrors (paths in `reference/`), so the next reader can diff
    behaviour instead of guessing.
