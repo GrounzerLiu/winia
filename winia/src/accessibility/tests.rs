@@ -14,6 +14,27 @@
             clickable,
             focused: false,
             live_region: crate::semantics::LiveRegionMode::Off,
+            collection: false,
+            collection_index: None,
+            scroll_owner: None,
+        }
+    }
+
+    /// The lazy list's shape: a collection that offers ScrollToIndex.
+    fn collection() -> ElementData {
+        ElementData {
+            collection: true,
+            scroll_owner: None,
+            ..element(None, false, SemanticsState::new())
+        }
+    }
+
+    /// A row of that list: a position in the collection, whose ancestor offers the jump.
+    fn item(index: usize, owner: u64) -> ElementData {
+        ElementData {
+            collection_index: Some(index),
+            scroll_owner: Some(owner),
+            ..element(None, false, SemanticsState::new())
         }
     }
 
@@ -34,10 +55,16 @@
             (SemanticsRole::DropdownList, UIA_ListControlTypeId),
         ];
         for (role, expected) in cases {
-            assert_eq!(control_type_for(Some(role)).0, expected.0, "{role:?}");
+            let element = element(Some(role), false, SemanticsState::new());
+            assert_eq!(control_type_for(&element).0, expected.0, "{role:?}");
         }
         // A named element with no role is text — `Text` and `RichText` compose exactly that.
-        assert_eq!(control_type_for(None).0, UIA_TextControlTypeId.0);
+        let plain = element(None, false, SemanticsState::new());
+        assert_eq!(control_type_for(&plain).0, UIA_TextControlTypeId.0);
+        // A collection is a LIST and its rows are LIST ITEMS, whatever role they carry: a reader that
+        // hears "text" for every row never gets to say "row 3 of 200".
+        assert_eq!(control_type_for(&collection()).0, UIA_ListControlTypeId.0);
+        assert_eq!(control_type_for(&item(3, 7)).0, UIA_ListItemControlTypeId.0);
     }
 
     #[test]
@@ -167,6 +194,39 @@
             assert!(provider.AddToSelection().is_err());
             assert!(provider.RemoveFromSelection().is_err());
         }
+    }
+
+    #[test]
+    fn an_item_offers_scroll_item_and_scrolls_into_view() {
+        let row = item(42, 7);
+        assert!(
+            supports_pattern(&row, UIA_ScrollItemPatternId),
+            "an item of a collection that offers the jump offers ScrollItem"
+        );
+        // Half a declaration is not enough: no position, or no collection to move, means a pattern
+        // that would have nowhere to send the request.
+        let no_index = ElementData { collection_index: None, ..row.clone() };
+        assert!(!supports_pattern(&no_index, UIA_ScrollItemPatternId));
+        let no_owner = ElementData { scroll_owner: None, ..row.clone() };
+        assert!(!supports_pattern(&no_owner, UIA_ScrollItemPatternId));
+        // The collection itself is not an item.
+        assert!(!supports_pattern(&collection(), UIA_ScrollItemPatternId));
+
+        // Invoking the pattern queues the jump for the frame loop — it must not run application code.
+        crate::semantics::take_actions(7777);
+        let pattern: IScrollItemProvider = ScrollItemPattern {
+            window_id: 7777,
+            owner: 7,
+            index: 42,
+        }
+        .into();
+        // SAFETY: COM calls into the implementation above; the provider outlives the call.
+        unsafe { pattern.ScrollIntoView().expect("queued") };
+        assert_eq!(
+            crate::semantics::take_actions(7777),
+            vec![crate::semantics::UiAction::ScrollToIndex { node: Some(7), index: 42 }],
+            "the collection is named, so a window with several lists moves the right one"
+        );
     }
 
     #[test]

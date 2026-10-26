@@ -134,6 +134,21 @@ which is what a test can use.
 Still absent: `IndexForKey`, `heading`, `traversalIndex`, and the Windows bridge's item-container
 pattern — a UIA client can now read the collection and the capability, but no pattern invokes it yet.
 
+### Collections in the bridge
+
+A collection reads as a UIA **List** and its rows as **List Items** — the control type follows the
+declaration, not the role (a lazy row has no role, and "text" for every row never gets a client to
+"row 3 of 200"). Each item offers **ScrollItemPattern**, and `ScrollIntoView()` queues
+`UiAction::ScrollToIndex { node: <the collection's node id>, index: <the item's index> }`: the provider
+never runs application code, and naming the collection means a window with several lists moves the
+right one. The nearest ancestor that declares the action is resolved from the snapshot at query time —
+a path-prefix walk, no store to keep in sync.
+
+Still missing on this side: **ItemContainerPattern** (`FindItemByProperty`, so a client can find an
+item UIA has not realized), and a real-client verification pass — the pattern implementations are
+covered by unit tests (`cargo test -p winia --features accessibility --lib accessibility`), but
+Narrator/Inspect still has to be run against a built app (`tools/verify_uia.ps1`).
+
 ## The Windows bridge (feature `accessibility`)
 
 ```bash

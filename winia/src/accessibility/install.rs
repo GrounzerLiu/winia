@@ -348,7 +348,7 @@ fn hwnd_of(window: &dyn winit::window::Window) -> Option<HWND> {
 }
 
 /// Per-window data handed to the subclass procedure as `dwRefData`.
-struct ProviderContext {
-    window_id: u64,
+pub(crate) struct ProviderContext {
+    pub(crate) window_id: u64,
 }
 

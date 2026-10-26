@@ -15,13 +15,15 @@ use super::*;
     IRawElementProviderFragment,
     IRawElementProviderFragmentRoot
 )]
-struct Provider {
-    window_id: u64,
-    path: Vec<usize>,
+pub(crate) struct Provider {
+    /// The window the element belongs to; also the key its snapshot is published under.
+    pub(crate) window_id: u64,
+    /// The path from the window root to the element (see the type doc above).
+    pub(crate) path: Vec<usize>,
 }
 
 impl Provider {
-    fn root(window_id: u64) -> Self {
+    pub(crate) fn root(window_id: u64) -> Self {
         Self {
             window_id,
             path: Vec::new(),
@@ -40,6 +42,13 @@ impl Provider {
     fn element(&self) -> Option<ElementData> {
         let snapshot = self.snapshot()?;
         let (node, _) = snapshot.resolve(&self.path)?;
+        // The nearest ANCESTOR that offers ScrollToIndex — a path prefix, so this is the collection
+        // this element sits in. The element's own action is not an answer here: an item asks its
+        // container to scroll it, it does not scroll itself.
+        let scroll_owner = (0..self.path.len()).rev().find_map(|len| {
+            let (ancestor, _) = snapshot.resolve(&self.path[..len])?;
+            ancestor.scroll_to_index.as_ref().map(|_| ancestor.node_id)
+        });
         Some(ElementData {
             node_id: node.node_id,
             role: node.role,
@@ -48,6 +57,9 @@ impl Provider {
             clickable: node.clickable,
             focused: node.focused,
             live_region: node.live_region,
+            collection: node.collection.is_some(),
+            collection_index: node.collection_item.map(|info| info.index),
+            scroll_owner,
         })
     }
 
@@ -115,18 +127,35 @@ impl Provider {
 ///
 /// Copied rather than borrowed because the tree lives behind an `Arc` that a method cannot hand back
 /// alongside a reference into it — and the values are small: an id, a name, and a `Copy` state.
-struct ElementData {
-    node_id: u64,
-    role: Option<SemanticsRole>,
-    name: Option<String>,
-    state: crate::semantics::SemanticsState,
-    clickable: bool,
-    focused: bool,
-    live_region: crate::semantics::LiveRegionMode,
+#[derive(Clone)]
+pub(crate) struct ElementData {
+    pub(crate) node_id: u64,
+    pub(crate) role: Option<SemanticsRole>,
+    pub(crate) name: Option<String>,
+    pub(crate) state: crate::semantics::SemanticsState,
+    pub(crate) clickable: bool,
+    pub(crate) focused: bool,
+    pub(crate) live_region: crate::semantics::LiveRegionMode,
+    /// Whether this element is a COLLECTION (Compose's `CollectionInfo`): a lazy list.
+    pub(crate) collection: bool,
+    /// This element's position in its enclosing collection, when it is an item of one.
+    pub(crate) collection_index: Option<usize>,
+    /// The element that offers ScrollToIndex for this item: its nearest ancestor collection. Queued
+    /// with the action so the frame loop knows which list to move; `None` for the collection itself
+    /// and for anything outside a collection.
+    pub(crate) scroll_owner: Option<u64>,
 }
 
-fn control_type_for(role: Option<SemanticsRole>) -> UIA_CONTROLTYPE_ID {
-    match role {
+pub(crate) fn control_type_for(element: &ElementData) -> UIA_CONTROLTYPE_ID {
+    // A collection is a LIST and its items are LIST ITEMS, whatever role (or none) they carry: a
+    // reader that hears "text" for every row never gets to say "row 3 of 200".
+    if element.collection {
+        return UIA_ListControlTypeId;
+    }
+    if element.collection_index.is_some() {
+        return UIA_ListItemControlTypeId;
+    }
+    match element.role {
         Some(SemanticsRole::Button) => UIA_ButtonControlTypeId,
         // UIA has no switch control type; a switch IS a toggleable control, which CheckBox is here.
         Some(SemanticsRole::Checkbox) | Some(SemanticsRole::Switch) => UIA_CheckBoxControlTypeId,
@@ -151,7 +180,7 @@ fn control_type_for(role: Option<SemanticsRole>) -> UIA_CONTROLTYPE_ID {
 /// true of it, and a client may use either. (An earlier version returned a single pattern, which made
 /// an enabled checkbox offer only Invoke and left a client looking for Toggle with nothing, even
 /// though the state was right there.)
-fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
+pub(crate) fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
     if pattern_id == UIA_InvokePatternId {
         return element.clickable;
     }
@@ -164,6 +193,12 @@ fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
     if pattern_id == UIA_RangeValuePatternId {
         return element.state.progress_value().is_some();
     }
+    // ScrollItem is what a client calls to bring an ITEM into view; it needs both the item's position
+    // and the collection that offers the jump, so an item outside a collection (a stray declaration)
+    // offers nothing rather than a pattern that would have nowhere to send the request.
+    if pattern_id == UIA_ScrollItemPatternId {
+        return element.collection_index.is_some() && element.scroll_owner.is_some();
+    }
     false
 }
 
@@ -173,10 +208,10 @@ fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
 /// pattern does. The element's own handler decides what the new value is (a tri-state checkbox cycles
 /// through Indeterminate), which is why the provider does not compute it.
 #[implement(IToggleProvider)]
-struct TogglePattern {
-    window_id: u64,
-    node_id: u64,
-    state: ToggleableState,
+pub(crate) struct TogglePattern {
+    pub(crate) window_id: u64,
+    pub(crate) node_id: u64,
+    pub(crate) state: ToggleableState,
 }
 
 impl IToggleProvider_Impl for TogglePattern_Impl {
@@ -203,10 +238,10 @@ impl IToggleProvider_Impl for TogglePattern_Impl {
 /// single-choice (a radio group, a tab row), so "add to the selection" has no meaning for them —
 /// reporting that honestly is better than pretending the click did something it did not.
 #[implement(ISelectionItemProvider)]
-struct SelectionItemPattern {
-    window_id: u64,
-    node_id: u64,
-    selected: bool,
+pub(crate) struct SelectionItemPattern {
+    pub(crate) window_id: u64,
+    pub(crate) node_id: u64,
+    pub(crate) selected: bool,
 }
 
 impl ISelectionItemProvider_Impl for SelectionItemPattern_Impl {
@@ -246,10 +281,10 @@ impl ISelectionItemProvider_Impl for SelectionItemPattern_Impl {
 /// that with `IsReadOnly`, and `SetValue` answers `UIA_E_NOTSUPPORTED` rather than pretending to
 /// accept one — the same rule as every other refusal in this file.
 #[implement(IRangeValueProvider)]
-struct RangeValuePattern {
-    value: f64,
-    min: f64,
-    max: f64,
+pub(crate) struct RangeValuePattern {
+    pub(crate) value: f64,
+    pub(crate) min: f64,
+    pub(crate) max: f64,
 }
 
 impl IRangeValueProvider_Impl for RangeValuePattern_Impl {
@@ -289,9 +324,9 @@ impl IRangeValueProvider_Impl for RangeValuePattern_Impl {
 /// The action is queued for the frame loop rather than run here (module header), and it names the same
 /// node the snapshot does, so it reaches the same callback a real click does.
 #[implement(IInvokeProvider)]
-struct InvokePattern {
-    window_id: u64,
-    node_id: u64,
+pub(crate) struct InvokePattern {
+    pub(crate) window_id: u64,
+    pub(crate) node_id: u64,
 }
 
 impl IInvokeProvider_Impl for InvokePattern_Impl {
@@ -299,6 +334,31 @@ impl IInvokeProvider_Impl for InvokePattern_Impl {
         crate::semantics::request_action(
             self.window_id,
             crate::semantics::UiAction::Invoke(self.node_id),
+        );
+        Ok(())
+    }
+}
+
+/// The ScrollItem pattern: "bring this item into view" — Compose's `ScrollToIndex` seen from the
+/// item's side.
+///
+/// The provider queues the jump for the frame loop (it must not run application code) and names the
+/// COLLECTION that offers it, so a window with several lists moves the right one.
+#[implement(IScrollItemProvider)]
+pub(crate) struct ScrollItemPattern {
+    pub(crate) window_id: u64,
+    pub(crate) owner: u64,
+    pub(crate) index: usize,
+}
+
+impl IScrollItemProvider_Impl for ScrollItemPattern_Impl {
+    fn ScrollIntoView(&self) -> WinResult<()> {
+        crate::semantics::request_action(
+            self.window_id,
+            crate::semantics::UiAction::ScrollToIndex {
+                node: Some(self.owner),
+                index: self.index,
+            },
         );
         Ok(())
     }
@@ -477,6 +537,13 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                     }
                     .into()
                 }
+                UIA_ScrollItemPatternId => ScrollItemPattern {
+                    window_id: self.window_id,
+                    // `supports_pattern` already required both; the fallbacks keep the types total.
+                    owner: element.scroll_owner.unwrap_or(element.node_id),
+                    index: element.collection_index.unwrap_or(0),
+                }
+                .into(),
                 // `supports_pattern` answers false for anything else, so reaching here is a bug — and
                 // saying so beats handing back a pattern that is not the one that was asked for.
                 _ => Err(not_implemented())?,
@@ -516,7 +583,7 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
         let node = element;
 
         match property_id {
-            UIA_ControlTypePropertyId => Ok(variant_i32(control_type_for(node.role).0)),
+            UIA_ControlTypePropertyId => Ok(variant_i32(control_type_for(&node).0)),
             UIA_NamePropertyId => match node.name.as_deref() {
                 Some(name) if !name.is_empty() => Ok(variant_bstr(name)),
                 _ => Ok(variant_not_supported()),
@@ -531,6 +598,9 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             }
             UIA_IsRangeValuePatternAvailablePropertyId => Ok(variant_bool(
                 supports_pattern(&node, UIA_RangeValuePatternId),
+            )),
+            UIA_IsScrollItemPatternAvailablePropertyId => Ok(variant_bool(
+                supports_pattern(&node, UIA_ScrollItemPatternId),
             )),
             UIA_RangeValueValuePropertyId => match node.state.progress_value() {
                 Some((current, _, _)) => Ok(variant_double(current as f64)),

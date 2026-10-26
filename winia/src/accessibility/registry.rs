@@ -9,13 +9,13 @@ use super::*;
 static HWNDS: std::sync::Mutex<Option<std::collections::HashMap<u64, isize>>> =
     std::sync::Mutex::new(None);
 
-fn register_hwnd(window_id: u64, hwnd: HWND) {
+pub(crate) fn register_hwnd(window_id: u64, hwnd: HWND) {
     let mut map = HWNDS.lock().unwrap();
     map.get_or_insert_with(Default::default)
         .insert(window_id, hwnd.0 as isize);
 }
 
-fn unregister_hwnd(window_id: u64) {
+pub(crate) fn unregister_hwnd(window_id: u64) {
     if let Ok(mut map) = HWNDS.lock() {
         if let Some(map) = map.as_mut() {
             map.remove(&window_id);
@@ -39,7 +39,7 @@ unsafe impl Send for ProviderCache {}
 
 static PROVIDERS: std::sync::Mutex<Option<ProviderCache>> = std::sync::Mutex::new(None);
 
-fn cached_provider(
+pub(crate) fn cached_provider(
     window_id: u64,
     path: &[usize],
     make: impl FnOnce() -> Provider,
@@ -57,7 +57,7 @@ fn cached_provider(
 
 /// The root provider of a window — the one `WM_GETOBJECT` answers with, so it has to be the same
 /// instance every time UIA asks.
-fn root_provider(window_id: u64) -> IRawElementProviderSimple {
+pub(crate) fn root_provider(window_id: u64) -> IRawElementProviderSimple {
     let fragment = cached_provider(window_id, &[], || Provider::root(window_id));
     // The root is both: it is the fragment root and the simple provider UIA was asked for.
     // Every Provider implements all three interfaces, so this cast cannot fail in practice; a NULL
@@ -66,7 +66,7 @@ fn root_provider(window_id: u64) -> IRawElementProviderSimple {
     fragment.cast().expect("a Provider is always an IRawElementProviderSimple")
 }
 
-fn forget_providers(window_id: u64) {
+pub(crate) fn forget_providers(window_id: u64) {
     if let Ok(mut store) = PROVIDERS.lock() {
         if let Some(cache) = store.as_mut() {
             cache.0.retain(|(id, _), _| *id != window_id);
@@ -74,7 +74,7 @@ fn forget_providers(window_id: u64) {
     }
 }
 
-fn hwnd_for(window_id: u64) -> Option<HWND> {
+pub(crate) fn hwnd_for(window_id: u64) -> Option<HWND> {
     let map = HWNDS.lock().ok()?;
     let value = *map.as_ref()?.get(&window_id)?;
     Some(HWND(value as *mut core::ffi::c_void))
@@ -86,7 +86,7 @@ fn hwnd_for(window_id: u64) -> Option<HWND> {
 
 /// Where the window's client area starts on screen, in physical pixels — the origin UIA's
 /// BoundingRectangle is measured from, since it is in screen coordinates.
-fn client_screen_origin(hwnd: HWND) -> (f64, f64) {
+pub(crate) fn client_screen_origin(hwnd: HWND) -> (f64, f64) {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::ClientToScreen;
     // SAFETY: the call takes the HWND we were handed and writes into a local.
@@ -99,7 +99,7 @@ fn client_screen_origin(hwnd: HWND) -> (f64, f64) {
     }
 }
 
-unsafe extern "system" fn subclass_proc(
+pub(crate) unsafe extern "system" fn subclass_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
