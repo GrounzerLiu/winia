@@ -84,6 +84,33 @@ No `DragAndDrop` equivalent at all: no drag source, no drop target, no transfer 
 
 No embedding of a native widget inside the composition.
 
+### 7. The layout primitives
+
+Surveyed against `reference/compose/foundation-layout-1.13.0-beta01` (22 public API files) plus the
+`foundation.lazy` packages. `winia/src/layout/` covers most of the pre-1.13 surface; the gaps are
+concentrated in the APIs 1.13 added, and in the grid family.
+
+| Compose | winia | Notes |
+| --- | --- | --- |
+| `Row` / `Column` / `Box` / `BoxWithConstraints` / `Spacer` | yes | the box is named `Stack` (`box_layout.rs`), `BoxLayout` is the policy |
+| `FlowRow` / `FlowColumn` | yes | `flow.rs`; `Clip`/`Visible` overflow only |
+| `FlowRowOverflow.expandIndicator` / `expandOrCollapseIndicator` | **missing** | recorded in `flow.rs`'s header |
+| `Arrangement` (Start/End/Center/SpaceBetween/Around/Evenly) | yes | `node/geometry.rs` |
+| `Arrangement.Absolute.*` | **closed 2026-10-26** | `Arrangement::Absolute(AbsoluteArrangement)` |
+| `Arrangement.aligned()` / `spacedBy(space, alignment)` | **closed 2026-10-26** | `Arrangement::Aligned(Alignment)`; the gap half of `spacedBy` stays on the container (`Row::spacing`) — see [arrangement.md](arrangement.md) |
+| `Arrangement.spacedBy(space)` as a value | partial | the gap is `Row::spacing` / `Column::spacing`, not part of the arrangement |
+| `Modifier.visible` | **closed 2026-10-26** | `Modifier::visible(bool)`; see [visible.md](visible.md) |
+| `Modifier.windowInsetsStartWidth` / `EndWidth` / `TopHeight` / `BottomHeight` | **missing** | `WindowInsetsSize.kt`; winia has the padding form only |
+| `Modifier.fitInside` / `fitOutside` (rulers) | **missing** | `RulerAlignment.kt`, new in 1.13 |
+| `Grid` / `GridConfigurationScope` / `GridTrackSpec` | **missing** | `Grid.kt`, new in 1.13 |
+| `FlexBox` / `FlexBoxConfig` | **missing** | `FlexBox.kt`, new in 1.13 |
+| `ContextualFlowRow` / `ContextualFlowColumn` | **missing** | `ContextualFlowLayout.kt` |
+| `IntrinsicSize`, `AspectRatio`, `Size`, `Padding`, `Offset`, `AlignmentLine` | yes | all chain steps (`SizeStep`) in `modifier/builders/layout.rs` |
+| `WindowInsets` + `windowInsetsPadding` | yes | `window/insets.rs`, `Modifier::status_bars_padding` and friends |
+| `RowScope` / `ColumnScope` | deliberate non-goal | `layout_weight`/`align_self` are plain modifiers; a misplaced one is silently ignored |
+| `LookaheadLayout` | deliberate non-goal | see [lookahead-subcompose-feasibility.md](lookahead-subcompose-feasibility.md); the app re-runs layout for the shared-element pass instead |
+| `ConstraintLayout` | out of scope | `androidx.constraintlayout.compose`, a separate artifact |
+
 ## What exists and could still deepen
 
 | Area | Today | Note |
