@@ -4,15 +4,22 @@ pub fn linear(x: f32) -> f32 { x }
 pub trait Interpolator : Sync + Send + std::fmt::Debug {
     fn interpolate(&self, x: f32) -> f32;
 
+    /// The concrete type's name; two interpolators of different types are different curves.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     /// Value equality across INSTANCES. An animation spec stores its interpolator as
     /// `Arc<dyn Interpolator>`, which cannot derive `PartialEq`, and a caller may rebuild the
     /// whole spec (fresh `Arc`s) on every frame — so parameter comparison has to answer by VALUE:
     /// two interpolators that draw the same curve compare equal even though they are different
     /// objects.
-    fn same_parameter(&self, other: &dyn Interpolator) -> bool;
-
-    /// Downcast hook for [`Interpolator::same_parameter`] implementations.
-    fn as_any(&self) -> &dyn std::any::Any;
+    ///
+    /// The default is value-correct but allocates (it compares the `Debug` form), which keeps an
+    /// interpolator implemented OUTSIDE this crate working; the ones here override it.
+    fn same_parameter(&self, other: &dyn Interpolator) -> bool {
+        self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
+    }
 }
 
 /// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
@@ -45,11 +52,8 @@ impl Interpolator for Linear {
     }
 
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
-        other.as_any().downcast_ref::<Linear>().is_some()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+        // A unit struct: same type means the same curve.
+        self.type_name() == other.type_name()
     }
 }
 
@@ -103,11 +107,7 @@ macro_rules! interpolator {
                 // The table is a COMPILE-TIME constant of this type (nothing here is configurable),
                 // so "same type" already means "same curve" — no need to walk the points, and this
                 // comparison runs once per item per frame.
-                other.as_any().downcast_ref::<$name>().is_some()
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
+                self.type_name() == other.type_name()
             }
 
             fn interpolate(&self, x: f32) -> f32 {
@@ -1361,17 +1361,11 @@ impl CubicBezier {
 
 impl Interpolator for CubicBezier {
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
-        other.as_any().downcast_ref::<CubicBezier>().is_some_and(|other| {
-            other.p1x == self.p1x
-                && other.p1y == self.p1y
-                && other.p2x == self.p2x
-                && other.p2y == self.p2y
-        })
+        // The four control points are the whole state and the derived Debug prints them, so the
+        // trait default compares them exactly. This type is not on the hot path the tables are.
+        self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn interpolate(&self, x: f32) -> f32 {
         if x <= 0.0 { return 0.0; }
@@ -1407,15 +1401,10 @@ impl PathEasing {
 
 impl Interpolator for PathEasing {
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<PathEasing>()
-            .is_some_and(|other| other.points == self.points)
+        // The point list is the whole state and the derived Debug prints it.
+        self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn interpolate(&self, x: f32) -> f32 {
         if x <= 0.0 { return 0.0; }
