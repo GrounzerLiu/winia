@@ -8,12 +8,49 @@ mod ui;
 use std::time::Duration;
 use ui::UiTest;
 
-/// The status line the demo prints: item count, the spec mode and whether fades are on.
+/// The item count the status line reports. The text arrives wrapped as "text(12 items | …)", so the
+/// digits are taken from the END of the part before " items".
+fn count(app: &mut UiTest) -> u32 {
+    info(app)
+        .split(" items")
+        .next()
+        .and_then(|head| head.rsplit(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Polls the animation report for a line that matches, so a spring that settles in a few hundred
+/// milliseconds is caught before it is gone. `extra` narrows the line further (e.g. to an OFFSET
+/// animation, which carries `components=2`).
+fn saw_animation(app: &mut UiTest, needle: &str, extra: Option<&str>) -> bool {
+    for _ in 0..8 {
+        let lines = app.animations();
+        if lines
+            .iter()
+            .any(|line| line.contains(needle) && extra.is_none_or(|extra| line.contains(extra)))
+        {
+            return true;
+        }
+        app.refresh();
+    }
+    false
+}
+
+/// The status line the demo prints: item count, the spec mode, whether fades are on, and the scroll
+/// offset. The tree dump can lag one frame behind an action, so this retries instead of returning an
+/// empty string that a caller would read as "0 items".
 fn info(app: &mut UiTest) -> String {
-    app.all_texts()
-        .into_iter()
-        .find(|text| text.contains(" items | spec "))
-        .unwrap_or_default()
+    for _ in 0..6 {
+        if let Some(text) = app
+            .all_texts()
+            .into_iter()
+            .find(|text| text.contains(" items | spec "))
+        {
+            return text;
+        }
+        app.refresh();
+    }
+    String::new()
 }
 
 fn click_tag(app: &mut UiTest, tag: &str) {
@@ -32,65 +69,64 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         info(app).contains("12 items") && info(app).contains("spec default")
     });
 
+    // TAP a card first, while the list is still at the top: the debug tree reports an item in the
+    // LIST's content coordinates, and those equal screen coordinates only at offset 0. A tap anywhere
+    // later would have to have the scroll offset subtracted, which the report does not give per item.
+    let first = app.expect_tag("lazy-anim-item-0");
+    app.click(first.0 + first.2 / 2.0, first.1 + first.3 / 2.0);
+    app.expect_eventually_timeout("the tapped card is gone", Duration::from_secs(2), |app| {
+        app.refresh();
+        app.find_tag("lazy-anim-item-0").is_none()
+    });
+    assert_eq!(count(&mut app), 11, "and the data lost that key: {:?}", info(&mut app));
+
     // INSERT at the head: the new key fades in, every other card moves down one slot. Both channels
     // of the default contract are springs at Compose's StiffnessMediumLow (400).
-    let first_before = app.expect_tag("lazy-anim-item-0");
+    let first_before = app.expect_tag("lazy-anim-item-1");
     click_tag(&mut app, "lazy-anim-insert-head");
     app.refresh();
     assert!(
-        info(&mut app).contains("13 items"),
-        "the list grew: {:?}",
+        info(&mut app).contains("12 items"),
+        "the list grew back: {:?}",
         info(&mut app)
     );
     let new_card = app.expect_tag("lazy-anim-item-12");
-    let first_after = app.expect_tag("lazy-anim-item-0");
+    let first_after = app.expect_tag("lazy-anim-item-1");
     assert!(
         new_card.1 <= first_before.1 + 1.0,
         "the inserted card takes the first slot: new {new_card:?} vs old first {first_before:?}"
     );
     assert!(
         first_after.1 > first_before.1,
-        "and the old first card moved down: {first_after:?} vs {first_before:?}"
+        "and the first card it pushed down moved: {first_after:?} vs {first_before:?}"
     );
     // `components=2` narrows this to an OFFSET animation (x and y lanes), i.e. an item's placement:
     // the shell's own animations are scalars with their own 180/500 ms tweens, so a bare
     // `spring(stiffness=400` could otherwise be satisfied by something that is not the item.
-    let animations = app.animations();
     assert!(
-        animations
-            .iter()
-            .any(|line| line.contains("spring(stiffness=400") && line.contains("components=2")),
-        "the default contract places items with a StiffnessMediumLow spring: {animations:?}"
+        saw_animation(&mut app, "spring(stiffness=400", Some("components=2")),
+        "the default contract places items with a StiffnessMediumLow spring"
     );
 
     // SHUFFLE: same keys, new slots — pure placement, nothing appears or disappears.
     click_tag(&mut app, "lazy-anim-shuffle");
     app.refresh();
-    assert!(info(&mut app).contains("13 items"), "a shuffle changes no key count");
-    let animations = app.animations();
+    assert!(info(&mut app).contains("12 items"), "a shuffle changes no key count");
     assert!(
-        animations
-            .iter()
-            .any(|line| line.contains("spring(") && line.contains("components=2")),
-        "a reorder animates the placement: {animations:?}"
+        saw_animation(&mut app, "spring(", Some("components=2")),
+        "a reorder animates the placement"
     );
 
-    // NOTE: the ghost is a Skia picture with no tag of its own, so what is asserted here is the DATA
+    // REMOVE from the middle: the key leaves the data, so its captured frame fades out. The ghost is
+    // a Skia picture with no tag of its own, so what this asserts is the DATA change (count); the
+    // picture itself is covered by the render tests.
     click_tag(&mut app, "lazy-anim-remove-middle");
     app.refresh();
     assert!(
-        info(&mut app).contains("12 items"),
+        info(&mut app).contains("11 items"),
         "the list shrank: {:?}",
         info(&mut app)
     );
-
-    // TAP a card: the clicked item is removed, so the fade-out path runs for a key the test names.
-    let victim = app.expect_tag("lazy-anim-item-12");
-    app.click(victim.0 + victim.2 / 2.0, victim.1 + victim.3 / 2.0);
-    app.expect_eventually_timeout("the tapped card is gone", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("lazy-anim-item-12").is_none() && info(app).contains("11 items")
-    });
 
     // The SLOW contract: a bouncier placement spring and 450 ms tweens for the fades, so the two
     // channels are distinguishable in the animation report.
@@ -104,19 +140,18 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     );
     click_tag(&mut app, "lazy-anim-insert-head");
     app.refresh();
-    let animations = app.animations();
     assert!(
-        animations.iter().any(|line| line.contains("tween(450ms)")),
-        "the slow contract fades with a 450 ms tween: {animations:?}"
+        saw_animation(&mut app, "tween(450ms)", None),
+        "the slow contract fades with a 450 ms tween"
     );
     assert!(
-        animations
-            .iter()
-            .any(|line| line.contains("spring(stiffness=180") && line.contains("components=2")),
-        "and moves with its own spring: {animations:?}"
+        saw_animation(&mut app, "spring(stiffness=180", Some("components=2")),
+        "and moves with its own spring"
     );
 
-    // PLACEMENT ONLY: the fades are switched off, so no tween runs at all.
+    // PLACEMENT ONLY: the fades are switched off. The demo's own fade curve is the only
+    // `tween(450ms)` in the app, so its absence is the observable half of "fades off" — a global
+    // "no tween at all" would be wrong, the shell runs its own 180/500 ms tweens.
     click_tag(&mut app, "lazy-anim-spec"); // slow -> default
     click_tag(&mut app, "lazy-anim-spec"); // default -> placement
     app.refresh();
@@ -127,9 +162,6 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     );
     click_tag(&mut app, "lazy-anim-insert-head");
     app.refresh();
-    // The demo's own fade curve is the only `tween(450ms)` in the app, so its absence is the
-    // observable half of "fades off". (A global "no tween at all" would be wrong: the shell's app bar
-    // and buttons run their own 180/500 ms tweens, which are visible in the report.)
     let animations = app.animations();
     assert!(!animations.is_empty(), "the animation report answered: {animations:?}");
     assert!(

@@ -680,7 +680,17 @@ impl<A: LazyAxis> LazyList<A> {
             if let Some(last_key) = state.last_known_first_key.get() {
                 let cache_ref = cache.get();
                 if let Some(new_index) = intervals.index_of_key(last_key) {
-                    let new_offset = self.content_padding.0 + prefix_height(&cache_ref, new_index, self.spacing);
+                    // Preserve the anchor's position INSIDE the viewport: the correction moves the
+                    // offset to where that key now starts, so the pixel offset it had must be added
+                    // back. Without it the anchor snaps to the top of the viewport and the whole
+                    // content jumps — measured at launch (offset 0, content padding 4): the first
+                    // insert moved the offset to 4 and the list scrolled up 4 px.
+                    let (_, item_offset) =
+                        anchor_from_offset(&cache_ref, state.offset.get(), self.spacing, self.content_padding.0);
+                    let new_offset = (self.content_padding.0
+                        + prefix_height(&cache_ref, new_index, self.spacing)
+                        + item_offset)
+                        .max(0.0);
                     state.offset.set(new_offset);
                 }
             }

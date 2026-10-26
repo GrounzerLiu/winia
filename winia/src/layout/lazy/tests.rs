@@ -2736,6 +2736,65 @@
         );
         crate::animation::clear_all_animations();
     }
+    /// A data change must not move the VIEWPORT: the anchor key keeps its pixel position. The
+    /// correction used to snap the anchor to the top of the viewport, so at launch (offset 0, content
+    /// padding 4) the first insert scrolled the list up 4 px, and mid-scroll it jumped by whatever
+    /// fraction of an item the anchor was into the viewport.
+    #[test]
+    fn a_data_change_keeps_the_anchor_at_its_pixel_position() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .spacing(8.0)
+                    .content_padding(4.0, 4.0)
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::components::text::Text::new(format!("Item {k}"))
+                            .modifier(Modifier::new().height(48.0))
+                            .build(ctx);
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        assert_eq!(state.offset(), 0.0, "a fresh list sits at the top");
+
+        // Insert in the MIDDLE: nothing above the anchor moved, so the offset must not move either.
+        let mut items: Vec<u64> = (0..10).collect();
+        items.push(999);
+        items.extend(10..20);
+        build(&mut composer, Arc::new(items));
+        assert_eq!(
+            state.offset(),
+            0.0,
+            "the first insert must not scroll the list (it used to snap to the content padding)"
+        );
+
+        // Now scroll to a non-boundary position (20 dp INTO item 3) and insert at the HEAD: the anchor
+        // key is what has to stay put, and its pixel position has to survive too.
+        state.scroll_to_item(3, 20.0);
+        build(&mut composer, Arc::new((0..20).collect()));
+        build(&mut composer, Arc::new((0..20).collect()));
+        let before = state.offset();
+        assert!(before > 100.0, "the list really scrolled: {before}");
+        let mut items: Vec<u64> = vec![77];
+        items.extend(0..20);
+        build(&mut composer, Arc::new(items));
+        // The anchor item's VISUAL position is what must not move, so the offset has to grow by exactly
+        // the inserted row (48 + 8 spacing) — not stay put (that would move the content up) and not
+        // snap to a row boundary (that would move it by the 20 dp the anchor was into its slot).
+        assert_eq!(
+            state.offset(),
+            before + 56.0,
+            "the anchor item keeps its pixel position when a row is inserted above it"
+        );
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

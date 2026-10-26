@@ -190,10 +190,11 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
             let spec = mode.get().spec();
             let keys_now = keys.get();
             Text::new(format!(
-                "{} items | spec {} | fade {}",
+                "{} items | spec {} | fade {} | offset {:.0}",
                 keys_now.len(),
                 mode.get().label(),
                 if mode.get() == SpecMode::PlacementOnly { "off" } else { "on" },
+                list_state.offset(),
             ))
             .modifier(Modifier::new().test_tag("lazy-anim-info"))
             .font_size(12.0)
