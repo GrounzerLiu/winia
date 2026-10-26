@@ -152,8 +152,11 @@ fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
                 .items(count.get(), move |ctx, index| {
                     Stack::new()
                         .modifier(
+                            // A staggered item keeps its own size, so it has to ask for the LANE's
+                            // width: without fill_max_width it measures zero wide and paints nothing.
                             Modifier::new()
                                 .test_tag(format!("stagger-item-{index}"))
+                                .fill_max_width()
                                 .height(tile_height(pattern.get(), index))
                                 .background(palette(index), Shape::rounded(6.0)),
                         )

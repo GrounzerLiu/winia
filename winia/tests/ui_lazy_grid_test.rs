@@ -85,6 +85,10 @@ fn a_staggered_grid_drifts_its_lanes() {
     );
     assert!(i1.0 > i0.0, "the second item opens the second lane: {i0:?} {i1:?}");
     assert!(
+        i0.2 > 100.0,
+        "a tile fills its lane instead of measuring zero wide: {i0:?}"
+    );
+    assert!(
         (i2.0 - i0.0).abs() <= 1.0,
         "the third item continues the FIRST lane: {i0:?} {i2:?}"
     );
