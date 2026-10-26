@@ -395,10 +395,11 @@
 
     #[test]
     fn aspect_ratio_respects_inner_fixed_size() {
-        // 链内 size(50,20) 是 tight（min=max）——aspect 的候选全部不满足，落到 unenforced 的
-        // 50x25，再被 clamp 回 tight 范围 → 50x20。**节点尺寸**与 Compose 一致；内容不同：
-        // Compose 把子节点量成 50x25、由外层 size 节点收成 50x20，winia 直接把 fixed(50,20)
-        // 交给子节点（见 docs/box.md 的差异表）。
+        // The chain's `size(50, 20)` is tight (min == max), so no aspect candidate fits: the
+        // unenforced 50x25 is chosen and then clamped back into the tight range, giving 50x20. The
+        // NODE size matches Compose; the content differs — Compose measures the child at 50x25 and
+        // lets the outer `size` node shrink it to 50x20, where winia hands `fixed(50, 20)` to the
+        // child directly (see the differences table in docs/box.md).
         let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));

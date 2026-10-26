@@ -576,9 +576,10 @@ pub(super) fn render_pass1(
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
-    // 叶子 padding 渲染偏移（测量已回加尺寸——绘制内容按内边距内缩；RTL 时 start 在右）。
-    // 用测量期 RESOLVED 的那份（元素 padding + window insets、动态维度只求值一次）：
-    // 重新从 modifier 解析会漏掉 inset，并与 `resolved_padding` 形成第二个来源。
+    // The leaf's padding offset: measure has already added it back to the size, so the CONTENT is
+    // inset by it (with `start` on the right under RTL). Uses the value RESOLVED during measure
+    // (element padding + window insets, with a dynamic dimension evaluated once): re-deriving it
+    // from the modifier would miss the insets and give `resolved_padding` a second source.
     let (pad_s, pad_t, pad_e, pad_b) = node.resolved_padding;
     let pad_rtl = node.layout_direction == crate::layout::LayoutDirection::Rtl;
     let (content_x, content_y, content_w, content_h) = match node.content_box_override {

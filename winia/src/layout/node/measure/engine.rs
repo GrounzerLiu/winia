@@ -540,8 +540,10 @@ pub(crate) fn measure_node_inner(
     }
 
     // 开放布局节点 A 型（exp/modifier-node）：在尺寸步骤之后串行变换约束。
-    // 位置语义 = 链中所有 size/padding/insets 步骤之后、intrinsic 请求与 padding 记账之前；
-    // 动态值在 transform 内求值（measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
+    // The position: after every size/padding/insets step in the chain, before the intrinsic
+    // request and before padding is accounted for. Dynamic values are evaluated inside the
+    // transform (a `State::get` during measure registers a layout dependency, like
+    // `Dimension::Dynamic`).
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
     // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
@@ -566,9 +568,11 @@ pub(crate) fn measure_node_inner(
     // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的
     // 固有尺寸，把约束收紧到它；`enforceIncoming`（`size/width/height` 形式）为真时 incoming 仍
     // 是最终夹取者，`requiredWidth/Height(IntrinsicSize)` 为假（忽略 incoming，同 requiredSize）。
-    // 位置在尺寸步进**之后**：padding 现在是步进的一步（`SizeStep::Padding`），已经按链序内缩，
-    // 所以这里收紧的是"节点盒子减掉 padding 之后"的内容尺寸；外层尺寸最后再把 padding 加回去
-    // （`intrinsic_size_of` 答的是含 padding 的盒子，因此这里要先减掉，见下方注释）。
+    // The position is AFTER the size steps: padding is one of them now (`SizeStep::Padding`)
+    // and has already deflated the constraints in chain order, so what is tightened here is the
+    // CONTENT size (the node's box minus its padding); the outer size adds the padding back at
+    // the end (`intrinsic_size_of` answers the box INCLUDING padding, which is why it is
+    // subtracted first — see the note below).
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_width_request() {
         // The constraints the request saw at ITS chain position decide the clamp: a fill outside
         // has already tightened them (Compose's IntrinsicWidthNode measures under those), while a
