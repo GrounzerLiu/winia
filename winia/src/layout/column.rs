@@ -140,6 +140,21 @@ impl MeasurePolicy for ColumnLayout {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_absolute_arrangement_still_mirrors_the_column_cross_axis() {
+        // Absolute is about the MAIN axis. A Column's main axis is y, so the cross-axis mirror RTL
+        // needs (Start on the right) has to keep working whatever the arrangement is.
+        let column = ColumnLayout::new()
+            .arrangement(Arrangement::Absolute(AbsoluteArrangement::Start))
+            .alignment(Alignment::Start)
+            .direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(30.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) =
+            column.measure(&mut nodes, &[], &children, Constraints::new(100.0, 100.0, 0.0, 100.0));
+        assert_eq!(placements[0].position.x, 70.0, "the child hugs the RIGHT edge in RTL");
+    }
+
     fn make_leaf(width: f32, height: f32) -> LayoutNode {
         use crate::modifier::Modifier;
         let mut node = LayoutNode::leaf(Modifier::new().size(width, height));

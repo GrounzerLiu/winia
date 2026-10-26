@@ -482,7 +482,14 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── Mirroring for RTL ──
-    if direction == LayoutDirection::Rtl {
+    //
+    // `Arrangement.Absolute.*` is the one family Compose packs to a PHYSICAL edge, so it is exempt
+    // on the MAIN axis: `Absolute::Start` stays left even in a right-to-left Row. A Column's main
+    // axis is y and this mirror never touched it — what it mirrors there is the CROSS axis, which
+    // still has to follow the layout direction whatever the main-axis arrangement is.
+    let absolute_main = A::HORIZONTAL
+        && matches!(arrangement, crate::layout::Arrangement::Absolute(_));
+    if direction == LayoutDirection::Rtl && !absolute_main {
         let container_x = A::rtl_container_width(measured_main, cross_size);
         for p in &mut placements {
             p.position.x = container_x - p.position.x - p.size.width;

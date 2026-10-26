@@ -246,7 +246,9 @@ pub mod prelude {
     pub use crate::layout::{Column, FlowColumn, FlowOverflow, FlowRow, Row, Spacer, Stack};
     pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
-    pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
+    pub use crate::layout::{
+        AbsoluteArrangement, Alignment, Arrangement, ContentAlignment, Constraints, LayoutDirection,
+    };
     pub use crate::window::insets::{Insets, InsetsKind, WindowInsetsController};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::runtime::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};

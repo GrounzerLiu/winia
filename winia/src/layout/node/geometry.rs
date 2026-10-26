@@ -26,6 +26,17 @@ pub struct Placement {
 // ── Arrangement ──
 
 /// Main-axis arrangement (Compose's Arrangement).
+///
+/// The six bare variants are Compose's mirroring family: under RTL an `End`-packed row becomes
+/// left-packed, because the container mirrors the children's positions afterwards. The two variants
+/// with a payload cover the rest of Compose's surface:
+///
+/// - [`Arrangement::Absolute`] is `Arrangement.Absolute.*` — the same six distributions packed to a
+///   PHYSICAL edge, never mirrored;
+/// - [`Arrangement::Aligned`] is `Arrangement.aligned(alignment)` and the alignment half of
+///   `Arrangement.spacedBy(space, alignment)`: the leftover main-axis space goes to that alignment.
+///   winia keeps the gap itself on the container (`Row::spacing`), so `spacedBy(space, alignment)`
+///   maps to `spacing(space)` plus this variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arrangement {
     Start,
@@ -34,6 +45,40 @@ pub enum Arrangement {
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+    /// Compose's `Arrangement.Absolute.*`: pack to a physical edge, do not mirror under RTL.
+    Absolute(AbsoluteArrangement),
+    /// Compose's `Arrangement.aligned(alignment)`: the leftover main-axis space goes to `alignment`.
+    /// `Stretch` has no meaning on the main axis and behaves as `Center`, as Compose's
+    /// `Alignment.Horizontal` cannot express it either.
+    Aligned(Alignment),
+}
+
+/// The six distributions `Arrangement.Absolute` offers (Compose's `Arrangement.Absolute` object).
+///
+/// The only difference from the bare [`Arrangement`] variants is that the container does NOT mirror
+/// the result under RTL: `Absolute::Start` packs left in both directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbsoluteArrangement {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+impl AbsoluteArrangement {
+    /// The mirroring variant with the same distribution — what the spacing maths runs on.
+    pub fn relative(self) -> Arrangement {
+        match self {
+            AbsoluteArrangement::Start => Arrangement::Start,
+            AbsoluteArrangement::End => Arrangement::End,
+            AbsoluteArrangement::Center => Arrangement::Center,
+            AbsoluteArrangement::SpaceBetween => Arrangement::SpaceBetween,
+            AbsoluteArrangement::SpaceAround => Arrangement::SpaceAround,
+            AbsoluteArrangement::SpaceEvenly => Arrangement::SpaceEvenly,
+        }
+    }
 }
 
 // ── Alignment ──

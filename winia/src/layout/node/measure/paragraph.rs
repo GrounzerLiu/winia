@@ -328,6 +328,46 @@ pub fn compute_spacing(
     gap_count: usize,
 ) -> (f32, f32) {
     match arrangement {
+        // Compose's `Arrangement.Absolute.*` distributes exactly like the mirroring variant; the
+        // difference is only that the container skips the RTL mirror (see `measure_flex`).
+        crate::layout::Arrangement::Absolute(absolute) => {
+            return relative_spacing(absolute.relative(), remaining, gap_count);
+        }
+        // Compose's `aligned(alignment)`: the gap between children is the container's own
+        // `spacing`, and the leftover main-axis space all goes to the alignment. `Stretch` cannot
+        // be expressed on the main axis and behaves as `Center`.
+        crate::layout::Arrangement::Aligned(alignment) => {
+            return (0.0, aligned_leading(alignment, remaining));
+        }
+        _ => {}
+    }
+    relative_spacing(arrangement, remaining, gap_count)
+}
+
+/// Where `Arrangement.aligned(alignment)` puts the leftover main-axis space.
+fn aligned_leading(alignment: crate::layout::Alignment, remaining: f32) -> f32 {
+    match alignment {
+        crate::layout::Alignment::Start => 0.0,
+        crate::layout::Alignment::End => remaining,
+        // `Stretch` cannot be expressed on the main axis; Compose's `Alignment.Horizontal` has no
+        // such value either, so it behaves as Center instead of panicking.
+        crate::layout::Alignment::Center | crate::layout::Alignment::Stretch => remaining / 2.0,
+    }
+}
+
+/// The six mirroring distributions (Compose's `Arrangement.Start` … `SpaceEvenly`).
+fn relative_spacing(
+    arrangement: crate::layout::Arrangement,
+    remaining: f32,
+    gap_count: usize,
+) -> (f32, f32) {
+    match arrangement {
+        // Unreachable from `compute_spacing` (it unwraps both payloads first), but the match has to
+        // stay exhaustive so a new variant cannot be forgotten here.
+        crate::layout::Arrangement::Absolute(absolute) => {
+            relative_spacing(absolute.relative(), remaining, gap_count)
+        }
+        crate::layout::Arrangement::Aligned(alignment) => (0.0, aligned_leading(alignment, remaining)),
         crate::layout::Arrangement::Start => (0.0, 0.0),
         crate::layout::Arrangement::End => (0.0, remaining),
         crate::layout::Arrangement::Center => (0.0, remaining / 2.0),

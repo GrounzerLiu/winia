@@ -205,6 +205,85 @@ mod tests {
     }
 
     #[test]
+    fn an_absolute_arrangement_ignores_the_layout_direction() {
+        // Compose's Arrangement.Absolute.* packs to a PHYSICAL edge: the RTL row must not mirror it.
+        let absolute = Arrangement::Absolute(AbsoluteArrangement::Start);
+        let row = RowLayout::new().arrangement(absolute).direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        assert_eq!(placements[0].position.x, 0.0, "Absolute::Start stays left in RTL");
+        assert_eq!(placements[1].position.x, 10.0);
+
+        // The mirroring family with the same distribution DOES mirror, which is the whole point.
+        let relative = RowLayout::new().arrangement(Arrangement::Start).direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
+        let (_, placements) = relative.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        assert_eq!(placements[0].position.x, 30.0, "Start mirrors, Absolute::Start does not");
+    }
+
+    #[test]
+    fn an_absolute_end_arrangement_packs_to_the_right() {
+        let absolute = Arrangement::Absolute(AbsoluteArrangement::End);
+        let row = RowLayout::new().arrangement(absolute);
+        let mut nodes = vec![make_leaf(10.0, 20.0), make_leaf(30.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(100.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 100.0);
+        assert_eq!(placements[0].position.x, 60.0, "60 of the 100 is left over, so the pair ends at the right edge");
+        assert_eq!(placements[1].position.x, 70.0);
+    }
+
+    #[test]
+    fn an_aligned_arrangement_gives_the_leftover_to_the_alignment() {
+        for (alignment, expected) in [
+            (Alignment::Start, 0.0),
+            (Alignment::Center, 50.0),
+            (Alignment::End, 100.0),
+        ] {
+            let row = RowLayout::new().arrangement(Arrangement::Aligned(alignment));
+            let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
+            let children: Vec<usize> = (0..nodes.len()).collect();
+            let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
+            assert_eq!(
+                placements[0].position.x, expected,
+                "Aligned({alignment:?}) puts the 100 of leftover at the aligned edge"
+            );
+            assert_eq!(placements[1].position.x, expected + 50.0, "the children keep their own gap");
+        }
+    }
+
+    #[test]
+    fn an_aligned_end_arrangement_mirrors_under_rtl() {
+        // Compose's Alignment.End is direction-relative: in RTL it is the LEFT edge, so the mirror
+        // the container applies is exactly right.
+        let row = RowLayout::new()
+            .arrangement(Arrangement::Aligned(Alignment::End))
+            .direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
+        // The pair packs to the LEFT edge (End in RTL) and the children run right to left, so the
+        // first one ends up on the right of the pair.
+        assert_eq!(placements[1].position.x, 0.0, "End in RTL packs the pair to the left");
+        assert_eq!(placements[0].position.x, 50.0, "and the first child is rightmost inside it");
+    }
+
+    #[test]
+    fn an_aligned_arrangement_keeps_the_container_spacing() {
+        // Compose's spacedBy(space, alignment) = the gap plus the alignment of the leftover; winia
+        // carries the gap on the container, so both together give composedBy's geometry.
+        let row = RowLayout::new()
+            .arrangement(Arrangement::Aligned(Alignment::End))
+            .spacing(10.0);
+        let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
+        assert_eq!(placements[0].position.x, 90.0, "50 + 10 + 50 = 110 of content, 90 left over at the end");
+        assert_eq!(placements[1].position.x, 150.0);
+    }
+
+    #[test]
     fn rtl_mirrors_the_child_order() {
         // RTL: the children run right to left, so the first one sits at the right edge.
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
