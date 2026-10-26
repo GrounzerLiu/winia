@@ -61,4 +61,27 @@ fn grid_demo_controls_drive_the_layout() {
         "the align button cycles the cell alignment: {:?}",
         app.all_texts()
     );
+
+    // REAL PIXELS through the debug server (the px command), not just the tree: the first two cells
+    // are painted with palette(0) green and palette(1) blue.
+    let c0 = app.expect_tag("grid-cell-0");
+    let green = app
+        .pixel_at_logical(c0.0 + c0.2 / 2.0, c0.1 + c0.3 / 2.0)
+        .unwrap_or((0, 0, 0, 0));
+    assert!(
+        (green.0 as i32 - 0x4C).abs() < 16
+            && (green.1 as i32 - 0xAF).abs() < 16
+            && (green.2 as i32 - 0x50).abs() < 16,
+        "the first cell paints palette(0) green: {green:?}"
+    );
+    let c1 = app.expect_tag("grid-cell-1");
+    let blue = app
+        .pixel_at_logical(c1.0 + c1.2 / 2.0, c1.1 + c1.3 / 2.0)
+        .unwrap_or((0, 0, 0, 0));
+    assert!(
+        (blue.0 as i32 - 0x21).abs() < 16
+            && (blue.1 as i32 - 0x96).abs() < 16
+            && (blue.2 as i32 - 0xF3).abs() < 16,
+        "the second cell paints palette(1) blue: {blue:?}"
+    );
 }

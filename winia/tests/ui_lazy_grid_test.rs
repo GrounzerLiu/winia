@@ -135,4 +135,3 @@ fn a_staggered_grid_drifts_its_lanes() {
         app.find_tag("stagger-item-39").is_some()
     });
 }
-

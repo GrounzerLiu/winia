@@ -166,8 +166,12 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                 }))
                 .build(ctx, |ctx| {
                     for index in 0..count.get() {
+                        // The cells take their cell's width explicitly: a Grid places the child, it does
+                        // not stretch it (Compose's TopStart default). Without this a cell with only a
+                        // height measures ZERO wide and paints nothing — a blank grid area.
                         let mut modifier = Modifier::new()
                             .test_tag(format!("grid-cell-{index}"))
+                            .fill_max_width()
                             .height(48.0)
                             .background(palette(index), Shape::rounded(6.0));
                         if index == 0 {
