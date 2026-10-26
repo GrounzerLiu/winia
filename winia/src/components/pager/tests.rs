@@ -192,7 +192,7 @@
     }
 
     #[test]
-    fn user_scroll_disabled_drops_the_scroll_channel() {
+    fn user_scroll_disabled_keeps_the_container_and_drops_only_the_input() {
         let state = PagerState::new(5);
         let mut composer = Composer::new();
         let theme = crate::theme::ThemeColors::default_light();
@@ -208,15 +208,18 @@
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
-        // The lazy list's own bookkeeping element stays (the measure pass needs the content height);
-        // what must disappear is the wheel/drag channel.
-        let has_wheel_channel = composer.arena_nodes().iter().any(|node| {
-            node.modifier
-                .elements()
-                .iter()
-                .any(|el| matches!(el, crate::modifier::ModifierElement::HorizontalScroll { .. }))
-        });
-        assert!(!has_wheel_channel, "userScrollEnabled=false must not attach the horizontal scroll channel");
+        // The scroll CONTAINER stays: it owns the clip and the viewport, and dropping it made the list
+        // paint its items over the next card (measured in the lazy demo). What goes away is the input
+        // channel — the gesture paths skip a node whose modifier says so.
+        let container = composer
+            .arena_nodes()
+            .iter()
+            .find(|node| node.modifier.horizontal_scroll_state().is_some())
+            .expect("the scroll container is still there");
+        assert!(
+            container.modifier.is_scroll_input_disabled(),
+            "userScrollEnabled=false must take the wheel/drag channel away"
+        );
     }
 
     /// The snap positions stay on page boundaries even when the page is offset inside the viewport: the

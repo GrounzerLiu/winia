@@ -845,11 +845,15 @@ impl<A: LazyAxis> LazyList<A> {
         };
         // `userScroll(false)` drops the wheel/drag channel but keeps the offset itself, so
         // `scroll_to_page` and an external animation still move the list.
+        // The scroll container is ALWAYS there — it owns the clip and the viewport. `user_scroll(false)`
+        // only takes the gestures away: dropping the container (the old behaviour) dropped the clip
+        // with it, and the list painted its items over the next card.
         let user_scroll = self.user_scroll;
-        let mut base = Modifier::new().fill_max_width().fill_max_height();
-        if user_scroll {
-            base = base.then(A::scroll(scroll));
-        }
+        let base = Modifier::new()
+            .fill_max_width()
+            .fill_max_height()
+            .then(A::scroll(scroll))
+            .scroll_input_disabled(!user_scroll);
         let m = base
             .lazy_scroll(content_height.clone())
             // The engine's mirror flag for a scroll container: `reverseLayout` flips the main axis,

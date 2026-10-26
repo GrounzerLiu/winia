@@ -266,6 +266,50 @@ fn lazy_ops_buttons_drive_the_list() {
     let baseline = ops_info(&mut app);
     assert!(baseline.contains("forward true"), "there is room ahead: {baseline:?}");
     assert!(baseline.contains("backward false"), "and none behind: {baseline:?}");
+    // LOCK: user_scroll(false) — the container keeps CLIPPING and the gestures stop reaching it.
+    click_tag(&mut app, "lazy-toggle-lock");
+    app.expect_eventually_timeout("lock on", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("lock true")
+    });
+    // Nothing of the list may paint below its own box. Without the clip the items ran over the next
+    // card — the bug this assertion was written for, and it only shows near the head of the list,
+    // where the composed window extends past the viewport. A tile is a saturated colour; the page
+    // background is neutral in either theme.
+    let list = app.expect_tag("lazy-main-list");
+    let probe_y = list.1 + list.3 + 8.0;
+    let points: Vec<(f32, f32)> = (0..5)
+        .map(|i| (list.0 + 20.0 + i as f32 * (list.2 - 40.0) / 4.0, probe_y))
+        .collect();
+    for (x, y) in &points {
+        if let Some((r, g, b, _a)) = app.pixel_at_logical(*x, *y) {
+            let spread = r.max(g).max(b) - r.min(g).min(b);
+            assert!(
+                spread < 40,
+                "nothing of the locked list may paint below its box: ({x},{y}) is a saturated colour ({r},{g},{b})"
+            );
+        }
+    }
+    // And a drag inside it must not move anything.
+    let info_before = ops_info(&mut app);
+    app.drag(
+        list.0 + list.2 / 2.0,
+        list.1 + list.3 * 0.75,
+        list.0 + list.2 / 2.0,
+        list.1 + list.3 * 0.25,
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    app.refresh();
+    assert_eq!(
+        ops_info(&mut app),
+        info_before,
+        "a locked list ignores the gesture, so nothing about it changed"
+    );
+    click_tag(&mut app, "lazy-toggle-lock");
+    app.expect_eventually_timeout("lock off", Duration::from_secs(2), |app| {
+        app.refresh();
+        ops_info(app).contains("lock false")
+    });
 
     // The window starts at the head, so the item whose key is 24 is not composed yet.
     assert!(
@@ -309,32 +353,6 @@ fn lazy_ops_buttons_drive_the_list() {
         ops_info(app).contains("reverse true")
     });
 
-    // LOCK: user_scroll(false) — a drag inside the list must not move it.
-    click_tag(&mut app, "lazy-toggle-lock");
-    app.expect_eventually_timeout("lock on", Duration::from_secs(2), |app| {
-        app.refresh();
-        ops_info(app).contains("lock true")
-    });
-    let before = app.expect_tag("lazy-main-list");
-    let info_before = ops_info(&mut app);
-    app.drag(
-        before.0 + before.2 / 2.0,
-        before.1 + before.3 * 0.75,
-        before.0 + before.2 / 2.0,
-        before.1 + before.3 * 0.25,
-    );
-    std::thread::sleep(Duration::from_millis(200));
-    app.refresh();
-    assert_eq!(
-        ops_info(&mut app),
-        info_before,
-        "a locked list ignores the gesture, so nothing about it changed"
-    );
-    click_tag(&mut app, "lazy-toggle-lock");
-    app.expect_eventually_timeout("lock off", Duration::from_secs(2), |app| {
-        app.refresh();
-        ops_info(app).contains("lock false")
-    });
 
     // PAGER: fill_items + snap_paging — "next page" lands on page 2 and that page is on screen.
     app.expect_eventually_timeout("the pager reports page 1", Duration::from_secs(2), |app| {

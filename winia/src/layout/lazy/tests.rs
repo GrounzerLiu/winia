@@ -2484,6 +2484,49 @@
         assert_eq!(action.invoke(109), Some(10));
     }
 
+    /// `user_scroll(false)` takes the GESTURES away, not the container: the list keeps its clip (or it
+    /// would paint its items over the next card — measured in the demo) and keeps answering a
+    /// programmatic jump.
+    #[test]
+    fn a_locked_list_keeps_its_container_and_loses_only_its_gestures() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .user_scroll(false)
+                .items(30, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.arena.root.expect("root");
+        let modifier = &composer.arena_nodes()[root].modifier;
+        assert!(
+            modifier.vertical_scroll_state().is_some(),
+            "the scroll container stays: it owns the clip and the viewport"
+        );
+        assert!(
+            modifier.is_scroll_input_disabled(),
+            "but the gesture paths skip it"
+        );
+
+        // And a programmatic jump still works, because it goes through the measure pass.
+        state.scroll_to_item(20, 0.0);
+        composer.compose(crate::compose!(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .user_scroll(false)
+                .items(30, |i| i as u64, |ctx, i| sized_item(ctx, i, 50.0, 40.0))
+                .build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(
+            state.layout_info().visible_items.first().map(|item| item.index),
+            Some(20),
+            "a locked list still jumps"
+        );
+    }
+
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

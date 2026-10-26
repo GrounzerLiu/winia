@@ -110,7 +110,9 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   off-grid" pass would fight it. Those paths need their own decision, not a background heal.
 - **One gesture moves at most one page**, because the snap is the lazy list's own: below
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
-- **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
+- **`user_scroll_enabled(false)`** takes the wheel/drag channel away while keeping the scroll CONTAINER
+  (its clip and its viewport — dropping the container painted the pages over the next card) and the
+  offset, so
   `scroll_to_page` and an external animation still move the pager.
 - **Two fling knobs are exposed**, the rest of `PagerDefaults.flingBehavior` is not.
   `snap_positional_threshold(f32)` (`snapPositionalThreshold`, default `0.5`) is how far into the page
@@ -156,7 +158,7 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `PageSize.Fill` / `PageSize.Fixed(n)` | Both, through the lazy list's `fill_items` / `item_main_size`. |
 | `beyondViewportPageCount` | `beyond_bounds` on the lazy list: the composition window is configurable. |
 | `snapPosition` (`Start/Center/End`) | A snap offset inside the step; a filled page always rests at Start, so it only shows with `PageSize::Fixed`. |
-| `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel; programmatic scrolling still works. |
+| `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel (`ModifierElement::ScrollInputDisabled`: the container keeps clipping and the gesture falls through to the parent); programmatic scrolling still works. |
 | `flingBehavior` — a replaceable `TargetedFlingBehavior` | `fling_behavior(behavior)`, over the plan-shaped trait in [fling-behavior.md](fling-behavior.md): the strategy returns the motion (target + curve, momentum, or nothing) and the frame clock runs it. It cannot drive the scroll per frame the way Compose's suspending `performFling` does. |
 | `PagerSnapDistance` (default `atMost(1)`) | `max_pages_per_fling(n)`; the default `1` matches Compose's, and unlike Compose there is no `0` ("no fling at all") — turn user scrolling off instead. |
 | `pageNestedScrollConnection` | A hook: `page_nested_scroll_connection(conn)` attaches the caller's `NestedScrollConnection` to the pager's list. Compose's DEFAULT connection (a nested pre-scroll past the pager's end turns a page) is not ported. |

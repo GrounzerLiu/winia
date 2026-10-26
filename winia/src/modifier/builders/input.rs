@@ -584,6 +584,18 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self
     }
 
+    /// Keep the scroll container (clip, viewport, programmatic scrolling) but let GESTURES pass
+    /// through it — Compose's `userScrollEnabled = false`. Dropping the container instead, which is
+    /// what a lazy list used to do, also drops the clip: the list then paints its items outside its
+    /// own box and over the next card.
+    pub fn scroll_input_disabled(self, disabled: bool) -> Self {
+        if disabled {
+            self.push(ModifierElement::ScrollInputDisabled)
+        } else {
+            self
+        }
+    }
+
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // 无 builder 期 get 副作用（State Phase4）：依赖由物化期

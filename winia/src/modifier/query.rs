@@ -316,6 +316,15 @@ impl Modifier {
         })
     }
 
+    /// Whether gestures must skip this node's scroll container (see
+    /// [`ModifierElement::ScrollInputDisabled`]): the container still clips and still answers a
+    /// programmatic scroll, it just does not take a drag or a wheel.
+    pub fn is_scroll_input_disabled(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::ScrollInputDisabled))
+    }
+
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::VerticalScroll { state } = el {

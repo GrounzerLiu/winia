@@ -623,6 +623,10 @@ pub(crate) enum ModifierElement {
     /// 完整 ScrollState（offset + is_scroll_in_progress + fling_limit）——
     /// 输入路径（app.rs 拖拽/wheel）经节点取整状态做 fling/极限
     VerticalScroll { state: ScrollState },
+    /// The scroll container at this node keeps its clip and its viewport, but the GESTURE paths skip
+    /// it: what a lazy list with `user_scroll(false)` needs. Dropping the container instead (the old
+    /// behaviour) also dropped the clip, so the list painted its items outside its own box.
+    ScrollInputDisabled,
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
     LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },

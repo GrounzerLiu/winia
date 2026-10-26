@@ -156,6 +156,9 @@ pub(crate) fn wheel_scroll_target(nodes: &[LayoutNode], path: &[usize], dx: f32,
     path.iter()
         .rev()
         .find(|&&idx| {
+            if nodes[idx].modifier.is_scroll_input_disabled() {
+                return false;
+            }
             (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
                 || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
                 || (dy != 0.0

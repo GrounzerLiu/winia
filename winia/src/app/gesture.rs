@@ -141,8 +141,11 @@ pub(crate) fn fire_gesture_action(
 /// Index of the innermost scroll container on the hit path (the first vertical/horizontal scroll state from rev).
 pub(crate) fn path_scroll_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
     path.iter().rev().find(|&&n| {
-        nodes[n].modifier.vertical_scroll_state().is_some()
-            || nodes[n].modifier.horizontal_scroll_state().is_some()
+        // A container whose input is disabled (a list with `user_scroll(false)`) keeps clipping and
+        // programmatic scrolling but must not swallow the gesture: it falls through to its parent.
+        !nodes[n].modifier.is_scroll_input_disabled()
+            && (nodes[n].modifier.vertical_scroll_state().is_some()
+                || nodes[n].modifier.horizontal_scroll_state().is_some())
     }).copied()
 }
 
