@@ -316,6 +316,12 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         if self.state.viewport_main.peek() != vh {
             self.state.viewport_main.set(vh);
         }
+        // The CROSS viewport goes out beside it: a lazy grid turns it into a cell count, and reading it
+        // from a State is what makes the grid re-chunk once the first measure has landed.
+        let usable_cross = (cross_max - cb - ca).max(0.0);
+        if self.state.viewport_cross.peek() != usable_cross {
+            self.state.viewport_cross.set(usable_cross);
+        }
         // Paging snap step, written back so a finished fling knows where to land. Only given when
         // every measured item is exactly the viewport's main size: `measured` covers every item in
         // this frame's composition window, so unequal items are caught and snapping turns itself off

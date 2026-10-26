@@ -46,7 +46,10 @@ pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
 pub use grid::{Grid, GridArea, GridFlow, GridLayout, GridTrackSpec};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
-pub use lazy::{ItemHeightCache, LazyColumn, LazyList, LazyListState, LazyRow};
+pub use lazy::{
+    GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyList, LazyListState, LazyRow,
+    LazyVerticalGrid,
+};
 pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
 pub use node::*;
 pub use relocation::BringIntoViewRequester;

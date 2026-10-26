@@ -36,6 +36,9 @@ pub struct LazyListState {
     /// pager's own build does not run again just because the viewport appeared - a derived value that
     /// reads this has to be woken by the write.
     pub(crate) viewport_main: crate::runtime::state::State<f32>,
+    /// The viewport's CROSS extent from the last measure, minus the cross content padding. A lazy GRID
+    /// turns it into a cell count (`GridCells::Adaptive`); nothing else reads it.
+    pub(crate) viewport_cross: crate::runtime::state::State<f32>,
     /// The scroll-activity pulse (lights a boundary scrollbar; same semantics as
     /// `ScrollState::scroll_pulse`). A lazy list assembles its `ScrollState` during `build` from three
     /// clones (`offset`, `is_scrolling`, `fling_limit`), so the pulse has to live HERE to stay stable
@@ -98,6 +101,7 @@ impl LazyListState {
             jump_request: crate::runtime::state::State::new(None),
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
             viewport_main: crate::runtime::state::State::new(0.0),
+            viewport_cross: crate::runtime::state::State::new(0.0),
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -140,6 +144,10 @@ impl LazyListState {
     /// A tracked read: a caller deriving from it (a pager's page size) is woken when the first measure
     /// resolves it, which a `peek` would miss - the pager's build does not re-run by itself.
     pub fn viewport_main_size(&self) -> f32 { self.viewport_main.get() }
+
+    /// The viewport's CROSS extent from the last measure (0 before the first one), minus the cross
+    /// content padding. A lazy grid derives its cell count from it.
+    pub fn viewport_cross_size(&self) -> f32 { self.viewport_cross.get() }
 
     /// Whether there is content past the last visible item (Compose
     /// `LazyListState.canScrollForward`). Asked from the pixel offset against the measured limit, so

@@ -245,7 +245,10 @@ pub mod prelude {
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Column, FlowColumn, FlowOverflow, FlowRow, Row, Spacer, Stack};
     pub use crate::layout::{Grid, GridArea, GridFlow, GridTrackSpec};
-    pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
+    pub use crate::layout::{
+        GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyListState, LazyRow,
+        LazyVerticalGrid,
+    };
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
     pub use crate::layout::{
         AbsoluteArrangement, Alignment, Arrangement, ContentAlignment, Constraints, LayoutDirection,
