@@ -391,7 +391,8 @@ impl Modifier {
     }
 
     /// Declare this child's span inside a `Grid` — Compose's `GridScope.Modifier.gridItem`
-    /// (`Grid.kt:158`). The alignment inside the cell defaults to stretch.
+    /// (`Grid.kt:158`). The alignment inside the cell defaults to Compose's `TopStart`; use
+    /// [`grid_item_aligned`](Self::grid_item_aligned) to centre, stretch or bottom-align the child.
     pub fn grid_item(self, column_span: u32, row_span: u32) -> Self {
         self.push(ModifierElement::GridItem {
             column_span,

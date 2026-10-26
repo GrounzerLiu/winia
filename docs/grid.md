@@ -59,7 +59,10 @@ Grid::new(vec![
    spanning several implicit rows contributes to the LAST of them.
 5. **Size**: the tracks plus the gaps between them, floored by the incoming minimum and never clamped
    to the maximum (a child that overflows its cell grows nothing, but a declared track larger than the
-   container is reported as-is — Compose's grid behaves the same way).
+   container is reported as-is — Compose's grid behaves the same way). Declared tracks count even when
+   no child reaches them: a grid of three 80 dp columns is 240 wide with no items, and a declared row
+   nobody fills still contributes its height. Under RTL the mirror lands inside the REPORTED width, so
+   an incoming minimum wider than the tracks shifts the whole grid instead of leaving it off-centre.
 
 ## Differences from Compose
 
@@ -103,7 +106,11 @@ Grid::new(vec![
 | `a_span_wider_than_the_grid_is_clamped` | a 5-column span inside a 2-column grid |
 | `a_negative_gap_is_clamped_in_measure` | a negative gap set straight on the public field |
 | `more_children_than_declared_cells_never_overlap` | a column flow past the declared cell count (the regression behind the review) |
-| `an_empty_grid_is_zero` | an empty grid |
+| `a_grid_without_children_reports_its_declared_tracks` | the tracks of an empty grid |
+| `an_unused_declared_row_still_counts` | a declared row no child reaches |
+| `a_grid_without_columns_places_every_child` | one placement per child even with no columns (the engine calls `place` unconditionally) |
+| `a_tall_row_span_does_not_swallow_a_later_child` | the placement fallback walking past an eight-row span |
+| `a_negative_gap_does_not_inflate_the_weighted_track` | the gap clamp running before the tracks resolve |
 
 UI (`winia/tests/ui_grid_test.rs`, fixture scenario `grid`, driven by `tests/ui_fixtures/fixture_all.rs`)
 reads the same five cases off a real window: fixed pitch 88, weight ratio 2x, a 146-wide span, the
