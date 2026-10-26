@@ -483,7 +483,24 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
-        self.state.item_animations.begin_frame();
+        // Consumed once per layout pass: the offset change the anchor correction made, so the host can
+        // rebase its per-item references instead of animating rows that only moved with the viewport.
+        let anchor_shift = {
+            let mut shift = self
+                .state
+                .anchor_shift
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let taken = *shift;
+            *shift = 0.0;
+            taken
+        };
+        let main_shift = if A::VERTICAL {
+            crate::unit::Offset::new(0.0, anchor_shift)
+        } else {
+            crate::unit::Offset::new(anchor_shift, 0.0)
+        };
+        self.state.item_animations.begin_frame(main_shift);
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;

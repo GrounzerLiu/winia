@@ -691,7 +691,15 @@ impl<A: LazyAxis> LazyList<A> {
                         + prefix_height(&cache_ref, new_index, self.spacing)
                         + item_offset)
                         .max(0.0);
+                    let previous = state.offset.get();
                     state.offset.set(new_offset);
+                    // The placement animation compares CONTENT positions, so a correction that moves
+                    // the viewport by the same amount has to be handed over as well — otherwise the
+                    // rows animate for a shift the offset already cancelled.
+                    {
+                        let mut shift = state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
+                        *shift += new_offset - previous;
+                    }
                 }
             }
         }

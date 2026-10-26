@@ -80,25 +80,22 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     });
     assert_eq!(count(&mut app), 11, "and the data lost that key: {:?}", info(&mut app));
 
-    // INSERT at the head: the new key fades in, every other card moves down one slot. Both channels
-    // of the default contract are springs at Compose's StiffnessMediumLow (400).
-    let first_before = app.expect_tag("lazy-anim-item-1");
-    click_tag(&mut app, "lazy-anim-insert-head");
+    // INSERT in the MIDDLE: the rows below open a gap and animate into it, and the new key fades in.
+    // (An insert at the HEAD is deliberately silent — the viewport moves with it, so nothing moves on
+    // screen; the lazy suite pins that case.)
+    let below_before = app.expect_tag("lazy-anim-item-6").1;
+    click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();
     assert!(
         info(&mut app).contains("12 items"),
         "the list grew back: {:?}",
         info(&mut app)
     );
-    let new_card = app.expect_tag("lazy-anim-item-12");
-    let first_after = app.expect_tag("lazy-anim-item-1");
+    app.expect_tag("lazy-anim-item-12");
+    let below_after = app.expect_tag("lazy-anim-item-6").1;
     assert!(
-        new_card.1 <= first_before.1 + 1.0,
-        "the inserted card takes the first slot: new {new_card:?} vs old first {first_before:?}"
-    );
-    assert!(
-        first_after.1 > first_before.1,
-        "and the first card it pushed down moved: {first_after:?} vs {first_before:?}"
+        below_after > below_before,
+        "the rows below the insert moved down: {below_after} vs {below_before}"
     );
     // `components=2` narrows this to an OFFSET animation (x and y lanes), i.e. an item's placement:
     // the shell's own animations are scalars with their own 180/500 ms tweens, so a bare
@@ -138,7 +135,7 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "the spec cycled to the slow contract: {:?}",
         info(&mut app)
     );
-    click_tag(&mut app, "lazy-anim-insert-head");
+    click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();
     assert!(
         saw_animation(&mut app, "tween(450ms)", None),
@@ -160,7 +157,7 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "the spec cycled to placement only: {:?}",
         info(&mut app)
     );
-    click_tag(&mut app, "lazy-anim-insert-head");
+    click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();
     let animations = app.animations();
     assert!(!animations.is_empty(), "the animation report answered: {animations:?}");

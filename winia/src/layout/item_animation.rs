@@ -157,13 +157,13 @@ mod tests {
             .fade_in(crate::animation::TweenSpec::default())
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf(), leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec, true);
         let live = HashSet::from([1u64, 2]);
         host.finish_frame(Some(&live));
 
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.finish_frame(Some(&live));
         assert!(
@@ -171,7 +171,7 @@ mod tests {
             "scrolling key 2 out of the window must not start an exit"
         );
 
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 1, 2, Offset::new(0.0, 10.0), &spec, true);
         host.finish_frame(Some(&live));
         let paint = nodes[1].item_paint.as_ref().expect("the returned item is painted");
@@ -185,7 +185,7 @@ mod tests {
         let spec = ItemAnimationSpec::new()
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         assert_eq!(host.inner.lock().unwrap_or_else(|e| e.into_inner()).items.len(), 1);
 
@@ -225,7 +225,7 @@ mod tests {
             crate::animation::DecaySpec::new(4.2, 0.1),
         ));
         let mut nodes = vec![leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         let paint = nodes[0].item_paint.as_ref().expect("the valid placement is kept");
         assert!(paint.fade_out.is_none(), "the unsupported fade is dropped");
@@ -242,7 +242,7 @@ mod tests {
             .fade_in(crate::animation::TweenSpec::default())
             .fade_out(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 7, Offset::ZERO, &spec, true);
         host.inner
             .lock()
@@ -266,7 +266,7 @@ mod tests {
             .pictures
             .insert(7, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
 
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.finish_frame(None);
         let state = host.store.lock().unwrap_or_else(|e| e.into_inner());
         let exit = state.exits.get(&7).expect("the removed item becomes an exit");
@@ -283,12 +283,12 @@ mod tests {
         let host = ItemAnimationHost::default();
         let spec = ItemAnimationSpec::new();
         let mut nodes = vec![leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         for key in 1..=300u64 {
             host.place(&mut nodes, 0, key, Offset::ZERO, &spec, true);
         }
         host.finish_frame(None);
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         let live: HashSet<u64> = (1..=300u64).collect();
         host.finish_frame(Some(&live));
@@ -315,11 +315,11 @@ mod tests {
         let spec = ItemAnimationSpec::new()
             .fade_in(crate::animation::TweenSpec::default());
         let mut nodes = vec![leaf(), leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.finish_frame(None);
 
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &spec, true);
         host.place(&mut nodes, 1, 2, Offset::ZERO, &spec, true);
         host.finish_frame(None);
@@ -338,10 +338,10 @@ mod tests {
         let host = ItemAnimationHost::default();
         let default_spec = ItemAnimationSpec::new();
         let mut nodes = vec![leaf(), leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec, true);
         host.finish_frame(None);
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec, true);
         host.place(&mut nodes, 1, 2, Offset::ZERO, &default_spec, true);
         host.finish_frame(None);
@@ -357,10 +357,10 @@ mod tests {
         let host = ItemAnimationHost::default();
         let no_fade = ItemAnimationSpec::new().without_fade_in().without_fade_out();
         let mut nodes = vec![leaf(), leaf()];
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 0, 1, Offset::ZERO, &no_fade, true);
         host.finish_frame(None);
-        host.begin_frame();
+        host.begin_frame(crate::unit::Offset::ZERO);
         host.place(&mut nodes, 1, 2, Offset::ZERO, &no_fade, true);
         host.finish_frame(None);
         let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
@@ -387,12 +387,18 @@ pub(crate) fn wrapper_item_spec(
 
 impl ItemAnimationHost {
     /// Start one placement pass. Layout policies call this once before walking their items.
-    /// Starts a layout pass.
-    pub(crate) fn begin_frame(&self) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .frame += 1;
+    /// Starts a layout pass. `content_shift` is the CONTENT-space movement the container applied by
+    /// moving its viewport instead of its items (a Lazy list's anchor correction after a data change):
+    /// every item's remembered position is rebased by it, so a row that did not move on SCREEN does not
+    /// animate.
+    pub(crate) fn begin_frame(&self, content_shift: crate::unit::Offset) {
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        state.frame += 1;
+        if content_shift.x != 0.0 || content_shift.y != 0.0 {
+            for item in state.items.values_mut() {
+                item.last_position = item.last_position + content_shift;
+            }
+        }
     }
 
     /// Record an item and attach its paint channels. Returns true when the item has a declaration.

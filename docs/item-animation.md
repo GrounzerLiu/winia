@@ -41,6 +41,12 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
   as stepped rather than continuous. Compose re-aims the running motion instead; this is a known
   difference.
 
+  A data change that moves the VIEWPORT with the content does not animate: inserting a row at the head
+  pushes every row down and the anchor correction scrolls the list by the same amount, so nothing moves
+  on screen. The list hands that offset change to the host, which rebases every item's remembered
+  position by it (Compose does the same with `applyScrollOffset`). Without it the correction and the
+  animation compensate the same shift twice and every row flashes one row up before springing back.
+
   One placement is NOT scroll-invariant and therefore does not fit this rule: a PINNED sticky header
   is re-placed every frame by the scroll offset itself. Give a sticky header no marker — a marker
   there re-anchors its paint offset on every scroll frame, which reads as the header riding along
