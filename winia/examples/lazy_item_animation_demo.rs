@@ -188,15 +188,21 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                     }
                     k.set(out);
                 });
-                // The label names the contract that is ACTIVE (tapping cycles to the next one), so the
-                // button explains itself instead of needing the status line.
+                // The label names the contract that is ACTIVE (tapping cycles to the next one), and it
+                // is read INSIDE the button's own content closure: the dependency then registers on that
+                // group, which re-runs on a change. A label computed out here and captured into the
+                // closure never updates — the FlowRow around it skips, so the closure does not re-run
+                // (the trap component-authoring 3.2 describes).
                 let m = mode.clone();
-                button(
-                    ctx,
-                    "lazy-anim-spec",
-                    format!("spec: {}", mode.get().label()),
-                    move || m.set(m.get().next()),
-                );
+                let m_label = mode.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lazy-anim-spec"))
+                    .on_click(move || m.set(m.get().next()))
+                    .build(ctx, |ctx| {
+                        Text::new(format!("spec: {}", m_label.get().label()))
+                            .font_size(12.0)
+                            .build(ctx);
+                    });
             });
 
             let spec = mode.get().spec();

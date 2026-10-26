@@ -136,6 +136,14 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "the spec cycled to the slow contract: {:?}",
         info(&mut app)
     );
+    // The BUTTON follows the mode too. It reads the mode inside its own content closure: a label
+    // computed in the parent and captured there never updates, because the FlowRow around it skips
+    // (measured: the button kept saying "spec: default" while the status line cycled).
+    assert!(
+        app.all_texts().iter().any(|text| text.contains("spec: slow")),
+        "the spec button names the contract it is in: {:?}",
+        app.all_texts()
+    );
     click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();
     assert!(
