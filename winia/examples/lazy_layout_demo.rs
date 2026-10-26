@@ -13,8 +13,9 @@
 //! Every list here holds `ITEMS` entries, far more than fits: a lazy list that cannot scroll does
 //! not exercise the window, the anchor or the mirror translate.
 //!
-//! Run with `cargo run -p winia --example lazy_layout_demo`; the same UI is the `lazy_layout`
-//! fixture scenario driven by `tests/ui_lazy_test.rs`.
+//! Run with `cargo run -p winia --example lazy_layout_demo` for this page, or with `-- ops` for the
+//! button-driven API page (see `lazy_ops_demo` / `ops_main` below). The same UIs are the `lazy_layout`
+//! and `lazy_ops` fixture scenarios driven by `tests/ui_lazy_test.rs`.
 
 use winia::prelude::*;
 
@@ -210,7 +211,18 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
         });
 }
 
+/// Entry point. Two pages share it:
+///
+/// @BT@cargo run -p winia --example lazy_layout_demo@BT@          the layout cases (RTL, unbounded cross axis)
+/// @BT@cargo run -p winia --example lazy_layout_demo -- ops@BT@   the button-driven API page
+///
+/// A cargo EXAMPLE has one @BT@main@BT@, so the page is an argument rather than a second binary — and the
+/// fixture drives the second page directly through @BT@ops_main@BT@.
 pub fn main() {
+    if std::env::args().skip(1).any(|arg| arg == "ops") {
+        ops_main();
+        return;
+    }
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
