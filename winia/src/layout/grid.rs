@@ -27,7 +27,7 @@
 //!   cell's top-left unless its own chain says otherwise.
 
 use super::container::build_container;
-use super::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use super::node::{intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement};
 use crate::layout::{ContentAlignment, Constraints, LayoutDirection};
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
@@ -208,7 +208,7 @@ impl GridLayout {
 /// against `f32::MAX` would let a `fill_max_width` child explode. Recorded as a difference in
 /// `docs/grid.md`.
 fn resolve_tracks(specs: &[GridTrackSpec], available: f32, gap: f32) -> Vec<f32> {
-    resolve_axis(specs, available, gap, |_| (0.0, 0.0))
+    resolve_axis(specs, available, gap, false, |_| (0.0, 0.0))
 }
 
 /// Resolves one axis with an intrinsic fallback: `intrinsic(i)` answers `(max, min)` for track `i`,
@@ -217,6 +217,9 @@ fn resolve_axis(
     specs: &[GridTrackSpec],
     available: f32,
     gap: f32,
+    // `true` answers a MIN intrinsic query: the intrinsic-driven tracks take the items' minimum
+    // instead of their maximum.
+    prefer_min: bool,
     intrinsic: impl Fn(usize) -> (f32, f32),
 ) -> Vec<f32> {
     let gaps = gap * specs.len().saturating_sub(1) as f32;
@@ -244,9 +247,10 @@ fn resolve_axis(
                 sizes[i] = if bounded {
                     fraction.max(0.0) * basis
                 } else {
-                    // Compose sizes a percentage track by its items' max intrinsic width when the axis
-                    // is unbounded (`Grid.kt:1645-1663`).
-                    intrinsic(i).0.max(0.0)
+                    // Compose sizes a percentage track by its items' intrinsic width when the axis is
+                    // unbounded, max for a max query and min for a min one (`Grid.kt:1645-1663`).
+                    let (max, min) = intrinsic(i);
+                    if prefer_min { min.max(0.0) } else { max.max(0.0) }
                 };
             }
             GridTrackSpec::Weight(_) => {
@@ -256,7 +260,8 @@ fn resolve_axis(
                 }
             }
             GridTrackSpec::FitContent => {
-                sizes[i] = intrinsic(i).0.max(0.0);
+                let (max, min) = intrinsic(i);
+                sizes[i] = if prefer_min { min.max(0.0) } else { max.max(0.0) };
                 intrinsic_total += sizes[i];
             }
         }
@@ -523,6 +528,168 @@ fn find_cell(
     (occupancy.rows.len(), 0)
 }
 
+
+/// Compose's pass 1.5 (`distributeSpanningSpace`, `Grid.kt:2178-2262`): an item spanning several
+/// tracks may need more room than they add up to, and the tracks that CAN grow — intrinsic and
+/// weighted ones, never fixed or percentage — absorb the deficit evenly. Implicit tracks count as
+/// intrinsic (Compose treats a track past the spec list as `Auto`).
+fn distribute_spanning(
+    specs: &[GridTrackSpec],
+    sizes: &mut [f32],
+    cells: &[Cell],
+    by_row: bool,
+    gap: f32,
+    mut required: impl FnMut(usize) -> f32,
+) {
+    for (index, cell) in cells.iter().enumerate() {
+        let (track, span) = if by_row {
+            (cell.row, cell.row_span)
+        } else {
+            (cell.column, cell.column_span)
+        };
+        if span <= 1 || track >= sizes.len() {
+            continue;
+        }
+        let end = (track + span).min(sizes.len());
+        let spanned = end - track;
+        // The gaps INSIDE the span are part of the room it already has.
+        let current = sizes[track..end].iter().sum::<f32>()
+            + gap * spanned.saturating_sub(1) as f32;
+        let growable: Vec<usize> = (track..end)
+            .filter(|i| {
+                !matches!(
+                    specs.get(*i).copied().unwrap_or(GridTrackSpec::FitContent),
+                    GridTrackSpec::Fixed(_) | GridTrackSpec::Percent(_)
+                )
+            })
+            .collect();
+        if growable.is_empty() {
+            continue;
+        }
+        let deficit = required(index) - current;
+        if deficit <= 0.0 {
+            continue;
+        }
+        let share = deficit / growable.len() as f32;
+        for i in growable {
+            sizes[i] += share;
+        }
+    }
+}
+
+
+impl GridLayout {
+    /// The cells an intrinsic query sees: the placement is `measure`'s, taken from the children's
+    /// modifiers rather than from a measurement.
+    fn intrinsic_cells(&self, ctx: &mut crate::layout::IntrinsicCtx<'_>, children: &[usize]) -> Vec<Cell> {
+        let columns = self.columns.len();
+        if columns == 0 {
+            return Vec::new();
+        }
+        let spans: Vec<(u32, u32)> = children
+            .iter()
+            .map(|&c| {
+                ctx.nodes[c]
+                    .modifier
+                    .get_grid_item()
+                    .map(|(column_span, row_span, _)| (column_span, row_span))
+                    .unwrap_or((1, 1))
+            })
+            .collect();
+        let area_ids: Vec<Option<u64>> = children
+            .iter()
+            .map(|&c| ctx.nodes[c].modifier.get_grid_item_area())
+            .collect();
+        let declared = if self.rows.is_empty() { None } else { Some(self.rows.len()) };
+        place_cells(&spans, columns, self.flow, declared, &self.areas, &area_ids)
+    }
+
+    /// Resolves the column tracks inside an intrinsic query — the same rules as `measure`, with the
+    /// items' intrinsics coming from the probe.
+    fn intrinsic_columns(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        cells: &[Cell],
+        available: f32,
+        height: f32,
+        prefer_min: bool,
+    ) -> Vec<f32> {
+        let columns = self.columns.len();
+        let mut per_track = vec![(0.0f32, 0.0f32); columns];
+        for (i, &child) in children.iter().enumerate() {
+            let Some(cell) = cells.get(i).copied() else { continue };
+            if cell.column_span != 1 || cell.column >= columns {
+                continue;
+            }
+            let max = ctx.child_intrinsic(child, IntrinsicQuery::MaxWidth, height);
+            let min = ctx.child_intrinsic(child, IntrinsicQuery::MinWidth, height);
+            per_track[cell.column].0 = per_track[cell.column].0.max(max);
+            per_track[cell.column].1 = per_track[cell.column].1.max(min);
+        }
+        let gap = self.column_gap.max(0.0);
+        let mut sizes = resolve_axis(&self.columns, available, gap, prefer_min, |i| per_track[i]);
+        distribute_spanning(&self.columns, &mut sizes, cells, false, gap, |index| {
+            ctx.child_intrinsic(children[index], IntrinsicQuery::MaxWidth, height)
+        });
+        sizes
+    }
+
+    /// Resolves the row tracks inside an intrinsic query, given the widths the columns already got:
+    /// a row's intrinsic height depends on how wide its cell is.
+    fn intrinsic_rows(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        cells: &[Cell],
+        column_widths: &[f32],
+        available: f32,
+        prefer_min: bool,
+    ) -> Vec<f32> {
+        let column_gap = self.column_gap.max(0.0);
+        let offsets = offset_table(column_widths, column_gap);
+        let cell_width = |cell: &Cell| -> f32 {
+            match (offsets.get(cell.column), offsets.get(cell.column + cell.column_span)) {
+                (Some(start), Some(end)) => (end - start - column_gap).max(0.0),
+                _ => available,
+            }
+        };
+        let tracks = self.rows.len().max(
+            cells
+                .iter()
+                .map(|c| c.row + c.row_span)
+                .max()
+                .unwrap_or(0),
+        );
+        let mut per_track = vec![(0.0f32, 0.0f32); tracks];
+        for (i, &child) in children.iter().enumerate() {
+            let Some(cell) = cells.get(i).copied() else { continue };
+            if cell.row_span != 1 || cell.row >= tracks {
+                continue;
+            }
+            let width = cell_width(&cell);
+            let max = ctx.child_intrinsic(child, IntrinsicQuery::MaxHeight, width);
+            let min = ctx.child_intrinsic(child, IntrinsicQuery::MinHeight, width);
+            per_track[cell.row].0 = per_track[cell.row].0.max(max);
+            per_track[cell.row].1 = per_track[cell.row].1.max(min);
+        }
+        let gap = self.row_gap.max(0.0);
+        let mut sizes = resolve_axis(&self.rows, available, gap, prefer_min, |i| {
+            per_track.get(i).copied().unwrap_or((0.0, 0.0))
+        });
+        distribute_spanning(&self.rows, &mut sizes, cells, true, gap, |index| {
+            let width = cell_width(&cells[index]);
+            ctx.child_intrinsic(children[index], IntrinsicQuery::MaxHeight, width)
+        });
+        sizes
+    }
+}
+
+/// The extent one axis's tracks need: their sizes plus the gaps between them.
+fn tracks_extent(sizes: &[f32], gap: f32) -> f32 {
+    sizes.iter().sum::<f32>() + gap.max(0.0) * sizes.len().saturating_sub(1) as f32
+}
+
 impl MeasurePolicy for GridLayout {
     fn measure(
         &self,
@@ -593,8 +760,17 @@ impl MeasurePolicy for GridLayout {
                 })
             })
             .collect();
-        let widths = resolve_axis(&self.columns, constraints.max_width, column_gap, |i| {
+        let mut widths = resolve_axis(&self.columns, constraints.max_width, column_gap, false, |i| {
             column_intrinsic[i]
+        });
+        distribute_spanning(&self.columns, &mut widths, &cells, false, column_gap, |index| {
+            intrinsic_size_of(
+                nodes,
+                policies,
+                children[index],
+                IntrinsicQuery::MaxWidth,
+                constraints.max_height,
+            )
         });
         let column_offsets = offset_table(&widths, column_gap);
 
@@ -612,10 +788,25 @@ impl MeasurePolicy for GridLayout {
                     track_intrinsic(nodes, policies, children, &cells, track, true, cell_width)
                 })
                 .collect();
-            resolve_axis(&self.rows, constraints.max_height, row_gap, |i| {
+            resolve_axis(&self.rows, constraints.max_height, row_gap, false, |i| {
                 row_intrinsic[i]
             })
         };
+        let mut declared_heights = declared_heights;
+        distribute_spanning(&self.rows, &mut declared_heights, &cells, true, row_gap, |index| {
+            let cell = cells[index];
+            let width = (column_offsets[cell.column + cell.column_span]
+                - column_offsets[cell.column]
+                - column_gap)
+                .max(0.0);
+            intrinsic_size_of(
+                nodes,
+                policies,
+                children[index],
+                IntrinsicQuery::MaxHeight,
+                width,
+            )
+        });
         let declared_table = offset_table(&declared_heights, row_gap);
         let row_count = cells
             .iter()
@@ -715,6 +906,70 @@ impl MeasurePolicy for GridLayout {
         }
         (measured, placements)
     }
+    // ── The four intrinsic queries (Compose's `Grid.kt:2007-2078`) ──
+    //
+    // The trait's default would run `measure` with a probe constraint, which is already track-aware,
+    // but it cannot answer a MIN query differently from a MAX one and it re-places the whole grid. These
+    // resolve the tracks from the probe directly.
+
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        if self.columns.is_empty() {
+            return 0.0;
+        }
+        let cells = self.intrinsic_cells(ctx, children);
+        let sizes = self.intrinsic_columns(ctx, children, &cells, f32::MAX, height, true);
+        tracks_extent(&sizes, self.column_gap)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        if self.columns.is_empty() {
+            return 0.0;
+        }
+        let cells = self.intrinsic_cells(ctx, children);
+        let sizes = self.intrinsic_columns(ctx, children, &cells, f32::MAX, height, false);
+        tracks_extent(&sizes, self.column_gap)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return 0.0;
+        }
+        let cells = self.intrinsic_cells(ctx, children);
+        let widths = self.intrinsic_columns(ctx, children, &cells, width, f32::MAX, false);
+        let heights = self.intrinsic_rows(ctx, children, &cells, &widths, f32::MAX, true);
+        tracks_extent(&heights, self.row_gap)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return 0.0;
+        }
+        let cells = self.intrinsic_cells(ctx, children);
+        let widths = self.intrinsic_columns(ctx, children, &cells, width, f32::MAX, false);
+        let heights = self.intrinsic_rows(ctx, children, &cells, &widths, f32::MAX, false);
+        tracks_extent(&heights, self.row_gap)
+    }
+
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &child) in children.iter().enumerate() {
             nodes[child].position = placements[i].position;
@@ -1172,6 +1427,56 @@ mod tests {
 
     /// A named area reserves its cells BEFORE auto-placement, so the rest of the children flow around
     /// it instead of landing inside (Compose's `area(...)` + `gridItem(areaId)`).
+
+    /// Compose's pass 1.5: a child spanning several INTRINSIC tracks pushes them wider when what it
+    /// needs does not fit what they already add up to (`Grid.kt:2178-2262`).
+    #[test]
+    fn a_spanning_item_grows_the_intrinsic_tracks_it_covers() {
+        let policy = GridLayout::new(vec![
+            GridTrackSpec::FitContent,
+            GridTrackSpec::FitContent,
+        ])
+        .column_gap(10.0);
+        let mut nodes = vec![
+            make_leaf(40.0, 10.0),
+            make_leaf(40.0, 10.0),
+            LayoutNode::leaf(Modifier::new().size(200.0, 10.0).grid_item(2, 1)),
+        ];
+        nodes[2].measured_size = Size::new(200.0, 10.0);
+        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        // The tracks start at 40 each; the span needs 200 against the 90 it has (40 + 10 + 40), so the
+        // 110 deficit splits evenly and both end at 95.
+        assert_eq!(size.width, 200.0, "95 + 10 + 95");
+        assert_eq!(placements[2].position.x, 0.0);
+    }
+
+    /// The grid answers its own intrinsic queries from the resolved tracks instead of falling back to
+    /// "measure me and report that" (`Grid.kt:2007-2078`).
+    #[test]
+    fn an_intrinsic_query_reports_the_resolved_tracks() {
+        use crate::layout::IntrinsicCtx;
+        let policy = GridLayout::new(vec![GridTrackSpec::fixed(40.0), GridTrackSpec::fixed(60.0)])
+            .column_gap(10.0);
+        let mut nodes = vec![make_leaf(10.0, 10.0)];
+        let children = vec![0usize];
+        let mut ctx = IntrinsicCtx {
+            nodes: &mut nodes,
+            policies: &[],
+            policy_idx: 0,
+        };
+        assert_eq!(
+            policy.max_intrinsic_width(&mut ctx, &children, f32::MAX),
+            110.0,
+            "40 + 10 + 60"
+        );
+        let mut ctx = IntrinsicCtx {
+            nodes: &mut nodes,
+            policies: &[],
+            policy_idx: 0,
+        };
+        assert_eq!(policy.min_intrinsic_width(&mut ctx, &children, f32::MAX), 110.0);
+    }
+
     #[test]
     fn a_named_area_reserves_its_cells() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0); 2])

@@ -50,6 +50,10 @@ Grid::new(vec![
    intrinsic tracks leave of that same space, so a two-half-width grid with a gap fills its axis
    exactly. On an UNBOUNDED axis (a grid inside a horizontal scroll, say) a percentage track falls back
    to its items' max intrinsic width and a weighted one to their min content, as Compose does.
+   A child spanning several tracks then runs Compose's pass 1.5 (`distributeSpanningSpace`,
+   `Grid.kt:2178-2262`): when what it needs exceeds the tracks plus the gaps inside the span, the
+   deficit is split evenly between the spanned tracks that can grow — intrinsic and weighted ones,
+   never fixed or percentage.
 2. **Placement** walks the cells in the flow's order: row-major for `Row`/`RowDense`, column-major
    for `Column`/`ColumnDense`. A `Dense` flow restarts the scan for every child, so a hole a span left
    behind is filled by a later child; a sparse flow never goes back. (Dense is winia's extension —
@@ -75,20 +79,8 @@ Grid::new(vec![
 
 - **`GridFlow::RowDense` / `ColumnDense` are winia's extension**: Compose's `GridFlow` has only
   `Row` and `Column` (`Grid.kt:531-536`).
-- **No intrinsic track** (`GridTrackSpec.FitContent` / `GridTrackSize.Auto`): every track is fixed,
-  percentage or weighted. An intrinsic track needs a second measurement pass over the children.
-- **On an UNBOUNDED axis a percentage or weighted track is 0.** Compose falls back to the items'
-  max intrinsic width for a percentage track and to min-content for a weight track
-  (`Grid.kt:1645-1663`); that needs intrinsic tracks, which v1 does not have. A grid inside a
-  horizontally scrolling parent therefore gives a percentage column no width.
-- **Intrinsic queries fall back to the `MeasurePolicy` default** (a measure-based approximation),
-  where Compose overrides all four to size its intrinsic tracks (`Grid.kt:2007-2078`). Since winia
-  has no intrinsic tracks there is nothing to be exact about, but a `Grid` under a
-  `Modifier.width(IntrinsicSize.Min)` parent therefore reports the largest child, not the resolved
-  track sum.
-- **No `GridItemSpan` max-line helper**; a span is a plain `u32` and is clamped to the column count.
-- **Implicit-row sizing is simplified**: a multi-row child sizes only the last row it covers instead
-  of being distributed across them.
+- **No `GridItemSpan` max-line helper**: a span is a plain `u32` and is clamped to the tracks that
+  exist (Compose's `GridItemSpan(maxLineSpan)` means "the rest of the line").
 - **A child in an IMPLICIT row is measured against the container's own maximum height**, not against
   infinity, so a `fill_max_height` child there grows the row to the container's height. Compose hands
   an auto row `Constraints(maxHeight = Infinity)`, which makes such a child wrap; winia avoids the
@@ -101,7 +93,7 @@ Grid::new(vec![
 
 ## Tests
 
-`winia/src/layout/grid.rs` (`layout::grid::tests`, 27 cases):
+`winia/src/layout/grid.rs` (`layout::grid::tests`, 29 cases):
 
 | test | pins |
 | --- | --- |
@@ -122,6 +114,8 @@ Grid::new(vec![
 | `a_percentage_grid_with_gaps_fills_its_axis` | the percentage basis excluding the gaps |
 | `a_fit_content_column_sizes_to_its_items` | an intrinsic track taking the widest item |
 | `a_named_area_reserves_its_cells` | an area placed before auto-placement flows around it |
+| `a_spanning_item_grows_the_intrinsic_tracks_it_covers` | Compose's pass 1.5 deficit split |
+| `an_intrinsic_query_reports_the_resolved_tracks` | the four intrinsic overrides |
 | `an_unknown_area_id_falls_back_to_auto_placement` | an id the grid does not know |
 | `an_unbounded_axis_sizes_percentage_and_weight_tracks_from_content` | the unbounded fallback |
 | `a_multi_row_span_splits_its_height_between_implicit_rows` | a two-row child sharing its rows |
