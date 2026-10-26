@@ -1,13 +1,13 @@
-//! Column 布局 — 委托到 flex::VerticalAxis
+//! Column layout — delegates to flex::VerticalAxis.
 //!
-//! 主轴 = 垂直（高度），交叉轴 = 水平（宽度）
+//! Main axis = vertical (height), cross axis = horizontal (width).
 //!
-//! 特性:
-//! - per-child 对齐: `Modifier::align_self(Alignment::Center)` 覆盖 Column 默认对齐
-//! - weight 权重: `Modifier::weight(2.0)` 按比例分配剩余高度
-//! - spacing: 子节点间固定间距
+//! What it offers:
+//! - per-child alignment: `Modifier::align_self(Alignment::Center)` overrides the Column default
+//! - weight: `Modifier::layout_weight(2.0)` shares the leftover height proportionally
+//! - spacing: a fixed gap between children
 //!
-//! 实现委托到 `flex::measure_flex::<VerticalAxis>()`。
+//! The implementation delegates to `flex::measure_flex::<VerticalAxis>()`.
 
 use super::constraints::Constraints;
 use crate::unit::Size;
@@ -17,7 +17,7 @@ use super::container::build_container;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 
-/// Column 布局策略
+/// Column's layout policy.
 #[derive(Debug, Clone)]
 pub struct ColumnLayout {
     pub arrangement: Arrangement,
@@ -134,7 +134,7 @@ impl MeasurePolicy for ColumnLayout {
     }
 }
 
-// ── 测试 ──
+// ── Tests ──
 
 #[cfg(test)]
 mod tests {
@@ -340,21 +340,22 @@ mod tests {
 
     #[test]
     fn a_tight_parent_width_leaves_the_children_loose() {
-        // tight 交叉轴父（如 fill_max_size+padding 的 Column）：子节点交叉轴
-        // 松约束（min=0）——自然宽，不继承父 tight（Compose Column 语义）
+        // A parent with a tight cross axis (a fill_max_size + padding Column): the children get a
+        // LOOSE cross axis (min = 0), so they take their natural width instead of the parent's tight
+        // one, as Compose's Column does.
         let mut nodes = vec![make_leaf(100.0, 20.0)];
         let children: Vec<usize> = vec![0];
         let (size, placements) = ColumnLayout::new().measure(
             &mut nodes, &[], &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
-        assert_eq!(placements[0].size.width, 100.0, "子节点自然宽（不撑满 tight 父）");
-        assert_eq!(size.width, 432.0, "Column 自身受 tight 父约束（432），松的只是子节点");
+        assert_eq!(placements[0].size.width, 100.0, "the child keeps its natural width, not the tight parent's");
+        assert_eq!(size.width, 432.0, "the Column itself honours the tight parent (432); only the children are loose");
     }
 
     #[test]
     fn a_fill_max_width_child_fills_a_tight_parent() {
-        // tight 父下 fill_max_width 子节点仍撑满（显式 fill 优先于松约束）
+        // Under a tight parent a fill_max_width child still fills: an explicit fill beats the loose range.
         use crate::modifier::Modifier;
         let mut nodes = vec![
             LayoutNode::leaf(Modifier::new().fill_max_width().height(20.0)),
@@ -364,20 +365,21 @@ mod tests {
             &mut nodes, &[], &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
-        assert_eq!(placements[0].size.width, 432.0, "fill_max_width 撑满");
+        assert_eq!(placements[0].size.width, 432.0, "fill_max_width fills");
         assert_eq!(size.width, 432.0);
     }
 
     #[test]
     fn stretch_alignment_widens_the_child_to_the_container() {
-        // Stretch 对齐：子节点拉伸到容器宽（放置期拉伸——stretch 语义不受松约束影响）
+        // Stretch alignment pulls the child to the container's width (a placement-time stretch, so the
+        // loose range does not matter).
         let mut nodes = vec![make_leaf(100.0, 20.0)];
         let children: Vec<usize> = vec![0];
         let (size, placements) = ColumnLayout::new().alignment(Alignment::Stretch).measure(
             &mut nodes, &[], &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
-        assert_eq!(placements[0].size.width, 432.0, "Stretch 子节点撑满容器宽");
+        assert_eq!(placements[0].size.width, 432.0, "a Stretch child fills the container's width");
         assert_eq!(size.width, 432.0);
     }
 
@@ -424,16 +426,18 @@ impl Column {
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
-    /// ⚠ 不宏化：宏化引入内部 scope 会拦截 content 顶层 State.get() 的依赖注册
-    /// （content 依赖注册到内部 scope → 父容器感知不到 → 内容不重跑 → 联动断）
+    /// NOT a macro, on purpose: a macro would open an inner scope, the content's top-level
+    /// `State::get()` would register on THAT scope, the parent would never learn about it and the
+    /// content would stop re-running (the coupling dies).
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        // 参数暂存（阶段 5：参数相等跳过——下帧 is_skip 比较 slot.params：
-        // spacing/arrangement/alignment 未变 → 容器 Skip（content 不重跑）；
-        // 变化 → Enter（重跑——修复"参数变化仍 Skip 用旧值"的缺口）
+        // Record the parameters: a later frame compares them against `slot.params` — unchanged
+        // spacing/arrangement/alignment means the container Skips (the content does not re-run), a
+        // change means Enter (it does; this closes the "parameter changed but the old value stayed"
+        // hole).
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
+        // Direction: an explicit modifier wins over the CompositionLocal default.
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         build_container(
             ctx,

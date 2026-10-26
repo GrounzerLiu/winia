@@ -1,13 +1,13 @@
-//! Row 布局 — 水平排列子节点（对齐 Compose Row）
+//! Row layout — children side by side, as Compose's Row does.
 //!
-//! 主轴 = 水平（宽度），交叉轴 = 垂直（高度）
+//! Main axis = horizontal (width), cross axis = vertical (height).
 //!
-//! 特性:
-//! - per-child 对齐: `Modifier::align_self(Alignment::Center)` 覆盖 Row 默认对齐
-//! - weight 权重: `Modifier::weight(2.0)` 按比例分配剩余宽度
-//! - spacing: 子节点间固定间距
+//! What it offers:
+//! - per-child alignment: `Modifier::align_self(Alignment::Center)` overrides the Row default
+//! - weight: `Modifier::layout_weight(2.0)` shares the leftover width proportionally
+//! - spacing: a fixed gap between children
 //!
-//! 实现委托到 `flex::measure_flex::<HorizontalAxis>()`。
+//! The implementation delegates to `flex::measure_flex::<HorizontalAxis>()`.
 
 use super::constraints::Constraints;
 use crate::unit::Size;
@@ -17,7 +17,7 @@ use super::container::build_container;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 
-/// Row 布局策略
+/// Row's layout policy.
 #[derive(Debug, Clone)]
 pub struct RowLayout {
     pub arrangement: Arrangement,
@@ -134,7 +134,7 @@ impl MeasurePolicy for RowLayout {
     }
 }
 
-// ── 测试 ──
+// ── Tests ──
 
 #[cfg(test)]
 mod tests {
@@ -206,34 +206,35 @@ mod tests {
 
     #[test]
     fn rtl_mirrors_the_child_order() {
-        // RTL：子节点从右到左排列（第一个子在最右）
+        // RTL: the children run right to left, so the first one sits at the right edge.
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = row.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.width, 40.0);
-        // 容器宽 40：第一个子（10 宽）在最右 → x = 30
+        // Container 40 wide: the first child (10 wide) is rightmost, so x = 30.
         assert_eq!(placements[0].position.x, 30.0);
         assert_eq!(placements[1].position.x, 0.0);
     }
 
     #[test]
     fn rtl_mirrors_inside_the_rows_own_width() {
-        // 回归：wrap Row 的 RTL 镜像必须用行自身宽度（此前误用 incoming
-        // max——子节点被推到约束宽度，wrap 行内容消失/错位）
+        // Regression: a wrap Row must mirror by its OWN width (the incoming max was used before, which
+        // pushed the children out to the constraint's width and made the row's content vanish).
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(20.0, 50.0), make_leaf(30.0, 50.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].position.x, 30.0, "第一个子（20 宽）在最右");
+        assert_eq!(placements[0].position.x, 30.0, "the first child (20 wide) sits rightmost");
         assert_eq!(placements[1].position.x, 0.0);
     }
 
     #[test]
     fn space_between_mirrors_inside_a_tight_row() {
-        // SpaceBetween 分配的是容器多余的主轴空间，而宽度由约束给出（min = max = 100），不是这个排列撑
-        // 出来的——这正是 Compose 的行为：`Row(SpaceBetween)` 要靠 `fillMaxWidth()` 才有宽度可分配。
-        // 对齐前后的差别见 `flex.rs` 的 `measured_main`。
+        // SpaceBetween shares the container's SURPLUS main-axis space, which here comes from the
+        // constraints (min = max = 100) rather than from the arrangement — exactly as in Compose, where
+        // `Row(SpaceBetween)` needs a `fillMaxWidth()` before there is anything to distribute. See
+        // `measured_main` in flex.rs for how that size is derived.
         let row = RowLayout::new()
             .direction(LayoutDirection::Rtl)
             .arrangement(Arrangement::SpaceBetween);
@@ -245,10 +246,10 @@ mod tests {
             &children,
             Constraints::new(100.0, 100.0, 0.0, 100.0),
         );
-        assert_eq!(size.width, 100.0, "宽度来自约束");
-        // LTR 位置：0 / 70（间距 50）；RTL 镜像后：80 / 0
-        assert_eq!(placements[0].position.x, 80.0, "第一个子在最右");
-        assert_eq!(placements[1].position.x, 0.0, "第二个子在最左");
+        assert_eq!(size.width, 100.0, "the width comes from the constraints");
+        // LTR: 0 / 70 (gap 50). Mirrored for RTL: 80 / 0.
+        assert_eq!(placements[0].position.x, 80.0, "the first child sits rightmost");
+        assert_eq!(placements[1].position.x, 0.0, "the second child sits leftmost");
     }
 
     /// Two baselines on one line — the case Compose's `alignBy` exists for, a small label next to
@@ -1022,11 +1023,12 @@ impl Row {
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        // 参数暂存（参数相等跳过——同 Column）
+        // Record the parameters: equal ones Skip, as in Column.
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        // 方向参与 changed（同 Column——方向切换必须 Enter 替换 policy）
+        // The direction takes part in `changed` (as in Column): a direction switch has to Enter and
+        // replace the policy.
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         build_container(
