@@ -52,10 +52,15 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         first_after.1 > first_before.1,
         "and the old first card moved down: {first_after:?} vs {first_before:?}"
     );
+    // `components=2` narrows this to an OFFSET animation (x and y lanes), i.e. an item's placement:
+    // the shell's own animations are scalars with their own 180/500 ms tweens, so a bare
+    // `spring(stiffness=400` could otherwise be satisfied by something that is not the item.
     let animations = app.animations();
     assert!(
-        animations.iter().any(|line| line.contains("spring(stiffness=400")),
-        "the default contract runs springs at StiffnessMediumLow: {animations:?}"
+        animations
+            .iter()
+            .any(|line| line.contains("spring(stiffness=400") && line.contains("components=2")),
+        "the default contract places items with a StiffnessMediumLow spring: {animations:?}"
     );
 
     // SHUFFLE: same keys, new slots — pure placement, nothing appears or disappears.
@@ -64,7 +69,9 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     assert!(info(&mut app).contains("13 items"), "a shuffle changes no key count");
     let animations = app.animations();
     assert!(
-        animations.iter().any(|line| line.contains("spring(")),
+        animations
+            .iter()
+            .any(|line| line.contains("spring(") && line.contains("components=2")),
         "a reorder animates the placement: {animations:?}"
     );
 
@@ -103,7 +110,9 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "the slow contract fades with a 450 ms tween: {animations:?}"
     );
     assert!(
-        animations.iter().any(|line| line.contains("spring(stiffness=180")),
+        animations
+            .iter()
+            .any(|line| line.contains("spring(stiffness=180") && line.contains("components=2")),
         "and moves with its own spring: {animations:?}"
     );
 
@@ -127,7 +136,9 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "without_fade_in/out leaves no item fade running: {animations:?}"
     );
     assert!(
-        animations.iter().any(|line| line.contains("spring(stiffness=400")),
+        animations
+            .iter()
+            .any(|line| line.contains("spring(stiffness=400") && line.contains("components=2")),
         "the placement still animates: {animations:?}"
     );
 }

@@ -638,6 +638,11 @@ impl<A: LazyAxis> LazyList<A> {
                 }
             }
             known.extend(key_set.iter().copied());
+            // Both sets are bounded by the CURRENT data: a key that was inserted and removed before
+            // it was ever composed must not stay queued forever, and a key that left the data is not
+            // "known" any more (if it comes back it is new again, and fades).
+            pending.retain(|key| key_set.contains(key));
+            known.retain(|key| key_set.contains(key));
         }
         if data_changed {
             data_sig.set(sig);
