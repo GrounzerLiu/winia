@@ -673,6 +673,13 @@ impl<A: LazyAxis> LazyList<A> {
         // And strictly AFTER the rebase: the offset calculation uses `prefix_height` over the height
         // cache MIGRATED BY KEY — before the rebase the index view still describes the old data, so the
         // prefix would be wrong and the offset misplaced.
+        // The anchor key belongs to THIS frame's layout pass: clearing it here means a frame that
+        // composes without laying out (or a correction that finds no anchor) cannot hand a stale delta
+        // to a later pass.
+        {
+            let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
+            *anchor = None;
+        }
         let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
         // While the list sits at the very START there is no reading position to preserve: the new
