@@ -81,8 +81,9 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     assert_eq!(count(&mut app), 11, "and the data lost that key: {:?}", info(&mut app));
 
     // INSERT in the MIDDLE: the rows below open a gap and animate into it, and the new key fades in.
-    // (An insert at the HEAD is deliberately silent — the viewport moves with it, so nothing moves on
-    // screen; the lazy suite pins that case.)
+    // (An insert at the HEAD is silent only while the list is SCROLLED, where the viewport moves with
+    // the rows; at the top it reveals the new row and animates the rows down. Both cases are pinned in
+    // the lazy suite, and a middle insert is the unambiguous placement case here.)
     let below_before = app.expect_tag("lazy-anim-item-6").1;
     click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();

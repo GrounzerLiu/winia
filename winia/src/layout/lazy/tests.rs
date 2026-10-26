@@ -2795,12 +2795,68 @@
             "the anchor item keeps its pixel position when a row is inserted above it"
         );
     }
-    /// Inserting at the HEAD pushes every row down and moves the viewport down by the same amount, so
-    /// nothing moves ON SCREEN and nothing may animate. Without handing the correction's shift to the
-    /// item host, the correction and the placement animation compensate the same shift twice and every
-    /// row flashes one row up before springing back.
+    /// Inserting at the head while the list is SCROLLED pushes every row down and moves the viewport
+    /// down by the same amount, so nothing moves on screen and nothing may animate. Without handing
+    /// the correction's shift to the item host, the correction and the placement animation compensate
+    /// the same shift twice and every row flashes one row up before springing back.
     #[test]
-    fn an_insert_at_the_head_does_not_animate_the_rows_it_pushes_down() {
+    fn an_insert_at_the_head_while_scrolled_does_not_animate_the_rows() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .spacing(8.0)
+                    .content_padding(4.0, 4.0)
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(48.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        // Scroll first: the anchor has something to preserve only then.
+        state.scroll_to_item(3, 20.0);
+        build(&mut composer, Arc::new((0..20).collect()));
+        build(&mut composer, Arc::new((0..20).collect()));
+        let mut items: Vec<u64> = vec![99];
+        items.extend(0..20);
+        build(&mut composer, Arc::new(items));
+
+        assert!(
+            state.offset() >= 55.0,
+            "the correction moved the viewport by one row: {}",
+            state.offset()
+        );
+        let offsets: Vec<(u64, f32)> = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
+            .collect();
+        assert!(
+            offsets.iter().all(|(_, y)| y.abs() < 0.5),
+            "no row may animate when the whole list only scrolled: {offsets:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+    /// At the very TOP there is no reading position to preserve, so an insert at the head shows its
+    /// item (the viewport stays at 0) and the rows below ANIMATE down into their new slots. Compose
+    /// anchors by key here and silently scrolls instead; this is a deliberate deviation.
+    #[test]
+    fn an_insert_at_the_head_while_at_the_top_reveals_the_new_item() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2832,19 +2888,15 @@
         items.extend(0..20);
         build(&mut composer, Arc::new(items));
 
-        assert!(
-            state.offset() >= 55.0,
-            "the correction moved the viewport by one row: {}",
-            state.offset()
-        );
+        assert_eq!(state.offset(), 0.0, "the viewport stays at the top, so the new row is visible");
         let offsets: Vec<(u64, f32)> = composer
             .arena_nodes()
             .iter()
             .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
             .collect();
         assert!(
-            offsets.iter().all(|(_, y)| y.abs() < 0.5),
-            "no row may animate when the whole list only scrolled: {offsets:?}"
+            offsets.iter().any(|(key, y)| *key != 99 && *y < -10.0),
+            "the rows below start at their old place and spring down: {offsets:?}"
         );
         crate::animation::clear_all_animations();
     }

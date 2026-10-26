@@ -675,8 +675,17 @@ impl<A: LazyAxis> LazyList<A> {
         // prefix would be wrong and the offset misplaced.
         let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
+        // While the list sits at the very START there is no reading position to preserve: the new
+        // content belongs at the top, where the user is looking (Compose anchors by key here instead,
+        // which silently scrolls the list and hides the new row — this is a deliberate deviation, so
+        // an insert at the head still shows its item and animates the rows below).
+        let at_start = state.offset.get() <= 0.0;
         if total_changed {
+            // The total is recorded either way: leaving it unset would make every later frame look
+            // like a data change and re-run the correction once the list is scrolled.
             known_total.set(total);
+        }
+        if total_changed && !at_start {
             if let Some(last_key) = state.last_known_first_key.get() {
                 let cache_ref = cache.get();
                 if let Some(new_index) = intervals.index_of_key(last_key) {

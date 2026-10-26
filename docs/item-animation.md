@@ -42,10 +42,16 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
   difference.
 
   A data change that moves the VIEWPORT with the content does not animate: inserting a row at the head
-  pushes every row down and the anchor correction scrolls the list by the same amount, so nothing moves
-  on screen. The list hands that offset change to the host, which rebases every item's remembered
-  position by it (Compose does the same with `applyScrollOffset`). Without it the correction and the
-  animation compensate the same shift twice and every row flashes one row up before springing back.
+  while the list is SCROLLED pushes every row down and the anchor correction scrolls the list by the
+  same amount, so nothing moves on screen. The list hands that offset change to the host, which rebases
+  every item's remembered position by it (Compose does the same with `applyScrollOffset`). Without it
+  the correction and the animation compensate the same shift twice and every row flashes one row up
+  before springing back.
+
+  At the very TOP there is no reading position to preserve, so the correction is skipped there: the
+  viewport stays at 0, the new row is visible, and the rows below animate down into their new slots.
+  Compose anchors by key in that case too and silently scrolls the list past the new row; this is a
+  deliberate deviation (recorded here, not a gap).
 
   One placement is NOT scroll-invariant and therefore does not fit this rule: a PINNED sticky header
   is re-placed every frame by the scroll offset itself. Give a sticky header no marker — a marker
