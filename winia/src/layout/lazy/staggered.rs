@@ -67,8 +67,7 @@ struct StaggeredPolicy<A: LazyAxis> {
     extent: f32,
     shared: Arc<Mutex<Shared>>,
     content_height: Backchannel<f32>,
-    fling_limit: Backchannel<f32>,
-    /// The scroll position, so the measure can clamp it into the range the extent allows.
+    /// The scroll position: the measure clamps its offset and writes its fling limit.
     state: ScrollState,
     marker: PhantomData<A>,
 }
@@ -138,7 +137,9 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         // `offset.set(10000)` stayed 10000 (measured), leaving the grid composing nothing forever.
         let max_off = (self.extent - viewport).max(0.0);
         self.content_height.set(self.extent);
-        self.fling_limit.set(max_off);
+        // The INPUT path (drag, wheel, fling) reads `ScrollState::fling_limit`, not a channel of our
+        // own: writing a private Backchannel left the real limit untouched.
+        self.state.fling_limit.set(max_off);
         if viewport > 0.0 {
             let current = self.state.offset.peek();
             if current > max_off {
@@ -311,7 +312,6 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             })
             .peek();
         let content_height = ctx.remember_backchannel(|| 0.0f32);
-        let fling_limit = ctx.remember_backchannel(|| 0.0f32);
         let state = self.state.clone().unwrap_or_else(ScrollState::new);
 
         // Price every item, then assign the lanes from the prices. An unmeasured item is priced at the
@@ -401,7 +401,6 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             extent,
             shared,
             content_height: content_height.clone(),
-            fling_limit,
             state: state.clone(),
             marker: PhantomData,
         };
@@ -556,6 +555,11 @@ mod tests {
         assert!(
             (clamped - 4196.0).abs() <= 2.0,
             "the offset clamps to the deepest lane minus the viewport: {clamped}"
+        );
+        assert!(
+            (state.fling_limit.peek() - 4196.0).abs() <= 2.0,
+            "and the INPUT path's fling limit is that same range: {}",
+            state.fling_limit.peek()
         );
     }
 
