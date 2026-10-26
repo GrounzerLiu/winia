@@ -862,7 +862,6 @@ impl<A: LazyAxis> LazyList<A> {
             // cross axis is mirrored in the policy instead.
             .lazy_scroll_reverse(mirror);
         let m = m
-            .then(self.modifier)
             .then(Modifier::new().with_item_animation_host(state.item_animations.clone()))
             // Accessibility: the list is a COLLECTION of `total` items, and each item below declares
             // its own position in it. Without both, a reader walks the visible rows as an anonymous
@@ -882,7 +881,10 @@ impl<A: LazyAxis> LazyList<A> {
                     // Compose's `IndexForKey`: the key → index map this frame built, shared behind
                     // an Arc so the closure does not copy a hundred thousand entries.
                     .index_for_key_action(move |key| key_source.get(&key).copied())
-            }));
+            }))
+            // The CALLER's modifier goes last (component-authoring §2.3) — the semantics above is the
+            // documented exception that stays before it, so a caller's own description still wins.
+            .then(self.modifier);
         // The registration order, taken out before the policy moves into the group (unreadable after).
         let child_globals = policy.globals.clone();
         // The item children MUST be registered AFTER `start_restartable_group` (so they attach under
