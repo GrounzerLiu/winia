@@ -49,8 +49,8 @@ pub use grid::{Grid, GridArea, GridFlow, GridLayout, GridTrackSpec};
 pub use staggered::{assign_lanes, lane_anchors, LaneSlot};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy::{
-    GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyList, LazyListState, LazyRow,
-    LazyVerticalGrid,
+    GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyHorizontalStaggeredGrid, LazyList,
+    LazyListState, LazyRow, LazyStaggeredGrid, LazyVerticalGrid, LazyVerticalStaggeredGrid,
 };
 pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
 pub use node::*;

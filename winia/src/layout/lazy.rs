@@ -102,6 +102,7 @@ impl LazyAxis for crate::layout::axis::HorizontalAxis {
 
 
 pub mod grid;
+pub mod staggered;
 mod info;
 mod interval;
 mod list;
@@ -114,6 +115,7 @@ pub(crate) use list::*;
 pub(crate) use policy::*;
 
 pub use grid::{GridCells, LazyGrid, LazyHorizontalGrid, LazyVerticalGrid};
+pub use staggered::{LazyHorizontalStaggeredGrid, LazyStaggeredGrid, LazyVerticalStaggeredGrid};
 pub use info::{LazyListItemInfo, LazyListLayoutInfo};
 pub use list::{ItemHeightCache, LazyColumn, LazyList, LazyRow};
 pub use state::LazyListState;
