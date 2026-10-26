@@ -1,11 +1,12 @@
 use super::*;
 
-// ── 递归测量引擎 ──
+// ── The recursive measure engine ──
 
-/// 递归测量节点（处理 modifier 中的约束并调用子节点的 measure_policy）。
+/// Measures a node recursively: applies the constraints the modifier chain asks for and calls the
+/// children's measure policies.
 ///
-/// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
-/// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
+/// Arena flavour: `nodes` is the node pool, `policies` the policy pool and `idx` this node's index.
+/// The children are reached through `nodes[idx].children` and measured recursively.
 /// Applies layout invalidation: a DFS over the tree marks the nodes whose slot key is in
 /// `dirty_keys`, and marks every ANCESTOR of those nodes.
 ///
@@ -26,7 +27,8 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
         if hit {
             nodes[idx].layout_dirty = true;
         }
-        // 索引读避免 clone（layout 是热路径）；每次索引读是临时借用，不阻塞递归写
+        // Index reads avoid a clone on a hot path; each one is a temporary borrow, so the recursive
+        // writes are not blocked.
         let mut child_hit = false;
         let n = nodes[idx].children.len();
         for i in 0..n {
@@ -51,8 +53,9 @@ impl FlightMeasureFrame {
     }
 }
 
-/// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）。
-/// thread_local 隔离——cargo test 并行线程互不串扰（全局 Atomic 会跨测试计数破坏断言）。
+// The measure counter (tests use it to prove the constant-folding and layout-invalidation paths
+// really skip or run a measure). Thread-local, so parallel cargo test threads cannot disturb each
+// other — a global Atomic would leak counts between tests and break their assertions.
 #[cfg(test)]
 thread_local! {
     pub(crate) static MEASURE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -209,17 +212,20 @@ pub(crate) fn measure_node_inner(
     idx: usize,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
-    // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
-    //（无 policy 走叶子分支会返回 0，把这个 0 写进节点缓存 → 塌缩不可逆）。
-    // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
-    //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
+    // Replay stub: a clean-skipped node has no measure policy and must never be measured again —
+    // without one it would take the leaf branch, return 0 and write that 0 into the node's cache,
+    // which collapses it irreversibly. A stub only appears while the slot really is clean; if the
+    // constraints changed, the slot is dirty next frame and Enter rebuilds it.
+    // Constant folding: when the node is clean, has no layout invalidation and the constraints are
+    // the same, the previous result is reused (the two-stage dependency: a layout animation value
+    // re-measures without recomposing).
     // A subcomposing node is not special-cased here either — see the wrapper's note.
     if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
 
-    // 真正执行 measure 才计数（常量折叠命中不计——测试验证折叠路径）
+    // Only a real measure counts (a constant-fold hit does not, which is what lets the tests verify
+    // the folding path).
     #[cfg(test)]
     MEASURE_COUNT.with(|c| c.set(c.get() + 1));
     // A real measure may change the painted content even when the box is unchanged. The item
@@ -269,7 +275,7 @@ pub(crate) fn measure_node_inner(
     // written while those elements are in force).
     nodes[idx].content_box_override = None;
 
-    // 应用 modifier 中的 Layout 约束（使用查询方法）
+    // Apply the layout constraints the modifier carries (through the query methods)
     let mut inner_constraints = constraints;
 
     // Size-shaping steps come first, in CHAIN ORDER — Compose's rule, because each Compose
@@ -539,13 +545,13 @@ pub(crate) fn measure_node_inner(
         }
     }
 
-    // 开放布局节点 A 型（exp/modifier-node）：在尺寸步骤之后串行变换约束。
+    // Open layout nodes, type A: transform the constraints in chain order, after the size steps.
     // The position: after every size/padding/insets step in the chain, before the intrinsic
     // request and before padding is accounted for. Dynamic values are evaluated inside the
     // transform (a `State::get` during measure registers a layout dependency, like
     // `Dimension::Dynamic`).
-    // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
-    // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
+    // The chain is copied out of the Arc to avoid a borrow clash with the mutable writes that follow.
+    // Early exit when there is no node: saves one collect allocation per node per measure.
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
         if nodes[idx].modifier.has_layout_nodes() {
             nodes[idx].modifier.layout_nodes().cloned().collect()
@@ -564,10 +570,12 @@ pub(crate) fn measure_node_inner(
     // in a 470 dp slot came out at 600 again and undid the alignment with Compose. Removed rather
     // than duplicated so there is one place that decides a node's size from its modifier.
 
-    // 1.5 固有尺寸请求（`Modifier.width/height(IntrinsicSize)`）——该轴取内容自己的固有测量。
-    // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的
-    // 固有尺寸，把约束收紧到它；`enforceIncoming`（`size/width/height` 形式）为真时 incoming 仍
-    // 是最终夹取者，`requiredWidth/Height(IntrinsicSize)` 为假（忽略 incoming，同 requiredSize）。
+    // 1.5 Intrinsic-size request (`Modifier.width/height(IntrinsicSize)`): that axis takes the
+    // content's own intrinsic measurement. Compose does it in
+    // `IntrinsicWidthNode.calculateContentConstraints` — compute the content's intrinsic size on the
+    // axis, then tighten the constraints to it; with `enforceIncoming` (the `size/width/height`
+    // forms) the incoming range is still the final clipper, and `requiredWidth/Height(IntrinsicSize)`
+    // sets it to false (the incoming range is ignored, like requiredSize).
     // The position is AFTER the size steps: padding is one of them now (`SizeStep::Padding`)
     // and has already deflated the constraints in chain order, so what is tightened here is the
     // CONTENT size (the node's box minus its padding); the outer size adds the padding back at
@@ -614,7 +622,7 @@ pub(crate) fn measure_node_inner(
         inner_constraints = inner_constraints.tighten_height((h - pad_t - pad_b).max(0.0));
     }
 
-    // 2. 应用 padding
+    // 2. Apply padding
     //
     // BOTH kinds of padding deflated IN THE WALK, at their chain positions (element padding through
     // `SizeStep::Padding`, window insets through `SizeStep::InsetPadding`). What is left here is the
@@ -660,53 +668,61 @@ pub(crate) fn measure_node_inner(
     let viewport_height = inner_constraints.max_height;
     let viewport_width = inner_constraints.max_width;
 
-    // 4. 检查 scroll 修饰符——给子节点无限约束
+    // 4. Check the scroll modifier: the children are measured unbounded
     if nodes[idx].modifier.vertical_scroll_state().is_some() {
-        // scroll 容器自身填 viewport（fill_max_height 在无限 max 时跳过，这里补上）
+        // A scroll container fills its viewport itself (fill_max_height skips an unbounded max, so it
+        // is applied here)
         if nodes[idx].modifier.is_fill_max_height() && inner_constraints.max_height >= f32::MAX {
             inner_constraints.min_height = viewport_height;
         }
-        // 保存 viewport 高度供滚动 clamping 使用
+        // Keep the viewport height for the scroll clamp
         nodes[idx].scroll_viewport_height = viewport_height;
-        // lazy 列表：内容总高 State → 节点字段（apply_scroll_delta 用；在测量前读，
-        // 值是上一帧测量回写的——首帧 0 退化到节点自身高度）
+        // Lazy lists: the content-height State goes into a node field (apply_scroll_delta reads it).
+        // It is read before measuring, so the value is the previous frame's write-back; on the first
+        // frame it is 0, which degrades to the node's own height.
         if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_height = ch.get();
             nodes[idx].scroll_reverse = nodes[idx].modifier.is_lazy_scroll_reverse();
         }
-        // ⚠ lazy 容器**不**改写成无界：policy 自己显式控制子约束（child_constraints
-        // 高度 ∞），保留有限 max_height 让 policy 拿到真实视口高——内部 clamp 的
-        // max_offset = content_h - vh 才正确（实测：回退 vh=600 > 真实视口 ~500，
-        // 跳末尾滚过头，Item 999 被推出视口底部）。普通 scroll 容器仍改写（子内容
+        // A lazy container is NOT rewritten to unbounded: its policy sets the children's constraints
+        // itself (an infinite height) and keeps the finite max_height so it can see the real viewport
+        // — only then is the internal max_offset = content_h - vh right (measured: falling back to
+        // vh = 600 against a real viewport of ~500 overshot a jump to the end and pushed item 999 out
+        // of the bottom). A plain scroll container is still rewritten (its content
         // wrap）。
         if nodes[idx].modifier.lazy_scroll_content_height().is_none() {
             inner_constraints.max_height = f32::MAX;
         }
     }
     if nodes[idx].modifier.horizontal_scroll_state().is_some() {
-        // scroll 容器自身填 viewport（fill_max_width 在无限 max 时跳过，这里补上）
+        // A scroll container fills its viewport itself (fill_max_width skips an unbounded max, so it
+        // is applied here)
         if nodes[idx].modifier.is_fill_max_width() && inner_constraints.max_width >= f32::MAX {
             inner_constraints.min_width = viewport_width;
         }
-        // 保存 viewport 宽度供滚动 clamping 使用
+        // Keep the viewport width for the scroll clamp
         nodes[idx].scroll_viewport_width = viewport_width;
-        // 水平反向滚动（RTL：render 平移镜像——offset 0 显示内容末端，对齐垂直 reverseLayout；
-        // LazyRow 的 reverse_layout 打 lazy_scroll_reverse 标记（与垂直同构），
-        // 此处同样认领——否则水平反向有 placement 镜像、无 render 镜像，
-        // offset 两端语义不一致。非懒水平容器无 LazyScroll 元素，|| 安全。
+        // Reversed horizontal scrolling (RTL mirrors the render translate: offset 0 shows the end of
+        // the content, matching a vertical reverseLayout). A LazyRow's reverse_layout sets the same
+        // lazy_scroll_reverse flag a vertical list uses, and it is claimed here too — otherwise a
+        // reversed horizontal list would mirror its placements but not its render translate, and the
+        // two ends of the offset range would mean different things. A non-lazy horizontal container
+        // carries no LazyScroll element, so the || is safe.
         nodes[idx].scroll_reverse = nodes[idx].modifier.is_horizontal_scroll_reverse()
             || nodes[idx].modifier.is_lazy_scroll_reverse();
-        // lazy 横向列表：内容总宽 State → 节点字段（与垂直同语义）
+        // Lazy horizontal lists: the content-width State goes into a node field, with the same
+        // meaning as the vertical one.
         if let Some(cw) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_width = cw.get();
         }
-        // ⚠ lazy 容器不改写成无界：保留有限 max_width 让 policy 拿真实视口宽
+        // A lazy container is NOT rewritten to unbounded: the finite max_width lets the policy see
+        // the real viewport width.
         if nodes[idx].modifier.lazy_scroll_content_height().is_none() {
             inner_constraints.max_width = f32::MAX;
         }
     }
 
-    // 实际测量
+    // The actual measure
     // RemeasureToBounds: the child layout is re-measured with FIXED constraints
     // of the animated bounds, so content reflows (text rewraps, rows resize)
     // instead of being graphically scaled. Applied last — Compose's "animated
@@ -728,7 +744,8 @@ pub(crate) fn measure_node_inner(
     }
 
     let mut result = if let Some(pidx) = nodes[idx].measure_policy {
-        // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
+        // Copy the child indices first: `policy.measure` borrows all of `nodes` mutably, so the
+        // `nodes[idx]` borrow cannot be held across it.
         //
         // The ADOPTED subcomposition child is left out: this policy did not create it (a subcomposing
         // component appends it during adoption), and a policy that counts its children read one too
@@ -740,9 +757,10 @@ pub(crate) fn measure_node_inner(
             children.retain(|&c| c != sub);
         }
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
-        // 测量后同步 lazy 内容总高/宽到节点字段（render 的 reverse translate 与
-        // apply_scroll_delta 依赖；measure_node 顶部读的是上一帧值——首帧为 0
-        // 会让 reverseLayout 首帧平移错误，内容整体被推出视口）
+        // After measuring, sync a lazy list's content height/width into the node fields (the render
+        // pass's reverse translate and apply_scroll_delta depend on them). `measure_node` reads the
+        // previous frame's value at the top, so a 0 on the first frame makes a reverseLayout translate
+         // wrongly and pushes the whole content out of the viewport.
         let content_h_state = nodes[idx].modifier.lazy_scroll_content_height().map(|s| s.get());
         if let Some(v) = content_h_state {
             nodes[idx].scroll_content_height = v;
@@ -802,7 +820,7 @@ pub(crate) fn measure_node_inner(
         nodes[idx].children_have_z = children
             .iter()
             .any(|&c| nodes[c].modifier.get_z_index().is_some());
-        // apply padding offset（RTL：start 在右——子靠右偏移）
+        // Apply the padding offset (RTL: start is on the right, so the children shift right)
         let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
         let left_offset = if rtl { pad_end } else { pad_start };
         if left_offset > 0.0 || pad_top > 0.0 {
@@ -811,8 +829,8 @@ pub(crate) fn measure_node_inner(
                 nodes[c].position.y += pad_top;
             }
         }
-        // apply per-child offset modifier（普通 offset 在 RTL 下 x 镜像——
-        // 对标 Compose；absolute_offset 豁免镜像）
+        // Apply the per-child offset modifier (a plain offset mirrors x under RTL, as in Compose;
+        // absolute_offset is exempt).
         let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
         for &c in &children {
             if let Some((ox, oy)) = nodes[c].modifier.get_offset() {
@@ -824,9 +842,10 @@ pub(crate) fn measure_node_inner(
                 nodes[c].position.y += ay;
             }
         }
-        // 非 lazy 垂直滚动容器：内容总高 = 子节点底部最大值（含底部 padding）——
-        // 供 apply_scroll_delta 的 max_offset 与 fling 极限。修复 fill 容器场景：
-        // 自身高度 = 视口 → 原 measured_size 高度算 max_offset 恒 0（无法滚动）
+        // A non-lazy vertical scroll container: the content height is the lowest child edge (bottom
+        // padding included), which feeds apply_scroll_delta's max_offset and the fling limit. This
+        // fixes the fill case, where the container's own height equals the viewport and deriving
+        // max_offset from measured_size therefore stayed 0 (nothing could scroll).
         if nodes[idx].modifier.vertical_scroll_state().is_some()
             && nodes[idx].modifier.lazy_scroll_content_height().is_none()
         {
@@ -853,7 +872,8 @@ pub(crate) fn measure_node_inner(
                 }
             }
         }
-        // 非 lazy 水平滚动容器：内容总宽 = 子节点右侧最大值（含尾部 padding）
+        // A non-lazy horizontal scroll container: the content width is the rightmost child edge
+        // (trailing padding included).
         if nodes[idx].modifier.horizontal_scroll_state().is_some()
             && nodes[idx].modifier.lazy_scroll_content_height().is_none()
         {
@@ -874,14 +894,15 @@ pub(crate) fn measure_node_inner(
             }
         }
         let mut outer_size = Size::new(size.width + pad_x, size.height + pad_y);
-        // scroll 容器自身尺寸 clamp 回视口——第 4 步为子节点把约束改成了无界
-        // （max=f32::MAX），若不做 clamp，自身高度/宽度会被内容撑开（如
-        // `.height(180.0)` 的滚动列表实测 991 高）。viewport_* 保存于第 3 步
-        // （padding 已扣、size 约束已收窄），故完整视口高 = viewport + pad。
-        // lazy 容器不改写约束（见第 4 步注释），其 policy 已按有限视口测量，
-        // 此处 clamp 对它们是无操作（内容本来就 ≤ 视口）。若父约束无限
-        // （viewport=f32::MAX），min 无效果，仍按内容撑开（语义：无固定高度
-        // 的滚动容器随内容增长）。
+        // Clamp a scroll container's own size back to its viewport: step 4 made the children's
+        // constraints unbounded (max = f32::MAX), and without the clamp the container's height or
+        // width would be dragged out by its content (a `.height(180.0)` list measured 991 high).
+        // viewport_* was captured in step 3 (padding already removed, the size constraint already
+        // narrowed), so the full viewport height is viewport + pad. Lazy containers skip the rewrite
+        // (see step 4) and their policy already measured against the finite viewport, so this clamp
+        // is a no-op for them (their content is at most the viewport). With an unbounded parent
+        // (viewport = f32::MAX) the min has no effect and the content still sizes the container — a
+        // scroll container without a fixed height grows with its content.
         if nodes[idx].modifier.vertical_scroll_state().is_some() && viewport_height < f32::MAX {
             outer_size.height = outer_size.height.min(viewport_height + pad_y);
         }
@@ -891,11 +912,11 @@ pub(crate) fn measure_node_inner(
         nodes[idx].measured_size = outer_size;
         (outer_size, placements)
     } else {
-        // 叶子节点：使用 ContentMeasurer 或默认逻辑
+        // A leaf: use the ContentMeasurer or the default logic
         let size = if nodes[idx].has_text_content {
-            // 合并的 measure + cache（避免重复创建 Paragraph）
-            // 使用父约束的 max_width 作为排版宽度，确保文本在可用空间内自动换行。
-            // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
+            // A combined measure and cache, so the Paragraph is built once
+            // The parent's max_width is the layout width, which makes the text wrap inside the space
+            // it has. For a scroll container inner_constraints.max_width is already f32::MAX.
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
             // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its text
@@ -926,12 +947,13 @@ pub(crate) fn measure_node_inner(
             if let Some(last) = last {
                 nodes[idx].set_alignment_line(crate::layout::AlignmentLine::LAST_BASELINE, last);
             }
-            // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
-            // 高度 +20 预留，防与下方元素重叠）
+            // Supporting text (TextField draws it 4 dp below the container; the height reserves 20 so
+            // it cannot overlap whatever follows).
             let supporting_h = supporting_text_height(&nodes[idx]);
-            // 用约束 clamping 最终尺寸（fill_max_width 时约束收紧，文本应填满可用宽度）。
-            // ⚠ 高度 = paragraph 实际高度（含自动折行）+ supporting——不得按
-            // 显式换行数近似（折行文本高度会裁剪）；min_height 提升兜底占位
+            // The final size is clamped into the constraints (a fill_max_width has already tightened
+            // them, so the text fills the width it was given). The height is the paragraph's real
+            // height (wrapping included) plus the supporting line — never approximated from the
+            // explicit newline count, which would crop wrapped text; a raised min_height floors it.
             Size::new(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height + supporting_h),
@@ -944,14 +966,15 @@ pub(crate) fn measure_node_inner(
                 inner_constraints.constrain_height(text_size.height),
             )
         } else if nodes[idx].has_image_content {
-            // Image 叶子：固有尺寸（位图像素 / SVG viewBox），约束钳制
+            // An Image leaf: its intrinsic size (bitmap pixels or the SVG viewBox), clamped by the
+            // constraints.
             let (iw, ih) = nodes[idx].modifier.image_intrinsic_size().unwrap_or((0.0, 0.0));
             Size::new(
                 inner_constraints.constrain_width(iw),
                 inner_constraints.constrain_height(ih),
             )
         } else {
-            // 普通叶子节点
+            // A plain leaf
             let w = inner_constraints.constrain_width(
                 if inner_constraints.has_fixed_width() {
                     inner_constraints.min_width
@@ -970,8 +993,9 @@ pub(crate) fn measure_node_inner(
         };
 
         nodes[idx].measured_size = size;
-        // 叶子尺寸回加 padding（容器路径 1279 同语义——叶子此前丢失：
-        // 测量尺寸不含内边距 → Text+padding 高度塌陷、内容贴边）
+        // Add the padding back to a leaf's size (the container path does the same). Leaves used to
+        // lose it: the measured size excluded the padding, so Text + padding collapsed and the content
+        // hugged the edge.
         let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
         nodes[idx].measured_size = outer_size;
         (outer_size, Vec::new())
@@ -1215,12 +1239,13 @@ pub(crate) fn measure_node_inner(
         }
     }
 
-    // 标记测量完成，缓存约束供下帧复用
+    // Mark the measure done and cache the constraints for the next frame
     nodes[idx].dirty = false;
     nodes[idx].layout_dirty = false;
     nodes[idx].cached_constraints = Some(constraints);
-    // 尺寸上报（对标 Compose onSizeChanged）——最终尺寸定型后回调
-    // （常量折叠早退路径不经过这里——尺寸未变无需上报；元素内再去重）
+    // Report the size (Compose's onSizeChanged) once the final size is settled. The constant-fold
+    // early exit does not come through here — an unchanged size needs no report — and the element
+    // deduplicates again.
     let (rw, rh) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
     nodes[idx].modifier.report_measured_size(rw, rh);
 

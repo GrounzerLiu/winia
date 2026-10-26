@@ -108,8 +108,9 @@
 
     #[test]
     fn test_hit_test_z_order_topmost_first() {
-        // 兄弟节点：绘制按 children 正序（后画在上层）——命中必须倒序优先
-        // 底层铺满（leaf1）+ 上层局部矩形（leaf2）重叠点 → 应命中 leaf2
+        // Siblings paint in children order (later paints above), so the hit test must prefer the
+        // later one: leaf1 fills the box, leaf2 is a smaller rectangle on top, and their overlap must
+        // hit leaf2.
         let mut nodes = vec![
             LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
             LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
@@ -122,10 +123,10 @@
         nodes[2].position = Offset::new(30.0, 30.0);
         nodes[0].children = vec![1, 2];
 
-        // (40,40) 同时落在 leaf1 与 leaf2 内——上层（后画 leaf2）优先
+        // (40, 40) is inside both, and the upper one (leaf2) wins.
         let path = hit_test(&nodes, 0, 40.0, 40.0);
-        assert_eq!(path, vec![0, 2], "上层兄弟优先命中（z-order）");
-        // (20,20) 只落 leaf1（leaf2 范围外）
+        assert_eq!(path, vec![0, 2], "the upper sibling wins the hit (z-order)");
+        // (20, 20) is only inside leaf1 (outside leaf2).
         let path2 = hit_test(&nodes, 0, 20.0, 20.0);
         assert_eq!(path2, vec![0, 1]);
     }
@@ -198,9 +199,9 @@
     }
     #[test]
     fn test_scroll_offset_rtl_reverse_mirrors() {
-        // RTL（scroll_reverse）回归：hit_test 坐标转换必须用 render 的镜像
-        // 偏移量 off = content_w - viewport_w - offset，而非裸 offset——
-        // 否则 RTL 滚动 tab 的点击位置错位（用户实测 bug）
+        // RTL (scroll_reverse) regression: the hit test must use the render pass's mirrored offset
+        // off = content_w - viewport_w - offset, not the raw offset — otherwise clicks on a scrolled
+        // RTL tab row land in the wrong place (a bug reported from real use).
         let state = crate::modifier::ScrollState::new();
         let m = Modifier::new().horizontal_scroll(state.clone());
         let mut node = LayoutNode::leaf(m);
@@ -208,22 +209,22 @@
         node.scroll_content_width = 1000.0;
         node.scroll_viewport_width = 360.0;
 
-        // offset=0 → 镜像偏移 = 1000-360-0 = 640（render 显示内容末端）
+        // offset = 0 maps to 1000 - 360 - 0 = 640 (the render pass shows the end of the content).
         state.offset.set(0.0);
         let (dx, dy) = scroll_offset_for_node(&node);
-        assert!((dx - 640.0).abs() < 0.01, "RTL offset=0 应镜像为 640，实际 {dx}");
+        assert!((dx - 640.0).abs() < 0.01, "RTL offset 0 mirrors to 640, got {dx}");
         assert_eq!(dy, 0.0);
 
         // offset=100 → 640-100 = 540
         state.offset.set(100.0);
         let (dx, _) = scroll_offset_for_node(&node);
-        assert!((dx - 540.0).abs() < 0.01, "RTL offset=100 应镜像为 540，实际 {dx}");
+        assert!((dx - 540.0).abs() < 0.01, "RTL offset 100 mirrors to 540, got {dx}");
 
-        // LTR（非 reverse）对照：偏移 = 裸 offset
+        // The LTR control (not reversed): the offset is the raw one.
         node.scroll_reverse = false;
         state.offset.set(100.0);
         let (dx, _) = scroll_offset_for_node(&node);
-        assert!((dx - 100.0).abs() < 0.01, "LTR 应裸 offset=100，实际 {dx}");
+        assert!((dx - 100.0).abs() < 0.01, "LTR uses the raw offset 100, got {dx}");
     }
 
     #[test]
@@ -237,7 +238,7 @@
         nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
-        // 点击子节点
+        // A click on the child
         let path = hit_test(&nodes, 0, 30.0, 75.0);
         assert_eq!(path, vec![0, 1], "should hit parent and child");
     }
@@ -253,18 +254,19 @@
         nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
-        // 点击父节点但不在子节点范围内
+        // A click on the parent, outside the child's range
         let path = hit_test(&nodes, 0, 80.0, 75.0);
         assert_eq!(path, vec![0], "should only hit parent");
     }
 
-    /// 回归：滚动容器内 scene 坐标（hit_test 输入）与 node_abs_position
-    /// （app.rs 点击/拖拽定位用）必须同一空间——都减祖先 scroll 偏移。
-    /// 此前 node_abs_position 纯累加 layout position，滚动后局部 y 被
-    /// 滚动量污染 → 多行 TextField 点击/拖拽只能定位到第一行。
+    /// Regression: scene coordinates (the hit test's input) and `node_abs_position` (what app.rs uses
+    /// to place a click or drag) must live in the same space — both subtract the ancestors' scroll
+    /// offsets. `node_abs_position` used to accumulate the layout position alone, so after a scroll
+    /// its local y carried the scroll amount and a multi-line TextField could only be hit on its
+    /// first line.
     #[test]
     fn test_scroll_scene_coords_consistent() {
-        // 滚动容器（y=0，滚动 50px）内含子节点（y=100，内容高 60）
+        // A scroll container at y = 0 scrolled by 50 holds a child at y = 100 (content 60 high).
         let scroll = crate::modifier::ScrollState::new();
         scroll.offset.set(50.0);
         let mut nodes = vec![
@@ -276,34 +278,34 @@
         nodes[1].position = Offset::new(0.0, 100.0);
         nodes[0].children.push(1);
 
-        // 渲染时画布 translate(0, -50) → 子节点视觉顶边在场景 y=50
+        // The render pass translates by (0, -50), so the child's visual top is at scene y = 50.
         let path = hit_test(&nodes, 0, 50.0, 60.0);
-        assert_eq!(path, vec![0, 1], "滚动后子节点视觉范围 (50,50)-(50,110) 应命中");
-        // 子节点本地坐标 = 场景 - 视觉顶边 = (50-0, 60-50) = (50, 10)
+        assert_eq!(path, vec![0, 1], "the child's visual range (50,50)-(50,110) is hit after the scroll");
+        // Local = scene - visual top = (50-0, 60-50) = (50, 10).
         let (x, y) = scene_to_node_local(&nodes, &path, 1, 50.0, 60.0);
-        assert_eq!((x, y), (50.0, 10.0), "本地坐标须扣除滚动偏移");
+        assert_eq!((x, y), (50.0, 10.0), "the local coordinates subtract the scroll offset");
 
-        // 未滚动点（y=140 → 场景 140-50=90，仍命中子节点本地 y=40）
+        // An unscrolled point (y = 140 maps to scene 90, still the child's local y = 40).
         let path2 = hit_test(&nodes, 0, 50.0, 90.0);
         assert_eq!(path2, vec![0, 1]);
         let (_, y2) = scene_to_node_local(&nodes, &path2, 1, 50.0, 90.0);
         assert_eq!(y2, 40.0);
 
-        // 滚动偏移变化 → 同一场景点对应不同本地坐标（偏移已消耗）。
-        // offset=50：视觉顶边 y=50，场景 (50,50) → 本地 y=0；
-        // offset=100：视觉顶边 y=0，场景 (50,50) → 本地 y=50（仍在可视范围）
+        // Changing the scroll offset changes the local coordinates of the same scene point (the
+        // offset has been consumed). offset 50: visual top 50, scene (50,50) -> local y 0.
+        // offset 100: visual top 0, scene (50,50) -> local y 50, still inside the child.
         scroll.offset.set(100.0);
         let path3 = hit_test(&nodes, 0, 50.0, 50.0);
         assert_eq!(path3, vec![0, 1]);
         let (_, y3) = scene_to_node_local(&nodes, &path3, 1, 50.0, 50.0);
-        assert_eq!(y3, 50.0, "本地坐标随滚动偏移同步变化");
+        assert_eq!(y3, 50.0, "the local coordinates follow the scroll offset");
     }
 
-    // ── scene_to_node_local（波纹按压点本地坐标）──
+    // ── scene_to_node_local (the ripple press point's local coordinates) ──
 
     #[test]
     fn scene_to_node_local_plain() {
-        // root(10,20) → child(30,40)：视觉原点 (40,60)
+        // root(10,20) -> child(30,40): the visual origin is (40,60).
         let mut nodes = vec![
             LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
@@ -313,13 +315,13 @@
         nodes[0].children.push(1);
 
         let (lx, ly) = scene_to_node_local(&nodes, &[0, 1], 1, 45.0, 62.0);
-        assert_eq!((lx, ly), (5.0, 2.0), "无滚动：本地 = 场景 - 布局原点");
+        assert_eq!((lx, ly), (5.0, 2.0), "no scroll: local = scene - layout origin");
     }
 
     #[test]
     fn scene_to_node_local_under_scroll() {
-        // root(0,0) → scroll 容器(50,100, offset=50) → child(100,0)：
-        // 视觉原点 = (50+100-0, 100+0-50) = (150, 50)
+        // root(0,0) -> scroll container(50,100, offset 50) -> child(100,0): the visual origin is
+        // (50+100-0, 100+0-50) = (150, 50).
         let scroll = crate::modifier::ScrollState::new();
         scroll.offset.set(50.0);
         let mut nodes = vec![
@@ -334,12 +336,12 @@
         nodes[1].children.push(2);
 
         let (lx, ly) = scene_to_node_local(&nodes, &[0, 1, 2], 2, 160.0, 60.0);
-        assert_eq!((lx, ly), (10.0, 10.0), "滚动偏移从视觉原点扣除（与 hit_test/渲染一致）");
+        assert_eq!((lx, ly), (10.0, 10.0), "the scroll offset comes off the visual origin, as in hit_test and render");
     }
 
     #[test]
     fn collect_focus_candidates_uses_visual_centers() {
-        // root(0,0) → scroll 容器(50,100, offset=50) → focusable(100,0, 20x20)
+        // root(0,0) -> scroll container(50,100, offset 50) -> focusable(100,0, 20x20)
         let scroll = crate::modifier::ScrollState::new();
         scroll.offset.set(50.0);
         let mut nodes = vec![
@@ -350,7 +352,7 @@
         nodes[0].position = Offset::new(0.0, 0.0);
         nodes[1].position = Offset::new(50.0, 100.0);
         nodes[2].position = Offset::new(100.0, 0.0);
-        // 测试不执行 measure——显式设置测量尺寸（与 scene_to_node_local 系列一致）
+        // These tests do not measure, so the sizes are set by hand (as in the scene_to_node_local series).
         nodes[0].measured_size = Size::new(300.0, 300.0);
         nodes[1].measured_size = Size::new(200.0, 200.0);
         nodes[2].measured_size = Size::new(20.0, 20.0);
@@ -358,8 +360,8 @@
         nodes[1].children.push(2);
 
         let cands = collect_focus_candidates(&nodes, 0);
-        assert_eq!(cands.len(), 1, "仅 focusable 子节点进入候选");
-        // 视觉位置 = (150, 50)，中心 = (160, 60)（scroll offset 已扣除）
+        assert_eq!(cands.len(), 1, "only the focusable child is a candidate");
+        // Visual position (150, 50), centre (160, 60) — the scroll offset is already removed.
         assert_eq!(cands[0].0, nodes[2].id);
         assert_eq!((cands[0].1, cands[0].2), (160.0, 60.0));
     }
@@ -368,11 +370,11 @@
 
     #[test]
     fn required_size_overrides_incoming() {
-        // 父约束 100x100，requiredSize(200, 50) → 溢出（enforceIncoming=false）
+        // Parent 100x100, requiredSize(200, 50) overflows it (enforceIncoming = false).
         let m = Modifier::new().required_size(200.0, 50.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!((size.width, size.height), (200.0, 50.0), "required 忽略 incoming 收缩");
+        assert_eq!((size.width, size.height), (200.0, 50.0), "required ignores the incoming shrink");
     }
 
     #[test]
@@ -380,17 +382,17 @@
         let m = Modifier::new().required_width(300.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(size.width, 300.0, "requiredWidth 溢出");
-        assert!(size.height <= 100.0, "高度仍受 incoming 约束");
+        assert_eq!(size.width, 300.0, "requiredWidth overflows");
+        assert!(size.height <= 100.0, "the height still obeys the incoming constraint");
     }
 
     #[test]
     fn aspect_ratio_derives_from_max_width() {
-        // 无 size 约束：外层 max 300x300，ratio 2 → 宽 300 高 150
+        // No size constraint: max 300x300 with ratio 2 gives 300 wide and 150 high.
         let m = Modifier::new().aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert_eq!((size.width, size.height), (300.0, 150.0), "以 max_w 为基准推导");
+        assert_eq!((size.width, size.height), (300.0, 150.0), "derived from max width");
     }
 
     #[test]
@@ -403,26 +405,26 @@
         let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert_eq!((size.width, size.height), (50.0, 20.0), "tight size 约束 aspect 不可改变（Compose 一致）");
+        assert_eq!((size.width, size.height), (50.0, 20.0), "a tight size leaves aspect no room (as in Compose)");
     }
 
     #[test]
     fn aspect_ratio_clamps_to_max_height() {
-        // 无 size：外层 max 300x100，ratio 2 → h = 300/2 = 150 > 100 → clamp：(200, 100)
+        // No size: max 300x100 with ratio 2 gives h = 150, over the 100 limit, so (200, 100).
         let m = Modifier::new().aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 100.0));
-        assert_eq!((size.width, size.height), (200.0, 100.0), "高度超界时反推宽度");
+        assert_eq!((size.width, size.height), (200.0, 100.0), "the width follows from the height limit");
     }
 
     #[test]
     fn aspect_ratio_match_height_first() {
-        // match_height_first：以 max_h 为基准——无 size 时外层 100x300，ratio 2
+        // match_height_first starts from max height: 100x300 with ratio 2.
         // → h = 300，w = 600 > 100 → clamp：(100, 50)
         let m = Modifier::new().aspect_ratio(2.0, true);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 300.0));
-        assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
+        assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first derives it");
     }
 
     /// Compose's `findSize` has FOUR candidates on each pass; with no bounded maximum the
@@ -821,29 +823,29 @@
         assert_eq!((size.width, size.height), (250.0, 60.0));
     }
 
-    // ── minWidth / minHeight（对标 Compose widthIn/heightIn）──
+    // ── minWidth / minHeight (Compose's widthIn/heightIn) ──
 
     #[test]
     fn min_width_height_raises_min_constraints() {
-        // min_width(58).min_height(40) + 空内容 → 撑到 58x40（Button 默认最小尺寸）
+        // min_width(58).min_height(40) with empty content grows to 58x40 (Button's default minimum).
         let m = Modifier::new().min_width(58.0).min_height(40.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!((size.width, size.height), (58.0, 40.0), "min 约束提升 incoming min");
+        assert_eq!((size.width, size.height), (58.0, 40.0), "the minimum raises the incoming min");
     }
 
     #[test]
     fn min_width_yields_to_tight_size() {
-        // tight size(30,20) 之后 min(58) 被 max=30 夹住（Compose constraints 合并语义）
+        // After a tight size(30,20) the min(58) is capped by max = 30, as Compose merges constraints.
         let m = Modifier::new().size(30.0, 20.0).min_width(58.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!((size.width, size.height), (30.0, 20.0), "min 不得越过 tight max");
+        assert_eq!((size.width, size.height), (30.0, 20.0), "the minimum must not cross the tight max");
     }
 
     #[test]
     fn min_width_dynamic_state() {
-        // 动态 min（动画）：measure 期 get() 注册布局依赖——值变化重测生效
+        // A dynamic min (animation): the measure-time get() registers a layout dependency, so a change re-measures.
         use crate::runtime::state::State;
         let s = State::new(58.0);
         let m = Modifier::new().min_width(&s);
@@ -851,13 +853,13 @@
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
         assert_eq!(size.width, 58.0);
         s.set(70.0);
-        // 模拟动画值 notify 后的布局失效（真实链路：composer pending → layout_dirty）
+        // Simulate the layout invalidation an animation notify causes (composer pending -> layout_dirty).
         nodes[0].layout_dirty = true;
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(size.width, 70.0, "动态 min 值变化后重测取新值");
+        assert_eq!(size.width, 70.0, "the re-measure picks up the changed dynamic min");
     }
 
-    // ── size ranges（Compose widthIn/heightIn/sizeIn 与 required*In）──
+    // ── size ranges (Compose's widthIn/heightIn/sizeIn and required*In) ──
 
     #[test]
     fn width_in_intersects_the_target_with_the_incoming_range() {
@@ -1107,7 +1109,7 @@
         assert_eq!(composer.find_by_layout_id("other"), None);
     }
 
-    // ── maxWidth / maxHeight（Compose widthIn/heightIn 的另一半）──
+    // ── maxWidth / maxHeight (the other half of Compose's widthIn/heightIn) ──
 
     #[test]
     fn max_width_caps_a_wider_child() {
@@ -1120,7 +1122,7 @@
         let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
             vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
-        assert_eq!(size.width, 200.0, "max_width 限制内容宽度");
+        assert_eq!(size.width, 200.0, "max_width limits the content width");
     }
 
     /// A conflicting min and max resolve by CHAIN ORDER, which is Compose's rule: each modifier is
@@ -1155,7 +1157,7 @@
         let m = Modifier::new().size(30.0, 20.0).max_width(10.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!((size.width, size.height), (30.0, 20.0), "max 不得越过 tight min");
+        assert_eq!((size.width, size.height), (30.0, 20.0), "the maximum must not cross the tight min");
     }
 
     #[test]
@@ -1168,7 +1170,7 @@
         let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
             vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
-        assert_eq!(size.height, 50.0, "max_height 限制内容高度");
+        assert_eq!(size.height, 50.0, "max_height limits the content height");
     }
 
     #[test]
@@ -1191,7 +1193,7 @@
         nodes[0].layout_dirty = true;
         nodes[1].layout_dirty = true;
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
-        assert_eq!(size.width, 300.0, "动态 max 值变化后重测取新值");
+        assert_eq!(size.width, 300.0, "the re-measure picks up the changed dynamic max");
     }
 
 
@@ -1237,38 +1239,39 @@
     fn test_tag_in_param_eq() {
         let a = Modifier::new().test_tag("a");
         let b = Modifier::new().test_tag("b");
-        assert!(!a.param_eq(&b), "tag 不同必须不等");
+        assert!(!a.param_eq(&b), "a different tag must compare unequal");
         let c = Modifier::new().test_tag("a");
-        assert!(a.param_eq(&c), "tag 相同必须相等");
+        assert!(a.param_eq(&c), "the same tag must compare equal");
     }
 
     #[test]
     fn test_leaf_padding_included_in_measured_size() {
-        // 叶子节点（无 policy）尺寸回加 padding（此前丢失：测量不含内边距，
-        // Text+padding 高度塌陷、内容贴边）
+        // A leaf (no policy) adds the padding back to its size. It used to lose it: the measured size
+        // excluded the padding, so Text + padding collapsed and the content hugged the edge.
         let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 50.0).padding(10.0))];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
-        // size(100,50) 经 padding(10) 内缩 → 内容 80x30，回加后 100x50
+        // size(100,50) deflated by padding(10) leaves 80x30 of content, which reads 100x50 again.
         assert_eq!(size, Size::new(100.0, 50.0));
         assert_eq!(nodes[0].measured_size, Size::new(100.0, 50.0));
     }
 
     #[test]
     fn test_leaf_asymmetric_padding_included() {
-        // 非对称 padding：start(10)+bottom(5) + 固定 size(60,40)
-        // → 内容区 50x35 + padding 回加 = 总尺寸 60x40（修改前返回 50x35 丢失 padding）
+        // Asymmetric padding, start(10) plus bottom(5), with a fixed size(60,40): the content area is
+        // 50x35 and the padding brings the total back to 60x40 (it used to return 50x35, losing it).
         let mut nodes = vec![LayoutNode::leaf(
             Modifier::new().size(60.0, 40.0).padding_start(10.0).padding_bottom(5.0),
         )];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
         assert_eq!(size, Size::new(60.0, 40.0));
-        // 无固定尺寸的纯 padding 叶子：内容 0 + padding 回加
+        // A padding-only leaf with no fixed size: empty content plus the padding.
         let mut nodes2 = vec![LayoutNode::leaf(Modifier::new().padding_start(10.0).padding_bottom(5.0))];
         let (size2, _) = measure_node(&mut nodes2, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
         assert_eq!(size2, Size::new(10.0, 5.0));
     }
 
-    // ── Image 叶子测量（固有尺寸布局——对齐 Compose：未指定维度以固有尺寸为基准）──
+    // ── Image leaf measurement (intrinsic-size layout: an unspecified dimension falls back to the
+    //    intrinsic size, as Compose does) ──
 
     fn image_modifier() -> Modifier {
         use crate::graphics::{ContentScale, ImageAlignment};
@@ -1284,16 +1287,16 @@
 
     #[test]
     fn test_leaf_image_intrinsic_size() {
-        // 固有尺寸来自 SVG viewBox（纯内存，无需文件）
+        // The intrinsic size comes from the SVG viewBox (in memory, no file).
         let mut nodes = vec![LayoutNode::leaf(image_modifier())];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
-        assert_eq!(size, Size::new(48.0, 24.0), "UNBOUNDED 下按固有尺寸");
+        assert_eq!(size, Size::new(48.0, 24.0), "UNBOUNDED uses the intrinsic size");
         assert_eq!(nodes[0].measured_size, Size::new(48.0, 24.0));
     }
 
     #[test]
     fn test_leaf_image_tight_constraints_clamped() {
-        // tight 100x50：无 size modifier 时被约束钳制
+        // A tight 100x50 clamps it when no size modifier is present.
         let mut nodes = vec![LayoutNode::leaf(image_modifier())];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(100.0, 100.0, 50.0, 50.0));
         assert_eq!(size, Size::new(100.0, 50.0));
@@ -1301,7 +1304,7 @@
 
     #[test]
     fn test_leaf_image_size_modifier_overrides() {
-        // modifier size 覆盖固有尺寸（Compose 语义：size 指定即以此为准）
+        // A modifier size overrides the intrinsic one (as in Compose).
         let m = Modifier::new().size(64.0, 32.0).image_content(
             crate::graphics::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
             crate::graphics::ContentScale::Fit,
@@ -1317,8 +1320,8 @@
 
     #[test]
     fn test_leaf_image_svg_without_viewbox_fallback() {
-        // 无 viewBox/width 的 SVG：测量回退 24×24（与解码回退一致——
-        // 否则 Image 测量 0 尺寸空白而 Icon 正常显示的不一致）
+        // An SVG with no viewBox or width falls back to 24x24 measured (matching the decode fallback),
+        // otherwise an Image would measure 0 while the same Icon draws.
         let m = Modifier::new().image_content(
             crate::graphics::IconSource::svg(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0h24v24H0z\"/></svg>",
@@ -1336,7 +1339,7 @@
 
     #[test]
     fn test_measure_node_rtl_padding() {
-        // RTL + padding_start(10)：start 在右——子内容靠右 10（左侧空隙 0）
+        // RTL with padding_start(10): start is on the right, so the content sits 10 in from it.
         use crate::layout::row::RowLayout;
         let mut nodes = vec![
             LayoutNode::new(
@@ -1349,18 +1352,18 @@
             LayoutNode::leaf(Modifier::new().size(30.0, 20.0)),
         ];
         nodes[0].children = vec![1];
-        nodes[0].layout_direction = LayoutDirection::Rtl; // 模拟物化快照（modifier 覆盖）
+        nodes[0].layout_direction = LayoutDirection::Rtl; // the materialised snapshot (a modifier override)
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        // 内容区宽 = 100-10 = 90；RTL 第一个子（30 宽）在右端 → x = 60
-        // padding 偏移（Rtl 用 end=0）→ 不变
-        assert_eq!(nodes[1].position.x, 60.0, "RTL 下 start 在右：子内容靠右，右侧空隙 10");
-        // 右侧空隙 = 100 - (60+30) = 10 ✓（padding_start 生效在右）
+        // Content width 100 - 10 = 90; the first child (30 wide) sits at the right end, so x = 60.
+        // The padding offset (RTL uses end = 0) leaves it unchanged.
+        assert_eq!(nodes[1].position.x, 60.0, "RTL puts start on the right: the content hugs it, 10 of empty space on the right");
+        // The gap on the right is 100 - (60+30) = 10, so padding_start lands on the right.
     }
 
     #[test]
     fn test_measure_node_rtl_padding_end_left() {
-        // RTL + padding_end(20)：end 在左——子内容从右侧排，左侧空隙 20
+        // RTL with padding_end(20): end is on the left, so the content starts from the right and leaves 20 on the left.
         use crate::layout::row::RowLayout;
         let mut nodes = vec![
             LayoutNode::new(
@@ -1373,17 +1376,17 @@
             LayoutNode::leaf(Modifier::new().size(30.0, 20.0)),
         ];
         nodes[0].children = vec![1];
-        nodes[0].layout_direction = LayoutDirection::Rtl; // 模拟物化快照
+        nodes[0].layout_direction = LayoutDirection::Rtl; // the materialised snapshot
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        // 内容区宽 = 100-20 = 80；flex RTL 第一个子 x = 80-30 = 50
-        // padding 偏移（Rtl 用 end=20）→ 50+20 = 70
-        assert_eq!(nodes[1].position.x, 70.0, "RTL 下 end 在左：子靠右排，左侧空隙 20");
+        // Content width 100 - 20 = 80; flex puts the first child at x = 80 - 30 = 50.
+        // The padding offset (RTL uses end = 20) makes it 50 + 20 = 70.
+        assert_eq!(nodes[1].position.x, 70.0, "RTL puts end on the left: the content runs from the right, 20 of space on the left");
     }
 
     #[test]
     fn test_measure_node_ltr_padding_unaffected() {
-        // LTR 对照组：padding_start(10) → 子靠左 10
+        // The LTR control: padding_start(10) puts the child 10 from the left.
         use crate::layout::row::RowLayout;
         let mut nodes = vec![
             LayoutNode::new(
@@ -1395,14 +1398,14 @@
         nodes[0].children = vec![1];
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(nodes[1].position.x, 10.0, "LTR 下 start 在左：子靠左 10");
+        assert_eq!(nodes[1].position.x, 10.0, "LTR puts start on the left: the child sits 10 in");
     }
 
     #[test]
     fn test_measure_node_offset_rtl_mirror() {
-        // 普通 offset 在 RTL 下 x 镜像（对标 Compose offset）；absolute_offset 豁免
+        // A plain offset mirrors x under RTL as Compose's offset does; absolute_offset is exempt.
         use crate::layout::row::RowLayout;
-        // LTR：offset(10, 5) → 子 x 加 10
+        // LTR: offset(10, 5) moves the child 10 to the right.
         let mut nodes = vec![
             LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
             LayoutNode::leaf(Modifier::new().size(30.0, 20.0).offset(10.0, 5.0)),
@@ -1410,10 +1413,10 @@
         nodes[0].children = vec![1];
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(nodes[1].position.x, 10.0, "LTR offset(10) 向右");
-        assert_eq!(nodes[1].position.y, 5.0, "offset y 不受方向影响");
+        assert_eq!(nodes[1].position.x, 10.0, "LTR offset(10) moves right");
+        assert_eq!(nodes[1].position.y, 5.0, "the offset's y ignores the direction");
 
-        // RTL：offset(10) 镜像 → x 减 10
+        // RTL: offset(10) mirrors, so x loses 10.
         let mut nodes = vec![
             LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
             LayoutNode::leaf(Modifier::new().size(30.0, 20.0).offset(10.0, 5.0)),
@@ -1422,9 +1425,9 @@
         nodes[0].layout_direction = LayoutDirection::Rtl;
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(nodes[1].position.x, 60.0, "RTL offset(10) x 镜像（flex 70 - 10）");
+        assert_eq!(nodes[1].position.x, 60.0, "RTL offset(10) mirrors x (flex 70 - 10)");
 
-        // RTL + absolute_offset：不镜像 → x 加 10
+        // RTL with absolute_offset: no mirroring, so x gains 10.
         let mut nodes = vec![
             LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
             LayoutNode::leaf(Modifier::new().size(30.0, 20.0).absolute_offset(10.0, 0.0)),
@@ -1433,7 +1436,7 @@
         nodes[0].layout_direction = LayoutDirection::Rtl;
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(nodes[1].position.x, 80.0, "RTL absolute_offset(10) 不镜像（flex 70 + 10）");
+        assert_eq!(nodes[1].position.x, 80.0, "RTL absolute_offset(10) does not mirror (flex 70 + 10)");
     }
 
     /// The text snapshot compare must be as faithful as the snapshot it reads, and the refresh must

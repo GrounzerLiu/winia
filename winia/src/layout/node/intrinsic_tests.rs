@@ -355,12 +355,12 @@
     /// on ONE line: the intrinsic it reads is the width it then hands over, so an answer narrower than the
     /// laid-out line makes the text wrap inside its own intrinsic width.
     ///
-    /// Measured before the fix, on "复制" in `label_large`: the intrinsic came back 28.2 while the line lays
+    /// Measured before the fix, on "Copy" in `label_large`: the intrinsic came back 28.2 while the line lays
     /// out 29.0 wide, and the `IntrinsicSize::Max` column produced a 28.2-wide, 40-tall text — two stacked
     /// glyphs. That is the dropdown menu item whose label the user saw running vertically.
     #[test]
     fn an_intrinsic_width_parent_leaves_its_text_on_one_line() {
-        for content in ["复制", "New file", "带图标", "⧉ 粘贴 Ctrl+V"] {
+        for content in ["Copy", "New file", "With icon", "Paste Ctrl+V"] {
             // (a) With room to spare: the text's own single-line size.
             let roomy = text_in_a_column(content, Modifier::new().fill_max_width());
             // (b) Shrunk to the intrinsic: the parent's width comes from the same answer it then gives.
