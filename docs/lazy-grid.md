@@ -71,3 +71,36 @@ composes one cell per line and the next corrects it — the same two-phase rule 
 `winia/src/layout/lazy/grid.rs` (`layout::lazy::grid::tests`): chunking with a fixed count, a span
 that does not fit, the adaptive cell count, and an end-to-end vertical grid (two lines, three equally
 weighted cells, and the anchor jumping to the second line).
+
+## The staggered grid
+
+`LazyVerticalStaggeredGrid` / `LazyHorizontalStaggeredGrid` (`layout/lazy/staggered.rs`) are the
+waterfall: no lines at all. Every item keeps its own main-axis size and goes into the lane whose cursor
+is lowest, so the lanes drift; the placement rule is `layout::staggered::assign_lanes`, tested on its
+own.
+
+```rust
+LazyVerticalStaggeredGrid::new()
+    .lanes(GridCells::Fixed(2))
+    .spacing(8.0)            // inside a lane
+    .cross_spacing(8.0)      // between lanes
+    .state(scroll)
+    .items(40, |ctx, index| { /* any height */ })
+    .build(ctx);
+```
+
+They window differently from the grid above. The container attaches `A::scroll` and `lazy_scroll`, so
+the engine takes the content extent from the modifier instead of from the composed children's bottoms
+(which only cover the window), and a shared `ItemHeightCache` prices every item to decide the lane
+assignment and the window:
+
+`[offset - beyond, offset + viewport + beyond]`. The policy measures the window at the cell size,
+records each measured main size back into the cache, places by lane cursor, and reports the extent over
+the WHOLE data set — so the scroll range and the fling limit stay right with only a slice composed.
+
+Scope, recorded in the module header: `GridCells::Fixed` only (Adaptive needs the cross viewport before
+the first measure), and no item placement animation or sticky headers — as Compose's staggered grids.
+
+UI coverage: `tests/ui_lazy_grid_test.rs` (scenario `lazy_staggered`) asserts that both lanes open at
+the same offset, that items 2 and 3 continue their lanes downward, and that the lanes have DRIFTED
+apart — the property a line grid cannot express.

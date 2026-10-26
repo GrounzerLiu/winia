@@ -62,16 +62,16 @@ empty `remember` slots. That is what `remember_saveable` fixes — see [saveable
 Most of the family shipped since this document was written: `LazyRow` is the same axis-generic
 `LazyList` as `LazyColumn` (`layout/lazy/list.rs`), `LazyVerticalGrid`/`LazyHorizontalGrid` are one
 axis-generic `LazyGrid` (`layout/lazy/grid.rs`, see [lazy-grid.md](lazy-grid.md)), and `Pager` lives in
-`components/pager.rs`. What is left is the STAGGERED family and the generic lazy layout API.
+`components/pager.rs`, and `LazyVerticalStaggeredGrid`/`LazyHorizontalStaggeredGrid` are the axis-generic
+`LazyStaggeredGrid`. What is left is the generic lazy layout API and the prefetch strategy.
 
 | Missing | Compose equivalent | Consequence |
 | --- | --- | --- |
-| `LazyVerticalStaggeredGrid` / horizontal | `foundation.lazy.staggeredgrid` | waterfall feeds |
 | Generic `LazyLayout` API | `foundation.lazy.LazyLayout` | a custom lazy layout cannot reuse the window, the anchor model or item recycling |
 | `LazyListPrefetchStrategy` | `foundation.lazy.LazyListPrefetchStrategy` | winia widens the window with `beyond_bounds(n)` instead of a per-frame prefetch budget |
 
-The staggered grid is the most *user-visible* gap left: it cannot be papered over inside a component
-the way a semantics attribute can.
+The generic `LazyLayout` API is the largest item left: without it a custom lazy layout cannot reuse the
+window, the anchor model or item recycling.
 
 ### 4. ~~AnchoredDraggable~~ — already shared
 
@@ -139,8 +139,8 @@ single-threaded composer does not need. What shipped instead is write batches pl
 it does not delete the three approximations, it gives them something to stand on.
 See [snapshot-feasibility.md](snapshot-feasibility.md).
 
-**The staggered lazy grid is the highest-visibility item left in the container family.** Like the grids
-before it, it is additive and touches nothing existing.
+**The generic `LazyLayout` API is the highest-leverage item left in the container family.** The
+remaining prefetch strategy is a refinement of the window the lazy lists already have.
 
 ## Re-checking this document
 
