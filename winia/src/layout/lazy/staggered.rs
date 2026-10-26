@@ -61,6 +61,8 @@ struct StaggeredPolicy<A: LazyAxis> {
     shared: Arc<Mutex<Shared>>,
     content_height: Backchannel<f32>,
     fling_limit: Backchannel<f32>,
+    /// The scroll position, so the measure can clamp it into the range the extent allows.
+    state: ScrollState,
     marker: PhantomData<A>,
 }
 
@@ -124,9 +126,18 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
                 shared.heights.record_keyed(index as u64, main_size);
             }
         }
-        // The scroll range covers the whole data set, not the composed window.
+        // The scroll range covers the whole data set, not the composed window — and the offset is
+        // CLAMPED into it, the way the lazy list's policy does: without the clamp a programmatic
+        // `offset.set(10000)` stayed 10000 (measured), leaving the grid composing nothing forever.
+        let max_off = (self.extent - viewport).max(0.0);
         self.content_height.set(self.extent);
-        self.fling_limit.set((self.extent - viewport).max(0.0));
+        self.fling_limit.set(max_off);
+        if viewport > 0.0 {
+            let current = self.state.offset.peek();
+            if current > max_off {
+                self.state.offset.set(max_off);
+            }
+        }
         let size = if A::VERTICAL {
             Size::new(cross_max, viewport.max(constraints.min_height))
         } else {
@@ -296,17 +307,34 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         let fling_limit = ctx.remember_backchannel(|| 0.0f32);
         let state = self.state.clone().unwrap_or_else(ScrollState::new);
 
-        // Price every item, then assign the lanes from the prices.
+        // Price every item, then assign the lanes from the prices. An unmeasured item is priced at the
+        // AVERAGE of the measured ones rather than a fixed constant: the extent (and so the scroll
+        // range) then converges on the first frame's measurements instead of over-shooting per item
+        // (measured: 200 forty-dp items reported a 11552 dp extent against a real 4792 with a flat 120).
         let heights: Vec<f32> = {
             let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-            (0..self.count)
-                .map(|index| {
-                    shared
-                        .heights
-                        .height_keyed(key(index))
-                        .filter(|height| *height > 0.0)
-                        .unwrap_or(ESTIMATE)
-                })
+            let mut measured_sum = 0.0f32;
+            let mut measured_count = 0usize;
+            let mut priced: Vec<Option<f32>> = Vec::with_capacity(self.count);
+            for index in 0..self.count {
+                let height = shared
+                    .heights
+                    .height_keyed(key(index))
+                    .filter(|height| *height > 0.0);
+                if let Some(height) = height {
+                    measured_sum += height;
+                    measured_count += 1;
+                }
+                priced.push(height);
+            }
+            let estimate = if measured_count > 0 {
+                measured_sum / measured_count as f32
+            } else {
+                ESTIMATE
+            };
+            priced
+                .into_iter()
+                .map(|height| height.unwrap_or(estimate))
                 .collect()
         };
         let (slots, extent) = assign_lanes(lanes, &heights, self.spacing);
@@ -364,6 +392,7 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             shared,
             content_height: content_height.clone(),
             fling_limit,
+            state: state.clone(),
             marker: PhantomData,
         };
         let modifier = Modifier::new()
@@ -443,6 +472,41 @@ mod tests {
         );
     }
 
+
+
+    /// The offset is clamped into the range the extent allows. Without the clamp a programmatic
+    /// `offset.set(10000)` stayed 10000 and the grid composed nothing, forever (measured).
+    #[test]
+    fn the_offset_is_clamped_into_the_scroll_range() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        // Content that FITS: nothing may scroll.
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        grid_frame(&mut composer, &state, 4, 40.0);
+        grid_frame(&mut composer, &state, 4, 40.0);
+        state.offset.set(10000.0);
+        grid_frame(&mut composer, &state, 4, 40.0);
+        assert_eq!(state.offset.get(), 0.0, "a grid whose content fits cannot scroll");
+
+        // A tall grid: the clamp is extent - viewport. 200 items of 40 dp in two lanes with the
+        // helper's 4 dp spacing are (100 * 44) - 4 = 4396, so 4396 - 200 = 4196.
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        for _ in 0..3 {
+            grid_frame(&mut composer, &state, 200, 40.0);
+        }
+        state.offset.set(999_999.0);
+        grid_frame(&mut composer, &state, 200, 40.0);
+        grid_frame(&mut composer, &state, 200, 40.0);
+        let clamped = state.offset.get();
+        assert!(
+            (clamped - 4196.0).abs() <= 2.0,
+            "the offset clamps to the deepest lane minus the viewport: {clamped}"
+        );
+    }
 
     /// A DATA change has to re-enter the container: the group compares parameters and a data signature,
     /// so dropping items at a stable offset does not leave last frame's children behind (measured:
