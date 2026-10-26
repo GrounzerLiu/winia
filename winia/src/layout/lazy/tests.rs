@@ -3076,6 +3076,65 @@
         );
         crate::animation::clear_all_animations();
     }
+    /// A window can hold rows ABOVE the anchor (beyond_bounds), and an insert between them and the
+    /// anchor does not move them. The anchor's delta must therefore be applied per row, only to rows
+    /// whose content position moved by exactly that amount — a uniform rebase would animate the rows
+    /// above the insert for nothing.
+    #[test]
+    fn an_insert_between_the_anchor_and_the_rows_above_it_leaves_those_rows_alone() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .spacing(8.0)
+                    .content_padding(4.0, 4.0)
+                    .beyond_bounds(3)
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(48.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        state.scroll_to_item(6, 0.0);
+        build(&mut composer, Arc::new((0..20).collect()));
+        build(&mut composer, Arc::new((0..20).collect()));
+
+        // Insert key 99 at index 5: above the anchor (key 6, which moves) but below keys 3 and 4, which
+        // stays where it is (composed because of `beyond_bounds`).
+        let mut items: Vec<u64> = (0..5).collect();
+        items.push(99);
+        items.extend(5..20);
+        build(&mut composer, Arc::new(items));
+
+        let offsets: Vec<(u64, f32)> = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref().map(|p| (p.key, p.offset.peek().y)))
+            .collect();
+        assert!(offsets.len() >= 5, "the rows carry paint channels: {offsets:?}");
+        let untouched = offsets.iter().find(|(key, _)| *key == 4).map(|(_, y)| *y);
+        assert_eq!(untouched, Some(0.0), "the row above the insert did not move: {offsets:?}");
+        assert!(
+            offsets.iter().all(|(_, y)| y.abs() < 0.5),
+            "and the rows that moved with the viewport stay still: {offsets:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]
