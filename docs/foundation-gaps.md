@@ -102,7 +102,7 @@ concentrated in the APIs 1.13 added, and in the grid family.
 | `Modifier.visible` | **closed 2026-10-26** | `Modifier::visible(bool)`; see [visible.md](visible.md) |
 | `Modifier.windowInsetsStartWidth` / `EndWidth` / `TopHeight` / `BottomHeight` | **missing** | `WindowInsetsSize.kt`; winia has the padding form only |
 | `Modifier.fitInside` / `fitOutside` (rulers) | **missing** | `RulerAlignment.kt`, new in 1.13 |
-| `Grid` / `GridConfigurationScope` / `GridTrackSpec` | **missing** | `Grid.kt`, new in 1.13 |
+| `Grid` / `GridConfigurationScope` / `GridTrackSpec` | **closed 2026-10-26** | `layout::Grid` — fixed/percentage/weighted/intrinsic tracks, spans, gaps, named areas, pass-1.5 deficit distribution; see [grid.md](grid.md) |
 | `FlexBox` / `FlexBoxConfig` | **missing** | `FlexBox.kt`, new in 1.13 |
 | `ContextualFlowRow` / `ContextualFlowColumn` | **missing** | `ContextualFlowLayout.kt` |
 | `IntrinsicSize`, `AspectRatio`, `Size`, `Padding`, `Offset`, `AlignmentLine` | yes | all chain steps (`SizeStep`) in `modifier/builders/layout.rs` |
