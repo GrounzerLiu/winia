@@ -15,6 +15,11 @@ pub fn semantics_tree(nodes: &[LayoutNode], root: usize) -> Vec<SemanticsNode> {
 
 pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: &mut Vec<SemanticsNode>) {
     let node = &nodes[idx];
+    // Compose's `Modifier.visible(false)`: "invisible to accessibility services" (`Visible.kt:36-38`),
+    // so the node and everything below it stays out of the tree a screen reader descends.
+    if !node.modifier.is_visible() {
+        return;
+    }
     let config = node.modifier.semantics_config();
     let (x, y) = (parent_x + node.position.x, parent_y + node.position.y);
     let bounds = (x, y, node.measured_size.width, node.measured_size.height);

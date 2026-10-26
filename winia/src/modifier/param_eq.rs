@@ -84,6 +84,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (ContentAlignSelf { alignment: aa }, ContentAlignSelf { alignment: ba }) => aa == ba,
         (MatchParentSize, MatchParentSize) => true,
+        (Visible { visible: a }, Visible { visible: b }) => a == b,
         (AlignBy { line: a }, AlignBy { line: b }) => a == b,
         (FillMaxRowHeight { fraction: a }, FillMaxRowHeight { fraction: b }) => a == b,
         (FillMaxColumnWidth { fraction: a }, FillMaxColumnWidth { fraction: b }) => a == b,

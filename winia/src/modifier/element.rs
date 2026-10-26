@@ -368,6 +368,10 @@ pub(crate) enum ModifierElement {
     /// Compose's `BoxScope.matchParentSize`: the child does NOT take part in sizing its box and is
     /// then measured at the box's size. Only a `Box`/`Stack` reads it.
     MatchParentSize,
+    /// Compose's `Modifier.visible` (`Visible.kt:51`): while `false` the node is measured and keeps
+    /// its space, but it is not painted, not hit-tested, not focusable and invisible to
+    /// accessibility — `View.INVISIBLE`, not `View.GONE`.
+    Visible { visible: bool },
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },

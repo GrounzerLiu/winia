@@ -58,6 +58,19 @@
     }
 
     #[test]
+    fn param_eq_compares_the_visibility() {
+        let hidden = Modifier::new().visible(false);
+        assert!(
+            !hidden.param_eq(&Modifier::new().visible(true)),
+            "a different visibility must compare unequal, or the node would stay hidden"
+        );
+        assert!(hidden.param_eq(&Modifier::new().visible(false)));
+        // The comparison is structural, so a chain that GAINS a `visible(true)` is not equal to a
+        // chain without one — the container enters once and the node settles from then on.
+        assert!(!Modifier::new().param_eq(&Modifier::new().visible(true)));
+    }
+
+    #[test]
     fn param_eq_detects_size_change() {
         let a = Modifier::new().width(200.0);
         let b = Modifier::new().width(360.0);

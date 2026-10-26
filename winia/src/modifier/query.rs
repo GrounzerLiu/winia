@@ -567,6 +567,20 @@ impl Modifier {
             .any(|el| matches!(el, ModifierElement::MatchParentSize))
     }
 
+    /// Whether this node is painted, hit-tested and exposed to accessibility — Compose's
+    /// `Modifier.visible` (`Visible.kt:51`). Last value wins, and no `visible` in the chain means
+    /// visible.
+    pub fn is_visible(&self) -> bool {
+        self.elements
+            .iter()
+            .rev()
+            .find_map(|el| match el {
+                ModifierElement::Visible { visible } => Some(*visible),
+                _ => None,
+            })
+            .unwrap_or(true)
+    }
+
     /// Both-axis alignment override, read by `Box`/`Stack` (Compose's `BoxScope.align`). Last wins, as
     /// above.
     pub fn get_content_align_self(&self) -> Option<crate::layout::ContentAlignment> {

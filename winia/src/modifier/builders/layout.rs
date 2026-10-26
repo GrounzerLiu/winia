@@ -390,6 +390,17 @@ impl Modifier {
         self.push(ModifierElement::MatchParentSize)
     }
 
+    /// Hide this node without giving up its space — Compose's `Modifier.visible`
+    /// (`Visible.kt:51`).
+    ///
+    /// While hidden the node is still measured and still takes part in its parent's layout
+    /// (`AbsoluteSize`, like `View.INVISIBLE`), but it is not painted, not hit-tested, not
+    /// focusable and absent from accessibility. That is different from `AnimatedVisibility`, which
+    /// removes the node from layout, and from an alpha of 0, which keeps it interactive.
+    pub fn visible(self, visible: bool) -> Self {
+        self.push(ModifierElement::Visible { visible })
+    }
+
     /// Align this child by one of its own alignment lines instead of by its edge — Compose's
     /// `RowScope.Modifier.alignBy` / `ColumnScope.Modifier.alignBy`.
     ///

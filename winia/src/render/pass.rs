@@ -179,6 +179,11 @@ pub(super) fn render_pass1(
     if !layer_root && node.paint_disposition() != PaintDisposition::InTree {
         return;
     }
+    // Compose's `Modifier.visible` (`Visible.kt:96-109`): the node keeps its measured size and its
+    // place in layout, but it is not painted, and neither is anything below it.
+    if !node.modifier.is_visible() {
+        return;
+    }
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
     // Content box, NOT `measured_size`: while a flight reports a placeholder

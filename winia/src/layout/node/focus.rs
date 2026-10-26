@@ -4,6 +4,11 @@ use super::*;
 
 /// Collects the ids of every focusable node in the tree (arena flavour).
 pub fn collect_focusable_ids(nodes: &[LayoutNode], root: usize, list: &mut Vec<u64>) {
+    // Compose's `Modifier.visible(false)` also clears `focused` (`Visible.kt:111-116`), so a hidden
+    // subtree cannot be reached with Tab either.
+    if !nodes[root].modifier.is_visible() {
+        return;
+    }
     if has_focusable_modifier(&nodes[root]) {
         list.push(nodes[root].id);
     }
@@ -29,6 +34,10 @@ pub(crate) fn collect_focus_candidates_rec(
     out: &mut Vec<(u64, f32, f32)>,
 ) {
     let node = &nodes[idx];
+    // A hidden subtree is not focusable at all (see `collect_focusable_ids`).
+    if !node.modifier.is_visible() {
+        return;
+    }
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
     if has_focusable_modifier(node) {

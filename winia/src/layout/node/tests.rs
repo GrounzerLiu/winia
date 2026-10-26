@@ -107,6 +107,24 @@
     }
 
     #[test]
+    fn a_hidden_sibling_does_not_take_the_hit() {
+        // Modifier.visible(false): not painted, so not hit either — the sibling underneath answers.
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(40.0, 40.0).visible(false)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[2].measured_size = Size::new(40.0, 40.0);
+        nodes[2].position = Offset::new(30.0, 30.0);
+        nodes[0].children = vec![1, 2];
+
+        let path = hit_test(&nodes, 0, 40.0, 40.0);
+        assert_eq!(path, vec![0, 1], "the hidden top sibling is skipped: {path:?}");
+    }
+
+    #[test]
     fn test_hit_test_z_order_topmost_first() {
         // Siblings paint in children order (later paints above), so the hit test must prefer the
         // later one: leaf1 fills the box, leaf2 is a smaller rectangle on top, and their overlap must

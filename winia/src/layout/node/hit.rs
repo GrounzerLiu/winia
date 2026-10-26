@@ -302,6 +302,11 @@ pub(crate) fn hit_test_recursive(
     if node.paint == PaintDisposition::Placeholder {
         return false;
     }
+    // `Modifier.visible(false)`: not painted, so not hit either — the whole subtree goes with it,
+    // exactly like the placeholder case above.
+    if !node.modifier.is_visible() {
+        return false;
+    }
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
     let mut nw = node.content_box().width;

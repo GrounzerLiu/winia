@@ -51,6 +51,7 @@ impl Debug for ModifierElement {
                 f.debug_struct("ContentAlignSelf").field("alignment", alignment).finish()
             }
             Self::MatchParentSize => f.write_str("MatchParentSize"),
+            Self::Visible { visible } => f.debug_struct("Visible").field("visible", visible).finish(),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::FillMaxRowHeight { fraction } => {
                 f.debug_struct("FillMaxRowHeight").field("fraction", fraction).finish()

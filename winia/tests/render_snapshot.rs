@@ -682,3 +682,40 @@ fn a_height_reported_during_layout_moves_a_dependent_offset() {
         "and the offset that reads it moved the node there without a recompose"
     );
 }
+
+/// Compose's `Modifier.visible(false)` is `View.INVISIBLE`, not `GONE` (`Visible.kt:36-38`): the node
+/// keeps its measured space, so the sibling after it starts where it would have, but nothing of it is
+/// painted.
+#[test]
+fn a_hidden_node_keeps_its_space_and_paints_nothing() {
+    let (mut surface, _) = render_ui(120.0, 40.0, winia::app_root!(|ctx| {
+        Row::new().build(ctx, |ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(40.0, 40.0)
+                    .background(Color::RED, Shape::Rectangle)
+                    .visible(false),
+            );
+            ctx.end_node();
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new().size(40.0, 40.0).background(Color::BLUE, Shape::Rectangle),
+            );
+            ctx.end_node();
+        });
+    }));
+
+    let (r, g, b, _) = pixel(&mut surface, 20, 20);
+    assert!(
+        color_close((r, g, b), (255, 255, 255), 5),
+        "the hidden box paints nothing, got ({r},{g},{b})"
+    );
+    let (r2, g2, b2, _) = pixel(&mut surface, 60, 20);
+    assert!(
+        color_close((r2, g2, b2), (0, 0, 255), 10),
+        "the next sibling still starts after the hidden box's space, got ({r2},{g2},{b2})"
+    );
+}
