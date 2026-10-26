@@ -167,7 +167,7 @@ pub fn build(self, ctx: &mut ComposeCtx) {
   - `scene_strategy_chain_priority_and_fallback`（自定义 Scene/策略链优先级 + SinglePane 兜底）
   - `scene_strategy_switch_converges`（策略链切换：entries 未变 → 瞬时切（防 dup-key），可反复切换无冻结）
   - `dialog_entry_renders_as_overlay`（as_dialog 标记：主树不渲染 dialog 内容、base 恒定、pop 生命周期）
-- 完整 `cargo test -p winia --lib` 657 项通过（animated_size / lazy 等时序敏感 flaky 与 nav 无关）
+- The full `cargo test -p winia --lib` suite passes, 657 tests (the timing-sensitive flaky ones in animated_size / lazy are unrelated to nav)
 - 真实 demo（`examples/nav_demo.rs`，debug-server 实操）：
   - Home → 点「打开 Detail 42」→ `[Home, Detail(42)]` + Detail 页面 ✓
   - Detail → 点「返回」→ `[Home]` + Home 页面 ✓
@@ -326,7 +326,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 
 **验证**：单元测试 `remember_state_decorator_preserves_entry_state`（覆盖返回保持 + pop 清理
 双场景）+ `pop_slideout_does_not_repollute_entry_state_pool`（draining 回归）；demo 实操验证；
-完整测试 657 项通过。
+The full suite passes, 657 tests.
 
 ## 七、差距分析（androidx-main 2026-08 vs winia，2026-08-30）
 

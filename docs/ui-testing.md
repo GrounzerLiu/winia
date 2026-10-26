@@ -73,25 +73,26 @@ carry none of it — `crate::debug` is a set of no-op stubs there.
   RedrawRequested 不来（window_event 不调用）→ 事件卡队列（历史教训：子窗口打开后
   第二次点击失效）。
 
-### UiTest 封装（`tests/ui/support.rs`）
+### The `UiTest` wrapper (`tests/ui/support.rs`)
 
-- `launch("counter")`：spawn exe（**先 taskkill 同名残留**——测试中断的孤儿进程防累积）、
-  等待首帧树（20s 超时，带诊断）。
-- **串行锁**：所有 UI 测试共用 `TEST_SERIAL` Mutex——taskkill 清理会误杀并行测试刚启动的
-  进程（历史教训：第一版并行 + taskkill = 连环互杀全挂）。
-- `Drop`：发 `q` 优雅关闭 → 3s 限时等待 → 超时 kill（测试失败也保证无残留窗口）。
-- 查询：`tree()`（t 命令）、`find(label)`、`find_tag`、`tag_node_id`、`all_texts`。
-- 输入：`click` / `tap` / `drag` / `fling_inside` / `swipe`、`scroll`、`resize`、`key`、
-  `type_text`、`focus_next`、`request_focus`、`select_window`、`hover`、`long_press`、`double_tap`、
-  `tap_tag`、`drag_tag`。
-- 断言：`expect_text` / `expect_text_timeout` / `expect_text_exact` / `expect_no_text`、
-  `expect_tag` / `expect_no_tag` / `expect_tag_rect` / `expect_tag_size` / `expect_tag_position`、
-  `expect_focused` / `expect_only_focused`、`expect_window_count` / `expect_overlay_count`、
-  `expect_no_overlay_text`、`expect_semantics_name` / `expect_semantics_role`、
-  `expect_no_animations` / `wait_animations_idle`、`expect_pixel_at_logical`、`save_png`、`trace`。
-- 所有等待默认使用 `DEFAULT_WAIT`（5 秒）；用 `set_default_timeout` / `with_timeout` 改全局默认，
-  或调用对应的 `*_timeout` / `*_within` 变体只改一次。
-- 通用等待：`wait_for_tag`、`wait_until`、`expect_eventually`。
+- `launch("counter")` spawns the exe (**killing leftovers of the same name first**, so an interrupted
+  run cannot accumulate orphan processes) and waits for the first frame's tree (20 s, with diagnostics).
+- **Serial lock**: every UI test shares one `TEST_SERIAL` mutex — the taskkill cleanup would otherwise
+  kill a parallel test's freshly spawned process (learned the hard way: the first parallel version plus
+  taskkill killed everything in a chain).
+- `Drop` sends `q` for a graceful shutdown, waits 3 s, then kills: no window survives a failing test.
+- Queries: `tree()` (the `t` command), `find(label)`, `find_tag`, `tag_node_id`, `all_texts`.
+- Input: `click` / `tap` / `drag` / `fling_inside` / `swipe`, `scroll`, `resize`, `key`, `type_text`,
+  `focus_next`, `request_focus`, `select_window`, `hover`, `long_press`, `double_tap`, `tap_tag`,
+  `drag_tag`.
+- Assertions: `expect_text` / `expect_text_timeout` / `expect_text_exact` / `expect_no_text`,
+  `expect_tag` / `expect_no_tag` / `expect_tag_rect` / `expect_tag_size` / `expect_tag_position`,
+  `expect_focused` / `expect_only_focused`, `expect_window_count` / `expect_overlay_count`,
+  `expect_no_overlay_text`, `expect_semantics_name` / `expect_semantics_role`,
+  `expect_no_animations` / `wait_animations_idle`, `expect_pixel_at_logical`, `save_png`, `trace`.
+- Every wait uses `DEFAULT_WAIT` (5 s) unless changed globally with `set_default_timeout` /
+  `with_timeout`, or for one call with the matching `*_timeout` / `*_within` variant.
+- Generic waits: `wait_for_tag`, `wait_until`, `expect_eventually`.
 
 `tests/ui_support.rs` includes this module outside a fixture, so the support crate is compiled
 and its parser unit tests run even while the UI scenarios are being rebuilt.

@@ -170,12 +170,13 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
 4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）A 型 node
    仅多一次 transform 调用（MinWidth 级别，开销可忽略）；绘制/输入路径可接受；
    大规模列表待实测（未测，不要断言）。
-5. ~~`padding(…).size(…)` 的顺序不生效~~ → 已修（2026-10-25）。`padding` 现在是尺寸
-   步进的一步（`SizeStep::Padding`，见 §五 的链），按链序把约束内缩，所以
-   `padding_vertical(16).size(200,48)` 上报 **200x80**（Compose 同），`size(200,48).padding_vertical(16)`
-   上报 200x48（padding 从固定尺寸里吸收）。`BottomSheetScaffold` 的 snackbar 槽按实测高度
-   摆放，链式 padding 现在正确；`a_snackbar_slot_that_pads_itself_is_measured_with_the_padding` 已解除
-   `#[ignore]`，并改断言为"按 padded extent 摆放"（584 = 720 - 56 - 80）。
+5. ~~`padding(…).size(…)` in that order did not take effect~~ → fixed (2026-10-25). `padding` is a
+   size step now (`SizeStep::Padding`, see the chain in section 5) and deflates the constraints in
+   chain order, so `padding_vertical(16).size(200, 48)` reports **200x80** (as Compose does) and
+   `size(200, 48).padding_vertical(16)` reports 200x48 (the padding is absorbed by the fixed size).
+   `BottomSheetScaffold`'s snackbar slot is placed by its measured height, chain-order padding is
+   correct now, and `a_snackbar_slot_that_pads_itself_is_measured_with_the_padding` lost its
+   `#[ignore]` with the assertion changed to "placed by its padded extent" (584 = 720 - 56 - 80).
    - Window-inset padding is a chain step too (`SizeStep::InsetPadding`): each inset is resolved
      from the window state and consumed at its element's position, so it behaves exactly like
      element padding in every order. `consumeWindowInsets` is the consume-only step.
@@ -190,13 +191,13 @@ incoming
  → min（MinWidth/Height，提升 min，受 max 夹）
  → required（RequiredSize，直接覆盖，⚠必须在 size 之后）
  → fixed（Fixed/Dp/Px 兼容分支）
- → aspectRatio（按当前约束推导尺寸，并把子约束 fixed 成它——Compose 的 `AspectRatioNode`）
+ → aspectRatio (derives a size from the current constraints and fixes the child's constraints to it — Compose's `AspectRatioNode`)
  → padding（offset(pad)，子约束缩小）
  → insets (windowInsetsPadding: resolved from the window state and consumed here, at its chain position)
  → fill（min=max，scroll 前保存 viewport）
  → scroll（viewport 回写节点字段；lazy 不改无界，普通改无界）
  → policy.measure / 叶子分支
- → 后处理：padding 回加 → scroll clamp 回视口 → 缓存+上报
+ → post-processing: add the padding back → clamp a scroll container back to its viewport → cache and report
 ```
 
 ### 结论：分两型渐进，不要一次做完全接管
@@ -302,17 +303,18 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 ## 八、附：`animate_scroll_to_item_animates_offset` flaky 根因（分支外，记录）
 
 - 现象：全量跑时偶发 `23980 vs 23966`（差 13px，阈值 5px），单跑必过。
-- 根因：`step_animations_until_done`（`layout/lazy/tests.rs`）用
-  `sleep(20ms)` + `(v-last)<0.5 && frames>5` 判收敛——spring 尾段每帧位移
-  <0.5 即停，残余 13px 未收完就 assert。机器负载高时帧间隔抖动，
-  收敛判据提前触发。
-- 与本分支无关（改动面未碰 spring/滚动；干净树同现象已验证）。
+- Root cause: `step_animations_until_done` (`layout/lazy/tests.rs`) decided convergence with
+  `sleep(20ms)` plus `(v-last) < 0.5 && frames > 5` — the tail of a spring moves less than 0.5 per
+  frame, so the loop stopped with 13 px still to go and the assertion fired. On a loaded machine the
+  frame intervals jitter and the criterion triggers early.
+- Unrelated to this branch (the change set never touched springs or scrolling; the same failure was
+  reproduced on a clean tree).
 - ✅ 已修（v2，2026-09）：新增 `step_animations_until_target(state, target, max)`
   helper——调用方持 TEST_SERIAL（串行下 `has_animation_for_state` 无空窗误判），
   以"动画表排空 + 距目标 <5px"双条件收敛（与最终断言同阈）；`animate_scroll_to_item`
-  用例切到该 helper。判据间隙：引擎 done 阈 0.01 vs 旧位移判据 0.5（50 倍），
-  尾段提前触发是必然的。验证：单跑 10/10 + `lazy` 模块 28/28 +
-  全量 730/730（`--test-threads=1`）。
+  cases to it. The gap between the two criteria explains it: the engine's done threshold is 0.01
+  against the old 0.5 px criterion (50x), so triggering early in the tail was inevitable. Verified:
+  10/10 on its own, 28/28 for the `lazy` module, 730/730 for the full suite (`--test-threads=1`).
 
 ## 七、提交历史（分支 `exp/modifier-node`，已删，内容全合入 v2）
 
