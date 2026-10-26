@@ -483,24 +483,30 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
-        // Consumed once per layout pass: the offset change the anchor correction made, so the host can
-        // rebase its per-item references instead of animating rows that only moved with the viewport.
-        let anchor_shift = {
-            let mut shift = self
+        self.state.item_animations.begin_frame();
+        // A data change can move the VIEWPORT by as much as it moves the rows (the anchor correction),
+        // and a move that cancels out on screen must not animate. The correction leaves the key it kept
+        // in place; rebasing the memory by that item's ACTUAL delta is exact, where a build-time
+        // estimate of the inserted row's height is off by the spacing and leaves a residual flash.
+        let anchor = {
+            let mut anchor = self
                 .state
-                .anchor_shift
+                .anchor_key
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let taken = *shift;
-            *shift = 0.0;
-            taken
+            anchor.take()
         };
-        let main_shift = if A::VERTICAL {
-            crate::unit::Offset::new(0.0, anchor_shift)
-        } else {
-            crate::unit::Offset::new(anchor_shift, 0.0)
-        };
-        self.state.item_animations.begin_frame(main_shift);
+        if let Some(anchor_key) = anchor {
+            if let Some(i) = children.iter().enumerate().find_map(|(i, _c)| {
+                let global = self.globals.get(i).copied().unwrap_or(i);
+                (self.keys.get(global).copied().unwrap_or(global as u64) == anchor_key).then_some(i)
+            }) {
+                let position = placements[i].position;
+                if let Some(last) = self.state.item_animations.remembered_position(anchor_key) {
+                    self.state.item_animations.rebase(position - last);
+                }
+            }
+        }
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;

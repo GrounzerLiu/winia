@@ -65,11 +65,11 @@ pub struct LazyListState {
     /// Keys that are new to the data and have not been placed yet; the policy takes one per place, so
     /// a fade starts exactly once even when a frame takes several compose passes.
     pub(crate) pending_new: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
-    /// The offset change the anchor correction applied this frame, in content coordinates (main axis).
-    /// The item-animation host consumes it so rows that only moved because the correction moved the
-    /// viewport do not animate: without it the correction and the placement animation compensate the
-    /// same shift twice, and every row flashes one row up before springing back.
-    pub(crate) anchor_shift: std::sync::Arc<std::sync::Mutex<f32>>,
+    /// The key the anchor correction kept in place this frame, consumed by the next layout pass. The
+    /// policy rebases the item-animation memory by that item's ACTUAL content delta, so rows that only
+    /// moved because the correction moved the viewport do not animate — and an estimate that is off
+    /// by a few pixels corrects itself instead of leaving a residual flash.
+    pub(crate) anchor_key: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
     /// Whether this list has laid out at least once. A FLAG, not "known_keys is empty": a list whose
     /// data starts empty (an async load, a filter that transiently matches nothing) must still fade
     /// its first real content in, and every empty -> filled transition would otherwise look like a
@@ -100,7 +100,7 @@ impl LazyListState {
             known_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             pending_new: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             has_layout: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            anchor_shift: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
+            anchor_key: std::sync::Arc::new(std::sync::Mutex::new(None)),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),

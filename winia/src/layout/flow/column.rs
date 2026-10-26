@@ -117,7 +117,7 @@ impl MeasurePolicy for FlowColumnLayout {
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
-        self.item_animations.begin_frame(crate::unit::Offset::ZERO);
+        self.item_animations.begin_frame();
         let mut seen = std::collections::HashSet::new();
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;

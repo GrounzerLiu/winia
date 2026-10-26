@@ -43,10 +43,11 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
 
   A data change that moves the VIEWPORT with the content does not animate: inserting a row at the head
   while the list is SCROLLED pushes every row down and the anchor correction scrolls the list by the
-  same amount, so nothing moves on screen. The list hands that offset change to the host, which rebases
-  every item's remembered position by it (Compose does the same with `applyScrollOffset`). Without it
-  the correction and the animation compensate the same shift twice and every row flashes one row up
-  before springing back.
+  same amount, so nothing moves on screen. The correction therefore leaves the key it kept in place,
+  and the layout pass rebases every item's remembered position by THAT ITEM'S ACTUAL delta (Compose's
+  `applyScrollOffset`, computed from real placements). The actual delta matters: a build-time estimate of
+  the inserted row's height is off by the row spacing, and a shift derived from it left every row 8 dp
+  out — drawn 8 dp lower, then springing back.
 
   At the very TOP there is no reading position to preserve, so the correction is skipped there: the
   viewport stays at 0, the new row is visible, and the rows below animate down into their new slots.

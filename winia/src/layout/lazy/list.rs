@@ -700,14 +700,14 @@ impl<A: LazyAxis> LazyList<A> {
                         + prefix_height(&cache_ref, new_index, self.spacing)
                         + item_offset)
                         .max(0.0);
-                    let previous = state.offset.get();
                     state.offset.set(new_offset);
-                    // The placement animation compares CONTENT positions, so a correction that moves
-                    // the viewport by the same amount has to be handed over as well — otherwise the
-                    // rows animate for a shift the offset already cancelled.
+                    // The placement animation compares CONTENT positions, so this correction has to be
+                    // handed over too — otherwise the rows animate for a move the viewport already
+                    // made. The policy rebases by the anchor's ACTUAL delta (a build-time estimate of
+                    // the new row's height is off by a few pixels and would leave a residual flash).
                     {
-                        let mut shift = state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
-                        *shift += new_offset - previous;
+                        let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
+                        *anchor = Some(last_key);
                     }
                 }
             }
