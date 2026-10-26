@@ -23,11 +23,23 @@ pub struct ItemAnimationSpec {
 }
 
 impl Default for ItemAnimationSpec {
+    /// Compose's `Modifier.animateItem()` defaults: ALL THREE channels on, each a spring at
+    /// `StiffnessMediumLow` (400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM`, see
+    /// `animated_size.rs`), damping 1.0, threshold 0.01.
+    ///
+    /// A channel is switched off the way Compose's `null` argument does it: `without_placement()`,
+    /// `without_fade_in()`, `without_fade_out()`.
     fn default() -> Self {
+        let spring = || {
+            AnimationSpec::Spring(SpringSpec {
+                stiffness: SpringSpec::STIFFNESS_MEDIUM,
+                ..SpringSpec::default()
+            })
+        };
         Self {
-            placement: Some(AnimationSpec::Spring(SpringSpec::default())),
-            fade_in: None,
-            fade_out: None,
+            placement: Some(spring()),
+            fade_in: Some(spring()),
+            fade_out: Some(spring()),
         }
     }
 }
@@ -88,6 +100,18 @@ impl ItemAnimationSpec {
         self
     }
 
+    /// Drops the fade-in channel (Compose's `fadeInSpec = null`).
+    pub fn without_fade_in(mut self) -> Self {
+        self.fade_in = None;
+        self
+    }
+
+    /// Drops the fade-out channel (Compose's `fadeOutSpec = null`).
+    pub fn without_fade_out(mut self) -> Self {
+        self.fade_out = None;
+        self
+    }
+
     /// Sets the fade-in curve.
     pub fn fade_in(mut self, spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
@@ -137,6 +161,25 @@ mod tests {
         let _ = ItemAnimationSpec::new().fade_out(crate::animation::DecaySpec::new(4.2, 0.1));
     }
 
+    #[test]
+    fn the_default_contract_is_composes_three_springs() {
+        let spec = ItemAnimationSpec::new();
+        for (name, channel) in [
+            ("placement", spec.placement_spec()),
+            ("fade_in", spec.fade_in_spec()),
+            ("fade_out", spec.fade_out_spec()),
+        ] {
+            match channel {
+                Some(AnimationSpec::Spring(spring)) => {
+                    assert_eq!(spring.stiffness, SpringSpec::STIFFNESS_MEDIUM, "{name} uses StiffnessMediumLow (400)");
+                    assert_eq!(spring.damping_ratio, 1.0, "{name} is critically damped");
+                    assert_eq!(spring.threshold, 0.01, "{name} uses the Float visibility threshold");
+                }
+                other => panic!("{name} must be a spring by default, got {other:?}"),
+            }
+        }
+        assert!(!spec.is_inert(), "the default marker animates");
+    }
     /// The demo builds its spec inline every frame; two such specs must compare equal, or every item
     /// re-enters composition on every frame.
     #[test]

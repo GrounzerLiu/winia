@@ -326,6 +326,47 @@ mod tests {
         assert!(paint.alpha.peek() < 0.001, "the new key starts transparent");
         crate::animation::clear_all_animations();
     }
+    /// Compose's `Modifier.animateItem()` animates appearance by default (fadeInSpec is a spring, not
+    /// null), so the bare marker must fade a new item in — and `without_fade_in()` must turn that off.
+    #[test]
+    fn the_default_marker_fades_a_new_item_in() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let host = ItemAnimationHost::default();
+        let default_spec = ItemAnimationSpec::new();
+        let mut nodes = vec![leaf(), leaf()];
+        host.begin_frame();
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec);
+        host.finish_frame(None);
+        host.begin_frame();
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &default_spec);
+        host.place(&mut nodes, 1, 2, Offset::ZERO, &default_spec);
+        host.finish_frame(None);
+        let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
+        assert!(
+            paint.alpha.peek() < 0.001,
+            "the default contract fades a new key in (Compose's fadeInSpec default is not null)"
+        );
+        assert!(paint.fade_out.is_some(), "and it captures an exit picture for a later removal");
+
+        // The same frame with the channel dropped: no fade, no exit picture.
+        crate::animation::clear_all_animations();
+        let host = ItemAnimationHost::default();
+        let no_fade = ItemAnimationSpec::new().without_fade_in().without_fade_out();
+        let mut nodes = vec![leaf(), leaf()];
+        host.begin_frame();
+        host.place(&mut nodes, 0, 1, Offset::ZERO, &no_fade);
+        host.finish_frame(None);
+        host.begin_frame();
+        host.place(&mut nodes, 1, 2, Offset::ZERO, &no_fade);
+        host.finish_frame(None);
+        let paint = nodes[1].item_paint.as_ref().expect("the new item is painted");
+        assert_eq!(paint.alpha.peek(), 1.0, "without_fade_in starts opaque");
+        assert!(paint.fade_out.is_none(), "without_fade_out captures nothing");
+        crate::animation::clear_all_animations();
+    }
 }
 
 /// The marker for a Lazy item wrapper. The item's root content is the wrapper's direct child;
