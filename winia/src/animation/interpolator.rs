@@ -15,10 +15,18 @@ pub trait Interpolator : Sync + Send + std::fmt::Debug {
     /// two interpolators that draw the same curve compare equal even though they are different
     /// objects.
     ///
-    /// The default is value-correct but allocates (it compares the `Debug` form), which keeps an
-    /// interpolator implemented OUTSIDE this crate working; the ones here override it.
+    /// The DEFAULT implementation is value-correct only when the implementor's `Debug` prints every
+    /// field that affects the curve (it compares the `Debug` form, which also allocates). It exists so
+    /// an interpolator implemented outside this crate keeps working; everything in this module
+    /// overrides it with an allocation-free comparison.
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
         self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
+    }
+
+    /// Downcast support for [`Interpolator::same_parameter`] implementations that carry state.
+    /// Defaults to `None`, so adding it is not a breaking change for implementors.
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
     }
 }
 
@@ -1361,9 +1369,19 @@ impl CubicBezier {
 
 impl Interpolator for CubicBezier {
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
-        // The four control points are the whole state and the derived Debug prints them, so the
-        // trait default compares them exactly. This type is not on the hot path the tables are.
-        self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
+        // Compared by state, not by `Debug`: this is on the hot path — `TweenSpec::default()`'s
+        // interpolator IS a CubicBezier (`fast_out_slow_in`), and the comparison runs once per item
+        // per frame.
+        other.as_any().and_then(|other| other.downcast_ref::<CubicBezier>()).is_some_and(|other| {
+            other.p1x == self.p1x
+                && other.p1y == self.p1y
+                && other.p2x == self.p2x
+                && other.p2y == self.p2y
+        })
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
     }
 
 
@@ -1401,8 +1419,15 @@ impl PathEasing {
 
 impl Interpolator for PathEasing {
     fn same_parameter(&self, other: &dyn Interpolator) -> bool {
-        // The point list is the whole state and the derived Debug prints it.
-        self.type_name() == other.type_name() && format!("{self:?}") == format!("{other:?}")
+        // Compared by state: the point list is the curve.
+        other
+            .as_any()
+            .and_then(|other| other.downcast_ref::<PathEasing>())
+            .is_some_and(|other| other.points == self.points)
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
     }
 
 

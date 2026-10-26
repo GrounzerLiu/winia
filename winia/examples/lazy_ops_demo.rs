@@ -83,8 +83,6 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                         animate.animate_scroll_to_item(25, 0.0)
                     });
                 });
-                // Seven buttons do not fit one 440 dp row, and a button outside the card cannot be
-                // clicked by coordinates — which is exactly how the UI test drives this page.
                 // A Flow, not a Row: seven buttons never fit one line, and a button outside the card
                 // cannot be clicked by coordinates (which is how the UI test drives this page).
                 FlowRow::new()

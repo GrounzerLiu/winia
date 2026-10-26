@@ -75,7 +75,7 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         "a reorder animates the placement: {animations:?}"
     );
 
-    // REMOVE from the middle: the key leaves the data and its captured frame fades out.
+    // NOTE: the ghost is a Skia picture with no tag of its own, so what is asserted here is the DATA
     click_tag(&mut app, "lazy-anim-remove-middle");
     app.refresh();
     assert!(
@@ -131,6 +131,7 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     // observable half of "fades off". (A global "no tween at all" would be wrong: the shell's app bar
     // and buttons run their own 180/500 ms tweens, which are visible in the report.)
     let animations = app.animations();
+    assert!(!animations.is_empty(), "the animation report answered: {animations:?}");
     assert!(
         !animations.iter().any(|line| line.contains("tween(450ms)")),
         "without_fade_in/out leaves no item fade running: {animations:?}"

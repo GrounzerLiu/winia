@@ -34,6 +34,17 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
   restarts the spring each frame with zero velocity, so the item crawls towards its slot instead of
   settling (measured on an item 48 dp out of place: ten 16 ms frames of scrolling leave it at 7.7 dp
   now, and the restart rule visibly froze the same case).
+
+  Moving the target again RE-ANCHORS the curve from the item's current paint position: the running
+  motion is cancelled first, so its velocity is not carried into the new one. A placement that is
+  re-targeted several times before it settles (a drag-reorder, a pinned sticky header) therefore reads
+  as stepped rather than continuous. Compose re-aims the running motion instead; this is a known
+  difference.
+
+  One placement is NOT scroll-invariant and therefore does not fit this rule: a PINNED sticky header
+  is re-placed every frame by the scroll offset itself. Give a sticky header no marker — a marker
+  there re-anchors its paint offset on every scroll frame, which reads as the header riding along
+  with the content. (Known limitation, same behaviour as before this rule existed.)
 - **Fade-in**: a key that is new to the container's DATA starts at alpha 0 and animates to 1. A key
   that is merely new to the composed WINDOW is not an appearance: scrolling a Lazy list composes keys
   that have been in the data all along, and fading those in makes a scroll look like a strobe
@@ -43,8 +54,9 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
   composes every child (a Flow) has no window to scroll through, so every new key there is a data
   change. The FIRST layout never fades: the list's initial content appears at once.
 - **Fade-out**: while a key is rendered, the renderer captures its frame as a Skia picture and
-  refreshes it when the item moves or fades; after removal the owning container draws that picture
-  while the fade-out curve runs. This is why removal does not depend on the layout node surviving,
+  refreshes it when the item's CONTENT or paint epoch changes (a still item reuses the picture, it is
+  not re-recorded every frame); after removal the owning container draws that picture while the
+  fade-out curve runs. This is why removal does not depend on the layout node surviving,
   and why the ghost follows the container's scroll clip and translation.
 - **Size** is not part of the item contract. Use `AnimatedSize` around the item or the container;
   Compose splits `animateItem` from `animateContentSize` for the same reason.
@@ -54,7 +66,10 @@ it is rendered — that is the cost of a removal that survives the node (see Lif
 The host keys state by:
 
 - the Lazy item key from `items_from`;
-- the Flow child's stable `slot_key` (use `ctx.key` / `ctx.keyed_range`).
+- the Flow child's stable `slot_key` (use `ctx.key` / `ctx.keyed_range`). A Flow composes every child,
+  so an unseen key there is always a data change — with one consequence worth knowing: a child that
+  returns from the CROSS axis clip (Flow's `overflow` clipping) is retired while it is clipped and
+  therefore fades in when it comes back, even though its key never left the data.
 
 Put the Lazy marker on the item's root content. A marker deeper in the subtree belongs to a nested
 Flow/Lazy item and is not used for the outer wrapper. Without a stable key, a reorder looks like a
@@ -63,8 +78,8 @@ new item and the old one exits.
 ## Lifecycle limits
 
 - A Lazy list keeps paint channels only for the composed window plus a bounded set of recently
-  off-screen keys. Scrolling far away and back may therefore treat an evicted item as a new item
-  (it can fade in again); this is what keeps a long virtualized list bounded.
+  off-screen keys (256). An item that was merely scrolled out and back is still in the data, so it
+  comes back at full alpha — no fade, no ghost. Only a key that left the DATA and comes back fades.
 - Off-screen items do not keep exit pictures. A picture is captured while the item is rendered and
   dropped as soon as the item leaves the composed window.
 - Removing `animate_item` or passing an inert spec retires the item's channels without drawing a

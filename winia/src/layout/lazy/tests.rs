@@ -2692,6 +2692,50 @@
         );
         crate::animation::clear_all_animations();
     }
+    /// A list whose data starts EMPTY must still fade its first real content in. "First layout" is a
+    /// FLAG, not "the key set is empty": an async load or a filter that transiently matches nothing
+    /// would otherwise suppress the fade for its first real data — and again after every empty frame.
+    #[test]
+    fn content_that_arrives_after_an_empty_frame_fades_in() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items, |k| *k, |ctx, _i, k| {
+                        crate::layout::Column::new()
+                            .modifier(Modifier::new().animate_item().fill_max_width().height(48.0))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new(format!("Item {k}")).build(ctx);
+                            });
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+
+        build(&mut composer, Arc::new(Vec::new()));
+        build(&mut composer, Arc::new((0..8).collect()));
+        let alpha = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_paint.as_ref())
+            .find(|paint| paint.key == 0)
+            .map(|paint| paint.alpha.peek())
+            .expect("the first real item is painted");
+        assert!(
+            alpha < 0.001,
+            "content that arrives after an empty frame fades in, got {alpha}"
+        );
+        crate::animation::clear_all_animations();
+    }
     // ── Duplicate-key detection (Compose throws on a key conflict) ──
     #[test]
     #[should_panic(expected = "duplicate key")]

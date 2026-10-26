@@ -485,17 +485,35 @@ impl RepeatableSpec {
 
 impl AnimationSpec {
     /// Value equality for parameter comparison (see the note above).
+    ///
+    /// The match is on `self` first so a new variant is a COMPILE error instead of silently comparing
+    /// unequal to everything (which would re-enter the item on every frame).
     pub fn same_parameter(&self, other: &Self) -> bool {
-        match (self, other) {
-            (AnimationSpec::Spring(a), AnimationSpec::Spring(b)) => a == b,
-            (AnimationSpec::Tween(a), AnimationSpec::Tween(b)) => a.same_parameter(b),
-            (AnimationSpec::Keyframes(a), AnimationSpec::Keyframes(b)) => a.same_parameter(b),
-            (AnimationSpec::Repeatable(a), AnimationSpec::Repeatable(b)) => a.same_parameter(b),
-            (AnimationSpec::Snap(a), AnimationSpec::Snap(b)) => a == b,
-            (AnimationSpec::Decay(a), AnimationSpec::Decay(b)) => {
-                a.friction == b.friction && a.threshold == b.threshold
-            }
-            _ => false,
+        match self {
+            AnimationSpec::Spring(a) => match other {
+                AnimationSpec::Spring(b) => a == b,
+                _ => false,
+            },
+            AnimationSpec::Tween(a) => match other {
+                AnimationSpec::Tween(b) => a.same_parameter(b),
+                _ => false,
+            },
+            AnimationSpec::Keyframes(a) => match other {
+                AnimationSpec::Keyframes(b) => a.same_parameter(b),
+                _ => false,
+            },
+            AnimationSpec::Repeatable(a) => match other {
+                AnimationSpec::Repeatable(b) => a.same_parameter(b),
+                _ => false,
+            },
+            AnimationSpec::Snap(a) => match other {
+                AnimationSpec::Snap(b) => a == b,
+                _ => false,
+            },
+            AnimationSpec::Decay(a) => match other {
+                AnimationSpec::Decay(b) => a.friction == b.friction && a.threshold == b.threshold,
+                _ => false,
+            },
         }
     }
 }

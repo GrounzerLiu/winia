@@ -37,11 +37,19 @@ pub enum DurationSpec {
 impl DurationSpec {
     /// Value equality for parameter comparison (an interpolator compares by curve, not by "Arc" identity).
     pub fn same_parameter(&self, other: &Self) -> bool {
-        match (self, other) {
-            (DurationSpec::Tween(a), DurationSpec::Tween(b)) => a.same_parameter(b),
-            (DurationSpec::Keyframes(a), DurationSpec::Keyframes(b)) => a.same_parameter(b),
-            (DurationSpec::Snap(a), DurationSpec::Snap(b)) => a == b,
-            _ => false,
+        match self {
+            DurationSpec::Tween(a) => match other {
+                DurationSpec::Tween(b) => a.same_parameter(b),
+                _ => false,
+            },
+            DurationSpec::Keyframes(a) => match other {
+                DurationSpec::Keyframes(b) => a.same_parameter(b),
+                _ => false,
+            },
+            DurationSpec::Snap(a) => match other {
+                DurationSpec::Snap(b) => a == b,
+                _ => false,
+            },
         }
     }
 }

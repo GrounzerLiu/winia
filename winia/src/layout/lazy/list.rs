@@ -631,7 +631,9 @@ impl<A: LazyAxis> LazyList<A> {
             let mut pending = state.pending_new.lock().unwrap_or_else(|e| e.into_inner());
             // The FIRST layout is not an appearance: the list's initial content does not fade in, and
             // leaving its keys pending would make them fade the first time a scroll composed them.
-            let first_layout = known.is_empty();
+            // A flag, not "known is empty": a list that starts empty must still fade its first real
+            // content in, and every empty -> filled transition would otherwise look like a first layout.
+            let first_layout = !state.has_layout.swap(true, std::sync::atomic::Ordering::Relaxed);
             if !first_layout {
                 for key in &key_set {
                     if !known.contains(key) {
