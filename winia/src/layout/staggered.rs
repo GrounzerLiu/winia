@@ -50,10 +50,18 @@ pub fn assign_lanes(lane_count: usize, sizes: &[f32], spacing: f32) -> (Vec<Lane
     (slots, extent)
 }
 
-/// The lanes whose first visible item is at `main_start <= offset` (Compose keeps one scroll position
-/// per lane, because the lanes drift): the FIRST item of each lane at or above the offset.
+/// Compose keeps one scroll position per lane because the lanes drift: this returns, per lane, the item
+/// COVERING the offset — the last one that starts at or above it (`None` when the lane does not reach).
 pub fn lane_anchors(slots: &[LaneSlot], lane_count: usize, offset: f32) -> Vec<Option<usize>> {
-    let mut anchors = vec![None; lane_count.max(1)];
+    // A slot whose lane is past `lane_count` widens the result instead of panicking: the caller's lane
+    // count and the slots' lanes can disagree while a grid is being reconfigured.
+    let lanes = slots
+        .iter()
+        .map(|slot| slot.lane + 1)
+        .chain(std::iter::once(lane_count.max(1)))
+        .max()
+        .unwrap_or(1);
+    let mut anchors = vec![None; lanes];
     for (index, slot) in slots.iter().enumerate() {
         // The lanes drift, so each keeps its own reading position: the item COVERING the offset, which
         // is the last one that starts at or above it (a lane with no item that far is `None`).

@@ -102,13 +102,24 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         let main_max = A::main_max(&constraints);
         // An unbounded main axis (a wrap-content parent) falls back to the LAST viewport, as the lazy
         // list does: reporting 0 collapsed the grid and emptied the window.
+        // Both axes have to survive a WRAP-CONTENT parent, which hands f32::MAX (that is the framework's
+        // unbounded sentinel as well as the scroll one). Main: the last measured viewport, else the same
+        // default the build uses. Cross: the last measured cross extent, else a sane lane width — an
+        // f32::MAX cross extent used to poison the reported size, the hit test and the clip.
         let viewport = if main_max < f32::MAX {
             main_max
         } else {
-            self.viewport_main.peek()
+            let cached = self.viewport_main.peek();
+            if cached > 0.0 { cached } else { FIRST_FRAME_VIEWPORT }
+        };
+        let cross_extent = if cross_max < f32::MAX {
+            cross_max
+        } else {
+            let cached = self.viewport_cross.peek();
+            if cached > 0.0 { cached } else { self.lanes.max(1) as f32 * 200.0 }.max(1.0)
         };
         let lanes = self.lanes.max(1);
-        let usable = (cross_max
+        let usable = (cross_extent
             - self.cross_before
             - self.cross_after
             - self.cross_spacing * lanes.saturating_sub(1) as f32)
@@ -138,7 +149,7 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             // own cross size, so the RTL anchor is the cell's far edge minus that size.
             let cross_size = if A::VERTICAL { size.width } else { size.height };
             let cross = if self.rtl && A::VERTICAL {
-                cross_max - self.cross_after - lane_offset - cross_size
+                cross_extent - self.cross_after - lane_offset - cross_size
             } else {
                 self.cross_before + lane_offset
             };
@@ -156,7 +167,7 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             if self.viewport_main.peek() != viewport {
                 self.viewport_main.set(viewport);
             }
-            let cross = if cross_max < f32::MAX { cross_max } else { 0.0 };
+            let cross = cross_extent;
             if self.viewport_cross.peek() != cross {
                 self.viewport_cross.set(cross);
             }
@@ -192,9 +203,9 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             }
         }
         let size = if A::VERTICAL {
-            Size::new(cross_max, viewport.max(constraints.min_height))
+            Size::new(cross_extent, viewport.max(constraints.min_height))
         } else {
-            Size::new(viewport.max(constraints.min_width), cross_max)
+            Size::new(viewport.max(constraints.min_width), cross_extent)
         };
         (size, placements)
     }
@@ -664,6 +675,47 @@ mod tests {
             first_three[1].0 > first_three[0].0 && first_three[2].0 > first_three[1].0,
             "and the lanes run across: {first_three:?}"
         );
+    }
+
+
+    /// A WRAP-CONTENT parent hands both axes f32::MAX. The grid must still report a usable size and
+    /// compose its window instead of collapsing to zero or poisoning the parent with the sentinel.
+    #[test]
+    fn an_unbounded_parent_still_measures_a_usable_grid() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyVerticalStaggeredGrid::new()
+                    .lanes(GridCells::Fixed(2))
+                    .spacing(8.0)
+                    .state(s)
+                    .items(6, |ctx, index| {
+                        Stack::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(10.0, 40.0)
+                                    .test_tag(format!("free-{index}")),
+                            )
+                            .build(ctx, |_| {});
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::UNBOUNDED);
+        }
+        let root = composer.layout_root().unwrap();
+        assert!(root.measured_size.height > 0.0, "a usable height: {:?}", root.measured_size);
+        assert!(
+            root.measured_size.width < 100_000.0,
+            "and the cross sentinel never reaches the parent: {:?}",
+            root.measured_size
+        );
+        assert!(!root.children.is_empty(), "the window composes under an unbounded parent");
     }
 
     /// The main-axis content padding moves the first item down and counts towards the extent (it used
