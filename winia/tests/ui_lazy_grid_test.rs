@@ -66,3 +66,35 @@ fn lazy_grids_lay_out_both_axes() {
         }
     });
 }
+
+/// The staggered grid drifts its lanes: an item goes into the SHORTER lane, not into a shared row, so
+/// the lanes end up at different cursors. Read off the real window (scenario `lazy_staggered`).
+#[test]
+fn a_staggered_grid_drifts_its_lanes() {
+    let mut app = UiTest::launch("lazy_staggered");
+    app.expect_text("Staggered Grid");
+
+    // Heights cycle 60 / 90 / 120, so items 0 and 1 open the two lanes, 2 and 3 continue them.
+    let i0 = app.expect_tag("stagger-item-0");
+    let i1 = app.expect_tag("stagger-item-1");
+    let i2 = app.expect_tag("stagger-item-2");
+    let i3 = app.expect_tag("stagger-item-3");
+    assert!(
+        (i0.1 - i1.1).abs() <= 1.0,
+        "both lanes start at the same main offset: {i0:?} {i1:?}"
+    );
+    assert!(i1.0 > i0.0, "the second item opens the second lane: {i0:?} {i1:?}");
+    assert!(
+        (i2.0 - i0.0).abs() <= 1.0,
+        "the third item continues the FIRST lane: {i0:?} {i2:?}"
+    );
+    assert!(i2.1 > i0.1, "below the first item: {i0:?} {i2:?}");
+    assert!(
+        (i3.0 - i1.0).abs() <= 1.0,
+        "the fourth continues the SECOND lane: {i1:?} {i3:?}"
+    );
+    assert!(
+        (i2.1 - i3.1).abs() > 1.0,
+        "the lanes have drifted apart, which a line grid could not express: {i2:?} {i3:?}"
+    );
+}
