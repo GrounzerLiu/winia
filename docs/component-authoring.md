@@ -529,6 +529,11 @@ Two rules cover most cases:
 | Fixture | `winia/tests/ui_fixtures/fixture_all.rs` (one bin, scenario by `argv[1]`) | a scenario the visual/behavioural suite can drive |
 | UI | `winia/tests/ui_test.rs` (`--features debug-server`) | clicks, key events, semantics tree, screenshots |
 
+**MUST** lay a demo's control row out as a `FlowRow`, not a `Row`: the UI test clicks a button by its
+reported coordinates, and a fixed row pushes the tail of a long button run outside the card, where a
+click reaches nothing. Measured on `lazy_item_animation_demo`: five buttons in a 520 dp window put the
+fifth at x = 497 with a `Row` (off the card) and wrap it to a second line with a `FlowRow`.
+
 **MUST** write the unit test against the arena, not against a rendering (a split module keeps
 the same rule in its `<module>/tests.rs`, as `layout/flow/tests.rs` does):
 

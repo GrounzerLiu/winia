@@ -132,7 +132,14 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 .font_size(12.0)
                 .build(ctx);
 
-            Row::new().spacing(6.0).build(ctx, |ctx| {
+            // A Flow, not a Row: five buttons do not fit one line at this width, and a button that
+            // ends up outside the card cannot be clicked by coordinates (which is how the UI test drives
+            // this page).
+            FlowRow::new()
+                .main_spacing(6.0)
+                .cross_spacing(6.0)
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx, |ctx| {
                 let (k, n) = (keys.clone(), next_key.clone());
                 button(ctx, "lazy-anim-insert-head", "insert head", move || {
                     let mut next = k.get();

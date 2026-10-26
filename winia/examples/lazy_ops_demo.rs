@@ -51,7 +51,13 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
             Text::new("Lazy API surface, driven by buttons").font_size(18.0).build(ctx);
 
             card(ctx, "lazy-ops-card", "1. data, jumps, fling, reverse, lock", |ctx| {
-                Row::new().spacing(6.0).build(ctx, |ctx| {
+                // A Flow, not a Row: seven buttons never fit one line, and a button outside the card
+                // cannot be clicked by coordinates (which is how the UI test drives this page).
+                FlowRow::new()
+                    .main_spacing(6.0)
+                    .cross_spacing(6.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
                     let (data_add, next_key_add) = (data.clone(), next_key.clone());
                     action(ctx, "lazy-add-head", "add 5", move || {
                         let mut next: Vec<u64> = data_add.get().as_ref().clone();
@@ -79,7 +85,13 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                 });
                 // Seven buttons do not fit one 440 dp row, and a button outside the card cannot be
                 // clicked by coordinates — which is exactly how the UI test drives this page.
-                Row::new().spacing(6.0).build(ctx, |ctx| {
+                // A Flow, not a Row: seven buttons never fit one line, and a button outside the card
+                // cannot be clicked by coordinates (which is how the UI test drives this page).
+                FlowRow::new()
+                    .main_spacing(6.0)
+                    .cross_spacing(6.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
                     let fling = main_state.clone();
                     action(ctx, "lazy-fling", "fling", move || fling.fling(1500.0));
                     let flip = reverse.clone();
@@ -174,7 +186,13 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                         );
                     })
                     .build(ctx);
-                Row::new().spacing(6.0).build(ctx, |ctx| {
+                // A Flow, not a Row: seven buttons never fit one line, and a button outside the card
+                // cannot be clicked by coordinates (which is how the UI test drives this page).
+                FlowRow::new()
+                    .main_spacing(6.0)
+                    .cross_spacing(6.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
                     let next_page = page.clone();
                     let pager = pager_state.clone();
                     action(ctx, "lazy-next-page", "next page", move || {
