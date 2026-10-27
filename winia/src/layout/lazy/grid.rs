@@ -21,9 +21,12 @@
 //! - No `stickyHeader` (Compose's lazy grids do not have one either).
 
 use super::{LazyAxis, LazyList, LazyListState};
-use crate::layout::{Column, Row, Stack};
+use crate::layout::container::build_container;
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::layout::Constraints;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::{Offset, Size};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -43,6 +46,13 @@ impl GridCells {
             GridCells::Fixed(cells) => cells.max(1),
             GridCells::Adaptive(min_size) => {
                 let min_size = min_size.max(1.0);
+                // An UNBOUNDED cross axis has no cell count: Compose requires bounds here (it throws),
+                // and letting it through saturated the cast below to usize::MAX, which put every item
+                // into ONE line (measured: the list then had a single item and no scroll range). Both
+                // sentinels count: infinity and the f32::MAX the scroll paths write.
+                if !(cross_extent < f32::MAX) {
+                    return 1;
+                }
                 if cross_extent <= 0.0 {
                     // Nothing measured yet: the grid composes one cell per line for this frame and
                     // re-chunks as soon as the cross extent is written back.
@@ -59,6 +69,20 @@ impl GridCells {
 #[derive(Debug, Clone)]
 struct Line {
     items: Vec<(usize, u32)>,
+}
+
+/// The key of one line: its first item's key folded together with the line's SHAPE (item count, the
+/// grid's cell count and the cross spacing). Stable while the shape is stable — what the anchor needs —
+/// and different as soon as the shape changes — what the Skip decision needs.
+fn shape_key(first: u64, items: usize, cells: usize, spacing: f32) -> u64 {
+    const PRIME: u64 = 0x1000_0000_01b3;
+    let mut hash = first ^ 0xcbf2_9ce4_8422_2325;
+    for value in [items as u64, cells as u64, spacing.to_bits() as u64] {
+        hash ^= value;
+        hash = hash.wrapping_mul(PRIME);
+        hash ^= hash >> 29;
+    }
+    hash
 }
 
 /// Splits `count` items into lines, honouring each item's span — Compose's `LazyGridIntervalContent`
@@ -246,23 +270,34 @@ impl<A: LazyAxis> LazyGrid<A> {
         let Some(content) = self.content else {
             return;
         };
-        let cross = self
-            .state
-            .as_ref()
-            .map(|state| state.viewport_cross_size())
-            .unwrap_or(0.0);
+        // Resolve the state BEFORE the cross extent: without this, a grid that does not pass
+        // `.state(...)` had its state created inside LazyList::build, so the grid never read the cross
+        // extent, never registered a dependency on it and stayed at ONE cell per line forever (Compose
+        // computes the slots from the measure constraints, so it has no such contract).
+        let state = match self.state.clone() {
+            Some(state) => state,
+            None => ctx.remember(LazyListState::new).get(),
+        };
+        let cross = state.viewport_cross_size();
         let cells_per_line = self.cells.count(cross, self.cross_spacing);
         let lines = chunk_lines(content.count, cells_per_line, content.span.as_ref());
         let line_keys: Vec<u64> = lines
             .iter()
-            .map(|line| line.items.first().map(|(index, _)| (content.key)(*index)).unwrap_or(0))
+            .map(|line| {
+                let first = line.items.first().map(|(index, _)| (content.key)(*index)).unwrap_or(0);
+                // The line's identity carries its SHAPE as well as its first item's key: appending an
+                // item INSIDE the last line (or changing the cell count or the cross spacing) changes
+                // nothing else the lazy list compares, so the stale line was skipped and the new items
+                // never appeared (measured: 7 items fixed(3) then 9 items stayed 3/3/1).
+                shape_key(first, line.items.len(), cells_per_line, self.cross_spacing)
+            })
             .collect();
         let lines = Arc::new(lines);
         let line_keys = Arc::new(line_keys);
         let content = content.content;
         let cross_spacing = self.cross_spacing;
         let mut list = LazyList::<A>::new_list()
-            .state(self.state.unwrap_or_else(LazyListState::new))
+            .state(state)
             .modifier(self.modifier)
             .spacing(self.spacing)
             .content_padding(self.content_padding.0, self.content_padding.1)
@@ -275,45 +310,150 @@ impl<A: LazyAxis> LazyGrid<A> {
             lines.len(),
             move |line| line_keys[line],
             move |ctx, line| {
-                build_line::<A>(ctx, &lines[line].items, cross_spacing, content.as_ref());
+                build_line::<A>(
+                    ctx,
+                    &lines[line].items,
+                    cells_per_line,
+                    cross_spacing,
+                    content.as_ref(),
+                );
             },
         )
         .build(ctx);
     }
 }
 
-/// Composes one line: a Row for a vertical grid, a Column for a horizontal one. A cell's
-/// `layout_weight` is its span, so a two-cell item takes twice the space of a one-cell item.
+/// One line's geometry: Compose's slot table (`LazyGridSlots`). Each cell occupies `span` slots of
+/// `unit = (cross - (cells - 1) * spacing) / cells`, so a cell is `span * unit + (span - 1) * spacing`
+/// across and starts at `slot * (unit + spacing)`.
+///
+/// A `layout_weight` chain cannot express that: weights normalize over the line's OWN children, so a
+/// partial line stretched its cells across the whole line (measured: one cell 300 dp wide where three
+/// slots of 98.67 were correct) and a spanning cell lost the spacing it covers (96/192 where Compose
+/// gives 92/196 for spans [1, 2] at 300 dp with 12 dp of spacing).
+#[derive(Debug)]
+struct LineLayout {
+    cells: usize,
+    spacing: f32,
+    vertical: bool,
+    /// `(start slot, span)` per child, in composition order.
+    slots: Vec<(usize, usize)>,
+}
+
+impl MeasurePolicy for LineLayout {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let cells = self.cells.max(1);
+        let spacing = self.spacing.max(0.0);
+        let (cross_max, main_max) = if self.vertical {
+            (constraints.max_width, constraints.max_height)
+        } else {
+            (constraints.max_height, constraints.max_width)
+        };
+        let bounded = cross_max < f32::MAX;
+        let unit = if bounded {
+            ((cross_max - (cells as f32 - 1.0) * spacing) / cells as f32).max(0.0)
+        } else {
+            0.0
+        };
+        let mut placements = Vec::with_capacity(children.len());
+        let mut cross_used = 0.0f32;
+        let mut main_used = 0.0f32;
+        for (i, &child) in children.iter().enumerate() {
+            let (start, span) = self.slots.get(i).copied().unwrap_or((i, 1));
+            let span = span.max(1);
+            let cross = unit * span as f32 + (span as f32 - 1.0) * spacing;
+            let child_constraints = if self.vertical {
+                if bounded {
+                    Constraints::new(cross, cross, 0.0, main_max)
+                } else {
+                    Constraints::new(0.0, f32::MAX, 0.0, main_max)
+                }
+            } else if bounded {
+                Constraints::new(0.0, main_max, cross, cross)
+            } else {
+                Constraints::new(0.0, main_max, 0.0, f32::MAX)
+            };
+            let (size, _) = measure_node(nodes, policies, child, child_constraints);
+            let start_cross = start as f32 * (unit + spacing);
+            let position = if self.vertical {
+                Offset::new(start_cross, 0.0)
+            } else {
+                Offset::new(0.0, start_cross)
+            };
+            let cell_cross = if self.vertical { size.width } else { size.height };
+            let cell_main = if self.vertical { size.height } else { size.width };
+            cross_used = cross_used.max(start_cross + cell_cross);
+            main_used = main_used.max(cell_main);
+            placements.push(Placement { size, position });
+        }
+        // A line spans the whole grid across the cross axis even when its slots do not fill it.
+        let line_cross = if bounded { cross_max } else { cross_used };
+        let size = if self.vertical {
+            Size::new(line_cross, main_used)
+        } else {
+            Size::new(main_used, line_cross)
+        };
+        (size, placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (i, &child) in children.iter().enumerate() {
+            if let Some(placement) = placements.get(i) {
+                nodes[child].position = placement.position;
+                nodes[child].measured_size = placement.size;
+            }
+        }
+    }
+}
+
+/// Composes one line: the cells in slot order, measured by [`LineLayout`].
 fn build_line<A: LazyAxis>(
     ctx: &mut ComposeCtx,
     items: &[(usize, u32)],
+    cells: usize,
     cross_spacing: f32,
     content: &(dyn Fn(&mut ComposeCtx, usize) + Send + Sync),
 ) {
-    let weights: Vec<f32> = items.iter().map(|(_, span)| *span as f32).collect();
-    if A::VERTICAL {
-        Row::new()
-            .modifier(Modifier::new().fill_max_width())
-            .spacing(cross_spacing)
-            .build(ctx, |ctx| {
-                for (i, (index, _)) in items.iter().enumerate() {
-                    Stack::new()
-                        .modifier(Modifier::new().layout_weight(weights[i]))
-                        .build(ctx, |ctx| content(ctx, *index));
-                }
-            });
-    } else {
-        Column::new()
-            .modifier(Modifier::new().fill_max_height())
-            .spacing(cross_spacing)
-            .build(ctx, |ctx| {
-                for (i, (index, _)) in items.iter().enumerate() {
-                    Stack::new()
-                        .modifier(Modifier::new().layout_weight(weights[i]))
-                        .build(ctx, |ctx| content(ctx, *index));
-                }
-            });
+    let mut slots = Vec::with_capacity(items.len());
+    let mut used = 0usize;
+    for (_, span) in items {
+        let span = (*span).max(1) as usize;
+        slots.push((used, span));
+        used += span;
     }
+    let modifier = if A::VERTICAL {
+        Modifier::new().fill_max_width()
+    } else {
+        Modifier::new().fill_max_height()
+    };
+    // The line's SHAPE is declared here, so a changed chunking re-enters the line instead of keeping
+    // its previous geometry (the line key carries the same facts, which is what makes the enclosing
+    // item group run this code at all).
+    ctx.changed(&cells);
+    ctx.changed(&used);
+    ctx.changed(&items.len());
+    ctx.changed(&cross_spacing);
+    build_container(
+        ctx,
+        modifier,
+        LineLayout {
+            cells,
+            spacing: cross_spacing,
+            vertical: A::VERTICAL,
+            slots,
+        },
+        |ctx| {
+            for (index, _) in items {
+                content(ctx, *index);
+            }
+        },
+    );
 }
 
 #[cfg(test)]
@@ -414,5 +554,227 @@ mod tests {
         frame(&mut composer, &state);
         assert_eq!(state.first_visible(), 1, "the anchor is on the second line");
         assert_eq!(state.offset(), 44.0, "one line plus one spacing");
+    }
+
+    /// A line is a wrapper node in the lazy list; its single child is the line, whose children are the
+    /// cells. These two helpers read that shape off the arena.
+    fn line_shapes(composer: &Composer) -> Vec<usize> {
+        let Some(root) = composer.layout_root() else { return Vec::new() };
+        root.children
+            .clone()
+            .into_iter()
+            .map(|wrapper| {
+                composer.arena_nodes()[wrapper]
+                    .children
+                    .first()
+                    .map(|line| composer.arena_nodes()[*line].children.len())
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+
+    fn cell_widths(composer: &Composer) -> Vec<Vec<f32>> {
+        let Some(root) = composer.layout_root() else { return Vec::new() };
+        root.children
+            .clone()
+            .into_iter()
+            .map(|wrapper| {
+                let Some(line) = composer.arena_nodes()[wrapper].children.first().copied() else {
+                    return Vec::new();
+                };
+                composer.arena_nodes()[line]
+                    .children
+                    .iter()
+                    .map(|cell| composer.arena_nodes()[*cell].measured_size.width)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn grid_frame(composer: &mut Composer, constraints: Constraints, build: impl Fn(&mut ComposeCtx)) {
+        composer.compose(crate::compose!(|ctx| {
+            build(ctx);
+        }));
+        composer.layout(constraints);
+    }
+
+    fn cell(ctx: &mut ComposeCtx, index: usize) {
+        crate::layout::Stack::new()
+            .modifier(Modifier::new().size(10.0, 40.0).test_tag(format!("g{index}")))
+            .build(ctx, |_| {});
+    }
+
+    /// A PARTIAL line keeps the slot width. Weights normalize over the line's own children, so the last
+    /// line of any grid whose item count is not a multiple of the cell count stretched its item across
+    /// the whole line (measured: 300 dp where a three-cell grid wants 98.67).
+    #[test]
+    fn a_partial_line_keeps_the_slot_width() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            let s = state.clone();
+            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Fixed(3))
+                    .state(s.clone())
+                    .cross_spacing(2.0)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items(4, cell)
+                    .build(ctx);
+            });
+        }
+        let widths = cell_widths(&composer);
+        assert_eq!(widths.len(), 2, "four items in three-cell lines: {widths:?}");
+        assert_eq!(widths[1].len(), 1, "the second line holds one cell: {widths:?}");
+        assert!(
+            (widths[1][0] - (300.0 - 2.0 * 2.0) / 3.0).abs() < 0.5,
+            "the partial line keeps the slot width instead of the whole line: {widths:?}"
+        );
+    }
+
+    /// A spanning cell OWNS the spacing inside it: spans [1, 2] on a 300 dp line with 12 dp between
+    /// cells are 92 / 196 (Compose's slot table), not 96 / 192 (weights over the leftover).
+    #[test]
+    fn a_span_owns_the_spacing_inside_it() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        for _ in 0..2 {
+            let s = state.clone();
+            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Fixed(3))
+                    .state(s.clone())
+                    .cross_spacing(12.0)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items_with(
+                        2,
+                        |index| index as u64,
+                        |index| if index == 1 { 2 } else { 1 },
+                        cell,
+                    )
+                    .build(ctx);
+            });
+        }
+        let widths = cell_widths(&composer);
+        let unit = (300.0 - 2.0 * 12.0) / 3.0;
+        assert!((widths[0][0] - unit).abs() < 0.5, "one slot: {widths:?}");
+        assert!(
+            (widths[0][1] - (2.0 * unit + 12.0)).abs() < 0.5,
+            "two slots plus the spacing between them: {widths:?}"
+        );
+    }
+
+    /// A changed cell count re-chunks EVERY line: the line key carries the shape, so the lines are
+    /// rebuilt instead of skipped (measured before the fix: [2, 3, 1] instead of [3, 3, 1]).
+    #[test]
+    fn changing_the_cell_count_rechunks_every_line() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        for cells in [2usize, 2, 3, 3] {
+            let s = state.clone();
+            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Fixed(cells))
+                    .state(s.clone())
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items(7, cell)
+                    .build(ctx);
+            });
+        }
+        assert_eq!(line_shapes(&composer), vec![3, 3, 1]);
+    }
+
+    /// Appending items INSIDE the last line shows them: the line count and the first keys do not
+    /// change, so only a shape-carrying key can tell the lazy list the content moved (measured before
+    /// the fix: 7 items then 9 items stayed 3/3/1 instead of 3/3/3).
+    #[test]
+    fn appending_inside_the_last_line_shows_the_new_items() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        for count in [7usize, 7, 9, 9] {
+            let s = state.clone();
+            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Fixed(3))
+                    .state(s.clone())
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items(count, cell)
+                    .build(ctx);
+            });
+        }
+        assert_eq!(line_shapes(&composer), vec![3, 3, 3]);
+    }
+
+    /// A changed cross spacing rebuilds the lines (measured before the fix: the cells kept 100 dp).
+    #[test]
+    fn changing_the_cross_spacing_rebuilds_the_lines() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        for spacing in [0.0f32, 0.0, 12.0, 12.0] {
+            let s = state.clone();
+            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Fixed(3))
+                    .state(s.clone())
+                    .cross_spacing(spacing)
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items(6, cell)
+                    .build(ctx);
+            });
+        }
+        let widths = cell_widths(&composer);
+        assert!(
+            (widths[0][0] - (300.0 - 2.0 * 12.0) / 3.0).abs() < 0.5,
+            "the cells pick up the new spacing: {widths:?}"
+        );
+    }
+
+    /// An unbounded cross axis has no cell count: it falls back to one cell per line instead of
+    /// saturating the cast to usize::MAX and putting every item into one line.
+    #[test]
+    fn an_unbounded_cross_axis_falls_back_to_one_cell() {
+        for cross in [f32::INFINITY, f32::MAX] {
+            let state = LazyListState::new();
+            let mut composer = Composer::new();
+            for _ in 0..2 {
+                let s = state.clone();
+                grid_frame(&mut composer, Constraints::new(0.0, cross, 0.0, 300.0), |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Adaptive(100.0))
+                        .state(s.clone())
+                        .modifier(Modifier::new().height(300.0))
+                        .items(6, cell)
+                        .build(ctx);
+                });
+            }
+            let shapes = line_shapes(&composer);
+            assert!(
+                shapes.len() > 1 && shapes.iter().all(|cells| *cells == 1),
+                "cross {cross}: one cell per line, never one giant line: {shapes:?}"
+            );
+        }
+    }
+
+    /// Technical check of the Adaptive default path: WITHOUT `.state(...)` the grid must still learn
+    /// the cross extent (it remembers a state of its own). Before the fix the internal state was
+    /// created inside `LazyList::build`, so the grid never read the cross extent and stayed at one
+    /// cell per line forever.
+    #[test]
+    fn an_adaptive_grid_without_a_state_still_chunks_after_the_first_measure() {
+        let mut composer = Composer::new();
+        for _ in 0..3 {
+            grid_frame(&mut composer, Constraints::new(0.0, 320.0, 0.0, 300.0), |ctx| {
+                LazyVerticalGrid::new()
+                    .cells(GridCells::Adaptive(100.0))
+                    .modifier(Modifier::new().fill_max_width().height(300.0))
+                    .items(6, cell)
+                    .build(ctx);
+            });
+        }
+        let shapes = line_shapes(&composer);
+        assert!(
+            shapes.iter().all(|cells| *cells == 3),
+            "three 100 dp cells fit the 320 dp width without an external state: {shapes:?}"
+        );
     }
 }

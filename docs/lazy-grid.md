@@ -7,6 +7,24 @@ A windowed grid: items flow into LINES, and only the lines near the viewport are
 Compose foundation `LazyVerticalGrid` / `LazyHorizontalGrid` and `GridCells`, under
 `reference/compose/foundation-1.13.0-beta01/commonMain/androidx/compose/foundation/lazy/grid/`.
 
+## Geometry
+
+A line is laid out with Compose's SLOT table (`LazyGridSlots`), not with `layout_weight` weights:
+
+```
+unit = (cross_extent - (cells - 1) * cross_spacing) / cells
+cell width = span * unit + (span - 1) * cross_spacing
+cell start = slot * (unit + cross_spacing)
+```
+
+So a PARTIAL line keeps the slot width (it is not stretched over the line), and a spanning cell owns the
+spacing it covers — `spans [1, 2]` at 300 dp with 12 dp between cells is 92 / 196, not 96 / 192. A line
+reports the full cross extent of the grid even when its slots do not fill it.
+
+Two consequences worth knowing: `GridCells::Adaptive` with an UNBOUNDED cross axis falls back to one
+cell per line (Compose requires bounds and throws), and a grid that does not pass `.state(...)` remembers
+one of its own, so Adaptive still learns the cross extent after the first measure.
+
 ## API
 
 ```rust

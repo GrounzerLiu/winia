@@ -1,9 +1,12 @@
-//! Lazy grid demo — the vertical grid (fixed cells) and the horizontal one (adaptive, RTL).
+//! Lazy grid demo — every knob live: cell count (fixed or adaptive), both gaps, item count and the
+//! jumps, over both axes.
 //!
-//! The vertical grid shows three equal cells per line; the horizontal grid takes as many cells as fit
-//! at 80 dp and is laid out right to left, which the horizontal scroll modifier mirrors the same way it
-//! does for `LazyRow`. Every cell carries a `test_tag`, so the UI suite reads the geometry off
-//! the real window (`tests/ui_lazy_grid_test.rs`, fixture scenario `lazy_grid`).
+//! What to look at: the LAST line of the vertical grid is usually partial (the count starts at 62 with
+//! three cells), and its cells must stay the width of a SLOT instead of stretching over the line. Every
+//! fifth item spans two cells, so the slot arithmetic is visible too.
+//!
+//! Each grid sits inside a sized `Stack`: a size modifier applied directly to a lazy grid is ignored
+//! (measured: it reports a single line), while a sized parent gives it a real viewport.
 //!
 //! Run with `cargo run -p winia --example lazy_grid_demo`.
 
@@ -24,14 +27,26 @@ fn palette(i: usize) -> Color {
     COLORS[i % COLORS.len()]
 }
 
-fn cell(ctx: &mut ComposeCtx, tag: String, height: f32, color: Color) {
+fn vcell(ctx: &mut ComposeCtx, tag: String, color: Color) {
+    // A VERTICAL grid fixes the cross axis (width) and leaves the height to the content.
     Stack::new()
         .modifier(
             Modifier::new()
-                // The grid gives a cell its share of the line; the content has to take it, the same
-                // way a Compose grid item fills its span only when it asks to.
                 .fill_max_width()
-                .height(height)
+                .height(44.0)
+                .background(color, Shape::rounded(6.0))
+                .test_tag(tag),
+        )
+        .build(ctx, |_| {});
+}
+
+fn hcell(ctx: &mut ComposeCtx, tag: String, color: Color) {
+    // A HORIZONTAL grid fixes the cross axis (height) and leaves the width to the content.
+    Stack::new()
+        .modifier(
+            Modifier::new()
+                .width(80.0)
+                .height(44.0)
                 .background(color, Shape::rounded(6.0))
                 .test_tag(tag),
         )
@@ -42,41 +57,142 @@ fn cell(ctx: &mut ComposeCtx, tag: String, height: f32, color: Color) {
 fn lazy_grid_demo(ctx: &mut ComposeCtx) {
     let vertical = ctx.remember(|| LazyListState::new()).get();
     let horizontal = ctx.remember(|| LazyListState::new()).get();
+    let cells = ctx.remember(|| State::new(3usize)).get();
+    let adaptive = ctx.remember(|| State::new(false)).get();
+    let count = ctx.remember(|| State::new(62usize)).get();
+    let gap = ctx.remember(|| State::new(8.0f32)).get();
+    let cross_gap = ctx.remember(|| State::new(8.0f32)).get();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
-        .spacing(12.0)
+        .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("Lazy grids").font_size(18.0).build(ctx);
+            Text::new("Lazy grids — every knob live").font_size(18.0).build(ctx);
+            Text::new(format!(
+                "{} cells | {} items | gap {:.0}/{:.0} | {}",
+                if adaptive.get() {
+                    "adaptive 80".to_string()
+                } else {
+                    format!("fixed {}", cells.get())
+                },
+                count.get(),
+                gap.get(),
+                cross_gap.get(),
+                "LTR"
+            ))
+            .font_size(11.0)
+            .modifier(Modifier::new().test_tag("lazy-grid-status"))
+            .build(ctx);
 
-            // Three equal cells per line, scrolling vertically.
-            LazyVerticalGrid::new()
-                .cells(GridCells::Fixed(3))
-                .state(vertical)
-                .spacing(8.0)
-                .cross_spacing(8.0)
-                .modifier(Modifier::new().fill_max_width().height(260.0))
-                .items(60, |ctx, index| {
-                    cell(ctx, format!("vcell-{index}"), 56.0, palette(index));
-                })
-                .build(ctx);
+            Row::new().spacing(6.0).build(ctx, |ctx| {
+                let s = cells.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-cells-less"))
+                    .on_click(move || s.set(s.get().saturating_sub(1).max(1)))
+                    .build(ctx, |ctx| Text::new("cells -").font_size(11.0).build(ctx));
+                let s = cells.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-cells-more"))
+                    .on_click(move || s.set((s.get() + 1).min(6)))
+                    .build(ctx, |ctx| Text::new("cells +").font_size(11.0).build(ctx));
+                let s = count.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-items-more"))
+                    .on_click(move || s.set((s.get() + 1).min(200)))
+                    .build(ctx, |ctx| Text::new("items +").font_size(11.0).build(ctx));
+                let s = count.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-items-less"))
+                    .on_click(move || s.set(s.get().saturating_sub(1).max(1)))
+                    .build(ctx, |ctx| Text::new("items -").font_size(11.0).build(ctx));
+            });
 
-            // As many 80 dp cells as fit, laid out right to left.
-            LazyHorizontalGrid::new()
-                .cells(GridCells::Adaptive(80.0))
-                .state(horizontal)
-                .spacing(8.0)
-                .cross_spacing(8.0)
+            Row::new().spacing(6.0).build(ctx, |ctx| {
+                let s = adaptive.clone();
+                Switch::new(adaptive.get())
+                    .modifier(Modifier::new().test_tag("lg-adaptive"))
+                    .on_checked_change(move |value| s.set(value))
+                    .build(ctx, |_| {});
+                Text::new("adaptive").font_size(11.0).build(ctx);
+                let s = vertical.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-top"))
+                    .on_click(move || s.offset.set(0.0))
+                    .build(ctx, |ctx| Text::new("top").font_size(11.0).build(ctx));
+                let s = vertical.clone();
+                Button::new()
+                    .modifier(Modifier::new().test_tag("lg-end"))
+                    .on_click(move || s.offset.set(1.0e9))
+                    .build(ctx, |ctx| Text::new("end").font_size(11.0).build(ctx));
+            });
+
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                Text::new("gap").font_size(11.0).build(ctx);
+                let s = gap.clone();
+                Slider::new(gap.get())
+                    .modifier(Modifier::new().test_tag("lg-gap"))
+                    .value_range(0.0, 24.0)
+                    .on_value_change(move |value| s.set(value))
+                    .build(ctx);
+            });
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                Text::new("cross").font_size(11.0).build(ctx);
+                let s = cross_gap.clone();
+                Slider::new(cross_gap.get())
+                    .modifier(Modifier::new().test_tag("lg-cross-gap"))
+                    .value_range(0.0, 24.0)
+                    .on_value_change(move |value| s.set(value))
+                    .build(ctx);
+            });
+
+            // The tag carries the cell count and the adaptive flag: a pass-through wrapper must declare
+            // what its content depends on, or it Skips and the grid never rebuilds.
+            Stack::new()
                 .modifier(
                     Modifier::new()
                         .fill_max_width()
-                        .height(180.0)
-                        .layout_direction(LayoutDirection::Rtl),
+                        .height(240.0)
+                        .test_tag(format!("lg-vgrid-{}-{}", cells.get(), adaptive.get())),
                 )
-                .items(60, |ctx, index| {
-                    cell(ctx, format!("hcell-{index}"), 48.0, palette(index + 2));
-                })
-                .build(ctx);
+                .build(ctx, |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(if adaptive.get() {
+                            GridCells::Adaptive(80.0)
+                        } else {
+                            GridCells::Fixed(cells.get())
+                        })
+                        .state(vertical)
+                        .spacing(gap.get())
+                        .cross_spacing(cross_gap.get())
+                        .modifier(Modifier::new().fill_max_size())
+                        .items_with(
+                            count.get(),
+                            |index| index as u64,
+                            |index| if index % 5 == 4 { 2 } else { 1 },
+                            |ctx, index| vcell(ctx, format!("vcell-{index}"), palette(index)),
+                        )
+                        .build(ctx);
+                });
+
+            Stack::new()
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(120.0)
+                        .test_tag("lg-hgrid"),
+                )
+                .build(ctx, |ctx| {
+                    LazyHorizontalGrid::new()
+                        .cells(GridCells::Adaptive(120.0))
+                        .state(horizontal)
+                        .spacing(gap.get())
+                        .cross_spacing(cross_gap.get())
+                        .modifier(Modifier::new().fill_max_size())
+                        .items(40, |ctx, index| {
+                            hcell(ctx, format!("hcell-{index}"), palette(index + 2));
+                        })
+                        .build(ctx);
+                });
         });
 }
 
@@ -84,7 +200,7 @@ pub fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(460.0, 760.0)
+                .size(480.0, 960.0)
                 .title("Lazy grid demo")
                 .build(ctx, |ctx| {
                     settings::shell("Lazy Grid", ctx, lazy_grid_demo);
