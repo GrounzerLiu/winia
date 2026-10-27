@@ -60,8 +60,7 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
                     action(ctx, "lazy-add-head", "add 5", {
-                        clone!(data);
-                        clone!(next_key);
+                        clone!(data, next_key);
                         move || {
                             let mut next: Vec<u64> = data.get().as_ref().clone();
                             let mut key = next_key.get();
@@ -206,8 +205,7 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
                     action(ctx, "lazy-next-page", "next page", {
-                        clone!(page);
-                        clone!(pager_state);
+                        clone!(page, pager_state);
                         move || {
                             let target = (page.get() + 1).min(PAGES - 1);
                             page.set(target);
@@ -215,8 +213,7 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                         }
                     });
                     action(ctx, "lazy-first-page", "first page", {
-                        clone!(page);
-                        clone!(pager_state);
+                        clone!(page, pager_state);
                         move || {
                             page.set(0);
                             pager_state.scroll_to_item(0, 0.0);

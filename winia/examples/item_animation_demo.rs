@@ -77,8 +77,7 @@ pub fn main() {
                                     Button::new()
                                         .modifier(Modifier::new().test_tag("add-head"))
                                         .on_click({
-                                            clone!(items);
-                                            clone!(next_id);
+                                            clone!(items, next_id);
                                             move || {
                                                 let id = next_id.get();
                                                 next_id.set(id + 1);
@@ -91,8 +90,7 @@ pub fn main() {
                                     Button::new()
                                         .modifier(Modifier::new().test_tag("add-item"))
                                         .on_click({
-                                            clone!(items);
-                                            clone!(next_id);
+                                            clone!(items, next_id);
                                             move || {
                                                 let id = next_id.get();
                                                 next_id.set(id + 1);

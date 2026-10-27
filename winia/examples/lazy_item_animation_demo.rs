@@ -147,8 +147,7 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width())
                 .build(ctx, |ctx| {
                 button(ctx, "lazy-anim-insert-head", "insert head", {
-                    clone!(keys);
-                    clone!(next_key);
+                    clone!(keys, next_key);
                     move || {
                         let mut next = keys.get();
                         let id = next_key.get();
@@ -158,8 +157,7 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                     }
                 });
                 button(ctx, "lazy-anim-insert-middle", "insert middle", {
-                    clone!(keys);
-                    clone!(next_key);
+                    clone!(keys, next_key);
                     move || {
                         let mut next = keys.get();
                         let id = next_key.get();
