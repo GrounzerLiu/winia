@@ -16,6 +16,7 @@ pub use sizing::{Dimension, IntrinsicSize, SizeValue};
 pub(crate) mod container;
 pub mod components;
 pub mod spacer;
+pub mod flexbox;
 pub mod grid;
 pub mod staggered;
 pub mod box_with_constraints;
@@ -45,6 +46,10 @@ pub use row::Row;
 pub use box_layout::Stack;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
+pub use flexbox::{
+    FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBox, FlexBoxConfig,
+    FlexBoxConfigInput, FlexBoxLayout, FlexDirection, FlexItemConfig, FlexJustifyContent, FlexWrap,
+};
 pub use grid::{Grid, GridArea, GridFlow, GridLayout, GridTrackSpec};
 pub use staggered::{assign_lanes, lane_anchors, LaneSlot};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};

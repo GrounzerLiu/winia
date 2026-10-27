@@ -1,5 +1,31 @@
     use super::*;
 
+    /// A flex item's own config is a parameter of the FlexBox that measured it: a changed grow,
+    /// basis or align-self must re-enter, or a Clean line keeps its old geometry.
+    #[test]
+    fn param_eq_compares_the_flex_item_config() {
+        use crate::layout::{FlexAlignSelf, FlexBasis, FlexItemConfig};
+
+        let a = Modifier::new().flex(FlexItemConfig::new().grow(1.0).basis_dp(80.0));
+        let b = Modifier::new().flex(FlexItemConfig::new().grow(1.0).basis_dp(80.0));
+        assert!(a.param_eq(&b), "two identical flex configs are the same parameter");
+
+        let grown = Modifier::new().flex(FlexItemConfig::new().grow(2.0).basis_dp(80.0));
+        assert!(!a.param_eq(&grown), "a different grow must re-enter");
+
+        let percent =
+            Modifier::new().flex(FlexItemConfig::new().grow(1.0).basis(FlexBasis::Percent(0.5)));
+        assert!(!a.param_eq(&percent), "a different basis must re-enter");
+
+        let aligned = Modifier::new().flex(
+            FlexItemConfig::new()
+                .grow(1.0)
+                .basis_dp(80.0)
+                .align_self(FlexAlignSelf::End),
+        );
+        assert!(!a.param_eq(&aligned), "a different align-self must re-enter");
+    }
+
     /// A changed `content_align_self` must re-enter the box: the parameter is part of the Skip
     /// contract (`BoxLayout` places children with it), and an element missing from `param_eq` is a
     /// change a Clean slot skips past forever.

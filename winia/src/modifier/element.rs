@@ -373,6 +373,9 @@ pub(crate) enum ModifierElement {
     GridItemArea { area_id: u64 },
     /// A grid item's span and cell alignment — Compose's `GridScope.Modifier.gridItem`
     /// (`Grid.kt:158-230`). Only `Grid` reads it.
+    /// A flex item's share of its FlexBox — Compose's Modifier.flex(FlexConfig)
+    /// (FlexBox.kt:2215-2253). Only FlexBox reads it.
+    FlexItem(crate::layout::flexbox::FlexItemConfig),
     GridItem {
         column_span: u32,
         row_span: u32,

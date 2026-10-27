@@ -106,7 +106,7 @@ concentrated in the APIs 1.13 added, and in the grid family.
 | `Modifier.windowInsetsStartWidth` / `EndWidth` / `TopHeight` / `BottomHeight` | **missing** | `WindowInsetsSize.kt`; winia has the padding form only |
 | `Modifier.fitInside` / `fitOutside` (rulers) | **missing** | `RulerAlignment.kt`, new in 1.13 |
 | `Grid` / `GridConfigurationScope` / `GridTrackSpec` | **closed 2026-10-26** | `layout::Grid` — fixed/percentage/weighted/intrinsic tracks, spans, gaps, named areas, pass-1.5 deficit distribution; see [grid.md](grid.md) |
-| `FlexBox` / `FlexBoxConfig` | **missing** | `FlexBox.kt`, new in 1.13 |
+| `FlexBox` / `FlexBoxConfig` | **closed 2026-10-27** | `layout::FlexBox` — direction, wrap, justify/align items+content, grow/shrink/basis, order, responsive `config_for`; see [flexbox.md](flexbox.md) |
 | `ContextualFlowRow` / `ContextualFlowColumn` | **missing** | `ContextualFlowLayout.kt` |
 | `IntrinsicSize`, `AspectRatio`, `Size`, `Padding`, `Offset`, `AlignmentLine` | yes | all chain steps (`SizeStep`) in `modifier/builders/layout.rs` |
 | `WindowInsets` + `windowInsetsPadding` | yes | `window/insets.rs`, `Modifier::status_bars_padding` and friends |

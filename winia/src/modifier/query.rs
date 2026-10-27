@@ -569,6 +569,14 @@ impl Modifier {
 
     /// The named area a child asks for inside a `Grid` — see [`Modifier::grid_item_in_area`]. Last
     /// wins, and no such element means "auto-place me".
+    /// A child's flex properties inside a FlexBox — see Modifier::flex. Last wins.
+    pub fn get_flex_item(&self) -> Option<crate::layout::flexbox::FlexItemConfig> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::FlexItem(config) => Some(*config),
+            _ => None,
+        })
+    }
+
     pub fn get_grid_item_area(&self) -> Option<u64> {
         self.elements.iter().rev().find_map(|el| match el {
             ModifierElement::GridItemArea { area_id } => Some(*area_id),
