@@ -69,34 +69,44 @@ fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
 
             // Row 1: the structural knobs.
             Row::new().spacing(8.0).build(ctx, |ctx| {
-                let l = lanes.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lanes-less"))
-                    .on_click(move || l.set(l.get().saturating_sub(1).max(1)))
+                    .on_click({
+                        clone!(lanes);
+                        move || lanes.set(lanes.get().saturating_sub(1).max(1))
+                    })
                     .build(ctx, |ctx| Text::new("lanes -").font_size(12.0).build(ctx));
-                let l = lanes.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lanes-more"))
-                    .on_click(move || l.set((l.get() + 1).min(4)))
+                    .on_click({
+                        clone!(lanes);
+                        move || lanes.set((lanes.get() + 1).min(4))
+                    })
                     .build(ctx, |ctx| Text::new("lanes +").font_size(12.0).build(ctx));
-                let c = count.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("items-less"))
-                    .on_click(move || c.set(c.get().saturating_sub(8).max(8)))
+                    .on_click({
+                        clone!(count);
+                        move || count.set(count.get().saturating_sub(8).max(8))
+                    })
                     .build(ctx, |ctx| Text::new("items -").font_size(12.0).build(ctx));
-                let c = count.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("items-more"))
-                    .on_click(move || c.set((c.get() + 8).min(160)))
+                    .on_click({
+                        clone!(count);
+                        move || count.set((count.get() + 8).min(160))
+                    })
                     .build(ctx, |ctx| Text::new("items +").font_size(12.0).build(ctx));
             });
 
             // Row 2: the pattern, the jumps and the direction.
             Row::new().spacing(8.0).build(ctx, |ctx| {
-                let p = pattern.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("pattern"))
-                    .on_click(move || p.set((p.get() + 1) % 4))
+                    .on_click({
+                        clone!(pattern);
+                        move || pattern.set((pattern.get() + 1) % 4)
+                    })
                     .build(ctx, |ctx| Text::new("heights").font_size(12.0).build(ctx));
                 Button::new()
                     .modifier(Modifier::new().test_tag("jump-top"))
@@ -112,30 +122,36 @@ fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
                         move || scroll.offset.set(1.0e9)
                     })
                     .build(ctx, |ctx| Text::new("end").font_size(12.0).build(ctx));
-                let r = rtl.clone();
                 Switch::new(rtl.get())
                     .modifier(Modifier::new().test_tag("rtl"))
-                    .on_checked_change(move |value| r.set(value))
+                    .on_checked_change({
+                        clone!(rtl);
+                        move |value| rtl.set(value)
+                    })
                     .build(ctx, |_| {});
             });
 
             // The two gaps.
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("gap").font_size(12.0).build(ctx);
-                let g = gap.clone();
                 Slider::new(gap.get())
                     .modifier(Modifier::new().test_tag("gap"))
                     .value_range(0.0, 24.0)
-                    .on_value_change(move |value| g.set(value))
+                    .on_value_change({
+                        clone!(gap);
+                        move |value| gap.set(value)
+                    })
                     .build(ctx);
             });
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("cross").font_size(12.0).build(ctx);
-                let g = cross_gap.clone();
                 Slider::new(cross_gap.get())
                     .modifier(Modifier::new().test_tag("cross-gap"))
                     .value_range(0.0, 24.0)
-                    .on_value_change(move |value| g.set(value))
+                    .on_value_change({
+                        clone!(cross_gap);
+                        move |value| cross_gap.set(value)
+                    })
                     .build(ctx);
             });
 

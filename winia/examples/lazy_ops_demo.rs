@@ -11,6 +11,7 @@
 //! Run with `cargo run -p winia --example lazy_ops_demo`; the same UI is the `lazy_ops` fixture
 //! scenario driven by `tests/ui_lazy_test.rs`.
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -58,29 +59,36 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                     .cross_spacing(6.0)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                    let (data_add, next_key_add) = (data.clone(), next_key.clone());
-                    action(ctx, "lazy-add-head", "add 5", move || {
-                        let mut next: Vec<u64> = data_add.get().as_ref().clone();
-                        let mut key = next_key_add.get();
-                        for _ in 0..STEP {
-                            next.insert(0, key);
-                            key += 1;
+                    action(ctx, "lazy-add-head", "add 5", {
+                        clone!(data);
+                        clone!(next_key);
+                        move || {
+                            let mut next: Vec<u64> = data.get().as_ref().clone();
+                            let mut key = next_key.get();
+                            for _ in 0..STEP {
+                                next.insert(0, key);
+                                key += 1;
+                            }
+                            next_key.set(key);
+                            data.set(std::sync::Arc::new(next));
                         }
-                        next_key_add.set(key);
-                        data_add.set(std::sync::Arc::new(next));
                     });
-                    let data_remove = data.clone();
-                    action(ctx, "lazy-remove-head", "remove 5", move || {
-                        let mut next: Vec<u64> = data_remove.get().as_ref().clone();
-                        let keep = next.len().saturating_sub(STEP);
-                        next.truncate(keep);
-                        data_remove.set(std::sync::Arc::new(next));
+                    action(ctx, "lazy-remove-head", "remove 5", {
+                        clone!(data);
+                        move || {
+                            let mut next: Vec<u64> = data.get().as_ref().clone();
+                            let keep = next.len().saturating_sub(STEP);
+                            next.truncate(keep);
+                            data.set(std::sync::Arc::new(next));
+                        }
                     });
-                    let jump = main_state.clone();
-                    action(ctx, "lazy-jump-25", "jump 25", move || jump.scroll_to_item(25, 0.0));
-                    let animate = main_state.clone();
-                    action(ctx, "lazy-animate-25", "animate 25", move || {
-                        animate.animate_scroll_to_item(25, 0.0)
+                    action(ctx, "lazy-jump-25", "jump 25", {
+                        clone!(main_state);
+                        move || main_state.scroll_to_item(25, 0.0)
+                    });
+                    action(ctx, "lazy-animate-25", "animate 25", {
+                        clone!(main_state);
+                        move || main_state.animate_scroll_to_item(25, 0.0)
                     });
                 });
                 // A Flow, not a Row: seven buttons never fit one line, and a button outside the card
@@ -90,12 +98,18 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                     .cross_spacing(6.0)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                    let fling = main_state.clone();
-                    action(ctx, "lazy-fling", "fling", move || fling.fling(1500.0));
-                    let flip = reverse.clone();
-                    action(ctx, "lazy-flip-reverse", "reverse", move || flip.set(!flip.get()));
-                    let lock = locked.clone();
-                    action(ctx, "lazy-toggle-lock", "lock scroll", move || lock.set(!lock.get()));
+                    action(ctx, "lazy-fling", "fling", {
+                        clone!(main_state);
+                        move || main_state.fling(1500.0)
+                    });
+                    action(ctx, "lazy-flip-reverse", "reverse", {
+                        clone!(reverse);
+                        move || reverse.set(!reverse.get())
+                    });
+                    action(ctx, "lazy-toggle-lock", "lock scroll", {
+                        clone!(locked);
+                        move || locked.set(!locked.get())
+                    });
                 });
                 // What the list reports: the visible range from `layout_info`, the rest from the state.
                 let info = main_state.layout_info();
@@ -191,18 +205,22 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
                     .cross_spacing(6.0)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                    let next_page = page.clone();
-                    let pager = pager_state.clone();
-                    action(ctx, "lazy-next-page", "next page", move || {
-                        let target = (next_page.get() + 1).min(PAGES - 1);
-                        next_page.set(target);
-                        pager.scroll_to_item(target, 0.0);
+                    action(ctx, "lazy-next-page", "next page", {
+                        clone!(page);
+                        clone!(pager_state);
+                        move || {
+                            let target = (page.get() + 1).min(PAGES - 1);
+                            page.set(target);
+                            pager_state.scroll_to_item(target, 0.0);
+                        }
                     });
-                    let reset_page = page.clone();
-                    let pager = pager_state.clone();
-                    action(ctx, "lazy-first-page", "first page", move || {
-                        reset_page.set(0);
-                        pager.scroll_to_item(0, 0.0);
+                    action(ctx, "lazy-first-page", "first page", {
+                        clone!(page);
+                        clone!(pager_state);
+                        move || {
+                            page.set(0);
+                            pager_state.scroll_to_item(0, 0.0);
+                        }
                     });
                     Text::new(format!("page {} of {}", page.get() + 1, PAGES))
                         .modifier(Modifier::new().test_tag("lazy-page-info"))

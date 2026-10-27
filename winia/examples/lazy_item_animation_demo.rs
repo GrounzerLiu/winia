@@ -18,6 +18,7 @@ use std::time::Duration;
 use winia::animation::interpolator::EaseOutCubic;
 use winia::animation::item::ItemAnimationSpec;
 use winia::animation::{SpringSpec, TweenSpec};
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -145,36 +146,45 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 .cross_spacing(6.0)
                 .modifier(Modifier::new().fill_max_width())
                 .build(ctx, |ctx| {
-                let (k, n) = (keys.clone(), next_key.clone());
-                button(ctx, "lazy-anim-insert-head", "insert head", move || {
-                    let mut next = k.get();
-                    let id = n.get();
-                    n.set(id + 1);
-                    next.insert(0, id);
-                    k.set(next);
-                });
-                let (k, n) = (keys.clone(), next_key.clone());
-                button(ctx, "lazy-anim-insert-middle", "insert middle", move || {
-                    let mut next = k.get();
-                    let id = n.get();
-                    n.set(id + 1);
-                    let at = next.len() / 2;
-                    next.insert(at, id);
-                    k.set(next);
-                });
-                let k = keys.clone();
-                button(ctx, "lazy-anim-remove-middle", "remove middle", move || {
-                    let mut next = k.get();
-                    if !next.is_empty() {
-                        let at = next.len() / 2;
-                        next.remove(at);
+                button(ctx, "lazy-anim-insert-head", "insert head", {
+                    clone!(keys);
+                    clone!(next_key);
+                    move || {
+                        let mut next = keys.get();
+                        let id = next_key.get();
+                        next_key.set(id + 1);
+                        next.insert(0, id);
+                        keys.set(next);
                     }
-                    k.set(next);
                 });
-                let k = keys.clone();
-                button(ctx, "lazy-anim-shuffle", "shuffle", move || {
+                button(ctx, "lazy-anim-insert-middle", "insert middle", {
+                    clone!(keys);
+                    clone!(next_key);
+                    move || {
+                        let mut next = keys.get();
+                        let id = next_key.get();
+                        next_key.set(id + 1);
+                        let at = next.len() / 2;
+                        next.insert(at, id);
+                        keys.set(next);
+                    }
+                });
+                button(ctx, "lazy-anim-remove-middle", "remove middle", {
+                    clone!(keys);
+                    move || {
+                        let mut next = keys.get();
+                        if !next.is_empty() {
+                            let at = next.len() / 2;
+                            next.remove(at);
+                        }
+                        keys.set(next);
+                    }
+                });
+                button(ctx, "lazy-anim-shuffle", "shuffle", {
+                    clone!(keys);
+                    move || {
                     // Same keys, different slots: pure placement, no fade at all.
-                    let next = k.get();
+                    let next = keys.get();
                     let mid = next.len() / 2;
                     let (front, back) = next.split_at(mid);
                     let mut out = Vec::with_capacity(next.len());
@@ -186,20 +196,22 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                             out.push(*value);
                         }
                     }
-                    k.set(out);
+                    keys.set(out);
+                    }
                 });
                 // The label names the contract that is ACTIVE (tapping cycles to the next one), and it
                 // is read INSIDE the button's own content closure: the dependency then registers on that
                 // group, which re-runs on a change. A label computed out here and captured into the
                 // closure never updates — the FlowRow around it skips, so the closure does not re-run
                 // (the trap component-authoring 3.2 describes).
-                let m = mode.clone();
-                let m_label = mode.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lazy-anim-spec"))
-                    .on_click(move || m.set(m.get().next()))
+                    .on_click({
+                        clone!(mode);
+                        move || mode.set(mode.get().next())
+                    })
                     .build(ctx, |ctx| {
-                        Text::new(format!("spec: {}", m_label.get().label()))
+                        Text::new(format!("spec: {}", mode.get().label()))
                             .font_size(12.0)
                             .build(ctx);
                     });
