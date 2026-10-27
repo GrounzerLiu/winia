@@ -1639,3 +1639,24 @@ fn a_nowrap_ellipsis_lays_the_paragraph_out_at_the_box_width() {
         "a nowrap clip keeps the full line (layout {clip_width}, longest {clip_longest})"
     );
 }
+
+#[test]
+fn probe_text_param_change() {
+    use crate::runtime::composer::{ComposeCtx, Composer};
+    use crate::runtime::state::State;
+    let size = State::new(20.0f32);
+    let mut composer = Composer::new();
+    let mut build = |composer: &mut Composer, size: State<f32>| {
+        composer.compose(crate::compose!(|ctx: &mut ComposeCtx| {
+            let s = size.get();
+            crate::components::Text::new("Name").font_size(s).build(ctx);
+        }));
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+        let root = composer.layout_root_idx().unwrap();
+        composer.arena_nodes()[root].measured_size.height
+    };
+    let h20 = build(&mut composer, size.clone());
+    size.set(40.0);
+    let h40 = build(&mut composer, size.clone());
+    panic!("PROBE h20={h20} h40={h40}");
+}

@@ -153,6 +153,11 @@ exceptions, both about what the component still has to add afterwards:
 - **input nodes** - every clickable component appends `clickable`/ripple AFTER the caller's modifier
   (`button.rs:898` before `:905-909`, `card.rs:457-462`, `list_item.rs:146-150`), because the
   interaction node has to be added by the component, not by the caller.
+- **the drawing itself** - a leaf whose payload IS its content appends that payload after the caller's
+  chain (`components/text.rs` ends its chain with `text_content_full`, `rich_text.rs` likewise): the
+  payload is a DRAW element, so a caller's `background` has to stay earlier in the chain and paint
+  beneath the glyphs. Pinned by
+  `render_snapshot.rs::a_caller_background_paints_beneath_the_text`.
 
 ### 2.4 An animatable parameter: pick the carrier by the phase that reads it
 

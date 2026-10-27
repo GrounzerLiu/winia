@@ -92,22 +92,29 @@ impl Text {
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
-    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self { self.font_size = Some(size.into()); self }
+
+    // The options follow Compose's parameter order (`material3/Text.kt:40-58`): colour, size, the face,
+    // letter spacing, alignment, line height, overflow, wrapping, the line cap, then the style.
+
+    /// Compose's `color` parameter — it beats the style and the content colour.
     pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
+    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self { self.font_size = Some(size.into()); self }
     pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
     pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
     pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
-    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
-    pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
-    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
-    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
 
+    pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
+
     /// 行高（`TextUnit`；裸 `f32` 按 Sp 解释，对标 Compose `TextStyle.lineHeight`）
     pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
+
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
+    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
 
     /// 设置文字样式（单独参数优先级高于此样式）
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }

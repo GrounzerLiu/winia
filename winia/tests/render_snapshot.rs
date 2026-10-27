@@ -719,3 +719,38 @@ fn a_hidden_node_keeps_its_space_and_paints_nothing() {
         "the next sibling still starts after the hidden box's space, got ({r2},{g2},{b2})"
     );
 }
+
+/// §2.3 of `docs/component-authoring.md` says the caller's modifier goes last, and `Text` is the third
+/// documented exception: its payload IS the drawing, so it goes AFTER the caller's chain — otherwise a
+/// caller's `background` (an earlier draw element) would paint over the glyphs. This pins that order:
+/// the glyphs must stay visible on top of a caller background.
+#[test]
+fn a_caller_background_paints_beneath_the_text() {
+    let (mut surface, _) = render_ui(200.0, 100.0, winia::app_root!(|ctx| {
+        Text::new("IIII")
+            .font_size(72.0)
+            .color(Color::WHITE)
+            .modifier(
+                Modifier::new()
+                    .size(200.0, 100.0)
+                    .background(Color::RED, Shape::Rectangle),
+            )
+            .build(ctx);
+    }));
+
+    // The box is red everywhere except where a stroke is drawn; the glyphs are white.
+    let mut white = 0;
+    let mut red = 0;
+    for x in (10..190).step_by(4) {
+        for y in (10..90).step_by(4) {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r > 220 && g > 220 && b > 220 {
+                white += 1;
+            } else if r > 200 && g < 60 && b < 60 {
+                red += 1;
+            }
+        }
+    }
+    assert!(white > 5, "the glyphs are painted on TOP of the caller's background ({white} white samples)");
+    assert!(red > 50, "and the background is still there around them ({red} red samples)");
+}
