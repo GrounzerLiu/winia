@@ -107,7 +107,7 @@ concentrated in the APIs 1.13 added, and in the grid family.
 | `Modifier.fitInside` / `fitOutside` (rulers) | **missing** | `RulerAlignment.kt`, new in 1.13 |
 | `Grid` / `GridConfigurationScope` / `GridTrackSpec` | **closed 2026-10-26** | `layout::Grid` — fixed/percentage/weighted/intrinsic tracks, spans, gaps, named areas, pass-1.5 deficit distribution; see [grid.md](grid.md) |
 | `FlexBox` / `FlexBoxConfig` | **closed 2026-10-27** | `layout::FlexBox` — direction, wrap, justify/align items+content, grow/shrink/basis, order, responsive `config_for`; see [flexbox.md](flexbox.md) |
-| `ContextualFlowRow` / `ContextualFlowColumn` | **missing** | `ContextualFlowLayout.kt` |
+| `ContextualFlowRow` / `ContextualFlowColumn` | **deprecated upstream, not a gap** | `ContextualFlowLayout.kt:67` / `:142` — `@Deprecated("ContextualFlowLayouts are no longer maintained")`, and every `FlowLayoutOverflow` subclass (including `expandIndicator`) carries `@Deprecated("FlowLayout overflow is no longer maintained")`. The index-based variant composes only the items its constraints allow and hands each item its line context (`lineIndex`, the line's main-axis limit, the available cross space) so a caller can render an `N+` chip; upstream has stopped maintaining both. winia keeps `FlowRow`/`FlowColumn` with `max_lines` plus `FlowOverflow::Clip` / `Visible`. |
 | `IntrinsicSize`, `AspectRatio`, `Size`, `Padding`, `Offset`, `AlignmentLine` | yes | all chain steps (`SizeStep`) in `modifier/builders/layout.rs` |
 | `WindowInsets` + `windowInsetsPadding` | yes | `window/insets.rs`, `Modifier::status_bars_padding` and friends |
 | `RowScope` / `ColumnScope` | deliberate non-goal | `layout_weight`/`align_self` are plain modifiers; a misplaced one is silently ignored |
