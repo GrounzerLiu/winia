@@ -37,14 +37,22 @@ fn card(ctx: &mut ComposeCtx, tag: &str, title: &str, body: impl FnOnce(&mut Com
         });
 }
 
+/// The body composes seven cards, so it takes the macro: without it none of the statements below gets
+/// a compiled-in id, every key inside derives from the same chain, and a structure change (the settings
+/// sheet opening) shifts the per-base counters — the `[dup-key]` storm the materialiser panics on.
+/// Every other demo in this directory is marked the same way.
+#[composable]
 fn text_demo(ctx: &mut ComposeCtx) {
+    // The scroll state is REMEMBERED: a fresh `ScrollState` per build is a new identity every
+    // recomposition, so the page can never Skip and the scroll offset resets on every frame.
+    let scroll = ctx.remember(|| ScrollState::new()).get();
     Column::new()
         .spacing(12.0)
         .modifier(
             Modifier::new()
                 .fill_max_size()
                 .padding(16.0)
-                .vertical_scroll(ScrollState::new()),
+                .vertical_scroll(scroll),
         )
         .build(ctx, |ctx| {
             // 1. The type scale: the measured height follows the font size.

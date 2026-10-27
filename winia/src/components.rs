@@ -227,6 +227,45 @@ mod conventions {
         "tooltip.rs",              // anchored content, no parameter of its own to compare
     ];
 
+    /// Every demo body is `#[composable]`.
+    ///
+    /// A demo composes dozens of children from ONE function. Without the macro none of its statements
+    /// gets a compiled-in id, so every key inside derives from the same chain base and only the
+    /// per-base counter separates the siblings — a structure change (opening the settings sheet, say)
+    /// then shifts those counters and the materialiser panics with `[dup-key]`. Measured: the text demo
+    /// did exactly that, one run in three, until the attribute was added.
+    #[test]
+    fn every_demo_body_is_composable() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
+            let path = entry.expect("a dir entry").path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if !name.ends_with("_demo.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read the demo");
+            let lines: Vec<&str> = text.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                let trimmed = line.trim();
+                if !trimmed.starts_with("fn ") || !trimmed.contains("(ctx: &mut ComposeCtx) {") {
+                    continue;
+                }
+                let previous = index
+                    .checked_sub(1)
+                    .and_then(|i| lines.get(i))
+                    .map(|l| l.trim())
+                    .unwrap_or("");
+                if previous != "#[composable]" {
+                    offenders.push(format!("{name}:{}: {trimmed}", index + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a demo body that composes children needs #[composable]: {offenders:?}"
+        );
+    }
     fn component_sources() -> Vec<(String, String)> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src").join("components");
         let mut out = Vec::new();
