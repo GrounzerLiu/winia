@@ -1,5 +1,8 @@
-//! FlexBox through a real window: the demo's own controls drive direction, wrap, justify and grow,
-//! and the assertions read the measured geometry back out of the fixture's debug server.
+//! FlexBox through a real window. The demo's controls that this test drives are wrap (which stops the
+//! shrink) and justify (which packs a line to the main-end edge); direction, align and align-content
+//! have no button assertions here, and grow is demonstrated by the fixed strip rather than a control.
+//! Every assertion below reads measured geometry back out of the fixture's debug server, so a broken
+//! FlexBox fails here rather than passing on tag presence.
 
 #[path = "ui/support.rs"]
 mod ui;
@@ -25,10 +28,11 @@ fn flexbox_lays_out_both_axes() {
         "the 8 dp gap survives the shrink: {first:?} {second:?}"
     );
     app.refresh();
-    assert!(
-        app.find_tag("fb-tile-6").is_none(),
-        "the demo composes six tiles"
-    );
+    let tiles = ["0", "1", "2", "3", "4", "5"]
+        .iter()
+        .filter(|index| app.find_tag(&format!("fb-tile-{index}")).is_some())
+        .count();
+    assert_eq!(tiles, 6, "the demo composes six tiles");
 
     // Wrap on: four 96 dp tiles fit one line (4 * 96 + 3 * 8 <= the frame), so they stop shrinking
     // and the remaining two start the second line one line-height plus the cross gap lower.

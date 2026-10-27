@@ -567,8 +567,18 @@ impl Modifier {
             .any(|el| matches!(el, ModifierElement::MatchParentSize))
     }
 
-    /// The named area a child asks for inside a `Grid` — see [`Modifier::grid_item_in_area`]. Last
-    /// wins, and no such element means "auto-place me".
+    /// The fraction this node fills on its MAIN axis, if it fills one: Compose's
+    /// fillMaxWidth/fillMaxHeight, which a FlexBox turns into a grow factor when the item declares
+    /// none (FlexBox.kt:365-377, the mainAxisFillFraction fallback).
+    pub fn get_main_axis_fill(&self, horizontal: bool) -> Option<f32> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::FillMaxWidth { fraction } if horizontal => Some(*fraction),
+            ModifierElement::FillMaxHeight { fraction } if !horizontal => Some(*fraction),
+            ModifierElement::FillMaxSize { fraction } => Some(*fraction),
+            _ => None,
+        })
+    }
+
     /// A child's flex properties inside a FlexBox — see Modifier::flex. Last wins.
     pub fn get_flex_item(&self) -> Option<crate::layout::flexbox::FlexItemConfig> {
         self.elements.iter().rev().find_map(|el| match el {
@@ -577,6 +587,8 @@ impl Modifier {
         })
     }
 
+    /// The named area a child asks for inside a `Grid` — see [`Modifier::grid_item_in_area`]. Last
+    /// wins, and no such element means "auto-place me".
     pub fn get_grid_item_area(&self) -> Option<u64> {
         self.elements.iter().rev().find_map(|el| match el {
             ModifierElement::GridItemArea { area_id } => Some(*area_id),

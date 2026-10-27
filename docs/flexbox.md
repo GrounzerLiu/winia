@@ -69,13 +69,15 @@ Six phases, in the order Compose's measureFlexBox runs them:
    positive free space goes out by grow, negative by shrink x basis (scaled shrink), and an item that
    hits its min-content floor is frozen and the remainder re-distributed. A total grow/shrink below 1
    may only take its share of the INITIAL free space (9.7 step 4.b).
-3. Cross sizes. Items are measured at a tight main size; a line is as tall as its tallest item.
-   align-items: stretch / align-self: stretch re-measures the item at the line's full cross extent.
-   Baseline lines use the union of every item's space above and below its baseline. A NoWrap line is
-   at least the incoming cross minimum.
-4. align-content. The free cross space is distributed over the lines (Stretch grows every line by an
-   equal share first, then the six-value distribution positions them). WrapReverse stacks the lines
-   from the cross-end.
+3. Cross sizes, in the order Compose runs them. (a) Items are measured at a tight main size, each line
+   clamped to the cross space left for it (remainingCrossAxisSize); a line is as tall as its tallest
+   item, Baseline lines use the union of every item's space above and below its first baseline (a
+   child without a published line hangs entirely below it, so its baseline is its own height), and a
+   NoWrap line is at least the incoming cross minimum. (b) align-content: Stretch then grows every
+   line by an equal share of the leftover cross space. (c) Only now is a stretched item re-measured at
+   its line's final extent, so it fills the grown line instead of the intrinsic one.
+4. align-content. The free cross space is distributed over the lines; the gap between them is
+   subtracted exactly once. WrapReverse stacks the lines from the cross-end.
 5. Container size. Main = max(widest line, main minimum), clamped into the incoming range; cross = the
    lines' union, floored by the cross minimum and clamped into the incoming maximum.
 6. Placement. justify-content positions the items inside each line (a single item is packed to the
@@ -92,7 +94,7 @@ Six phases, in the order Compose's measureFlexBox runs them:
 | align_items / align_self | Start, End, Center, Stretch, Baseline / + Auto | Auto falls back to align-items |
 | align_content | Start, End, Center, Stretch, SpaceBetween, SpaceAround | Compose has no SpaceEvenly here |
 | basis | Auto, Dp, Percent | Percent is of the container's main axis |
-| grow / shrink | f32 | shrink is weighted by the basis |
+| grow / shrink | f32 | shrink is weighted by the basis; a main-axis fill (fill_max_width) implies growth when grow is not declared |
 | order | i32 | smaller first |
 
 ## Differences from Compose
@@ -100,9 +102,12 @@ Six phases, in the order Compose's measureFlexBox runs them:
 - Modifier.flex(..) has no scope. Compose's FlexBoxScope makes the modifier only valid inside a
   FlexBox; in winia it is a plain Modifier and is silently ignored by any other container, the same
   convention layout_weight and align_self follow.
-- Modifier.weight is not mapped to grow. Compose maps a main-axis fill fraction onto grow when the
-  grow factor is unset (FlexBox.kt:366-376); winia's weight means "share the leftover", which is not
-  CSS grow. Write grow explicitly.
+- Modifier.weight is not mapped to grow. winia's weight means "share the leftover", which is not CSS
+  grow; a main-axis FILL is mapped (Compose FlexBox.kt:365-377), weight is not. Write grow explicitly.
+- config_for must read its inputs INSIDE the resolver. A State read there is a layout dependency, so a
+  write re-measures; a value captured from the enclosing composition is frozen once the container
+  Skips, because a new closure is not one of the parameters the Skip decision compares. Compose has no
+  such contract — its policy reads a rememberUpdatedState — and winia has no equivalent channel.
 - The config cannot be built from a borrowed scope. Compose's FlexBoxConfig lambda receives a
   FlexBoxConfigScope with live accessors; winia hands config_for a FlexBoxConfigInput (the constraints
   and the density) by value.
@@ -112,7 +117,7 @@ Six phases, in the order Compose's measureFlexBox runs them:
 
 ## Tests
 
-cargo test -p winia --lib -- layout::flexbox — 19 cases:
+cargo test -p winia --lib -- layout::flexbox — 23 cases:
 
 | Test | What it pins |
 | --- | --- |
@@ -123,6 +128,8 @@ cargo test -p winia --lib -- layout::flexbox — 19 cases:
 | max_items_in_each_line_breaks_a_line | the Compose-only line cap |
 | grow_shares_the_free_space | equal grow weights split the space evenly |
 | shrink_takes_space_proportionally | CSS shrink is weighted by the basis (and a fixed size cannot shrink) |
+| a_filling_child_grows_into_the_free_space | a main-axis fill implies growth (Compose's mainAxisFillFraction fallback) |
+| a_growing_item_cannot_grow_below_its_min_content | a min-content violation freezes the item and the rest is re-distributed, so the line never exceeds its container |
 | a_percentage_basis_uses_the_container_main | Percent basis |
 | row_reverse_puts_the_first_item_at_the_end | main-axis reversal |
 | rtl_mirrors_the_main_axis | only x mirrors |
@@ -130,11 +137,21 @@ cargo test -p winia --lib -- layout::flexbox — 19 cases:
 | align_items_stretch_fills_the_line_cross | stretch re-measure |
 | align_self_overrides_align_items | per-item override |
 | align_content_space_between_distributes_the_lines | line distribution |
+| align_content_does_not_subtract_the_cross_gap_twice | the gap is subtracted once (3 lines of 20 in 120 with a 10 gap sit at 0/50/100) |
+| align_content_stretch_grows_the_stretched_items | stretch grows the lines BEFORE the items are measured |
 | order_reorders_the_items | CSS order |
 | a_column_direction_swaps_the_axes | column mapping |
 | an_empty_flex_box_takes_the_minimum | empty container |
-| a_baseline_axis_without_published_lines_degrades_to_the_start | the unspecified-baseline fallback |
+| a_baseline_without_a_published_line_falls_back_to_the_item_height | an item without a line hangs below the baseline (its own height), so the two boxes align their bottoms |
+| a_baseline_line_lines_up_the_texts | two real Texts share one first baseline |
 | a_baseline_line_lines_up_the_texts | two real Texts of different sizes share one first baseline |
+
+Lifecycle (a measure-only unit test cannot see these): cargo test -p winia --test flexbox_lifecycle
+
+| Test | What it pins |
+| --- | --- |
+| a_config_for_resolver_sees_a_state_change | a State read inside config_for registers a LAYOUT dependency, so the resolver re-runs and the direction flips |
+| a_child_flex_change_reaches_the_parent | a child's own Modifier::flex(..) changing re-measures the parent, even though the container's parameters did not change |
 
 cargo test -p winia --features debug-server --test ui_flexbox_test drives examples/flexbox_demo.rs
 through the debug server: six tiles shrink to the frame, wrap stops the shrink, justify-content packs

@@ -390,9 +390,6 @@ impl Modifier {
         self.push(ModifierElement::MatchParentSize)
     }
 
-    /// Place this child into a NAMED area of a `Grid` — Compose's `GridScope.Modifier.gridItem(areaId)`.
-    /// The area is declared on the grid (`Grid::areas`); an id the grid does not know falls back to
-    /// auto-placement.
     /// Declare this child's flex properties inside a FlexBox — Compose's
     /// FlexBoxScope.Modifier.flex(FlexConfig) (FlexBox.kt:1248-1276).
     ///
@@ -402,6 +399,9 @@ impl Modifier {
         self.push(ModifierElement::FlexItem(config))
     }
 
+    /// Place this child into a NAMED area of a `Grid` — Compose's `GridScope.Modifier.gridItem(areaId)`.
+    /// The area is declared on the grid (`Grid::areas`); an id the grid does not know falls back to
+    /// auto-placement.
     pub fn grid_item_in_area(self, area_id: u64) -> Self {
         self.push(ModifierElement::GridItemArea { area_id })
     }

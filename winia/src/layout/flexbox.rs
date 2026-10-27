@@ -405,6 +405,8 @@ struct FlexItem {
     /// min-content along the main axis.
     min_main: f32,
     target: f32,
+    /// The main size the child actually measured at (it can clamp itself below its share).
+    measured_main: f32,
     frozen: bool,
     cross: f32,
     /// The item's distance from its own top to its baseline.
@@ -529,10 +531,12 @@ impl MeasurePolicy for FlexBoxLayout {
             let base = match declared.basis {
                 FlexBasis::Dp(value) => value.max(0.0),
                 FlexBasis::Percent(fraction) => {
-                    if main_limit < f32::MAX {
-                        (main_limit * fraction.max(0.0)).max(0.0)
-                    } else {
+                    // A NaN fraction (a computed 0.0/0.0) falls back to max-content, as Compose's
+                    // isNaN check does (:386-394), instead of collapsing the item to zero.
+                    if fraction.is_nan() || main_limit >= f32::MAX {
                         max_content
+                    } else {
+                        (main_limit * fraction.max(0.0)).max(0.0)
                     }
                 }
                 FlexBasis::Auto => max_content,
@@ -548,17 +552,29 @@ impl MeasurePolicy for FlexBoxLayout {
                 },
                 cross_limit,
             );
+            // Compose turns a main-axis fill into growth when the item declares no grow factor
+            // (FlexBox.kt:365-377). grow 0.0 is treated as "not declared", which is what CSS grow 0
+            // effectively is.
+            let grow = if declared.grow > 0.0 {
+                declared.grow
+            } else {
+                nodes[child]
+                    .modifier
+                    .get_main_axis_fill(horizontal)
+                    .unwrap_or(0.0)
+            };
             items.push(FlexItem {
                 child,
                 slot,
                 order: declared.order,
-                grow: declared.grow.max(0.0),
+                grow: grow.max(0.0),
                 shrink: declared.shrink.max(0.0),
                 align_self: declared.align_self,
                 base,
                 hypothetical: base.max(min_main),
                 min_main,
                 target: base.max(min_main),
+                measured_main: base.max(min_main),
                 frozen: false,
                 cross: 0.0,
                 baseline: 0.0,
@@ -608,8 +624,13 @@ impl MeasurePolicy for FlexBoxLayout {
             max_above_baseline: 0.0,
         });
 
-        // ── Phase 3: measure the items, then each line's cross extent (:714-770, :916-968) ──
+        // ── Phase 3a: measure every item at a tight main size (measureFlexItems, :714-770) ──
+        //
+        // Each line's items are clamped to the cross space LEFT for that line, as Compose does with
+        // its running remainingCrossAxisSize (:723, :763-765, :984-1006).
+        let mut remaining_cross = cross_limit;
         for line in &mut lines {
+            let line_limit = remaining_cross.min(cross_limit);
             let mut line_cross = 0.0f32;
             let mut above = 0.0f32;
             let mut below = 0.0f32;
@@ -628,13 +649,18 @@ impl MeasurePolicy for FlexBoxLayout {
                     nodes,
                     policies,
                     child,
-                    item_constraints(horizontal, items[index].target, cross_limit),
+                    item_constraints(horizontal, items[index].target, line_limit),
                 )
                 .0;
                 items[index].cross = cross_of(horizontal, size);
+                items[index].measured_main = main_of(horizontal, size);
                 if aligns {
                     aligns_by_baseline = true;
-                    let baseline = nodes[child].alignment_line(baseline_line).unwrap_or(0.0);
+                    // A child that publishes no line hangs its whole height BELOW the baseline —
+                    // Compose falls back to the placeable's height (:2124-2146).
+                    let baseline = nodes[child]
+                        .alignment_line(baseline_line)
+                        .unwrap_or(items[index].cross);
                     items[index].baseline = baseline;
                     above = above.max(baseline);
                     below = below.max(items[index].cross - baseline);
@@ -653,10 +679,28 @@ impl MeasurePolicy for FlexBoxLayout {
             if !config.wrap.is_enabled() {
                 line.cross = line.cross.max(cross_floor);
             }
+            remaining_cross = (line_limit - line.cross - cross_gap).max(0.0);
         }
 
-        // Stretch: a stretched item fills its line's cross extent, so it is measured a second time
-        // once the line's extent is known (:714-770, measureItem :969-1010).
+        // ── Phase 3b: align-content: stretch grows the LINES first (:246-254) ──
+        //
+        // It has to run before the stretched items are measured, or a stretched item fills the
+        // line's INTRINSIC extent and leaves the grown part of the line empty.
+        let total_gap_cross = cross_gap * (lines.len().saturating_sub(1) as f32);
+        let mut lines_cross: f32 = lines.iter().map(|line| line.cross).sum::<f32>();
+        if config.wrap.is_enabled()
+            && config.align_content == FlexAlignContent::Stretch
+            && cross_floor < f32::MAX
+            && lines_cross + total_gap_cross < cross_floor
+        {
+            let extra = (cross_floor - lines_cross - total_gap_cross) / lines.len() as f32;
+            for line in &mut lines {
+                line.cross += extra;
+            }
+            lines_cross = lines.iter().map(|line| line.cross).sum();
+        }
+
+        // ── Phase 3c: a stretched item fills its line's (final) cross extent (:714-770) ──
         for line in &lines {
             for index in line.start..line.end {
                 if matches!(
@@ -677,24 +721,13 @@ impl MeasurePolicy for FlexBoxLayout {
             }
         }
 
-        // ── Phase 4: align-content — distribute the lines in the cross axis (:677-713, :771-810) ──
-        let mut total_cross: f32 = lines.iter().map(|line| line.cross).sum::<f32>()
-            + cross_gap * (lines.len().saturating_sub(1) as f32);
-        if config.wrap.is_enabled()
-            && config.align_content == FlexAlignContent::Stretch
-            && cross_floor < f32::MAX
-            && total_cross < cross_floor
-        {
-            // applyAlignContentStretch: the leftover is split evenly over the lines.
-            let extra = (cross_floor - total_cross) / lines.len() as f32;
-            for line in &mut lines {
-                line.cross += extra;
-            }
-            total_cross = cross_floor;
-        }
+        // ── Phase 4: align-content — distribute the lines in the cross axis (:771-810) ──
+        //
+        // free = the space left over the lines PLUS the gaps between them; the gap must be subtracted
+        // exactly once (totalLinesCrossSize in Compose does not include it, :779-780).
+        let total_cross = lines_cross + total_gap_cross;
         if config.wrap.is_enabled() {
-            let total_gap = cross_gap * (lines.len().saturating_sub(1) as f32);
-            let free = (cross_floor.max(total_cross) - total_cross - total_gap).max(0.0);
+            let free = (cross_floor.max(total_cross) - total_cross).max(0.0);
             let space_between = match config.align_content {
                 FlexAlignContent::SpaceAround => free / lines.len() as f32,
                 FlexAlignContent::SpaceBetween => {
@@ -809,13 +842,7 @@ impl MeasurePolicy for FlexBoxLayout {
                     FlexAlignSelf::Start | FlexAlignSelf::Stretch | FlexAlignSelf::Auto => 0.0,
                     FlexAlignSelf::End => line.cross - items[index].cross,
                     FlexAlignSelf::Center => (line.cross - items[index].cross) / 2.0,
-                    FlexAlignSelf::Baseline => {
-                        if items[index].baseline > 0.0 {
-                            line.max_above_baseline - items[index].baseline
-                        } else {
-                            0.0
-                        }
-                    }
+                    FlexAlignSelf::Baseline => line.max_above_baseline - items[index].baseline,
                 };
                 items[index].cross_position = line.cross_start + cross_offset;
             }
@@ -834,7 +861,7 @@ impl MeasurePolicy for FlexBoxLayout {
             children.len()
         ];
         for item in &items {
-            let child_size = make_size(horizontal, item.target, item.cross);
+            let child_size = make_size(horizontal, item.measured_main, item.cross);
             let mut x = if horizontal {
                 item.main_position
             } else {
@@ -924,22 +951,51 @@ fn resolve_line(items: &mut [FlexItem], container_main: f32, gap: f32) -> f32 {
                 free = fractional;
             }
         }
-        let mut current_free = free;
-        let mut current_grow: f32 = items
-            .iter()
-            .filter(|item| !item.frozen)
-            .map(|item| item.grow)
-            .sum();
-        for item in items.iter_mut().filter(|item| !item.frozen) {
-            let share = if current_grow > 0.0 {
-                item.grow / current_grow
-            } else {
-                0.0
+        let mut cap_left = Some(free.max(0.0));
+        // CSS 9.7 steps 4.d/4.e: grow, then FREEZE any item whose share would put it below its
+        // min-content size and hand the rest to the others. Clamping without redistributing made the
+        // line wider than its container (measured: bases 50+50 with one min-content of 200 gave
+        // 200 + 230 for a 300 dp line).
+        let mut rounds = 0usize;
+        loop {
+            rounds += 1;
+            let unfrozen: Vec<usize> = (0..items.len()).filter(|i| !items[*i].frozen).collect();
+            let grow_total: f32 = unfrozen.iter().map(|i| items[*i].grow).sum();
+            let frozen_targets: f32 = items
+                .iter()
+                .filter(|item| item.frozen)
+                .map(|item| item.target)
+                .sum();
+            let base_total: f32 = unfrozen.iter().map(|i| items[*i].base).sum();
+            let remaining = (container_main - total_gap - frozen_targets - base_total).max(0.0);
+            // The sum-of-factors cap (4.b) only limits the space handed out BEFORE any item freezes:
+            // once an item is pinned at its min-content size that size wins over the cap.
+            let space = match cap_left {
+                Some(cap) => remaining.min(cap),
+                None => remaining,
             };
-            let allocate = current_free * share;
-            current_free -= allocate;
-            current_grow -= item.grow;
-            item.target = (item.base + allocate).max(item.min_main);
+            if grow_total <= 0.0 || space <= 0.0 || rounds > items.len() + 1 {
+                for &index in &unfrozen {
+                    items[index].target = items[index].base;
+                }
+                break;
+            }
+            let mut froze = false;
+            for &index in &unfrozen {
+                let share = items[index].grow / grow_total;
+                let candidate = items[index].base + space * share;
+                if candidate < items[index].min_main {
+                    items[index].target = items[index].min_main;
+                    items[index].frozen = true;
+                    froze = true;
+                } else {
+                    items[index].target = candidate;
+                }
+            }
+            if !froze {
+                break;
+            }
+            cap_left = None;
         }
     } else {
         // CSS 9.7 step 4.c: scale the shrink factors by the basis, then re-run while items hit their
@@ -985,6 +1041,9 @@ fn resolve_line(items: &mut [FlexItem], container_main: f32, gap: f32) -> f32 {
                     item.target = item.min_main;
                     item.frozen = true;
                     needs_redistribution = true;
+                    // The frozen item no longer takes part: its factor leaves the pool, or the
+                    // "less than one total factor" rule keeps counting it (:660).
+                    sum_factors = (sum_factors - item.shrink).max(0.0);
                 } else {
                     item.target = target;
                 }
@@ -1032,8 +1091,15 @@ impl FlexBox {
     }
 
     /// A configuration resolved at MEASURE time from the incoming constraints and the density —
-    /// Compose's FlexBoxConfig lambda (FlexBox.kt:1836-2030). It wins over config(..) when both are
-    /// set.
+    /// Compose's FlexBoxConfig lambda (FlexBox.kt:1836-2030).
+    ///
+    /// Read everything the resolver depends on INSIDE the closure (a `State::get()` there registers a
+    /// LAYOUT dependency, so a write re-measures). A value captured from the enclosing composition is
+    /// frozen once the container Skips: the Skip decision only compares the declared parameters, and
+    /// a new closure is not one of them — Compose sidesteps this with `rememberUpdatedState`, which
+    /// has no equivalent here.
+    ///
+    /// Calling config(..) after config_for(..) drops the resolver; the last call wins.
     pub fn config_for(
         mut self,
         resolver: impl Fn(&FlexBoxConfigInput) -> FlexBoxConfig + 'static,
@@ -1371,16 +1437,102 @@ mod tests {
     }
 
     #[test]
-    fn a_baseline_axis_without_published_lines_degrades_to_the_start() {
-        // Leaves in this harness publish no alignment line, so a baseline item's own line is
-        // unspecified and Compose's rule is "place it at the line's start" (:896-905).
+    fn a_baseline_without_a_published_line_falls_back_to_the_item_height() {
+        // A child that publishes no alignment line hangs entirely BELOW the baseline, so its baseline
+        // is its own height — Compose's getBaseline fallback (:2124-2146). The two boxes then align
+        // their BOTTOMS: line cross 40, the 20 dp box sits at 20.
         let mut nodes = vec![leaf(20.0, 20.0), leaf(20.0, 40.0)];
         let (_, placements) = run(
             FlexBoxConfig::new().align_items(FlexAlignItems::Baseline),
             &mut nodes,
             Constraints::new(0.0, 300.0, 0.0, 100.0),
         );
-        assert_eq!(ys(&placements), vec![0.0, 0.0]);
+        assert_eq!(ys(&placements), vec![20.0, 0.0]);
+    }
+
+    /// A main-axis fill implies growth when the item declares no grow factor — Compose's
+    /// mainAxisFillFraction fallback (FlexBox.kt:365-377).
+    #[test]
+    fn a_filling_child_grows_into_the_free_space() {
+        let mut filling = LayoutNode::leaf(Modifier::new().fill_max_width());
+        filling.measured_size = Size::new(0.0, 20.0);
+        let mut nodes = vec![filling, leaf(50.0, 20.0)];
+        let (size, placements) = run(
+            FlexBoxConfig::new(),
+            &mut nodes,
+            Constraints::new(300.0, 300.0, 0.0, 100.0),
+        );
+        assert_eq!(size.width, 300.0);
+        assert!(
+            (placements[0].size.width - 250.0).abs() < 0.5,
+            "the filling child takes the space the other one leaves: {:?}",
+            placements[0].size
+        );
+    }
+
+    /// An item cannot grow below its min-content size: CSS 9.7 freezes it there and hands the rest to
+    /// the other items. Clamping without redistributing made the line WIDER than its container
+    /// (measured: bases 50+50 with one min-content of 200 gave 200 + 230 for a 300 dp line).
+    #[test]
+    fn a_growing_item_cannot_grow_below_its_min_content() {
+        let mut nodes = vec![
+            item_leaf(200.0, 20.0, FlexItemConfig::new().basis_dp(50.0).grow(1.0)),
+            item_leaf(50.0, 20.0, FlexItemConfig::new().basis_dp(50.0).grow(9.0)),
+        ];
+        let (size, placements) = run(
+            FlexBoxConfig::new(),
+            &mut nodes,
+            Constraints::new(300.0, 300.0, 0.0, 100.0),
+        );
+        assert_eq!(size.width, 300.0);
+        let widths: Vec<f32> = placements.iter().map(|p| p.size.width).collect();
+        assert!(
+            (widths[0] - 200.0).abs() < 0.5,
+            "the 200 dp item stays at its min-content size: {widths:?}"
+        );
+        assert!(
+            (widths[0] + widths[1] - 300.0).abs() < 0.5,
+            "the other item takes exactly the rest, so the line is not wider than the container: {widths:?}"
+        );
+    }
+
+    /// The cross gap is subtracted ONCE: Compose's totalLinesCrossSize is the sum of the line sizes
+    /// and the gap only appears in totalGap (:779-780).
+    #[test]
+    fn align_content_does_not_subtract_the_cross_gap_twice() {
+        let mut nodes = vec![leaf(100.0, 20.0), leaf(100.0, 20.0), leaf(100.0, 20.0)];
+        let (size, placements) = run(
+            FlexBoxConfig::new()
+                .wrap(FlexWrap::Wrap)
+                .align_content(FlexAlignContent::SpaceBetween)
+                .row_gap(10.0),
+            &mut nodes,
+            Constraints::new(0.0, 150.0, 120.0, 120.0),
+        );
+        assert_eq!(size.height, 120.0);
+        // free = 120 - 60 - 20 = 40 over two gaps -> 20 each: 0, 50, 100.
+        assert_eq!(ys(&placements), vec![0.0, 50.0, 100.0]);
+    }
+
+    /// align-content: stretch grows the LINES before the stretched items are measured, so a stretched
+    /// item fills the grown line (Compose runs applyAlignContentStretch before measureFlexItems).
+    #[test]
+    fn align_content_stretch_grows_the_stretched_items() {
+        let mut nodes = vec![leaf(200.0, 100.0), leaf(200.0, 100.0)];
+        let (size, placements) = run(
+            FlexBoxConfig::new()
+                .wrap(FlexWrap::Wrap)
+                .align_items(FlexAlignItems::Stretch)
+                .align_content(FlexAlignContent::Stretch),
+            &mut nodes,
+            Constraints::new(0.0, 150.0, 300.0, 300.0),
+        );
+        assert_eq!(size.height, 300.0, "the two lines share the cross minimum");
+        let heights: Vec<f32> = placements.iter().map(|p| p.size.height).collect();
+        assert!(
+            heights.iter().all(|height| (height - 150.0).abs() < 0.5),
+            "each stretched item fills its grown line: {heights:?}"
+        );
     }
 
     /// The baseline path with REAL published lines: two texts of different sizes must sit on one
