@@ -178,7 +178,9 @@ cargo test -p winia --test flexbox_matrix — 9 sweeps, roughly 100 000 measured
 | the_matrix_splits_a_line_evenly_between_equal_items | equal grow factors split a line evenly and fill the container |
 | the_matrix_stretches_each_line_to_its_own_extent | with wrap, stretch uses each line's own cross extent |
 
-cargo test -p winia --features debug-server --test ui_flexbox_test drives examples/flexbox_demo.rs
+examples/flexbox_demo.rs picks every parameter with material3 SEGMENTED BUTTONS (one row per knob, one
+segment per value) and shows the resulting lines live; `cargo test -p winia --features debug-server --test
+ui_flexbox_test` drives it
 through the debug server: six tiles shrink to the frame, wrap stops the shrink, justify-content packs
 a line to the end, and the grow strip fills its width from grow 2 : 1 plus a fixed basis.
 

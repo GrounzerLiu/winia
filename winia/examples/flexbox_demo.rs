@@ -1,13 +1,16 @@
-//! FlexBox demo — every knob live: direction, wrapping, justify-content, align-items and grow.
+//! FlexBox demo — every knob live, picked with material3 SEGMENTED BUTTONS: direction, wrapping,
+//! justify-content, align-items, align-content (the "lines" row) and grow.
 //!
 //! What to look at: with wrap off the six tiles squeeze into one line (they shrink, because CSS
-//! shrink is 1 by default); switch wrap on and they fall into lines of three; justify-content
-//! distributes the leftover inside each line; align-items positions each tile in its line; grow makes
-//! the tiles share the whole width instead of keeping their basis.
+//! shrink is 1 by default); pick Wrap and they fall into lines of four; justify-content distributes
+//! the leftover inside each line; align-items positions each tile in its line; the "lines" row moves
+//! the LINES themselves only when wrapping is on; the grow strip below fills its width from grow
+//! 2 : 1 plus a fixed basis.
 //!
 //! Run with cargo run -p winia --example flexbox_demo.
 
 use letclone::clone;
+use std::sync::Arc;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -64,10 +67,39 @@ fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool) {
         .build(ctx, |_| {});
 }
 
+/// What a segmented picker does when a value is chosen (the new index).
+type SetIndex = Arc<dyn Fn(usize) + Send + Sync>;
+
+/// A labelled single-choice segmented row: one segment per value, the current one selected.
+fn segmented(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    title: &'static str,
+    options: &'static [&'static str],
+    selected: usize,
+    set: SetIndex,
+) {
+    Row::new()
+        .modifier(Modifier::new().fill_max_width())
+        .spacing(8.0)
+        .build(ctx, |ctx| {
+            Text::new(title).font_size(11.0).build(ctx);
+            SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                for (index, label) in options.iter().enumerate() {
+                    clone!(set);
+                    SegmentedButton::new(selected == index, move || set(index))
+                        .shape(SegmentedButtonDefaults::item_shape(index, options.len()))
+                        .modifier(Modifier::new().test_tag(format!("{tag}-{index}")))
+                        .build(ctx, |ctx| Text::new(*label).font_size(10.0).build(ctx));
+                }
+            });
+        });
+}
+
 #[composable]
 fn flexbox_demo(ctx: &mut ComposeCtx) {
     let direction = ctx.remember(|| State::new(0usize)).get();
-    let wrap = ctx.remember(|| State::new(false)).get();
+    let wrap = ctx.remember(|| State::new(0usize)).get();
     let justify = ctx.remember(|| State::new(0usize)).get();
     let align = ctx.remember(|| State::new(0usize)).get();
     let align_content = ctx.remember(|| State::new(0usize)).get();
@@ -89,7 +121,11 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
         1 => FlexAlignItems::Center,
         _ => FlexAlignItems::Stretch,
     };
-    let wrap_value = if wrap.get() { FlexWrap::Wrap } else { FlexWrap::NoWrap };
+    let wrap_value = match wrap.get() {
+        0 => FlexWrap::NoWrap,
+        1 => FlexWrap::Wrap,
+        _ => FlexWrap::WrapReverse,
+    };
     let align_content_value = match align_content.get() {
         0 => FlexAlignContent::Start,
         1 => FlexAlignContent::Center,
@@ -114,43 +150,63 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
             .modifier(Modifier::new().test_tag("fb-status"))
             .build(ctx);
 
-            Row::new().spacing(6.0).build(ctx, |ctx| {
-                Button::new()
-                    .modifier(Modifier::new().test_tag("fb-direction"))
-                    .on_click({
-                        clone!(direction);
-                        move || direction.set((direction.get() + 1) % 4)
-                    })
-                    .build(ctx, |ctx| Text::new("direction").font_size(11.0).build(ctx));
-                Button::new()
-                    .modifier(Modifier::new().test_tag("fb-wrap"))
-                    .on_click({
-                        clone!(wrap);
-                        move || wrap.set(!wrap.get())
-                    })
-                    .build(ctx, |ctx| Text::new("wrap").font_size(11.0).build(ctx));
-                Button::new()
-                    .modifier(Modifier::new().test_tag("fb-justify"))
-                    .on_click({
-                        clone!(justify);
-                        move || justify.set((justify.get() + 1) % 4)
-                    })
-                    .build(ctx, |ctx| Text::new("justify").font_size(11.0).build(ctx));
-                Button::new()
-                    .modifier(Modifier::new().test_tag("fb-align"))
-                    .on_click({
-                        clone!(align);
-                        move || align.set((align.get() + 1) % 3)
-                    })
-                    .build(ctx, |ctx| Text::new("align").font_size(11.0).build(ctx));
-                Button::new()
-                    .modifier(Modifier::new().test_tag("fb-align-content"))
-                    .on_click({
-                        clone!(align_content);
-                        move || align_content.set((align_content.get() + 1) % 4)
-                    })
-                    .build(ctx, |ctx| Text::new("lines").font_size(11.0).build(ctx));
-            });
+            // The parameters are picked with material3 segmented buttons: one row per knob, one
+            // segment per value, so the current state is visible at a glance.
+            segmented(
+                ctx,
+                "fb-direction",
+                "direction",
+                &["Row", "Column", "RowReverse", "ColumnReverse"],
+                direction.get(),
+                {
+                    clone!(direction);
+                    Arc::new(move |index| direction.set(index))
+                },
+            );
+            segmented(
+                ctx,
+                "fb-wrap",
+                "wrap",
+                &["NoWrap", "Wrap", "WrapReverse"],
+                wrap.get(),
+                {
+                    clone!(wrap);
+                    Arc::new(move |index| wrap.set(index))
+                },
+            );
+            segmented(
+                ctx,
+                "fb-justify",
+                "justify",
+                &["Start", "End", "Center", "Between"],
+                justify.get(),
+                {
+                    clone!(justify);
+                    Arc::new(move |index| justify.set(index))
+                },
+            );
+            segmented(
+                ctx,
+                "fb-align",
+                "align",
+                &["Start", "Center", "Stretch"],
+                align.get(),
+                {
+                    clone!(align);
+                    Arc::new(move |index| align.set(index))
+                },
+            );
+            segmented(
+                ctx,
+                "fb-lines",
+                "lines",
+                &["Start", "Center", "Between", "Stretch"],
+                align_content.get(),
+                {
+                    clone!(align_content);
+                    Arc::new(move |index| align_content.set(index))
+                },
+            );
 
             // A sized frame: the FlexBox fills it, so justify-content and align-content have space to
             // distribute. The size and the tag ride on the FlexBox's OWN modifier — a pass-through

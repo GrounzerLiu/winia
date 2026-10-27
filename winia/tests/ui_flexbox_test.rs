@@ -1,6 +1,7 @@
-//! FlexBox through a real window. The demo's controls that this test drives are wrap (which stops the
-//! shrink) and justify (which packs a line to the main-end edge); direction, align and align-content
-//! have no button assertions here, and grow is demonstrated by the fixed strip rather than a control.
+//! FlexBox through a real window. The demo picks its parameters with material3 SEGMENTED BUTTONS, so
+//! each control is a direct choice rather than a cycle: the test selects Wrap, then justify End, then
+//! the Column direction. align / align-content have no assertion here, and grow is demonstrated by the
+//! fixed strip rather than a control.
 //! Every assertion below reads measured geometry back out of the fixture's debug server, so a broken
 //! FlexBox fails here rather than passing on tag presence.
 
@@ -36,7 +37,7 @@ fn flexbox_lays_out_both_axes() {
 
     // Wrap on: four 96 dp tiles fit one line (4 * 96 + 3 * 8 <= the frame), so they stop shrinking
     // and the remaining two start the second line one line-height plus the cross gap lower.
-    app.click_tag("fb-wrap");
+    app.click_tag("fb-wrap-1");
     app.expect_eventually("the tiles stop shrinking", |app| {
         app.refresh();
         (app.expect_tag("fb-tile-0").2 - 96.0).abs() <= 1.5
@@ -53,7 +54,7 @@ fn flexbox_lays_out_both_axes() {
     );
 
     // justify-content: End packs each line against the main-end edge.
-    app.click_tag("fb-justify");
+    app.click_tag("fb-justify-1");
     app.expect_eventually("the line is packed to the end", |app| {
         app.refresh();
         app.expect_tag("fb-tile-0").0 > 20.0
@@ -72,7 +73,7 @@ fn flexbox_lays_out_both_axes() {
 
     // direction: the same six tiles become a column, each keeping its cross size (this is where a tile
     // with no cross size collapsed to zero width before the demo sized its cross axis).
-    app.click_tag("fb-direction");
+    app.click_tag("fb-direction-1");
     app.expect_eventually("the grid becomes a column", |app| {
         app.refresh();
         app.expect_tag("fb-tile-1").1 > app.expect_tag("fb-tile-0").1 + 8.0
