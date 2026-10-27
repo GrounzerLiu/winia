@@ -129,6 +129,29 @@ fn text_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
+            // 4c. min lines, a decoration, and what onTextLayout reports about the measure pass.
+            card(ctx, "minlines", "min lines / decoration", |ctx| {
+                Row::new()
+                    .spacing(16.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        Text::new("one line")
+                            .font_size(15.0)
+                            .modifier(Modifier::new().test_tag("tx-one-line"))
+                            .build(ctx);
+                        Text::new("one line")
+                            .font_size(15.0)
+                            .min_lines(3)
+                            .modifier(Modifier::new().test_tag("tx-minlines"))
+                            .build(ctx);
+                        Text::new("underlined")
+                            .font_size(15.0)
+                            .text_decoration(TextDecoration::UNDERLINE)
+                            .modifier(Modifier::new().test_tag("tx-underline"))
+                            .build(ctx);
+                    });
+            });
+
             // 5. Alignment inside a wide box.
             card(ctx, "align", "alignment", |ctx| {
                 for (index, align) in [TextAlign::Left, TextAlign::Center, TextAlign::Right]

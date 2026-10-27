@@ -1483,6 +1483,11 @@
                     soft_wrap: true,
                     letter_spacing: 0.0,
                     line_height: None,
+                    min_lines: 1,
+                    underline: false,
+                    line_through: false,
+                    font_family: None,
+                    on_text_layout: None,
                 }),
                 None,
             )
@@ -1609,6 +1614,7 @@ fn a_nowrap_ellipsis_lays_the_paragraph_out_at_the_box_width() {
             soft_wrap,
             0.0,
             None,
+            crate::modifier::TextExtras::default(),
         );
         let mut nodes = vec![LayoutNode::leaf(modifier)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 60.0, 0.0, 500.0));
@@ -1640,8 +1646,12 @@ fn a_nowrap_ellipsis_lays_the_paragraph_out_at_the_box_width() {
     );
 }
 
+/// §3.2 of `docs/component-authoring.md`: a parameter that changes the CONTENT must re-enter the
+/// leaf. `Text` declares the content with `ctx.changed`; every other parameter rides the
+/// `TextContent` element, whose `param_eq` compares all sixteen fields, so a state-driven font size
+/// re-measures even though the string is unchanged (measured 27 -> 53 dp).
 #[test]
-fn probe_text_param_change() {
+fn a_text_parameter_change_re_measures_without_a_content_change() {
     use crate::runtime::composer::{ComposeCtx, Composer};
     use crate::runtime::state::State;
     let size = State::new(20.0f32);
@@ -1658,5 +1668,8 @@ fn probe_text_param_change() {
     let h20 = build(&mut composer, size.clone());
     size.set(40.0);
     let h40 = build(&mut composer, size.clone());
-    panic!("PROBE h20={h20} h40={h40}");
+    assert!(
+        h40 > h20 + 20.0,
+        "the leaf re-entered and re-measured: h20={h20} h40={h40}"
+    );
 }

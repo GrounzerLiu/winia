@@ -17,6 +17,9 @@ pub(crate) fn build_plain_paragraph(
     soft_wrap: bool,
     letter_spacing: f32,
     line_height: Option<f32>,
+    underline: bool,
+    line_through: bool,
+    font_family: Option<&str>,
     max_width: f32,
 ) -> crate::text::Paragraph {
     use skia_safe::textlayout::ParagraphStyle;
@@ -75,6 +78,22 @@ pub(crate) fn build_plain_paragraph(
             text_style.set_height_override(true);
         }
     }
+    // A font family, when the caller named one (Compose's `fontFamily`).
+    if let Some(family) = font_family {
+        text_style.set_font_families(&[family]);
+    }
+    // Compose's `textDecoration` — the plain leaf draws it now (the flags used to be RichText-only).
+    if underline || line_through {
+        use skia_safe::textlayout::TextDecoration as SkDecoration;
+        let mut decoration = SkDecoration::NO_DECORATION;
+        if underline {
+            decoration |= SkDecoration::UNDERLINE;
+        }
+        if line_through {
+            decoration |= SkDecoration::LINE_THROUGH;
+        }
+        text_style.set_decoration_type(decoration);
+    }
     // Weight and slant
     if font_weight != crate::text::FontWeight::NORMAL || font_style != crate::text::FontSlant::Upright {
         use skia_safe::FontStyle;
@@ -104,7 +123,7 @@ pub(crate) fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
-            letter_spacing, line_height,
+            letter_spacing, line_height, underline, line_through, font_family, ..
         } = el {
             return Some(build_plain_paragraph(
                 content.as_str(),
@@ -118,6 +137,9 @@ pub(crate) fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<
                 *soft_wrap,
                 *letter_spacing,
                 *line_height,
+                *underline,
+                *line_through,
+                font_family.as_deref(),
                 max_width,
             ));
         }
@@ -151,13 +173,61 @@ pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size 
         return Size::ZERO;
     };
 
-    let size = Size::new(
+    let text_size = Size::new(
         para.max_intrinsic_width().ceil().min(max_width),
         para.height().ceil(),
     );
+    let (min_lines, on_text_layout) = text_layout_extras(node);
+    let line_count = para.inner_paragraph().line_number();
+    let did_exceed_max_lines = para.did_exceed_max_lines();
+
+    // Compose's `minLines`: the box reserves at least that many lines even when the text is shorter.
+    // skia-safe does not expose `set_min_lines`, so the RESULT is padded rather than the paragraph —
+    // the glyphs still sit at the top, which is what `minLines` does anyway.
+    let mut size = text_size;
+    if min_lines > line_count.max(1) {
+        let line_height = if line_count > 0 {
+            text_size.height / line_count as f32
+        } else {
+            text_size.height
+        };
+        size.height = size.height.max(line_height * min_lines as f32);
+    }
 
     *node.cached_paragraph.borrow_mut() = Some(para);
+
+    // Compose's `onTextLayout`: report what this pass laid out (never from an intrinsic probe — that
+    // is a question about a hypothetical width, not a frame).
+    if let Some(callback) = on_text_layout {
+        callback(&crate::text::TextLayoutResult {
+            size,
+            text_size,
+            line_count,
+            did_exceed_max_lines,
+        });
+    }
     size
+}
+
+/// The text element's measure-side extras: how many lines to reserve, and the `onTextLayout` sink.
+#[allow(clippy::type_complexity)]
+fn text_layout_extras(
+    node: &LayoutNode,
+) -> (
+    usize,
+    Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
+) {
+    for el in node.modifier.elements() {
+        if let ModifierElement::TextContent {
+            min_lines,
+            on_text_layout,
+            ..
+        } = el
+        {
+            return (*min_lines, on_text_layout.clone());
+        }
+    }
+    (1, None)
 }
 
 /// The rich-text measure and cache, inline drawables included.

@@ -2,6 +2,23 @@ use super::super::*;
 
 // ── Draw Modifier 方法 ──
 
+/// The text parameters that are not part of the original payload — Compose's `minLines`,
+/// `textDecoration`, `fontFamily` and the `onTextLayout` callback. Grouped so the builder keeps a
+/// readable signature and a caller that uses none of them writes `TextExtras::default()`.
+#[derive(Default)]
+pub(crate) struct TextExtras {
+    /// The minimum number of lines the box reserves (`TextStyle.minLines`).
+    pub min_lines: usize,
+    pub underline: bool,
+    pub line_through: bool,
+    /// A font family name, resolved by Skia's font collection.
+    pub font_family: Option<String>,
+    /// Called after every measure with the layout the text produced (Compose's `onTextLayout`).
+    pub on_text_layout: Option<
+        std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>,
+    >,
+}
+
 impl Modifier {
     /// 设置背景色和形状
     /// 设置背景色和形状。
@@ -71,6 +88,7 @@ impl Modifier {
             content, font_size, color, font_weight, font_style,
             max_lines, align, overflow, soft_wrap,
             0.0, None,
+            TextExtras::default(),
         )
     }
 
@@ -89,8 +107,14 @@ impl Modifier {
         soft_wrap: bool,
         letter_spacing: f32,
         line_height: Option<f32>,
+        extras: crate::modifier::builders::draw::TextExtras,
     ) -> Self {
         self.push(ModifierElement::TextContent {
+            min_lines: extras.min_lines,
+            underline: extras.underline,
+            line_through: extras.line_through,
+            font_family: extras.font_family,
+            on_text_layout: extras.on_text_layout,
             content,
             font_size,
             color,

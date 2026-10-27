@@ -184,7 +184,9 @@ pub mod prelude {
         ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING, MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT,
         SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING,
     };
-    pub use crate::text::{TextAlign, TextOverflow, TextStyle, FontWeight, FontSlant};
+    pub use crate::text::{
+        FontSlant, FontWeight, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle,
+    };
     pub use crate::input::interaction::{MutableInteractionSource, ComponentState};
     // The general drawing surface (Compose `Canvas` / `DrawScope`) and the constraints-aware box
     // (Compose `BoxWithConstraints`) — the two entry points a caller reaches for when no existing

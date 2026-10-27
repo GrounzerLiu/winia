@@ -10,8 +10,8 @@ use crate::runtime::composition_local::CompositionLocal;
 use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
-use crate::text::{FontSlant, FontWeight, TextAlign, TextOverflow, TextStyle};
-use std::sync::LazyLock;
+use crate::text::{FontSlant, FontWeight, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle};
+use std::sync::{Arc, LazyLock};
 
 
 // ═══════════════════════════════════════════════════════════
@@ -45,6 +45,8 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         soft_wrap: override_.soft_wrap.or(base.soft_wrap),
         letter_spacing: override_.letter_spacing.or(base.letter_spacing),
         line_height: override_.line_height.or(base.line_height),
+        min_lines: override_.min_lines.or(base.min_lines),
+        font_family: override_.font_family.clone().or_else(|| base.font_family.clone()),
         underline: override_.underline || base.underline,
         strikethrough: override_.strikethrough || base.strikethrough,
         background: override_.background.or(base.background),
@@ -55,7 +57,7 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
 // Text 组件
 // ═══════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Text {
     content: String,
     modifier: Modifier,
@@ -70,6 +72,24 @@ pub struct Text {
     soft_wrap: Option<bool>,
     letter_spacing: Option<f32>,
     line_height: Option<TextUnit>,
+    min_lines: Option<usize>,
+    text_decoration: Option<TextDecoration>,
+    font_family: Option<String>,
+    /// Compose's `onTextLayout`: called after every measure with the layout the text produced.
+    on_text_layout: Option<Arc<dyn Fn(&TextLayoutResult) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for Text {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Text")
+            .field("content", &self.content)
+            .field("font_size", &self.font_size)
+            .field("color", &self.color)
+            .field("max_lines", &self.max_lines)
+            .field("min_lines", &self.min_lines)
+            .field("on_text_layout", &self.on_text_layout.is_some())
+            .finish()
+    }
 }
 
 impl Text {
@@ -88,6 +108,10 @@ impl Text {
             soft_wrap: None,
             letter_spacing: None,
             line_height: None,
+            min_lines: None,
+            text_decoration: None,
+            font_family: None,
+            on_text_layout: None,
         }
     }
 
@@ -104,8 +128,17 @@ impl Text {
     pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
     pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
 
+    /// Compose's `fontFamily`: a family name resolved against the platform's font collection.
+    pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+
+    /// Compose's `textDecoration` — the plain leaf draws it now (it used to be RichText-only).
+    pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
+        self.text_decoration = Some(decoration);
+        self
+    }
 
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
 
@@ -115,6 +148,18 @@ impl Text {
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
     pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
+
+    /// Compose's `minLines`: the box reserves at least this many lines even when the text is shorter.
+    pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
+
+    /// Compose's `onTextLayout`: called after every measure with what the text laid out to.
+    pub fn on_text_layout(
+        mut self,
+        callback: impl Fn(&TextLayoutResult) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_text_layout = Some(std::sync::Arc::new(callback));
+        self
+    }
 
     /// 设置文字样式（单独参数优先级高于此样式）
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
@@ -162,6 +207,9 @@ impl Text {
         let final_soft_wrap = self.soft_wrap.or(style.soft_wrap).unwrap_or(true);
         let final_letter_spacing = self.letter_spacing.or(style.letter_spacing).unwrap_or(0.0);
         let final_line_height = self.line_height.or(style.line_height);
+        let final_min_lines = self.min_lines.or(style.min_lines).unwrap_or(1);
+        let final_decoration = self.text_decoration.unwrap_or_else(|| style.decoration());
+        let final_font_family = self.font_family.clone().or_else(|| style.font_family.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
         // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
@@ -195,6 +243,13 @@ impl Text {
             final_soft_wrap,
             final_letter_spacing,
             final_line_height.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
+            crate::modifier::TextExtras {
+                min_lines: final_min_lines,
+                underline: final_decoration.underline,
+                line_through: final_decoration.line_through,
+                font_family: final_font_family,
+                on_text_layout: self.on_text_layout.clone(),
+            },
         );
 
         ctx.start_leaf(key, modifier);
@@ -349,5 +404,75 @@ mod tests {
             "12sp 高度应约为 16sp 的 3/4（实际 h16={} h12={}）",
             h16, h12
         );
+    }
+
+    /// Compose's `minLines`: the box reserves the lines even though the text is shorter.
+    #[test]
+    fn min_lines_reserves_the_box_height() {
+        let measure = |lines: usize| {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("Name").font_size(20.0).min_lines(lines).build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 500.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size.height
+        };
+        let one = measure(1);
+        let three = measure(3);
+        assert!(
+            one > 0.0 && (three - one * 3.0).abs() < 1.0,
+            "three reserved lines are three line boxes tall: one={one} three={three}"
+        );
+    }
+
+    /// Compose's `onTextLayout`: the callback sees what the measure pass laid out.
+    #[test]
+    fn on_text_layout_reports_what_was_laid_out() {
+        let seen: std::sync::Arc<std::sync::Mutex<Option<crate::text::TextLayoutResult>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = seen.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("one line")
+                .font_size(20.0)
+                .on_text_layout(move |result| {
+                    *sink.lock().unwrap() = Some(*result);
+                })
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        let result = seen.lock().unwrap().expect("the callback ran during measure");
+        assert_eq!(result.line_count, 1, "one line of text: {result:?}");
+        assert!(result.size.height > 0.0 && result.size.width > 0.0, "{result:?}");
+        assert!(!result.has_visual_overflow(), "nothing was cut off: {result:?}");
+    }
+
+    /// The decoration and the family reach the payload (the plain leaf used to ignore both).
+    #[test]
+    fn the_payload_carries_decoration_and_family() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("x")
+                .text_decoration(crate::text::TextDecoration::UNDERLINE_AND_LINE_THROUGH)
+                .font_family("Segoe UI")
+                .build(ctx);
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let payload = nodes[root]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| {
+                if let ModifierElement::TextContent { underline, line_through, font_family, .. } = el {
+                    Some((*underline, *line_through, font_family.clone()))
+                } else {
+                    None
+                }
+            })
+            .expect("a text payload");
+        assert!(payload.0 && payload.1, "both decorations reached the payload");
+        assert_eq!(payload.2.as_deref(), Some("Segoe UI"));
     }
 }

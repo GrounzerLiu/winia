@@ -282,3 +282,6 @@ pub use element::*;
 pub(crate) use element::{ModifierElement, SizeStep};
 
 mod builders;
+
+/// The text payload's extra parameters — see `builders::draw::TextExtras`.
+pub(crate) use builders::draw::TextExtras;

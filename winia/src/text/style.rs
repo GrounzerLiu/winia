@@ -49,6 +49,31 @@ impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
 pub enum TextAlign { Left, Center, Right, Justify }
 impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
 
+/// Compose's `TextDecoration`: a set of line decorations, combinable with `|` (`+` in Kotlin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextDecoration {
+    pub underline: bool,
+    pub line_through: bool,
+}
+
+impl TextDecoration {
+    pub const NONE: Self = Self { underline: false, line_through: false };
+    pub const UNDERLINE: Self = Self { underline: true, line_through: false };
+    pub const LINE_THROUGH: Self = Self { underline: false, line_through: true };
+    pub const UNDERLINE_AND_LINE_THROUGH: Self = Self { underline: true, line_through: true };
+}
+
+impl std::ops::BitOr for TextDecoration {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self {
+            underline: self.underline || other.underline,
+            line_through: self.line_through || other.line_through,
+        }
+    }
+}
+
 /// 文本溢出处理
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextOverflow {
@@ -77,6 +102,11 @@ pub struct TextStyle {
     pub soft_wrap: Option<bool>,
     pub letter_spacing: Option<f32>,
     pub line_height: Option<TextUnit>,
+    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`.
+    pub min_lines: Option<usize>,
+    /// A font family name resolved against the platform's font collection — Compose's
+    /// `TextStyle.fontFamily`, as a name here (winia has no `FontFamily` resolver type yet).
+    pub font_family: Option<String>,
     /// 下划线（仅 RichText 生效）
     pub underline: bool,
     /// 删除线（仅 RichText 生效）
@@ -87,7 +117,7 @@ pub struct TextStyle {
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, underline: false, strikethrough: false, background: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, underline: false, strikethrough: false, background: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -102,6 +132,20 @@ impl TextStyle {
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`.
+    pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
+    /// A font family name, resolved against the platform's font collection.
+    pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+    /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
+    pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
+        self.underline = decoration.underline;
+        self.strikethrough = decoration.line_through;
+        self
+    }
+    /// The decoration these flags describe.
+    pub fn decoration(&self) -> TextDecoration {
+        TextDecoration { underline: self.underline, line_through: self.strikethrough }
+    }
     pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
     pub fn underline(mut self) -> Self { self.underline = true; self }
     pub fn strikethrough(mut self) -> Self { self.strikethrough = true; self }

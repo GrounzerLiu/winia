@@ -494,7 +494,7 @@ pub(super) fn render_modifier_element<'a>(
             }
             None
         }
-        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height } => {
+        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, .. } => {
             Some(TextParams {
                 content, font_size: *font_size, color,
                 font_weight: *font_weight, font_style: *font_style,

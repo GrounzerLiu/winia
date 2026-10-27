@@ -754,3 +754,39 @@ fn a_caller_background_paints_beneath_the_text() {
     assert!(white > 5, "the glyphs are painted on TOP of the caller's background ({white} white samples)");
     assert!(red > 50, "and the background is still there around them ({red} red samples)");
 }
+
+/// Compose's `textDecoration`: the plain leaf draws it now (the `TextStyle` flags used to reach only
+/// `RichText`). An underline is a line ACROSS the glyph width, so the row just under the glyphs must
+/// gain dark pixels — "IIII" has no descenders to confuse the measurement.
+#[test]
+fn a_text_decoration_draws_under_the_glyphs() {
+    let dark_under_the_glyphs = |decoration: Option<winia::text::TextDecoration>| {
+        let (mut surface, _) = render_ui(200.0, 60.0, winia::app_root!(|ctx| {
+            let mut text = Text::new("IIII").font_size(40.0).color(Color::BLACK);
+            if let Some(decoration) = decoration {
+                text = text.text_decoration(decoration);
+            }
+            text.build(ctx);
+        }));
+        // The rule sits just under the baseline: measured rows 45-47 for 40 sp text, none without
+        // the decoration.
+        let mut dark = 0;
+        for x in (4..170).step_by(2) {
+            for y in 44..50 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 120 && g < 120 && b < 120 {
+                    dark += 1;
+                }
+            }
+        }
+        dark
+    };
+    let plain = dark_under_the_glyphs(None);
+    let underlined =
+        dark_under_the_glyphs(Some(winia::text::TextDecoration::UNDERLINE));
+    assert_eq!(plain, 0, "nothing is drawn under the glyphs without a decoration");
+    assert!(
+        underlined > 20,
+        "the underline draws a rule under the glyphs: {underlined} samples"
+    );
+}

@@ -97,6 +97,9 @@ pub(super) fn draw_text_field_aux_text(
         true,
         letter_spacing,
         line_height,
+        false,
+        false,
+        None,
         max_width,
     );
     // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
@@ -334,7 +337,8 @@ pub(super) fn draw_text_with_selection(
     // 兜底路径：缓存缺失时用共享构建函数重建（与测量期同一套逻辑——SSOT）
     let para = crate::layout::node::build_plain_paragraph(
         content, font_size, color, font_weight, font_style,
-        max_lines, align, overflow, soft_wrap, letter_spacing, line_height, w,
+        max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
+        false, false, None, w,
     );
     draw_text(canvas, &para, x, y, w, align, soft_wrap);
 }

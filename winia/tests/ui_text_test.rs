@@ -100,3 +100,15 @@ fn a_centred_nowrap_ellipsis_stays_inside_its_box() {
     let inside = (4..60).filter(|offset| lit(&mut app, rect.0 + *offset as f32, y)).count();
     assert!(inside > 0, "the line is drawn inside the box (not just blank)");
 }
+
+/// Compose's `minLines`: the box reserves the lines even though the text is one line.
+#[test]
+fn min_lines_reserves_the_box_height() {
+    let mut app = UiTest::launch("text");
+    let one = app.expect_tag("tx-one-line");
+    let three = app.expect_tag("tx-minlines");
+    assert!(
+        (three.3 - one.3 * 3.0).abs() < 2.0,
+        "three reserved lines are three line boxes: one={one:?} three={three:?}"
+    );
+}

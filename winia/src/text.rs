@@ -7,13 +7,15 @@ pub mod transformation;
 pub use decor::{DecoMode, DecoStyle, FontEdge, FontHint, RichSpanStyle};
 pub mod selection;
 pub mod field;
+mod layout_result;
 mod index_bimap;
 mod paragraph;
 mod paragraph_builder;
 mod text_layout;
 mod inline_drawable;
 
-pub use style::{FontSlant, FontWeight, TextAlign, TextOverflow, TextStyle};
+pub use style::{FontSlant, FontWeight, TextAlign, TextDecoration, TextOverflow, TextStyle};
+pub use layout_result::TextLayoutResult;
 pub use index_bimap::IndexBiMap;
 pub use paragraph::{build_plain_paragraph, Paragraph};
 pub use paragraph_builder::ParagraphBuilder;

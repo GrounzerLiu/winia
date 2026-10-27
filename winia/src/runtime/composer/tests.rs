@@ -2715,6 +2715,11 @@ fn test_text_content_change_remeasures() {
                         soft_wrap: true,
                         letter_spacing: 0.0,
                         line_height: None,
+                        min_lines: 1,
+                        underline: false,
+                        line_through: false,
+                        font_family: None,
+                        on_text_layout: None,
                     });
                     ctx.start_leaf(k, modifier);
                     ctx.end_node();
@@ -2779,6 +2784,11 @@ fn test_text_style_change_remeasures() {
                         soft_wrap: true,
                         letter_spacing: 0.0,
                         line_height: None,
+                        min_lines: 1,
+                        underline: false,
+                        line_through: false,
+                        font_family: None,
+                        on_text_layout: None,
                     });
                     ctx.start_leaf(k, modifier);
                     ctx.end_node();
@@ -3540,6 +3550,11 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
                     soft_wrap: true,
                     letter_spacing: 0.0,
                     line_height: None,
+                    min_lines: 1,
+                    underline: false,
+                    line_through: false,
+                    font_family: None,
+                    on_text_layout: None,
                 });
                 ctx.start_leaf(k, modifier);
                 ctx.end_node();

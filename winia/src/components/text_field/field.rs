@@ -926,6 +926,7 @@ impl TextField {
                 input_style.soft_wrap.unwrap_or(true),
                 input_style.letter_spacing.unwrap_or(0.0),
                 input_style.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
+                crate::modifier::TextExtras::default(),
             );
         let input_modifier = if interaction.is_some() {
             let fr_click = fr.clone();

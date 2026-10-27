@@ -151,9 +151,17 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
         (Blur { radius: ar }, Blur { radius: br }) => ar.same_parameter(br),
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar.same_parameter(br),
-        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh },
-         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh }) => {
+        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh, min_lines: amin, underline: au, line_through: alt, font_family: afam, on_text_layout: aotl },
+         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh, min_lines: bmin, underline: bu, line_through: blt, font_family: bfam, on_text_layout: botl }) => {
             ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw && als == bls && alh == blh
+                && amin == bmin && au == bu && alt == blt && afam == bfam
+                // The callback is compared by IDENTITY: a rebuild produces a new closure, which is a
+                // changed parameter, so the leaf re-enters and always calls the latest one.
+                && match (aotl, botl) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                    _ => false,
+                }
         }
         // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar, .. },

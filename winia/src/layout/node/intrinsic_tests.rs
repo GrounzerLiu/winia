@@ -17,6 +17,11 @@
             soft_wrap: true,
             letter_spacing: 0.0,
             line_height: None,
+            min_lines: 1,
+            underline: false,
+            line_through: false,
+            font_family: None,
+            on_text_layout: None,
         })
     }
 
