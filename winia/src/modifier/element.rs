@@ -229,6 +229,18 @@ pub enum ModifierNode {
 ///
 /// 按类别分为 Layout / Draw / Input 三类。
 /// 用 enum 而非 trait object，便于后续 Layout 系统分类提取。
+/// Which side of the window an inset-sized node takes its measurement from — Compose's
+/// `WindowInsetsWidthCalculator` / `WindowInsetsHeightCalculator` pairs (`WindowInsetsSize.kt`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsetSizeSide {
+    /// The inline start: the left inset in LTR, the right one in RTL.
+    Start,
+    /// The inline end: the right inset in LTR, the left one in RTL.
+    End,
+    Top,
+    Bottom,
+}
+
 /// One resolved size-shaping step, in chain order — see [`Modifier::size_steps`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SizeStep {
@@ -274,6 +286,9 @@ pub(crate) enum SizeStep {
     /// INDEX into `Modifier::elements` (the controller is not `Copy`), and `size_steps` emits exactly
     /// one step per element, so the index is stable for the chain it was built from.
     InsetPadding(usize),
+    /// A `windowInsets*Width` / `windowInsets*Height` element at its chain position: it does not pad,
+    /// it SETS one axis to the (unconsumed) inset on that side and measures the child inside it.
+    InsetSize(usize),
     /// A consume-only `consumeWindowInsets` element, at its chain position: it pads by nothing and
     /// only marks the inset as consumed for what follows.
     ConsumeInsets(usize),
@@ -324,6 +339,14 @@ pub(crate) enum ModifierElement {
     ConsumeWindowInsets {
         kind: crate::window::insets::InsetsKind,
         controller: crate::window::insets::WindowInsetsController,
+    },
+    /// Set ONE axis to the unconsumed inset on a side — Compose's `windowInsetsStartWidth` and
+    /// friends (`WindowInsetsSize.kt`). The child is measured inside that size and the node reports
+    /// (inset, child cross). It does not consume the inset.
+    WindowInsetsSize {
+        kind: crate::window::insets::InsetsKind,
+        controller: crate::window::insets::WindowInsetsController,
+        side: InsetSizeSide,
     },
     /// Fill the incoming maximum width — Compose `fillMaxWidth`. `fraction < 1` takes that share
     /// of the maximum; an unbounded maximum is a no-op (Compose's `FillNode`).

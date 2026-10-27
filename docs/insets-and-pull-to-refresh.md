@@ -83,3 +83,28 @@ decoration publishes the status-bar inset, a material3 NavigationBar publishes t
 inset, a simulated keyboard publishes the IME inset, and a Card + 24 ListItems pull to refresh through
 the LoadingIndicator. It uses the component library throughout (Surface, Card, ListItem, NavigationBar,
 Button, LoadingIndicator).
+
+## Inset SIZES (not padding)
+
+Compose's `WindowInsetsSize.kt` family sets one axis to the unconsumed inset instead of padding by it:
+
+```rust
+Modifier::new().window_insets_top_height(InsetsKind::StatusBars)   // height = top inset
+Modifier::new().window_insets_bottom_height(InsetsKind::NavigationBars)
+Modifier::new().window_insets_start_width(InsetsKind::StatusBars)   // left in LTR, right in RTL
+Modifier::new().window_insets_end_width(InsetsKind::StatusBars)
+```
+
+The node's one axis IS the inset, and the content is measured inside it — a status-bar spacer with
+content in it, not a padded box. The cross axis comes from the child (`windowInsetsTopHeight` keeps the
+child's width). The inset is NOT consumed, so a `windowInsetsPadding` further in still sees it, and a
+`consumeWindowInsets` earlier in the chain removes it from this node too (the step reads the same
+consumed set the padding steps maintain, at its chain position).
+
+Two differences from Padding: a zero inset collapses the node to `(0, 0)` and places nothing (Compose
+returns `layout(0, 0) {}`), and the axis is set EXACTLY — it is not clamped into the incoming range, so
+an inset wider than the parent overflows, as Compose's `constraints.copy(minWidth = width, maxWidth =
+width)` does.
+
+Tests: `layout::node::tests::an_inset_sized_node_takes_its_axis_from_the_inset` (top/bottom heights, the
+start width under LTR and RTL, and the zero inset).

@@ -545,6 +545,44 @@ impl Modifier {
         self.window_insets_padding(crate::window::insets::InsetsKind::StatusBars)
     }
 
+    /// Compose's `Modifier.windowInsetsStartWidth(insets)`: the node's WIDTH is the unconsumed inset
+    /// on the inline start (left in LTR, right in RTL), and the content is measured inside it
+    /// (`WindowInsetsSize.kt`). The inset is not consumed.
+    pub fn window_insets_start_width(self, kind: crate::window::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::WindowInsetsSize {
+            kind,
+            controller: crate::window::insets::current(),
+            side: crate::modifier::InsetSizeSide::Start,
+        })
+    }
+
+    /// Compose's `Modifier.windowInsetsEndWidth(insets)`: the width is the inset on the inline end.
+    pub fn window_insets_end_width(self, kind: crate::window::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::WindowInsetsSize {
+            kind,
+            controller: crate::window::insets::current(),
+            side: crate::modifier::InsetSizeSide::End,
+        })
+    }
+
+    /// Compose's `Modifier.windowInsetsTopHeight(insets)`.
+    pub fn window_insets_top_height(self, kind: crate::window::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::WindowInsetsSize {
+            kind,
+            controller: crate::window::insets::current(),
+            side: crate::modifier::InsetSizeSide::Top,
+        })
+    }
+
+    /// Compose's `Modifier.windowInsetsBottomHeight(insets)`.
+    pub fn window_insets_bottom_height(self, kind: crate::window::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::WindowInsetsSize {
+            kind,
+            controller: crate::window::insets::current(),
+            side: crate::modifier::InsetSizeSide::Bottom,
+        })
+    }
+
     /// Compose's `Modifier.navigationBarsPadding()`.
     pub fn navigation_bars_padding(self) -> Self {
         self.window_insets_padding(crate::window::insets::InsetsKind::NavigationBars)

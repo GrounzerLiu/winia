@@ -26,6 +26,7 @@ pub mod lazy;
 /// so the old `winia::layout::lazy_column::…` paths keep resolving.
 pub use lazy as lazy_column;
 pub mod adaptive;
+pub mod custom;
 pub mod subcompose;
 pub mod node;
 pub mod relocation;
@@ -46,6 +47,8 @@ pub use row::Row;
 pub use box_layout::Stack;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
+// Compose's `Layout`: a container with a caller-supplied measure policy.
+pub use custom::Layout;
 pub use flexbox::{
     FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBox, FlexBoxConfig,
     FlexBoxConfigInput, FlexBoxLayout, FlexDirection, FlexItemConfig, FlexJustifyContent, FlexWrap,

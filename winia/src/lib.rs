@@ -243,7 +243,7 @@ pub mod prelude {
         IdentityTransformation, OffsetMapping, PasswordTransformation, VisualTransformation,
     };
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
-    pub use crate::layout::{Column, FlowColumn, FlowOverflow, FlowRow, Row, Spacer, Stack};
+    pub use crate::layout::{Column, FlowColumn, FlowOverflow, FlowRow, Layout, Row, Spacer, Stack};
     pub use crate::layout::{
         FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBox, FlexBoxConfig,
         FlexDirection, FlexItemConfig, FlexJustifyContent, FlexWrap,

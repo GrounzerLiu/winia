@@ -54,6 +54,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             ConsumeWindowInsets { kind: bk, controller: bc },
         ) => ak == bk && ac.same(bc),
         (
+            WindowInsetsSize { kind: ak, controller: ac, side: as_ },
+            WindowInsetsSize { kind: bk, controller: bc, side: bs },
+        ) => ak == bk && ac.same(bc) && as_ == bs,
+        (
             PaddingSides { start: as_, top: at, end: ae, bottom: ab },
             PaddingSides { start: bs, top: bt, end: be, bottom: bb },
         ) => {

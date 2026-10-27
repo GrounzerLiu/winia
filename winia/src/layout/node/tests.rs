@@ -1521,3 +1521,70 @@
         box_node.refresh_text_snapshot();
         assert!(box_node.last_text.is_none(), "and the refresh drops the snapshot it cannot use");
     }
+
+/// Compose's `windowInsets*Width` / `windowInsets*Height` (`WindowInsetsSize.kt`): the node's ONE axis
+/// IS the unconsumed inset on that side and the content is measured inside it.
+#[test]
+fn an_inset_sized_node_takes_its_axis_from_the_inset() {
+    let _lock = crate::window::insets::INSET_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let controller = crate::window::insets::current();
+    struct ResetInsets(crate::window::insets::WindowInsetsController);
+    impl Drop for ResetInsets {
+        fn drop(&mut self) {
+            self.0.set(crate::window::insets::WindowInsets::default());
+        }
+    }
+    let _reset = ResetInsets(controller.clone());
+    controller.set(crate::window::insets::WindowInsets {
+        status_bars: crate::window::insets::Insets::new(20.0, 24.0, 5.0, 8.0),
+        ..Default::default()
+    });
+
+    // The top inset owns the height; the width comes from the content.
+    let top = Modifier::new()
+        .window_insets_top_height(crate::window::insets::InsetsKind::StatusBars)
+        .size(10.0, 10.0);
+    let mut nodes = vec![LayoutNode::leaf(top)];
+    let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+    assert_eq!(size, Size::new(10.0, 24.0), "24 dp of status bar is the height");
+
+    // The bottom inset owns the height too.
+    let bottom = Modifier::new()
+        .window_insets_bottom_height(crate::window::insets::InsetsKind::StatusBars)
+        .size(10.0, 10.0);
+    let mut nodes = vec![LayoutNode::leaf(bottom)];
+    let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+    assert_eq!(size, Size::new(10.0, 8.0), "8 dp of bottom inset is the height");
+
+    // The inline start is left in LTR (20) and the right in RTL (5).
+    for (direction, expected) in [
+        (crate::layout::LayoutDirection::Ltr, 20.0),
+        (crate::layout::LayoutDirection::Rtl, 5.0),
+    ] {
+        let start = Modifier::new()
+            .window_insets_start_width(crate::window::insets::InsetsKind::StatusBars)
+            .size(10.0, 10.0);
+        let mut nodes = vec![LayoutNode::leaf(start)];
+        // A hand-built node bypasses materialization, which is what usually stamps the direction.
+        nodes[0].layout_direction = direction;
+        let (size, _) =
+            measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(
+            size,
+            Size::new(expected, 10.0),
+            "the start width follows the layout direction ({direction:?})"
+        );
+    }
+
+    // An inset that has been consumed contributes nothing.
+    controller.set(crate::window::insets::WindowInsets::default());
+    let zero = Modifier::new()
+        .window_insets_start_width(crate::window::insets::InsetsKind::StatusBars)
+        .size(10.0, 10.0);
+    let mut nodes = vec![LayoutNode::leaf(zero)];
+    let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+    // Compose returns layout(0, 0) for a zero inset and places nothing.
+    assert_eq!(size, Size::new(0.0, 0.0), "no inset, no size");
+}

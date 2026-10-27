@@ -405,6 +405,49 @@ pub(crate) fn measure_node_inner(
                     inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
                 }
             }
+            SizeStep::InsetSize(index) => {
+                // Compose's DerivedWidth/HeightModifierNode (WindowInsetsSize.kt): the node's one axis IS
+                // the unconsumed inset on that side, the child is measured at exactly that size, and the
+                // CROSS axis comes from the child. It does not consume the inset.
+                if let Some((kind, controller, side)) = nodes[idx].modifier.inset_size_at(index) {
+                    let window = controller.state().get();
+                    let value = crate::window::insets::remaining(kind, window, inset_consumed);
+                    let rtl = nodes[idx].layout_direction == crate::layout::LayoutDirection::Rtl;
+                    let width = match side {
+                        crate::modifier::InsetSizeSide::Start => {
+                            if rtl { value.right } else { value.left }
+                        }
+                        crate::modifier::InsetSizeSide::End => {
+                            if rtl { value.left } else { value.right }
+                        }
+                        _ => 0.0,
+                    };
+                    let height = match side {
+                        crate::modifier::InsetSizeSide::Top => value.top,
+                        crate::modifier::InsetSizeSide::Bottom => value.bottom,
+                        _ => 0.0,
+                    };
+                    if width > 0.0 {
+                        inner_constraints = Constraints::new(
+                            width,
+                            width,
+                            inner_constraints.min_height,
+                            inner_constraints.max_height,
+                        );
+                    } else if height > 0.0 {
+                        inner_constraints = Constraints::new(
+                            inner_constraints.min_width,
+                            inner_constraints.max_width,
+                            height,
+                            height,
+                        );
+                    } else {
+                        // A zero inset collapses the node and places nothing (Compose returns
+                        // layout(0, 0) {} in that case).
+                        inner_constraints = Constraints::fixed(0.0, 0.0);
+                    }
+                }
+            }
             SizeStep::ConsumeInsets(index) => {
                 // Consume-only: no padding, it only marks the inset for what follows it.
                 if let Some((kind, controller)) = nodes[idx].modifier.inset_at(index) {

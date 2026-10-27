@@ -59,6 +59,26 @@ impl Modifier {
         }
     }
 
+    /// The inset-SIZE element at a chain index, for the walk's `SizeStep::InsetSize`: the side it
+    /// measures from as well as the inset it reads.
+    pub(crate) fn inset_size_at(
+        &self,
+        index: usize,
+    ) -> Option<(
+        crate::window::insets::InsetsKind,
+        crate::window::insets::WindowInsetsController,
+        crate::modifier::InsetSizeSide,
+    )> {
+        match self.elements.get(index)? {
+            ModifierElement::WindowInsetsSize {
+                kind,
+                controller,
+                side,
+            } => Some((*kind, controller.clone(), *side)),
+            _ => None,
+        }
+    }
+
     pub fn get_padding_horizontal(&self) -> (f32, f32) {
         let (s, _, e, _) = self.get_padding_sides();
         (s, e)
@@ -213,6 +233,7 @@ impl Modifier {
                 // it must see the deflated range (the reviewer's "one place the two kinds of padding
                 // differ"). The walk resolves the value; this only carries the element index.
                 ModifierElement::WindowInsetsPadding { .. } => out.push(SizeStep::InsetPadding(index)),
+                ModifierElement::WindowInsetsSize { .. } => out.push(SizeStep::InsetSize(index)),
                 ModifierElement::ConsumeWindowInsets { .. } => out.push(SizeStep::ConsumeInsets(index)),
                 ModifierElement::PaddingSides { start, top, end, bottom } => {
                     out.push(SizeStep::Padding {
