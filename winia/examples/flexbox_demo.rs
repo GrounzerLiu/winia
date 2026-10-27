@@ -67,17 +67,17 @@ fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool) {
         .build(ctx, |_| {});
 }
 
-/// What a segmented picker does when a value is chosen (the new index).
-type SetIndex = Arc<dyn Fn(usize) + Send + Sync>;
-
 /// A labelled single-choice segmented row: one segment per value, the current one selected.
+///
+/// The read happens INSIDE the row's content closure on purpose: a pass-through container that reads
+/// its parameters OUTSIDE (in the caller) Skips when only the selection changes, and its children keep
+/// the stale highlight (docs/component-authoring.md 3.2).
 fn segmented(
     ctx: &mut ComposeCtx,
     tag: &'static str,
     title: &'static str,
     options: &'static [&'static str],
-    selected: usize,
-    set: SetIndex,
+    state: State<usize>,
 ) {
     Row::new()
         .modifier(Modifier::new().fill_max_width())
@@ -85,11 +85,16 @@ fn segmented(
         .build(ctx, |ctx| {
             Text::new(title).font_size(11.0).build(ctx);
             SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                let selected = state.get();
                 for (index, label) in options.iter().enumerate() {
-                    clone!(set);
-                    SegmentedButton::new(selected == index, move || set(index))
+                    clone!(state);
+                    SegmentedButton::new(selected == index, move || state.set(index))
                         .shape(SegmentedButtonDefaults::item_shape(index, options.len()))
-                        .modifier(Modifier::new().test_tag(format!("{tag}-{index}")))
+                        // The tag carries the selection, so a test can see the highlight move.
+                        .modifier(Modifier::new().test_tag(format!(
+                            "{tag}-{index}-{}",
+                            if selected == index { "on" } else { "off" }
+                        )))
                         .build(ctx, |ctx| Text::new(*label).font_size(10.0).build(ctx));
                 }
             });
@@ -157,55 +162,35 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
                 "fb-direction",
                 "direction",
                 &["Row", "Column", "RowReverse", "ColumnReverse"],
-                direction.get(),
-                {
-                    clone!(direction);
-                    Arc::new(move |index| direction.set(index))
-                },
+                direction.clone(),
             );
             segmented(
                 ctx,
                 "fb-wrap",
                 "wrap",
                 &["NoWrap", "Wrap", "WrapReverse"],
-                wrap.get(),
-                {
-                    clone!(wrap);
-                    Arc::new(move |index| wrap.set(index))
-                },
+                wrap.clone(),
             );
             segmented(
                 ctx,
                 "fb-justify",
                 "justify",
                 &["Start", "End", "Center", "Between"],
-                justify.get(),
-                {
-                    clone!(justify);
-                    Arc::new(move |index| justify.set(index))
-                },
+                justify.clone(),
             );
             segmented(
                 ctx,
                 "fb-align",
                 "align",
                 &["Start", "Center", "Stretch"],
-                align.get(),
-                {
-                    clone!(align);
-                    Arc::new(move |index| align.set(index))
-                },
+                align.clone(),
             );
             segmented(
                 ctx,
                 "fb-lines",
                 "lines",
                 &["Start", "Center", "Between", "Stretch"],
-                align_content.get(),
-                {
-                    clone!(align_content);
-                    Arc::new(move |index| align_content.set(index))
-                },
+                align_content.clone(),
             );
 
             // A sized frame: the FlexBox fills it, so justify-content and align-content have space to

@@ -37,7 +37,13 @@ fn flexbox_lays_out_both_axes() {
 
     // Wrap on: four 96 dp tiles fit one line (4 * 96 + 3 * 8 <= the frame), so they stop shrinking
     // and the remaining two start the second line one line-height plus the cross gap lower.
-    app.click_tag("fb-wrap-1");
+    app.click_tag("fb-wrap-1-off");
+    // The segment's tag carries its selection state, so this is the highlight moving, not just the
+    // layout reacting.
+    app.expect_eventually("the Wrap segment becomes the selected one", |app| {
+        app.refresh();
+        app.find_tag("fb-wrap-1-on").is_some() && app.find_tag("fb-wrap-0-on").is_none()
+    });
     app.expect_eventually("the tiles stop shrinking", |app| {
         app.refresh();
         (app.expect_tag("fb-tile-0").2 - 96.0).abs() <= 1.5
@@ -54,7 +60,11 @@ fn flexbox_lays_out_both_axes() {
     );
 
     // justify-content: End packs each line against the main-end edge.
-    app.click_tag("fb-justify-1");
+    app.click_tag("fb-justify-1-off");
+    app.expect_eventually("the End segment becomes the selected one", |app| {
+        app.refresh();
+        app.find_tag("fb-justify-1-on").is_some()
+    });
     app.expect_eventually("the line is packed to the end", |app| {
         app.refresh();
         app.expect_tag("fb-tile-0").0 > 20.0
@@ -73,7 +83,11 @@ fn flexbox_lays_out_both_axes() {
 
     // direction: the same six tiles become a column, each keeping its cross size (this is where a tile
     // with no cross size collapsed to zero width before the demo sized its cross axis).
-    app.click_tag("fb-direction-1");
+    app.click_tag("fb-direction-1-off");
+    app.expect_eventually("the Column segment becomes the selected one", |app| {
+        app.refresh();
+        app.find_tag("fb-direction-1-on").is_some() && app.find_tag("fb-direction-0-on").is_none()
+    });
     app.expect_eventually("the grid becomes a column", |app| {
         app.refresh();
         app.expect_tag("fb-tile-1").1 > app.expect_tag("fb-tile-0").1 + 8.0
@@ -88,6 +102,19 @@ fn flexbox_lays_out_both_axes() {
         (column_first.0 - column_second.0).abs() < 1.5,
         "the column tiles share one cross position: {column_first:?} {column_second:?}"
     );
+
+    // The remaining two pickers are covered for the highlight at least: a pass-through wrapper that
+    // reads the state outside its content Skips and leaves the old segment lit.
+    app.click_tag("fb-align-2-off");
+    app.expect_eventually("the Stretch segment becomes the selected one", |app| {
+        app.refresh();
+        app.find_tag("fb-align-2-on").is_some() && app.find_tag("fb-align-0-on").is_none()
+    });
+    app.click_tag("fb-lines-2-off");
+    app.expect_eventually("the Between lines segment becomes the selected one", |app| {
+        app.refresh();
+        app.find_tag("fb-lines-2-on").is_some()
+    });
 
     // grow shares the FREE space: the strip holds a grow-2 tile, a grow-1 tile and a fixed 60 dp one,
     // and the three fill the width between them.
