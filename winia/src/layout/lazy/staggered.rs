@@ -483,9 +483,21 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             shared.anchors.clone()
         };
         let mut shift = 0.0f32;
-        if let Some((index, top)) = anchors.iter().flatten().min_by_key(|(index, _)| *index).copied() {
+        if let Some((lane, (index, top))) = anchors
+            .iter()
+            .enumerate()
+            .filter_map(|(lane, anchor)| anchor.map(|anchor| (lane, anchor)))
+            .min_by_key(|(_, anchor)| anchor.0)
+        {
             if let Some(slot) = slots.get(index) {
-                shift = top - slot.main_start;
+                // Compensate only while the anchor still sits in the SAME lane. A data change (an insert
+                // at the head) or a height-pattern change can re-assign it, and the lane difference was
+                // being folded into the shift: the whole waterfall moved DOWN by that much and left a
+                // blank strip above the first tile (reported from a screenshot: ~240 dp of nothing
+                // between the controls and the grid).
+                if slot.lane == lane {
+                    shift = top - slot.main_start;
+                }
             }
         }
         let tops: Vec<f32> = slots
@@ -939,6 +951,60 @@ mod tests {
         );
     }
 
+    /// A HEIGHT change re-assigns lanes, and the anchor's lane can move with it. The old code folded
+    /// that lane difference into the whole waterfall's shift, which pushed the content down and left a
+    /// blank strip between the controls and the first tile (reported from a screenshot).
+    #[test]
+    fn a_height_change_does_not_leave_a_blank_strip_above_the_tiles() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer, state: &ScrollState, tall: bool| {
+            let s = state.clone();
+            composer.compose(crate::compose!(|ctx| {
+                LazyVerticalStaggeredGrid::new()
+                    .lanes(GridCells::Fixed(2))
+                    .spacing(8.0)
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().height(200.0))
+                    .items(12, move |ctx, index| {
+                        let height = if tall {
+                            if index % 3 == 0 { 120.0 } else { 40.0 }
+                        } else {
+                            40.0
+                        };
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_width().height(height))
+                            .build(ctx, |_| {});
+                    })
+                    .build(ctx);
+            }));
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        for _ in 0..2 {
+            frame(&mut composer, &state, true);
+        }
+        state.offset.set(120.0);
+        for _ in 0..2 {
+            frame(&mut composer, &state, true);
+        }
+        for _ in 0..2 {
+            frame(&mut composer, &state, false);
+        }
+        let root = composer.layout_root().unwrap();
+        let top = root
+            .children
+            .iter()
+            .map(|child| composer.arena_nodes()[*child].position.y)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            top.abs() < 1.0,
+            "the content starts at the grid's top, never below a blank strip: {top}"
+        );
+    }
     /// A COLD JUMP: the window is chosen from estimated tops, and before the anchors were recorded the
     /// composed block could land hundreds of dp away from the viewport and show a blank frame.
     #[test]
