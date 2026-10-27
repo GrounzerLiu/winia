@@ -464,6 +464,13 @@ impl FlexBoxLayout {
         }
     }
 
+    /// The layout direction a hand-built policy places with. FlexBox::build resolves it from the
+    /// modifier chain (or the ambient direction) itself, so this is only for a policy used directly.
+    pub fn direction(mut self, direction: crate::layout::LayoutDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
     fn resolve(&self, constraints: Constraints) -> FlexBoxConfig {
         match &self.resolver {
             Some(resolver) => resolver(&FlexBoxConfigInput {
@@ -739,32 +746,30 @@ impl MeasurePolicy for FlexBoxLayout {
                 }
                 _ => 0.0,
             };
+            // The distribution is computed in the CROSS-START frame (the same arithmetic for both wrap
+            // modes) and then mirrored when the lines stack from the cross-end. Compose instead walks
+            // the reversed lines with increasing positions, which for SpaceBetween/SpaceAround on a
+            // wrap-reverse container walks the block off the cross extent (three 20 dp lines with
+            // 164 dp of free space landed at 164 / 274 / 384 inside a 240 dp box); mirroring the
+            // forward distribution is what CSS describes and what keeps the block inside.
+            let cross_extent = cross_floor.max(total_cross);
             let mut position = match config.align_content {
-                FlexAlignContent::End => {
-                    if cross_reverse {
-                        0.0
-                    } else {
-                        free
-                    }
-                }
+                FlexAlignContent::End => free,
                 FlexAlignContent::Center => free / 2.0,
                 FlexAlignContent::SpaceAround => space_between / 2.0,
-                _ => {
-                    if cross_reverse {
-                        free
-                    } else {
-                        0.0
-                    }
-                }
+                _ => 0.0,
             };
-            let order: Vec<usize> = if cross_reverse {
-                (0..lines.len()).rev().collect()
-            } else {
-                (0..lines.len()).collect()
-            };
-            for index in order {
-                lines[index].cross_start = position;
-                position += lines[index].cross + space_between + cross_gap;
+            let mut starts = vec![0.0f32; lines.len()];
+            for (index, line) in lines.iter().enumerate() {
+                starts[index] = position;
+                position += line.cross + space_between + cross_gap;
+            }
+            for (index, line) in lines.iter_mut().enumerate() {
+                line.cross_start = if cross_reverse {
+                    cross_extent - starts[index] - line.cross
+                } else {
+                    starts[index]
+                };
             }
         }
 
@@ -1528,6 +1533,28 @@ mod tests {
         assert_eq!(size.height, 120.0);
         // free = 120 - 60 - 20 = 40 over two gaps -> 20 each: 0, 50, 100.
         assert_eq!(ys(&placements), vec![0.0, 50.0, 100.0]);
+    }
+
+    /// WrapReverse mirrors the line distribution instead of walking it off the cross extent: Compose
+    /// adds up the reversed lines from the free-space edge, which for SpaceBetween/SpaceAround leaves
+    /// the block outside the container (three 20 dp lines with 164 dp of free space in 240 landed at
+    /// 164 / 274 / 384). The distribution is computed in the cross-start frame and mirrored.
+    #[test]
+    fn wrap_reverse_keeps_the_lines_inside_the_cross_extent() {
+        let mut nodes = vec![leaf(100.0, 20.0), leaf(100.0, 20.0), leaf(100.0, 20.0)];
+        let (size, placements) = run(
+            FlexBoxConfig::new()
+                .wrap(FlexWrap::WrapReverse)
+                .align_content(FlexAlignContent::SpaceBetween),
+            &mut nodes,
+            Constraints::new(0.0, 150.0, 240.0, 240.0),
+        );
+        assert_eq!(size.height, 240.0);
+        let ys: Vec<f32> = placements.iter().map(|placement| placement.position.y).collect();
+        assert!(
+            (ys[0] - 220.0).abs() < 0.5 && (ys[1] - 110.0).abs() < 0.5 && (ys[2] - 0.0).abs() < 0.5,
+            "the three lines span 0..240 with the first line at the cross-start (the bottom): {ys:?}"
+        );
     }
 
     /// align-content: stretch grows the LINES before the stretched items are measured, so a stretched

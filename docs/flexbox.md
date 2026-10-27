@@ -104,6 +104,11 @@ Six phases, in the order Compose's measureFlexBox runs them:
   convention layout_weight and align_self follow.
 - Modifier.weight is not mapped to grow. winia's weight means "share the leftover", which is not CSS
   grow; a main-axis FILL is mapped (Compose FlexBox.kt:365-377), weight is not. Write grow explicitly.
+- align-content in a wrap-reverse container is MIRRORED rather than walked backwards. Compose adds up the
+  reversed lines from the free-space edge, which for SpaceBetween / SpaceAround leaves the block outside
+  the cross extent (three 20 dp lines with 164 dp free in a 240 dp box land at 164 / 274 / 384). winia
+  computes the distribution in the cross-start frame and mirrors it (220 / 110 / 0, the first line at
+  the cross-start, the bottom).
 - A resolver-bearing FlexBox never Skips. The config is a closure, and a closure is neither comparable
   nor installed on a Skip (the policy only changes when the group Enters), so a captured value would
   freeze. FlexBox::build therefore bumps a generation counter that makes the group Enter on every
@@ -119,7 +124,7 @@ Six phases, in the order Compose's measureFlexBox runs them:
 
 ## Tests
 
-cargo test -p winia --lib -- layout::flexbox — 23 cases:
+cargo test -p winia --lib -- layout::flexbox — 24 cases:
 
 | Test | What it pins |
 | --- | --- |
@@ -141,6 +146,7 @@ cargo test -p winia --lib -- layout::flexbox — 23 cases:
 | align_content_space_between_distributes_the_lines | line distribution |
 | align_content_does_not_subtract_the_cross_gap_twice | the gap is subtracted once (3 lines of 20 in 120 with a 10 gap sit at 0/50/100) |
 | align_content_stretch_grows_the_stretched_items | stretch grows the lines BEFORE the items are measured |
+| wrap_reverse_keeps_the_lines_inside_the_cross_extent | the line distribution is mirrored in wrap-reverse (see the deviation below) |
 | order_reorders_the_items | CSS order |
 | a_column_direction_swaps_the_axes | column mapping |
 | an_empty_flex_box_takes_the_minimum | empty container |
@@ -155,6 +161,22 @@ Lifecycle (a measure-only unit test cannot see these): cargo test -p winia --tes
 | a_config_for_resolver_sees_a_state_change | a State read inside config_for registers a LAYOUT dependency, so the resolver re-runs and the direction flips |
 | a_child_flex_change_reaches_the_parent | a child's own Modifier::flex(..) changing re-measures the parent, even though the container's parameters did not change |
 | a_resolver_capturing_an_ancestor_value_still_updates | a value read in an ANCESTOR scope still reaches config_for (the non-skippable path) |
+
+### Combination sweep
+
+cargo test -p winia --test flexbox_matrix — 9 sweeps, roughly 100 000 measured cases:
+
+| Sweep | What it sweeps |
+| --- | --- |
+| the_matrix_respects_the_layout_invariants | 4 directions x 3 wraps x 6 justifies x 5 align-items x 6 align-contents x 4 counts x 3 item patterns x 4 constraint sets: finite sizes, the incoming range, placements matching the measured children, determinism |
+| the_matrix_respects_the_behavioural_invariants | order under Start, no overlap inside a line, the single line inside the container, the exact justify arithmetic (Start/End/Center/SpaceBetween) and the exact align placement |
+| the_matrix_mirrors_with_the_reverse_and_rtl_directions | RowReverse and RTL mirror the forward geometry |
+| the_matrix_holds_on_the_column_axis_and_unbounded_axes | the same invariants on a column, plus f32::MAX axes |
+| the_matrix_distributes_the_wrapped_lines | line block start, pitch and block containment for all six align-contents in both wrap modes |
+| the_matrix_distributes_the_wrapped_lines_on_the_column_axis | the same on a column (cross = x) |
+| the_matrix_covers_rtl_the_line_cap_order_and_nesting | RTL leaves the cross axis alone, max_items_in_each_line, order, a FlexBox inside a FlexBox |
+| the_matrix_splits_a_line_evenly_between_equal_items | equal grow factors split a line evenly and fill the container |
+| the_matrix_stretches_each_line_to_its_own_extent | with wrap, stretch uses each line's own cross extent |
 
 cargo test -p winia --features debug-server --test ui_flexbox_test drives examples/flexbox_demo.rs
 through the debug server: six tiles shrink to the frame, wrap stops the shrink, justify-content packs

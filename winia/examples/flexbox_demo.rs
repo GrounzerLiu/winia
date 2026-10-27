@@ -39,19 +39,24 @@ fn grow_tile(ctx: &mut ComposeCtx, index: usize, config: FlexItemConfig) {
 }
 
 /// One tile: a fixed basis with a slightly different height per index, so alignment is visible.
-fn tile(ctx: &mut ComposeCtx, index: usize) {
-    let height = match index % 3 {
+fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool) {
+    // The tile sizes its CROSS axis and lets the flex basis own the main axis: a fixed main size sets
+    // the min-content floor and would block shrink (CSS min-width: auto is the content's min size),
+    // while a tile with NO cross size collapses to zero in a column.
+    let extent = match index % 3 {
         0 => 40.0,
         1 => 64.0,
         _ => 88.0,
     };
-    let config = FlexItemConfig::new().basis_dp(96.0);
-    // No width: the main size comes from the flex basis, and nothing sets a min-content floor that
-    // would block shrink (a fixed width would — CSS min-width: auto is the content's min size).
+    let modifier = if horizontal {
+        Modifier::new().height(extent)
+    } else {
+        Modifier::new().width(96.0)
+    };
+    let config = FlexItemConfig::new().basis_dp(if horizontal { 96.0 } else { extent });
     Stack::new()
         .modifier(
-            Modifier::new()
-                .height(height)
+            modifier
                 .background(tile_color(index), Shape::rounded(8.0))
                 .test_tag(format!("fb-tile-{index}"))
                 .flex(config),
@@ -167,7 +172,7 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
                 )
                 .build(ctx, |ctx| {
                     for index in 0..6 {
-                        tile(ctx, index);
+                        tile(ctx, index, direction_value.is_horizontal());
                     }
                 });
 

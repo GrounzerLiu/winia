@@ -70,6 +70,24 @@ fn flexbox_lays_out_both_axes() {
         "the line starts away from the frame's start: {packed:?}"
     );
 
+    // direction: the same six tiles become a column, each keeping its cross size (this is where a tile
+    // with no cross size collapsed to zero width before the demo sized its cross axis).
+    app.click_tag("fb-direction");
+    app.expect_eventually("the grid becomes a column", |app| {
+        app.refresh();
+        app.expect_tag("fb-tile-1").1 > app.expect_tag("fb-tile-0").1 + 8.0
+    });
+    let column_first = app.expect_tag("fb-tile-0");
+    let column_second = app.expect_tag("fb-tile-1");
+    assert!(
+        column_first.2 > 50.0,
+        "a column tile keeps its cross size: {column_first:?}"
+    );
+    assert!(
+        (column_first.0 - column_second.0).abs() < 1.5,
+        "the column tiles share one cross position: {column_first:?} {column_second:?}"
+    );
+
     // grow shares the FREE space: the strip holds a grow-2 tile, a grow-1 tile and a fixed 60 dp one,
     // and the three fill the width between them.
     let frame = app.expect_tag("fb-grow-strip");
