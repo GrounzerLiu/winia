@@ -112,7 +112,7 @@ Six phases, in the order Compose's measureFlexBox runs them:
 
 ## Tests
 
-cargo test -p winia --lib -- layout::flexbox — 18 arena-level cases:
+cargo test -p winia --lib -- layout::flexbox — 19 cases:
 
 | Test | What it pins |
 | --- | --- |
@@ -134,6 +134,7 @@ cargo test -p winia --lib -- layout::flexbox — 18 arena-level cases:
 | a_column_direction_swaps_the_axes | column mapping |
 | an_empty_flex_box_takes_the_minimum | empty container |
 | a_baseline_axis_without_published_lines_degrades_to_the_start | the unspecified-baseline fallback |
+| a_baseline_line_lines_up_the_texts | two real Texts of different sizes share one first baseline |
 
 cargo test -p winia --features debug-server --test ui_flexbox_test drives examples/flexbox_demo.rs
 through the debug server: six tiles shrink to the frame, wrap stops the shrink, justify-content packs

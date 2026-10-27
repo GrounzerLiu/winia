@@ -56,6 +56,7 @@ pub enum FlexDirection {
     RowReverse,
     Column,
     ColumnReverse,
+
 }
 
 impl FlexDirection {
@@ -1381,4 +1382,49 @@ mod tests {
         );
         assert_eq!(ys(&placements), vec![0.0, 0.0]);
     }
-}
+
+    /// The baseline path with REAL published lines: two texts of different sizes must sit on one
+    /// first baseline (Compose's FlexAlignItems.Baseline, FlexBox.kt:916-968).
+    #[test]
+    fn a_baseline_line_lines_up_the_texts() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            FlexBox::new()
+                .config(FlexBoxConfig::new().align_items(FlexAlignItems::Baseline))
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("small")
+                        .font_size(12.0)
+                        .build(ctx);
+                    crate::components::Text::new("large")
+                        .font_size(32.0)
+                        .build(ctx);
+                });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        let root = composer.layout_root().unwrap();
+        let texts = root.children.clone();
+        assert_eq!(texts.len(), 2, "two texts in the line");
+        let nodes = composer.arena_nodes();
+        let line = crate::layout::node::AlignmentLine::FIRST_BASELINE;
+        let first = nodes[texts[0]].alignment_line(line).expect("small text has a baseline");
+        let second = nodes[texts[1]]
+            .alignment_line(line)
+            .expect("large text has a baseline");
+        let first_y = nodes[texts[0]].position.y + first;
+        let second_y = nodes[texts[1]].position.y + second;
+        assert!(
+            (first_y - second_y).abs() < 0.5,
+            "both texts sit on one baseline: {first_y} vs {second_y}"
+        );
+        assert!(
+            nodes[texts[1]].position.y < nodes[texts[0]].position.y,
+            "the larger text starts higher: {:?} {:?}",
+            nodes[texts[0]].position,
+            nodes[texts[1]].position
+        );
+    }}
