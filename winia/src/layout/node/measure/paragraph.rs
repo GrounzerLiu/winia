@@ -23,9 +23,19 @@ pub(crate) fn build_plain_paragraph(
 
     let mut para_style = ParagraphStyle::new();
 
-    // max_lines caps the line count
-    if max_lines < usize::MAX {
-        para_style.set_max_lines(max_lines);
+    // Compose's `TextDelegate.layoutText` (TextDelegate.kt:160-181): the constraint width matters when
+    // the text WRAPS or when it ELLIPSIZES, and a nowrap ellipsis is a ONE-LINE ellipsis — native text
+    // layout cannot produce several of them, so Compose overwrites maxLines with 1 there. Laying a
+    // nowrap ellipsis out at an infinite width (what this did) makes Skia believe the line fits and no
+    // ellipsis is ever produced.
+    let width_matters = soft_wrap || overflow == crate::text::TextOverflow::Ellipsis;
+    let effective_max_lines = if !soft_wrap && overflow == crate::text::TextOverflow::Ellipsis {
+        1
+    } else {
+        max_lines
+    };
+    if effective_max_lines < usize::MAX {
+        para_style.set_max_lines(effective_max_lines);
     }
 
     // ellipsis overflow: show an ellipsis when the text does not fit
@@ -38,8 +48,14 @@ pub(crate) fn build_plain_paragraph(
         para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
     }
 
-    // soft_wrap = false lays out at an infinite width, so nothing wraps
-    let layout_width = if soft_wrap { max_width } else { f32::MAX };
+    // A nowrap paragraph is laid out at an infinite width so nothing wraps — unless it ellipsizes, in
+    // which case the box width is what the ellipsis truncates against (see the width_matters note
+    // above). The f32::MAX sentinel some scroll paths use IS a bounded width, so clamp the infinity.
+    let layout_width = if width_matters {
+        max_width.min(f32::MAX)
+    } else {
+        f32::MAX
+    };
 
     let mut text_style = skia_safe::textlayout::TextStyle::new();
     text_style.set_font_size(font_size);

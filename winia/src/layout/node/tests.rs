@@ -1588,3 +1588,54 @@ fn an_inset_sized_node_takes_its_axis_from_the_inset() {
     // Compose returns layout(0, 0) for a zero inset and places nothing.
     assert_eq!(size, Size::new(0.0, 0.0), "no inset, no size");
 }
+
+/// Compose's `TextDelegate.layoutText` (TextDelegate.kt:160-181): a nowrap ELLIPSIS still lays the
+/// paragraph out at the box width (and as ONE line), so the ellipsis has something to truncate
+/// against. Before this the nowrap branch used `f32::MAX`, the line fit, and no ellipsis was ever
+/// produced — measured: layout width 3.4e38, longest line 251.86 in a 60 dp box.
+#[test]
+fn a_nowrap_ellipsis_lays_the_paragraph_out_at_the_box_width() {
+    use crate::text::{FontSlant, FontWeight, TextAlign, TextOverflow};
+    let layout = |overflow: TextOverflow, soft_wrap: bool| {
+        let modifier = Modifier::new().text_content_full(
+            "hello world this is a long line".to_string(),
+            20.0,
+            crate::graphics::Color::BLACK,
+            FontWeight::NORMAL,
+            FontSlant::Upright,
+            usize::MAX,
+            TextAlign::Left,
+            overflow,
+            soft_wrap,
+            0.0,
+            None,
+        );
+        let mut nodes = vec![LayoutNode::leaf(modifier)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 60.0, 0.0, 500.0));
+        let paragraph = nodes[0].cached_paragraph.borrow();
+        let paragraph = paragraph.as_ref().expect("a paragraph");
+        (
+            size.width,
+            paragraph.max_width(),
+            paragraph.longest_line(),
+            paragraph.did_exceed_max_lines(),
+        )
+    };
+
+    let (width, layout_width, longest, exceeded) = layout(TextOverflow::Ellipsis, false);
+    assert_eq!(width, 60.0, "the node is as wide as the box");
+    assert_eq!(layout_width, 60.0, "the nowrap ellipsis lays out AT the box width");
+    assert!(
+        longest <= 60.5,
+        "the line is truncated to the box (measured {longest}, layout width {layout_width})"
+    );
+    assert!(exceeded, "the paragraph reports the truncation");
+
+    // A nowrap CLIP still lays out at an infinite width (Compose's widthMatters is false there), so
+    // nothing is truncated by the paragraph itself; an ancestor does the clipping.
+    let (_, clip_width, clip_longest, _) = layout(TextOverflow::Clip, false);
+    assert!(
+        clip_width > f32::MAX / 2.0 && clip_longest > 100.0,
+        "a nowrap clip keeps the full line (layout {clip_width}, longest {clip_longest})"
+    );
+}

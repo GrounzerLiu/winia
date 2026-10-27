@@ -833,10 +833,21 @@ pub(super) fn render_pass1(
             // was laid out at its intrinsic width and can be WIDER than the box — then centring or
             // right-aligning has to shift it the other way rather than pin it to the left edge,
             // which is what keeps a button-group label centred while a press narrows its item.
-            let slack = if soft_wrap {
-                (content_w - para.max_intrinsic_width()).max(0.0)
+            // What the paragraph DRAWS across. A wrapped paragraph draws up to its intrinsic width; an
+            // unwrapped CLIP/Visible one was laid out at an infinite width, so its intrinsic width IS
+            // the line; an unwrapped ELLIPSIS one was laid out at the BOX width (see
+            // `build_plain_paragraph`) and its line cannot be wider than that box. Using the
+            // pre-ellipsis intrinsic width there computed a NEGATIVE slack (measured: a centred nowrap
+            // ellipsis in a 300 dp box spilled 14 sampled pixels to the LEFT of its own box).
+            let drawn_width = if soft_wrap {
+                para.max_intrinsic_width()
             } else {
-                content_w - para.max_intrinsic_width()
+                para.max_width().min(para.max_intrinsic_width())
+            };
+            let slack = if soft_wrap {
+                (content_w - drawn_width).max(0.0)
+            } else {
+                content_w - drawn_width
             };
             let x_off = match align {
                 crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
