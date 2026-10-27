@@ -307,10 +307,9 @@ impl FlowColumn {
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         // The host is cheap and always present; item state is only allocated for markers.
+        // Per INSTANCE, as in FlowRow: position_key() is the enclosing group, not this container.
         let item_animations = ctx
-            .remember_at_key(ctx.position_key(0x666c6f77), || {
-                crate::layout::item_animation::ItemAnimationHost::default()
-            })
+            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
             .peek();
         let modifier = self
             .modifier

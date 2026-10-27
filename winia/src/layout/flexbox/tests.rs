@@ -717,4 +717,3 @@ mod intrinsic_wiring_tests {
         );
     }
 }
-

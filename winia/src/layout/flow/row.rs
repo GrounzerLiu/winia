@@ -310,10 +310,11 @@ impl FlowRow {
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         // The host is cheap and always present; item state is only allocated for markers.
+        // Per INSTANCE: position_key() resolves to the innermost GROUP, so two flows under one parent
+        // shared a host and each begin_frame invalidated the other's items (they re-entered as "new"
+        // with alpha 0 every pass and stayed invisible). remember() keys the slot by the call site.
         let item_animations = ctx
-            .remember_at_key(ctx.position_key(0x666c6f77), || {
-                crate::layout::item_animation::ItemAnimationHost::default()
-            })
+            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
             .peek();
         let modifier = self
             .modifier

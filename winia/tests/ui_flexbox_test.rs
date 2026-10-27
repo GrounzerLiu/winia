@@ -169,3 +169,65 @@ fn flexbox_lays_out_both_axes() {
         "the three tiles and their gaps fill the strip: {frame:?} {two:?} {one:?} {fixed:?}"
     );
 }
+
+/// Reported: with item animation ON, resizing the window made the tiles disappear.
+#[test]
+fn the_tiles_survive_a_window_resize_with_animation_on() {
+    let mut app = UiTest::launch("flexbox");
+    app.click_tag("fb-animate");
+    app.expect_eventually("the switch is on", |app| {
+        app.refresh();
+        app.find_tag("fb-tile-0").is_some()
+    });
+    let before: Vec<(f32, f32, f32, f32)> = (0..6u32)
+        .filter_map(|id| app.find_tag(&format!("fb-tile-{id}")))
+        .collect();
+    assert_eq!(before.len(), 6, "six tiles before the resize");
+
+    app.resize(520.0, 900.0);
+    app.refresh();
+    let after: Vec<String> = (0..6u32)
+        .filter_map(|id| {
+            app.find_tag(&format!("fb-tile-{id}"))
+                .map(|rect| format!("{id}:{rect:?}"))
+        })
+        .collect();
+    assert_eq!(
+        after.len(),
+        6,
+        "the resize must keep every tile ({after:?})"
+    );
+}
+
+/// Reported: with item animation ON, resizing the window made the tiles disappear. The placement
+/// spring is what moves them, so a resize is exactly when a stuck or NaN channel would show: the tiles
+/// must still be PAINTED at their slots once the motion settles.
+#[test]
+fn the_tiles_stay_painted_after_a_resize_with_animation_on() {
+    let mut app = UiTest::launch("flexbox");
+    app.click_tag("fb-animate");
+    // Resize like a drag (many small steps), then jump wide and narrow.
+    for width in (300..=440).step_by(20) {
+        app.resize(width as f32, 900.0);
+    }
+    app.resize(900.0, 900.0);
+    app.resize(320.0, 780.0);
+    // The slot geometry comes from the tree; the pixels come from the frame the app actually painted.
+    app.expect_eventually("every tile is painted at its slot", |app| {
+        app.refresh();
+        let tiles: Vec<(f32, f32, f32, f32)> = (0..6u32)
+            .filter_map(|id| app.find_tag(&format!("fb-tile-{id}")))
+            .collect();
+        if tiles.len() != 6 {
+            return false;
+        }
+        tiles.iter().all(|rect| {
+            let centre = (rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0);
+            match app.pixel_at_logical(centre.0, centre.1) {
+                // The demo's surface is near-black; a tile is a saturated palette colour.
+                Some((r, g, b, a)) => a == 255 && (r as u32 + g as u32 + b as u32) > 150,
+                None => false,
+            }
+        })
+    });
+}

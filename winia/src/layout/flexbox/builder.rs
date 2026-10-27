@@ -97,10 +97,13 @@ impl FlexBox {
         // The item-animation host is cheap and always present; only items carrying the marker
         // allocate state. It rides on the modifier too so the render pass can find the container's
         // exit store and capture the removed items' pictures.
+        // Per INSTANCE, not per namespace: position_key() is the innermost GROUP's key, so two
+        // FlexBoxes under one parent got the same value and shared a host — each container's
+        // begin_frame then invalidated the other's items, which re-entered as "new" with alpha 0 on
+        // every pass and stayed invisible. remember() keys the slot by the call site, which IS the
+        // container instance.
         let item_animations = ctx
-            .remember_at_key(ctx.position_key(0x666c7862), || {
-                crate::layout::item_animation::ItemAnimationHost::default()
-            })
+            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
             .peek();
         let modifier = self
             .modifier

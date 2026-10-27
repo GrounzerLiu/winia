@@ -137,3 +137,15 @@ Placement is a paint offset, not a layout move. Hit testing and pointer input us
 slot while it is still visually travelling; this matches the graphics-layer placement model rather
 than making the hit target follow the painted offset. Tests and components should not assume the
 visual box is interactive during the animation.
+
+## The host is per container INSTANCE
+
+A container owns its `ItemAnimationHost` and keys it by its own call site (`ctx.remember`), never by a
+namespace shared between siblings. `ComposeCtx::position_key` resolves against the innermost GROUP —
+the PARENT container — so two flex/flow containers under one parent produced the same key and shared
+one host. Each container's `begin_frame` then aged the other's items out of the pass: their next
+`place` saw an unknown key, treated it as a NEW item and set alpha 0 again, so every tile stayed
+invisible for as long as the window kept relaying out (measured: this is what "the items disappear
+when I resize the window" was). The regression test is
+`tests/ui_flexbox_test.rs::the_tiles_stay_painted_after_a_resize_with_animation_on`, which resizes
+like a drag and then samples every tile's slot centre.
