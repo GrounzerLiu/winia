@@ -92,6 +92,14 @@ target** for everything it reads.
 - **MUST NOT** mark a LAYOUT PRIMITIVE that hands the caller's closure straight through: `Column`,
   `Row`, `Stack`, `Flow`, and the animation containers (`AnimatedVisibility`, `AnimatedContent`,
   `Crossfade`, `AnimatedSize`) stay scope-free.
+- **MUST** mark any FUNCTION that composes several children of its own — a demo body, a page builder, a
+  `fn card(ctx, ..)` helper that builds a Stack — even though it is not a component. Without the macro
+  the function gets no scope, its statements get no ids, and every key it creates derives from the same
+  chain base with only the per-base counter separating the siblings: a structure change then shifts that
+  counter (`docs/key-system-design.md` section 1.2) and the materialiser panics with `[dup-key]`.
+  Measured on the text demo: opening the settings sheet did it one run in three until the attribute was
+  added. The demo bodies under `examples/` are checked by
+  `components::conventions::every_demo_body_is_composable`.
 - **Why:** a `State::get()` written at the top of the content closure belongs to whoever composed
   it. With a scope in between it registers on the container instead, the parent Skips, and the
   change never re-runs the content - that is how the checkbox demo's select-all stopped
