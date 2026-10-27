@@ -17,14 +17,18 @@ fn leaf(ctx: &mut ComposeCtx, width: f32, height: f32, flex: FlexItemConfig) {
         .build(ctx, |_| {});
 }
 
-/// The FlexBox node is the layout root here; its children are the cells.
+/// Descend through single-child wrappers (a Column around the FlexBox) to the line's cells.
 fn cells(composer: &Composer) -> Vec<(f32, f32, f32, f32)> {
     let Some(root) = composer.layout_root() else {
         return Vec::new();
     };
-    root.children
-        .clone()
-        .into_iter()
+    let mut ids = root.children.clone();
+    let mut guard = 0;
+    while ids.len() == 1 && !composer.arena_nodes()[ids[0]].children.is_empty() && guard < 4 {
+        ids = composer.arena_nodes()[ids[0]].children.clone();
+        guard += 1;
+    }
+    ids.into_iter()
         .map(|child| {
             let node = &composer.arena_nodes()[child];
             (
@@ -125,5 +129,60 @@ fn a_child_flex_change_reaches_the_parent() {
     assert!(
         (on[0].2 - 150.0).abs() < 0.5 && (on[1].2 - 150.0).abs() < 0.5,
         "a changed child grow re-measures the parent: {on:?}"
+    );
+}
+
+/// The reviewer's case for the resolver: the value is read in an ANCESTOR scope, so the FlexBox's own
+/// parameters do not change. A new closure is not a comparable parameter, which is why a
+/// resolver-bearing FlexBox takes the non-restartable container — otherwise the Skip decision would
+/// keep the previous closure and the new direction would never appear.
+#[test]
+fn a_resolver_capturing_an_ancestor_value_still_updates() {
+    let mut composer = Composer::new();
+    let handle: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut frame = |composer: &mut Composer| {
+        clone!(handle);
+        composer.compose(winia::compose!(|ctx| {
+            let narrow = ctx.remember(|| State::new(false)).get();
+            *handle.lock().unwrap() = Some(narrow.clone());
+            Column::new().build(ctx, |ctx| {
+                // Read OUTSIDE the FlexBox: this is the ancestor-scope capture the review flagged.
+                let value = narrow.get();
+                FlexBox::new()
+                    .config_for(move |_| {
+                        if value {
+                            FlexBoxConfig::new().direction(FlexDirection::Column)
+                        } else {
+                            FlexBoxConfig::new()
+                        }
+                    })
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        leaf(ctx, 20.0, 40.0, FlexItemConfig::new());
+                        leaf(ctx, 20.0, 40.0, FlexItemConfig::new());
+                    });
+            });
+        }));
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+    };
+    for _ in 0..2 {
+        frame(&mut composer);
+    }
+    let row = cells(&composer);
+    assert!(
+        (row[1].0 - 20.0).abs() < 0.5 && (row[1].1 - 0.0).abs() < 0.5,
+        "the default config lays the cells out in a row: {row:?}"
+    );
+
+    let narrow = handle.lock().unwrap().clone().unwrap();
+    narrow.set(true);
+    for _ in 0..2 {
+        frame(&mut composer);
+    }
+    let column = cells(&composer);
+    assert!(
+        (column[1].0 - 0.0).abs() < 0.5 && (column[1].1 - 40.0).abs() < 0.5,
+        "the captured value reaches the resolver through the non-restartable container: {column:?}"
     );
 }

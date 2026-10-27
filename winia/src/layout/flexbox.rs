@@ -1054,6 +1054,11 @@ fn resolve_line(items: &mut [FlexItem], container_main: f32, gap: f32) -> f32 {
     total_gap + items.iter().map(|item| item.target).sum::<f32>()
 }
 
+/// Bumped for every build of a resolver-bearing FlexBox, so the group always Enters (see
+/// FlexBox::build). A counter rather than a pointer: an allocator may reuse the address of a freed
+/// closure, which would silently Skip again.
+static RESOLVER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 // ── The builder ──
 
 /// A CSS-flex container — Compose's FlexBox (FlexBox.kt:133).
@@ -1125,6 +1130,17 @@ impl FlexBox {
             .get_layout_direction()
             .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
+        // A responsive config is a NEW closure on every build, and a closure is not one of the
+        // parameters the Skip decision compares — worse, the policy is only installed when the group
+        // ENTERS, so a Skip would keep the previous closure forever (Compose compares the config
+        // OBJECT instead, so a changed lambda is a changed parameter there). A resolver-bearing
+        // FlexBox therefore never Skips: the generation below is a new value on every build, which
+        // makes the group Enter and the node dirty. Its cost is a rebuild of this subtree whenever the
+        // enclosing scope composes — which is exactly when the config could have changed.
+        if self.resolver.is_some() {
+            let generation = RESOLVER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ctx.changed(&generation);
+        }
         build_container(
             ctx,
             self.modifier,

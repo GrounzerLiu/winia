@@ -104,10 +104,12 @@ Six phases, in the order Compose's measureFlexBox runs them:
   convention layout_weight and align_self follow.
 - Modifier.weight is not mapped to grow. winia's weight means "share the leftover", which is not CSS
   grow; a main-axis FILL is mapped (Compose FlexBox.kt:365-377), weight is not. Write grow explicitly.
-- config_for must read its inputs INSIDE the resolver. A State read there is a layout dependency, so a
-  write re-measures; a value captured from the enclosing composition is frozen once the container
-  Skips, because a new closure is not one of the parameters the Skip decision compares. Compose has no
-  such contract — its policy reads a rememberUpdatedState — and winia has no equivalent channel.
+- A resolver-bearing FlexBox never Skips. The config is a closure, and a closure is neither comparable
+  nor installed on a Skip (the policy only changes when the group Enters), so a captured value would
+  freeze. FlexBox::build therefore bumps a generation counter that makes the group Enter on every
+  build; the cost is a rebuild of this subtree whenever the enclosing scope composes, which is exactly
+  when the config could have changed. Compose compares the config OBJECT instead, so a changed lambda
+  is a changed parameter there.
 - The config cannot be built from a borrowed scope. Compose's FlexBoxConfig lambda receives a
   FlexBoxConfigScope with live accessors; winia hands config_for a FlexBoxConfigInput (the constraints
   and the density) by value.
@@ -152,6 +154,7 @@ Lifecycle (a measure-only unit test cannot see these): cargo test -p winia --tes
 | --- | --- |
 | a_config_for_resolver_sees_a_state_change | a State read inside config_for registers a LAYOUT dependency, so the resolver re-runs and the direction flips |
 | a_child_flex_change_reaches_the_parent | a child's own Modifier::flex(..) changing re-measures the parent, even though the container's parameters did not change |
+| a_resolver_capturing_an_ancestor_value_still_updates | a value read in an ANCESTOR scope still reaches config_for (the non-skippable path) |
 
 cargo test -p winia --features debug-server --test ui_flexbox_test drives examples/flexbox_demo.rs
 through the debug server: six tiles shrink to the frame, wrap stops the shrink, justify-content packs
