@@ -4,6 +4,13 @@ A CSS-flex container: a main axis with grow / shrink / basis, line breaking, jus
 align-items / align-self / align-content, and a per-item order. This is Compose's FlexBox from
 foundation-layout 1.13, not the Row/Column family.
 
+## Files
+
+flexbox/ follows the flow/ and lazy/ layout (no mod.rs): flexbox.rs is the module doc plus the
+declarations and re-exports, config.rs the vocabulary and both config types, policy.rs the line model
+with the flexible-length resolution and the placement, intrinsic.rs the four intrinsic walks and
+builder.rs the composable wrapper. The tests live in flexbox/tests.rs.
+
 ## Sources
 
 | Compose | Here |
