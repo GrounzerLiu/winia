@@ -8,6 +8,7 @@
 //!
 //! Run with `cargo run -p winia --example grid_demo`.
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -93,54 +94,70 @@ fn grid_demo(ctx: &mut ComposeCtx) {
             .build(ctx);
 
             Row::new().spacing(6.0).build(ctx, |ctx| {
-                let s = preset.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("tracks"))
-                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .on_click({
+                        clone!(preset);
+                        move || preset.set((preset.get() + 1) % 4)
+                    })
                     .build(ctx, |ctx| Text::new("tracks").font_size(11.0).build(ctx));
-                let s = flow.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("flow"))
-                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .on_click({
+                        clone!(flow);
+                        move || flow.set((flow.get() + 1) % 4)
+                    })
                     .build(ctx, |ctx| Text::new("flow").font_size(11.0).build(ctx));
-                let s = align.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("align"))
-                    .on_click(move || s.set((s.get() + 1) % 4))
+                    .on_click({
+                        clone!(align);
+                        move || align.set((align.get() + 1) % 4)
+                    })
                     .build(ctx, |ctx| Text::new("align").font_size(11.0).build(ctx));
-                let s = count.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("cells-more"))
-                    .on_click(move || s.set((s.get() + 3).min(24)))
+                    .on_click({
+                        clone!(count);
+                        move || count.set((count.get() + 3).min(24))
+                    })
                     .build(ctx, |ctx| Text::new("cells +").font_size(11.0).build(ctx));
             });
             Row::new().spacing(6.0).build(ctx, |ctx| {
-                let s = span.clone();
                 Switch::new(span.get())
                     .modifier(Modifier::new().test_tag("span"))
-                    .on_checked_change(move |value| s.set(value))
+                    .on_checked_change({
+                        clone!(span);
+                        move |value| span.set(value)
+                    })
                     .build(ctx, |_| {});
                 Text::new("span 2").font_size(11.0).build(ctx);
-                let s = area.clone();
                 Switch::new(area.get())
                     .modifier(Modifier::new().test_tag("areas"))
-                    .on_checked_change(move |value| s.set(value))
+                    .on_checked_change({
+                        clone!(area);
+                        move |value| area.set(value)
+                    })
                     .build(ctx, |_| {});
                 Text::new("areas").font_size(11.0).build(ctx);
-                let s = rtl.clone();
                 Switch::new(rtl.get())
                     .modifier(Modifier::new().test_tag("rtl"))
-                    .on_checked_change(move |value| s.set(value))
+                    .on_checked_change({
+                        clone!(rtl);
+                        move |value| rtl.set(value)
+                    })
                     .build(ctx, |_| {});
                 Text::new("RTL").font_size(11.0).build(ctx);
             });
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("gap").font_size(11.0).build(ctx);
-                let s = gap.clone();
                 Slider::new(gap.get())
                     .modifier(Modifier::new().test_tag("gap"))
                     .value_range(0.0, 24.0)
-                    .on_value_change(move |value| s.set(value))
+                    .on_value_change({
+                        clone!(gap);
+                        move |value| gap.set(value)
+                    })
                     .build(ctx);
             });
 

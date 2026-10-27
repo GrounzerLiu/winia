@@ -7,6 +7,7 @@
 //!
 //! Run with `cargo run -p winia --example lazy_staggered_demo`.
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -97,15 +98,19 @@ fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().test_tag("pattern"))
                     .on_click(move || p.set((p.get() + 1) % 4))
                     .build(ctx, |ctx| Text::new("heights").font_size(12.0).build(ctx));
-                let s = scroll.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("jump-top"))
-                    .on_click(move || s.offset.set(0.0))
+                    .on_click({
+                        clone!(scroll);
+                        move || scroll.offset.set(0.0)
+                    })
                     .build(ctx, |ctx| Text::new("top").font_size(12.0).build(ctx));
-                let s = scroll.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("jump-end"))
-                    .on_click(move || s.offset.set(1.0e9))
+                    .on_click({
+                        clone!(scroll);
+                        move || scroll.offset.set(1.0e9)
+                    })
                     .build(ctx, |ctx| Text::new("end").font_size(12.0).build(ctx));
                 let r = rtl.clone();
                 Switch::new(rtl.get())

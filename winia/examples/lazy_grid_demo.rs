@@ -10,6 +10,7 @@
 //!
 //! Run with `cargo run -p winia --example lazy_grid_demo`.
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -85,63 +86,81 @@ fn lazy_grid_demo(ctx: &mut ComposeCtx) {
             .build(ctx);
 
             Row::new().spacing(6.0).build(ctx, |ctx| {
-                let s = cells.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-cells-less"))
-                    .on_click(move || s.set(s.get().saturating_sub(1).max(1)))
+                    .on_click({
+                        clone!(cells);
+                        move || cells.set(cells.get().saturating_sub(1).max(1))
+                    })
                     .build(ctx, |ctx| Text::new("cells -").font_size(11.0).build(ctx));
-                let s = cells.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-cells-more"))
-                    .on_click(move || s.set((s.get() + 1).min(6)))
+                    .on_click({
+                        clone!(cells);
+                        move || cells.set((cells.get() + 1).min(6))
+                    })
                     .build(ctx, |ctx| Text::new("cells +").font_size(11.0).build(ctx));
-                let s = count.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-items-more"))
-                    .on_click(move || s.set((s.get() + 1).min(200)))
+                    .on_click({
+                        clone!(count);
+                        move || count.set((count.get() + 1).min(200))
+                    })
                     .build(ctx, |ctx| Text::new("items +").font_size(11.0).build(ctx));
-                let s = count.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-items-less"))
-                    .on_click(move || s.set(s.get().saturating_sub(1).max(1)))
+                    .on_click({
+                        clone!(count);
+                        move || count.set(count.get().saturating_sub(1).max(1))
+                    })
                     .build(ctx, |ctx| Text::new("items -").font_size(11.0).build(ctx));
             });
 
             Row::new().spacing(6.0).build(ctx, |ctx| {
-                let s = adaptive.clone();
                 Switch::new(adaptive.get())
                     .modifier(Modifier::new().test_tag("lg-adaptive"))
-                    .on_checked_change(move |value| s.set(value))
+                    .on_checked_change({
+                        clone!(adaptive);
+                        move |value| adaptive.set(value)
+                    })
                     .build(ctx, |_| {});
                 Text::new("adaptive").font_size(11.0).build(ctx);
-                let s = vertical.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-top"))
-                    .on_click(move || s.offset.set(0.0))
+                    .on_click({
+                        clone!(vertical);
+                        move || vertical.offset.set(0.0)
+                    })
                     .build(ctx, |ctx| Text::new("top").font_size(11.0).build(ctx));
-                let s = vertical.clone();
                 Button::new()
                     .modifier(Modifier::new().test_tag("lg-end"))
-                    .on_click(move || s.offset.set(1.0e9))
+                    .on_click({
+                        clone!(vertical);
+                        move || vertical.offset.set(1.0e9)
+                    })
                     .build(ctx, |ctx| Text::new("end").font_size(11.0).build(ctx));
             });
 
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("gap").font_size(11.0).build(ctx);
-                let s = gap.clone();
                 Slider::new(gap.get())
                     .modifier(Modifier::new().test_tag("lg-gap"))
                     .value_range(0.0, 24.0)
-                    .on_value_change(move |value| s.set(value))
+                    .on_value_change({
+                        clone!(gap);
+                        move |value| gap.set(value)
+                    })
                     .build(ctx);
             });
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("cross").font_size(11.0).build(ctx);
-                let s = cross_gap.clone();
                 Slider::new(cross_gap.get())
                     .modifier(Modifier::new().test_tag("lg-cross-gap"))
                     .value_range(0.0, 24.0)
-                    .on_value_change(move |value| s.set(value))
+                    .on_value_change({
+                        clone!(cross_gap);
+                        move |value| cross_gap.set(value)
+                    })
                     .build(ctx);
             });
 

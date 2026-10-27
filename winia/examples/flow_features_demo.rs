@@ -5,6 +5,7 @@
 //! cross arrangement, weight, baseline alignment and fillMaxRowHeight / fillMaxColumnWidth.
 
 use winia::layout::IntrinsicSize;
+use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -47,7 +48,7 @@ fn flow_features(ctx: &mut ComposeCtx) {
             Button::new()
                 .modifier(Modifier::new().test_tag("toggle-columns"))
                 .on_click({
-                    let columns = columns.clone();
+                    clone!(columns);
                     move || {
                         let next = if columns.get() == 3 { 2 } else { 3 };
                         columns.set(next);

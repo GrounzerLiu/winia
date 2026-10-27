@@ -4,6 +4,7 @@
 
 use winia::animation::{item::ItemAnimationSpec, SpringSpec, TweenSpec};
 use winia::animation::interpolator::EaseOutCubic;
+use letclone::clone;
 use winia::prelude::*;
 
 fn item_spec() -> ItemAnimationSpec {
@@ -24,7 +25,7 @@ fn item_spec() -> ItemAnimationSpec {
 }
 
 fn item(ctx: &mut ComposeCtx, items: &State<Vec<u64>>, id: u64) {
-    let items = items.clone();
+    clone!(items);
     Stack::new()
         .modifier(
             Modifier::new()
@@ -76,8 +77,8 @@ pub fn main() {
                                     Button::new()
                                         .modifier(Modifier::new().test_tag("add-head"))
                                         .on_click({
-                                            let items = items.clone();
-                                            let next_id = next_id.clone();
+                                            clone!(items);
+                                            clone!(next_id);
                                             move || {
                                                 let id = next_id.get();
                                                 next_id.set(id + 1);
@@ -90,8 +91,8 @@ pub fn main() {
                                     Button::new()
                                         .modifier(Modifier::new().test_tag("add-item"))
                                         .on_click({
-                                            let items = items.clone();
-                                            let next_id = next_id.clone();
+                                            clone!(items);
+                                            clone!(next_id);
                                             move || {
                                                 let id = next_id.get();
                                                 next_id.set(id + 1);
@@ -104,7 +105,7 @@ pub fn main() {
                                     Button::new()
                                         .modifier(Modifier::new().test_tag("remove-item"))
                                         .on_click({
-                                            let items = items.clone();
+                                            clone!(items);
                                             move || {
                                                 let mut next = items.get();
                                                 next.pop();
