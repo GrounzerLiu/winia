@@ -42,7 +42,7 @@ fn grow_tile(ctx: &mut ComposeCtx, index: usize, config: FlexItemConfig) {
 }
 
 /// One tile: a fixed basis with a slightly different height per index, so alignment is visible.
-fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool) {
+fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool, animate: bool) {
     // The tile sizes its CROSS axis and lets the flex basis own the main axis: a fixed main size sets
     // the min-content floor and would block shrink (CSS min-width: auto is the content's min size),
     // while a tile with NO cross size collapses to zero in a column.
@@ -57,14 +57,15 @@ fn tile(ctx: &mut ComposeCtx, index: usize, horizontal: bool) {
         Modifier::new().width(96.0)
     };
     let config = FlexItemConfig::new().basis_dp(if horizontal { 96.0 } else { extent });
-    Stack::new()
-        .modifier(
-            modifier
-                .background(tile_color(index), Shape::rounded(8.0))
-                .test_tag(format!("fb-tile-{index}"))
-                .flex(config),
-        )
-        .build(ctx, |_| {});
+    // The marker must sit on the item's ROOT content, which for a flex child IS its own node.
+    let mut chain = modifier
+        .background(tile_color(index), Shape::rounded(8.0))
+        .test_tag(format!("fb-tile-{index}"))
+        .flex(config);
+    if animate {
+        chain = chain.animate_item();
+    }
+    Stack::new().modifier(chain).build(ctx, |_| {});
 }
 
 /// A labelled single-choice segmented row: one segment per value, the current one selected.
@@ -108,6 +109,11 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
     let justify = ctx.remember(|| State::new(0usize)).get();
     let align = ctx.remember(|| State::new(0usize)).get();
     let align_content = ctx.remember(|| State::new(0usize)).get();
+    // Item animation is OFF by default: the tiles then carry no marker at all.
+    let animate = ctx.remember(|| State::new(false)).get();
+    // The ids are the animation identity: removing the FIRST one keeps the others' identity, so they
+    // slide instead of re-entering.
+    let ids = ctx.remember(|| State::new((0..6u64).collect::<Vec<u64>>())).get();
 
     let direction_value = match direction.get() {
         0 => FlexDirection::Row,
@@ -193,6 +199,48 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
                 align_content.clone(),
             );
 
+            // Item animation is off by default; the two buttons change the item list so the placement
+            // spring and the fade are visible (adding appends, removing takes the FIRST item so the
+            // rest have to slide).
+            Row::new().spacing(10.0).build(ctx, |ctx| {
+                let on = animate.get();
+                Text::new(format!("item animation: {}", if on { "on" } else { "off" }))
+                    .font_size(11.0)
+                    .build(ctx);
+                Switch::new(on)
+                    .modifier(Modifier::new().test_tag("fb-animate"))
+                    .on_checked_change({
+                        clone!(animate);
+                        move |checked| animate.set(checked)
+                    })
+                    .build(ctx, |_| {});
+                Button::new()
+                    .modifier(Modifier::new().test_tag("fb-add"))
+                    .on_click({
+                        clone!(ids);
+                        move || {
+                            let mut next = ids.get();
+                            let next_id = next.last().copied().unwrap_or(0) + 1;
+                            next.push(next_id);
+                            ids.set(next);
+                        }
+                    })
+                    .build(ctx, |ctx| Text::new("add").font_size(11.0).build(ctx));
+                Button::new()
+                    .modifier(Modifier::new().test_tag("fb-remove"))
+                    .on_click({
+                        clone!(ids);
+                        move || {
+                            let mut next = ids.get();
+                            if !next.is_empty() {
+                                next.remove(0);
+                                ids.set(next);
+                            }
+                        }
+                    })
+                    .build(ctx, |ctx| Text::new("remove").font_size(11.0).build(ctx));
+            });
+
             // A sized frame: the FlexBox fills it, so justify-content and align-content have space to
             // distribute. The size and the tag ride on the FlexBox's OWN modifier — a pass-through
             // wrapper would Skip and never rebuild the flex lines.
@@ -212,9 +260,13 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
                         .test_tag("fb-frame"),
                 )
                 .build(ctx, |ctx| {
-                    for index in 0..6 {
-                        tile(ctx, index, direction_value.is_horizontal());
-                    }
+                    // Read the state INSIDE the container's content, or a change would dirty the
+                    // demo's scope and this group would Skip with the old tiles (component-authoring 3.2).
+                    let animate_on = animate.get();
+                    let list = ids.get();
+                    ctx.keyed_for_each(list, |id| *id, |ctx, id| {
+                        tile(ctx, id as usize, direction_value.is_horizontal(), animate_on);
+                    });
                 });
 
             // grow shares the FREE space, so it needs a line with room left: three tiles whose grow

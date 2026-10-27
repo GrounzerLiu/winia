@@ -111,6 +111,28 @@ Six phases, in the order Compose's measureFlexBox runs them:
 | grow / shrink | f32 | shrink is weighted by the basis; a main-axis fill (fill_max_width) implies growth when grow is not declared |
 | order | i32 | smaller first |
 
+### Item animation
+
+A child marked with `Modifier::animate_item()` (or `animate_item_with(spec)`) gets the same per-item
+placement / fade channels a Flow line has, recorded during `place`:
+
+- Identity is the child's composition key (`LayoutNode::slot_key`, falling back to the node id), so
+  nothing extra is declared on the item — a keyed loop over stable ids is enough to keep identity while
+  the list changes.
+- The marker must sit on the item's ROOT content, which for a flex child is its own node.
+- Every child is composed each frame (there is no window), so a key the host has not seen is new to the
+  DATA and fades in per the spec.
+- A moved item starts the placement spring from where it was drawn. Because wrapping re-flows a whole
+  line, inserting one item can move every item after it and the animation then looks like the block
+  sliding — the same behaviour a Flow line has.
+- Size changes are NOT part of this marker: use `AnimatedSize`, as Compose splits `animateItem` from
+  `animateContentSize`.
+- The container has no clip of its own, so a removed item's exit picture is drawn over its siblings
+  until the fade finishes; put the FlexBox inside a clipped container if that matters.
+
+The demo drives it with a switch that is OFF by default plus `add` / `remove` (the remove takes the
+FIRST item so the rest have to move).
+
 ## Differences from Compose
 
 - Modifier.flex(..) has no scope. Compose's FlexBoxScope makes the modifier only valid inside a
@@ -194,6 +216,8 @@ Flexible lengths: cargo test -p winia --test flexbox_flexible_lengths
 
 | Test | What it pins |
 | --- | --- |
+| a_marked_item_gets_a_paint_channel_and_animates_from_its_old_position | the channel exists and a centring re-layout starts it at -97 (the old position) |
+| an_unmarked_item_leaves_no_ghost_behind | stripping the marker drops the channel instead of ghosting a live child |
 | a_shrinking_item_freezes_at_its_min_content_and_the_other_takes_the_rest | 90 + 60 in a 150 dp line |
 | growing_past_a_min_content_floor_redistributes_instead_of_squashing | 200 + 100, the deliberate deviation above |
 

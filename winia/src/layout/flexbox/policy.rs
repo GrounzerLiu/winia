@@ -132,6 +132,9 @@ pub struct FlexBoxLayout {
     pub(crate) config: FlexBoxConfig,
     pub(crate) resolver: Option<Arc<dyn Fn(&FlexBoxConfigInput) -> FlexBoxConfig>>,
     pub(crate) direction: crate::layout::LayoutDirection,
+    /// Shared per-item placement/fade runtime. Only items carrying `animate_item` allocate state,
+    /// so a flex container without markers pays one Arc clone.
+    pub(crate) item_animations: crate::layout::item_animation::ItemAnimationHost,
 }
 
 impl std::fmt::Debug for FlexBoxLayout {
@@ -151,7 +154,18 @@ impl FlexBoxLayout {
             config,
             resolver: None,
             direction: crate::layout::LayoutDirection::Ltr,
+            item_animations: crate::layout::item_animation::ItemAnimationHost::default(),
         }
+    }
+
+    /// The per-item animation runtime this container shares with the render pass (the marker is
+    /// each child's own `Modifier::animate_item`).
+    pub fn item_animations(
+        mut self,
+        host: crate::layout::item_animation::ItemAnimationHost,
+    ) -> Self {
+        self.item_animations = host;
+        self
     }
 
     /// The layout direction a hand-built policy places with. FlexBox::build resolves it from the
@@ -607,12 +621,39 @@ impl MeasurePolicy for FlexBoxLayout {
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        self.item_animations.begin_frame();
+        let mut seen = std::collections::HashSet::new();
         for (index, child) in children.iter().enumerate() {
-            if let Some(placement) = placements.get(index) {
-                nodes[*child].position = placement.position;
-                nodes[*child].measured_size = placement.size;
+            let Some(placement) = placements.get(index) else {
+                continue;
+            };
+            nodes[*child].position = placement.position;
+            nodes[*child].measured_size = placement.size;
+            nodes[*child].item_paint = None;
+            // The item's identity is its composition key, so a flex container needs no extra API to
+            // animate: SlotKey is what a keyed loop (or a plain call site) already produced.
+            let key = if nodes[*child].slot_key != 0 {
+                nodes[*child].slot_key
+            } else {
+                nodes[*child].id
+            };
+            if !seen.insert(key) {
+                debug_assert!(false, "FlexBox item key {key} is used by more than one child");
+                continue;
             }
+            let Some(spec) = nodes[*child].modifier.animate_item_spec() else {
+                // The child is live but carries no marker: drop its channels, or finish_frame would
+                // treat it as removed and draw a ghost over the live item.
+                self.item_animations.retire(key);
+                continue;
+            };
+            let position = nodes[*child].position;
+            // Every child is composed each frame (there is no window), so a key unknown to the host
+            // IS new to the data.
+            self.item_animations
+                .place(nodes, *child, key, position, &spec, true);
         }
+        self.item_animations.finish_frame(None);
     }
 }
 

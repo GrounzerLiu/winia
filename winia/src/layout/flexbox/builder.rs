@@ -94,13 +94,25 @@ impl FlexBox {
             let generation = RESOLVER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             ctx.changed(&generation);
         }
+        // The item-animation host is cheap and always present; only items carrying the marker
+        // allocate state. It rides on the modifier too so the render pass can find the container's
+        // exit store and capture the removed items' pictures.
+        let item_animations = ctx
+            .remember_at_key(ctx.position_key(0x666c7862), || {
+                crate::layout::item_animation::ItemAnimationHost::default()
+            })
+            .peek();
+        let modifier = self
+            .modifier
+            .then(Modifier::new().with_item_animation_host(item_animations.clone()));
         build_container(
             ctx,
-            self.modifier,
+            modifier,
             FlexBoxLayout {
                 config: self.config,
                 resolver: self.resolver,
                 direction,
+                item_animations,
             },
             content,
         );

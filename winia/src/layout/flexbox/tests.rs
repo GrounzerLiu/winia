@@ -4,7 +4,7 @@ use super::*;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
 use crate::layout::Constraints;
 use crate::modifier::Modifier;
-use crate::unit::Size;
+use crate::unit::{Offset, Size};
 
 fn leaf(width: f32, height: f32) -> LayoutNode {
     let mut node = LayoutNode::leaf(Modifier::new().size(width, height));
@@ -462,6 +462,89 @@ fn a_baseline_line_lines_up_the_texts() {
         "the larger text starts higher: {:?} {:?}",
         nodes[texts[0]].position,
         nodes[texts[1]].position
+    );
+}
+
+/// Item animation: a marked child gets a paint channel, and a container change that MOVES it starts
+/// the placement spring from where it was drawn (the same contract FlowRow has).
+#[test]
+fn a_marked_item_gets_a_paint_channel_and_animates_from_its_old_position() {
+    use crate::layout::item_animation::ItemAnimationHost;
+
+    let host = ItemAnimationHost::default();
+    let mut nodes: Vec<LayoutNode> = (0..3)
+        .map(|_| LayoutNode::leaf(Modifier::new().size(30.0, 30.0).animate_item()))
+        .collect();
+    let children: Vec<usize> = (0..3).collect();
+    // Tight, or the container is content-sized and justify-content has nothing to distribute.
+    let constraints = Constraints::new(300.0, 300.0, 0.0, 100.0);
+
+    let start = FlexBoxLayout::new(FlexBoxConfig::new().gap(8.0)).item_animations(host.clone());
+    let (_, placements) = start.measure(&mut nodes, &[], &children, constraints);
+    start.place(&mut nodes, &children, &placements);
+    for (index, node) in nodes.iter().enumerate() {
+        let paint = node
+            .item_paint
+            .as_ref()
+            .unwrap_or_else(|| panic!("item {index} carries a paint channel"));
+        assert_eq!(
+            paint.offset.peek(),
+            Offset::ZERO,
+            "the first placement is its own origin"
+        );
+    }
+
+    // Centring the line moves every item by the free space over two: (300 - 106) / 2 = 97. The channel
+    // starts at the OLD position, so the spring walks it from there to zero instead of jumping.
+    let moved = FlexBoxLayout::new(
+        FlexBoxConfig::new()
+            .gap(8.0)
+            .justify_content(FlexJustifyContent::Center),
+    )
+    .item_animations(host);
+    let (_, placements) = moved.measure(&mut nodes, &[], &children, constraints);
+    moved.place(&mut nodes, &children, &placements);
+    for (index, node) in nodes.iter().enumerate() {
+        let paint = node
+            .item_paint
+            .as_ref()
+            .unwrap_or_else(|| panic!("item {index} carries a paint channel"));
+        assert_eq!(
+            paint.offset.peek(),
+            Offset::new(-97.0, 0.0),
+            "item {index} animates from where it was drawn"
+        );
+    }
+}
+
+/// An unmarked sibling must not be treated as a removed item: its channels are dropped, and no ghost
+/// is drawn over a live child.
+#[test]
+fn an_unmarked_item_leaves_no_ghost_behind() {
+    use crate::layout::item_animation::ItemAnimationHost;
+
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let host = ItemAnimationHost::default();
+    let mut nodes: Vec<LayoutNode> = (0..2)
+        .map(|_| LayoutNode::leaf(Modifier::new().size(30.0, 30.0).animate_item()))
+        .collect();
+    let children: Vec<usize> = (0..2).collect();
+    let constraints = Constraints::new(0.0, 300.0, 0.0, 100.0);
+    let policy = FlexBoxLayout::new(FlexBoxConfig::new()).item_animations(host.clone());
+    let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
+    policy.place(&mut nodes, &children, &placements);
+    assert!(nodes[0].item_paint.is_some());
+
+    // Strip the marker from the second child, then place again: it is still live, just not animated.
+    nodes[1].modifier = Modifier::new().size(30.0, 30.0);
+    let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
+    policy.place(&mut nodes, &children, &placements);
+    assert!(
+        nodes[1].item_paint.is_none(),
+        "an unmarked child must not be painted through the host"
     );
 }
 
