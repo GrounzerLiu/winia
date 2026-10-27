@@ -69,7 +69,14 @@ Six phases, in the order Compose's measureFlexBox runs them:
    positive free space goes out by grow, negative by shrink x basis (scaled shrink), and an item that
    hits its min-content floor is frozen and the remainder re-distributed. A total grow/shrink below 1
    may only take its share of the INITIAL free space (9.7 step 4.b).
-3. Cross sizes, in the order Compose runs them. (a) Items are measured at a tight main size, each line
+3. Intrinsics. The policy overrides all four (Compose does too, FlexBox.kt:1031-1230) instead of
+   letting the default approximation measure the content: measuring a wrapping flex at the query
+   constraints answers its RESOLVED line sizes, so the default would report the one-line sum (120 for
+   three 40 dp tiles) where the minimum is the widest item (40). The main-axis minimum sums the items
+   when wrap is off and takes the widest item when it is on; the main-axis maximum breaks at the
+   `maxItemsInEachLine` cap; the cross-axis answers simulate the line breaks against the other axis
+   and add the lines up.
+4. Cross sizes, in the order Compose runs them. (a) Items are measured at a tight main size, each line
    clamped to the cross space left for it (remainingCrossAxisSize); a line is as tall as its tallest
    item, Baseline lines use the union of every item's space above and below its first baseline (a
    child without a published line hangs entirely below it, so its baseline is its own height), and a
@@ -102,6 +109,16 @@ Six phases, in the order Compose's measureFlexBox runs them:
 - Modifier.flex(..) has no scope. Compose's FlexBoxScope makes the modifier only valid inside a
   FlexBox; in winia it is a plain Modifier and is silently ignored by any other container, the same
   convention layout_weight and align_self follow.
+- Growing past a min-content floor redistributes instead of squashing. CSS 9.7 4.d/4.e freezes the
+  item at its floor and hands the remaining space to the others; Compose's grow pass has no clamp, so
+  it would give both items of a 300 dp line 150 each even when one needs 200. Measured, pinned by
+  tests/flexbox_flexible_lengths.rs: winia 200 + 100, Compose 150 + 150.
+- align-content never walks the lines ABOVE the cross start. Compose computes its free space without
+  clamping, so with lines plus gaps larger than the cross extent an End/Center distribution moves the
+  block to a negative offset; winia clamps the free space at zero, which is what CSS describes.
+- FlexBasis::Dp carries PIXELS, not dp: every layout number in winia is a pixel value already
+  resolved by the caller (Modifier::size works the same way). The variant keeps Compose's name so the
+  correspondence stays obvious.
 - Modifier.weight is not mapped to grow. winia's weight means "share the leftover", which is not CSS
   grow; a main-axis FILL is mapped (Compose FlexBox.kt:365-377), weight is not. Write grow explicitly.
 - align-content in a wrap-reverse container is MIRRORED rather than walked backwards. Compose adds up the
@@ -153,6 +170,25 @@ cargo test -p winia --lib -- layout::flexbox — 24 cases:
 | a_baseline_without_a_published_line_falls_back_to_the_item_height | an item without a line hangs below the baseline (its own height), so the two boxes align their bottoms |
 | a_baseline_line_lines_up_the_texts | two real Texts share one first baseline |
 | a_baseline_line_lines_up_the_texts | two real Texts of different sizes share one first baseline |
+
+Intrinsics (the FlexBox overrides all four; the last case goes through width(IntrinsicSize.Min)):
+
+| Test | What it pins |
+| --- | --- |
+| a_nowrap_row_min_width_is_the_sum_of_its_items | 40 + 8 + 40 + 8 + 40 = 136 |
+| a_wrapping_row_min_width_is_its_widest_item | wrap: every item can be alone on its line |
+| a_wrapping_row_min_height_breaks_on_the_available_width | 100 dp wide: two items (cross 40) then one (60) |
+| the_max_intrinsic_width_breaks_at_the_line_cap | widest line under the cap (80), all items without one (120) |
+| a_column_sums_its_min_height_and_wraps_its_min_width | the column axis mapping |
+| a_flex_box_under_width_intrinsic_min_answers_the_flex_intrinsic | width(IntrinsicSize.Min) reaches the policy and answers 40, not the 120 one-line sum |
+| without_the_overrides_the_default_would_answer_the_one_line_sum | the counter-factual: the same layout behind a measure-only forwarder (i.e. with the trait defaults) answers 120 |
+
+Flexible lengths: cargo test -p winia --test flexbox_flexible_lengths
+
+| Test | What it pins |
+| --- | --- |
+| a_shrinking_item_freezes_at_its_min_content_and_the_other_takes_the_rest | 90 + 60 in a 150 dp line |
+| growing_past_a_min_content_floor_redistributes_instead_of_squashing | 200 + 100, the deliberate deviation above |
 
 Lifecycle (a measure-only unit test cannot see these): cargo test -p winia --test flexbox_lifecycle
 

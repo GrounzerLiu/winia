@@ -39,7 +39,7 @@
 
 use super::container::build_container;
 use super::node::intrinsic_size_of;
-use super::node::{measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement};
+use super::node::{measure_node, IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement};
 use super::Constraints;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
@@ -425,6 +425,9 @@ struct FlexLine {
     cross: f32,
     cross_start: f32,
     max_above_baseline: f32,
+    /// The cross space left for this line when its items were measured — a stretched item is
+    /// clamped to it (Compose's `remainingCrossAxisSize`, :984-1006).
+    cross_limit: f32,
 }
 
 impl FlexLine {
@@ -478,6 +481,152 @@ impl FlexBoxLayout {
                 density: crate::runtime::density::current_density().density,
             }),
             None => self.config,
+        }
+    }
+
+    /// The MAIN-axis intrinsic of the whole content (FlexBox.kt:1031-1082 for min, :1155-1185 for
+    /// max). A wrapping min is the widest single item — every item could be alone on its line; a
+    /// wrapping max is the widest line when a `maxItemsInEachLine` cap forces the breaks.
+    fn intrinsic_main(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        config: &FlexBoxConfig,
+        min: bool,
+        other: f32,
+    ) -> f32 {
+        let horizontal = config.direction.is_horizontal();
+        let gap = config.main_gap(horizontal);
+        let query = if horizontal {
+            if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth }
+        } else if min {
+            IntrinsicQuery::MinHeight
+        } else {
+            IntrinsicQuery::MaxHeight
+        };
+        if min {
+            let sizes: Vec<f32> = children
+                .iter()
+                .map(|&child| ctx.child_intrinsic(child, query, other))
+                .collect();
+            if config.wrap.is_enabled() {
+                sizes.iter().copied().fold(0.0f32, f32::max)
+            } else {
+                sizes.iter().sum::<f32>()
+                    + (children.len().saturating_sub(1) as f32) * gap
+            }
+        } else {
+            let cap = if config.wrap.is_enabled() {
+                config.max_items_in_each_line.max(1)
+            } else {
+                usize::MAX
+            };
+            let mut max_line = 0.0f32;
+            let mut line = 0.0f32;
+            let mut in_line = 0usize;
+            for &child in children {
+                let item = ctx.child_intrinsic(child, query, other);
+                line += if in_line == 0 { item } else { gap + item };
+                in_line += 1;
+                if in_line == cap {
+                    max_line = max_line.max(line);
+                    line = 0.0;
+                    in_line = 0;
+                }
+            }
+            max_line.max(line)
+        }
+    }
+
+    /// The CROSS-axis intrinsic: simulate the line breaks on the other axis and add up each line's
+    /// cross extent plus the gaps (FlexBox.kt:1186-1230).
+    fn intrinsic_cross(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        config: &FlexBoxConfig,
+        main_available: f32,
+        min: bool,
+    ) -> f32 {
+        let horizontal = config.direction.is_horizontal();
+        let main_gap = config.main_gap(horizontal);
+        let cross_gap = config.cross_gap(horizontal);
+        let (main_query, cross_query) = if horizontal {
+            (
+                if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth },
+                if min { IntrinsicQuery::MinHeight } else { IntrinsicQuery::MaxHeight },
+            )
+        } else {
+            (
+                if min { IntrinsicQuery::MinHeight } else { IntrinsicQuery::MaxHeight },
+                if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth },
+            )
+        };
+        let mut line_main = 0.0f32;
+        let mut line_cross = 0.0f32;
+        let mut total = 0.0f32;
+        let mut in_line = 0usize;
+        for &child in children {
+            let item_main = ctx.child_intrinsic(child, main_query, f32::MAX);
+            let item_cross = ctx.child_intrinsic(child, cross_query, item_main);
+            let projected = if in_line == 0 {
+                item_main
+            } else {
+                line_main + main_gap + item_main
+            };
+            let breaks = config.wrap.is_enabled()
+                && in_line > 0
+                && (in_line >= config.max_items_in_each_line || projected > main_available);
+            if breaks {
+                total += line_cross + cross_gap;
+                line_main = item_main;
+                line_cross = item_cross;
+                in_line = 1;
+            } else {
+                line_main = projected;
+                line_cross = line_cross.max(item_cross);
+                in_line += 1;
+            }
+        }
+        total + line_cross
+    }
+
+    /// A width intrinsic: the main axis when rows, the cross axis when columns. Compose resolves the
+    /// config with the query bound in place (:1035, :1098).
+    fn intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+        min: bool,
+    ) -> f32 {
+        if children.is_empty() {
+            return 0.0;
+        }
+        let config = self.resolve(Constraints::new(0.0, f32::MAX, 0.0, height));
+        if config.direction.is_horizontal() {
+            self.intrinsic_main(ctx, children, &config, min, height)
+        } else {
+            self.intrinsic_cross(ctx, children, &config, height, min)
+        }
+    }
+
+    /// A height intrinsic: the main axis when columns, the cross axis when rows.
+    fn intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+        min: bool,
+    ) -> f32 {
+        if children.is_empty() {
+            return 0.0;
+        }
+        let config = self.resolve(Constraints::new(0.0, width, 0.0, f32::MAX));
+        if config.direction.is_horizontal() {
+            self.intrinsic_cross(ctx, children, &config, width, min)
+        } else {
+            self.intrinsic_main(ctx, children, &config, min, width)
         }
     }
 
@@ -614,6 +763,7 @@ impl MeasurePolicy for FlexBoxLayout {
                     cross: 0.0,
                     cross_start: 0.0,
                     max_above_baseline: 0.0,
+                    cross_limit,
                 });
                 line_start = index;
                 accumulated = hypothetical + main_gap;
@@ -629,6 +779,7 @@ impl MeasurePolicy for FlexBoxLayout {
             cross: 0.0,
             cross_start: 0.0,
             max_above_baseline: 0.0,
+            cross_limit,
         });
 
         // ── Phase 3a: measure every item at a tight main size (measureFlexItems, :714-770) ──
@@ -638,6 +789,7 @@ impl MeasurePolicy for FlexBoxLayout {
         let mut remaining_cross = cross_limit;
         for line in &mut lines {
             let line_limit = remaining_cross.min(cross_limit);
+            line.cross_limit = line_limit;
             let mut line_cross = 0.0f32;
             let mut above = 0.0f32;
             let mut below = 0.0f32;
@@ -715,7 +867,9 @@ impl MeasurePolicy for FlexBoxLayout {
                     FlexAlignSelf::Stretch
                 ) {
                     let child = items[index].child;
-                    let cross = line.cross.min(cross_limit);
+                    // Compose clamps the line's cross extent to the space left for THIS line, not to
+                    // the container's maximum (:984-1006).
+                    let cross = line.cross.min(line.cross_limit);
                     let size = measure_node(
                         nodes,
                         policies,
@@ -886,6 +1040,47 @@ impl MeasurePolicy for FlexBoxLayout {
             };
         }
         (container_size, placements)
+    }
+
+    // ── Intrinsics (FlexBox.kt:1031-1230) ──
+    //
+    // Compose overrides all four instead of letting the default approximation measure the content:
+    // a wrapping flex measured at the query constraints lays the items out for real and answers the
+    // RESOLVED line sizes, which is not what "how narrow can this get" asks.
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        self.intrinsic_width(ctx, children, height, true)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        self.intrinsic_width(ctx, children, height, false)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        self.intrinsic_height(ctx, children, width, true)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        self.intrinsic_height(ctx, children, width, false)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -1623,3 +1818,173 @@ mod tests {
             nodes[texts[1]].position
         );
     }}
+
+/// The intrinsic walk (FlexBox.kt:1031-1230). Compose overrides all four instead of letting the
+/// default approximation measure the content, because a wrapping flex measured at the query
+/// constraints answers its RESOLVED line sizes rather than "how narrow can this get".
+#[cfg(test)]
+mod intrinsic_tests {
+    use super::*;
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+
+    /// Query one intrinsic of a FlexBox whose children are the given fixed sizes.
+    fn intrinsic_of(
+        policy: FlexBoxLayout,
+        children: &[(f32, f32)],
+        query: IntrinsicQuery,
+        other: f32,
+    ) -> f32 {
+        let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
+        for (width, height) in children {
+            nodes.push(LayoutNode::leaf(Modifier::new().size(*width, *height)));
+        }
+        nodes[0].children = (1..nodes.len()).collect();
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(policy)];
+        intrinsic_size_of(&mut nodes, &policies, 0, query, other)
+    }
+
+    #[test]
+    fn a_nowrap_row_min_width_is_the_sum_of_its_items() {
+        let policy = FlexBoxLayout::new(FlexBoxConfig::new().gap(8.0));
+        let width = intrinsic_of(policy, &[(40.0, 20.0); 3], IntrinsicQuery::MinWidth, 20.0);
+        assert_eq!(width, 136.0, "40 + 8 + 40 + 8 + 40");
+    }
+
+    #[test]
+    fn a_wrapping_row_min_width_is_its_widest_item() {
+        let policy = FlexBoxLayout::new(FlexBoxConfig::new().wrap(FlexWrap::Wrap).gap(8.0));
+        let width = intrinsic_of(policy, &[(40.0, 20.0); 3], IntrinsicQuery::MinWidth, 20.0);
+        assert_eq!(width, 40.0, "every item can be alone on its line");
+    }
+
+    #[test]
+    fn a_wrapping_row_min_height_breaks_on_the_available_width() {
+        let policy = FlexBoxLayout::new(FlexBoxConfig::new().wrap(FlexWrap::Wrap));
+        let height = intrinsic_of(
+            policy,
+            &[(40.0, 20.0), (40.0, 40.0), (40.0, 60.0)],
+            IntrinsicQuery::MinHeight,
+            100.0,
+        );
+        assert_eq!(height, 100.0, "two items fit a 100 dp width (cross 40), the third wraps (60)");
+    }
+
+    #[test]
+    fn the_max_intrinsic_width_breaks_at_the_line_cap() {
+        let capped = FlexBoxLayout::new(
+            FlexBoxConfig::new().wrap(FlexWrap::Wrap).max_items_in_each_line(2),
+        );
+        assert_eq!(
+            intrinsic_of(capped, &[(40.0, 20.0); 3], IntrinsicQuery::MaxWidth, 20.0),
+            80.0,
+            "the widest line holds the two capped items"
+        );
+        let uncapped = FlexBoxLayout::new(FlexBoxConfig::new().wrap(FlexWrap::Wrap));
+        assert_eq!(
+            intrinsic_of(uncapped, &[(40.0, 20.0); 3], IntrinsicQuery::MaxWidth, 20.0),
+            120.0,
+            "without a cap the preferred size is one line of everything"
+        );
+    }
+
+    #[test]
+    fn a_column_sums_its_min_height_and_wraps_its_min_width() {
+        let column = FlexBoxConfig::new().direction(FlexDirection::Column);
+        assert_eq!(
+            intrinsic_of(FlexBoxLayout::new(column), &[(40.0, 20.0); 2], IntrinsicQuery::MinHeight, 100.0),
+            40.0,
+            "no wrap: the two heights add up"
+        );
+        let wrapping = FlexBoxConfig::new().direction(FlexDirection::Column).wrap(FlexWrap::Wrap);
+        assert_eq!(
+            intrinsic_of(FlexBoxLayout::new(wrapping), &[(40.0, 20.0); 2], IntrinsicQuery::MinWidth, 100.0),
+            40.0,
+            "the cross axis of a wrapping column is the widest line, one item each"
+        );
+    }
+}
+
+/// The wiring: a width(IntrinsicSize.Min) above a FlexBox must reach the flex policy instead of the
+/// default measure-based approximation (which would answer the RESOLVED line width).
+#[cfg(test)]
+mod intrinsic_wiring_tests {
+    use super::*;
+    use crate::layout::{intrinsic_size_of, BoxLayout, IntrinsicQuery, IntrinsicSize};
+
+    #[test]
+    fn a_flex_box_under_width_intrinsic_min_answers_the_flex_intrinsic() {
+        // 0 = width(IntrinsicSize.Min) wrapper, 1 = the FlexBox, 2..4 = three 40x20 tiles.
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width(IntrinsicSize::Min), Some(0)),
+            LayoutNode::new(Modifier::new(), Some(1)),
+        ];
+        for _ in 0..3 {
+            nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
+        }
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 3, 4];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![
+            Box::new(BoxLayout::new()),
+            Box::new(FlexBoxLayout::new(
+                FlexBoxConfig::new().wrap(FlexWrap::Wrap),
+            )),
+        ];
+        // width(IntrinsicSize.Min) answers a Max width query with the content's MINIMUM, which for a
+        // wrapping flex is its widest item (40), not the 120 dp one-line sum.
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 20.0),
+            40.0
+        );
+    }
+
+    /// The same layout behind a policy that only forwards measure/place — i.e. with the DEFAULT
+    /// intrinsic methods. This is what the FlexBox answered before the overrides existed: measuring
+    /// at an unbounded main axis never wraps, so the minimum came back as the one-line sum.
+    #[test]
+    fn without_the_overrides_the_default_would_answer_the_one_line_sum() {
+        #[derive(Debug)]
+        struct Forwarding(FlexBoxLayout);
+
+        impl MeasurePolicy for Forwarding {
+            fn measure(
+                &self,
+                nodes: &mut Vec<LayoutNode>,
+                policies: &[Box<dyn MeasurePolicy>],
+                children: &[usize],
+                constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                self.0.measure(nodes, policies, children, constraints)
+            }
+
+            fn place(
+                &self,
+                nodes: &mut Vec<LayoutNode>,
+                children: &[usize],
+                placements: &[Placement],
+            ) {
+                self.0.place(nodes, children, placements)
+            }
+        }
+
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width(IntrinsicSize::Min), Some(0)),
+            LayoutNode::new(Modifier::new(), Some(1)),
+        ];
+        for _ in 0..3 {
+            nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
+        }
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 3, 4];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![
+            Box::new(BoxLayout::new()),
+            Box::new(Forwarding(FlexBoxLayout::new(
+                FlexBoxConfig::new().wrap(FlexWrap::Wrap),
+            ))),
+        ];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 20.0),
+            120.0,
+            "the default intrinsic walk lays the items out on one line"
+        );
+    }
+}
