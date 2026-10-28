@@ -323,7 +323,7 @@ pub(super) fn draw_text_with_selection(
     color: &crate::graphics::Color,
     font_weight: crate::text::FontWeight,
     font_style: crate::text::FontSlant,
-    x: f32, y: f32, w: f32,
+    x: f32, y: f32, w: f32, h: f32,
     max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool,
     letter_spacing: f32, line_height: Option<f32>,
     registrar: Option<crate::text::selection::SelectionRegistrar>,
@@ -340,7 +340,22 @@ pub(super) fn draw_text_with_selection(
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
         false, false, None, w,
     );
+    // Same rule as the cached path (see the text branch in `render::pass`): an overflowing layout
+    // is clipped to the text node's own box unless the caller asked for `Visible`. Without this the
+    // fallback — used when no measured paragraph is cached — would still spill and the two paths
+    // would disagree.
+    let clipped = overflow != crate::text::TextOverflow::Visible
+        && (para.did_exceed_max_lines()
+            || para.longest_line() > w + 0.5
+            || para.height() > h + 0.5);
+    if clipped {
+        canvas.save();
+        canvas.clip_rect(skia_safe::Rect::new(x, y, x + w, y + para.height()), None, Some(false));
+    }
     draw_text(canvas, &para, x, y, w, align, soft_wrap);
+    if clipped {
+        canvas.restore();
+    }
 }
 
 pub(super) fn draw_text(

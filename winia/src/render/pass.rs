@@ -967,7 +967,7 @@ pub(super) fn render_pass1(
                 canvas.restore();
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key);
         }
     }
 
