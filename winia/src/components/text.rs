@@ -153,11 +153,26 @@ impl Text {
     pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
 
     /// Compose's `onTextLayout`: called after every measure with what the text laid out to.
+    ///
+    /// The payload compares callbacks by IDENTITY, so a closure built per rebuild is a changed
+    /// parameter and the leaf re-measures. A caller that rebuilds often should create the sink once
+    /// and hand it to `on_text_layout_shared` — that keeps the parameter equal, so the slot can Skip
+    /// (`a_shared_callback_lets_the_leaf_skip` pins both halves).
     pub fn on_text_layout(
         mut self,
         callback: impl Fn(&TextLayoutResult) + Send + Sync + 'static,
     ) -> Self {
-        self.on_text_layout = Some(std::sync::Arc::new(callback));
+        self.on_text_layout = Some(Arc::new(callback));
+        self
+    }
+
+    /// The same sink, shared: build the `Arc` once (e.g. with `ctx.remember`) and the payload stays
+    /// equal across rebuilds.
+    pub fn on_text_layout_shared(
+        mut self,
+        callback: Arc<dyn Fn(&TextLayoutResult) + Send + Sync>,
+    ) -> Self {
+        self.on_text_layout = Some(callback);
         self
     }
 
@@ -208,6 +223,19 @@ impl Text {
         let final_letter_spacing = self.letter_spacing.or(style.letter_spacing).unwrap_or(0.0);
         let final_line_height = self.line_height.or(style.line_height);
         let final_min_lines = self.min_lines.or(style.min_lines).unwrap_or(1);
+        // Compose's `validateMinMaxLines` (`HeightInLinesModifier.kt:454-461`, called from
+        // `BasicText.kt:102`): both caps have to be positive and `min <= max`. Without it a bad pair
+        // silently produces a box that lies — `max_lines(0)` was measured at 44 x 27 (one line, with
+        // `did_exceed_max_lines` set), and `min_lines(5)` with `max_lines(2)` reserved three lines the
+        // text can never fill.
+        assert!(
+            final_min_lines > 0 && final_max_lines > 0,
+            "both min_lines ({final_min_lines}) and max_lines ({final_max_lines}) must be greater than zero"
+        );
+        assert!(
+            final_min_lines <= final_max_lines,
+            "min_lines ({final_min_lines}) must be less than or equal to max_lines ({final_max_lines})"
+        );
         let final_decoration = self.text_decoration.unwrap_or_else(|| style.decoration());
         let final_font_family = self.font_family.clone().or_else(|| style.font_family.clone());
 
@@ -269,6 +297,9 @@ impl Text {
     pub fn get_text_align(&self) -> Option<TextAlign> { self.text_align }
     pub fn get_overflow(&self) -> Option<TextOverflow> { self.overflow }
     pub fn get_max_lines(&self) -> Option<usize> { self.max_lines }
+    pub fn get_min_lines(&self) -> Option<usize> { self.min_lines }
+    pub fn get_font_family(&self) -> Option<&str> { self.font_family.as_deref() }
+    pub fn get_text_decoration(&self) -> Option<TextDecoration> { self.text_decoration }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
@@ -474,5 +505,62 @@ mod tests {
             .expect("a text payload");
         assert!(payload.0 && payload.1, "both decorations reached the payload");
         assert_eq!(payload.2.as_deref(), Some("Segoe UI"));
+    }
+
+    /// Compose's `validateMinMaxLines` (`HeightInLinesModifier.kt:454-461`): a non-positive cap is a
+    /// bad parameter, not a silent one.
+    #[test]
+    #[should_panic(expected = "must be greater than zero")]
+    fn a_zero_line_cap_is_rejected() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("x").max_lines(0).build(ctx);
+        });
+    }
+
+    /// And `min_lines` may not exceed `max_lines` — otherwise the box reserves lines the cap can
+    /// never fill.
+    #[test]
+    #[should_panic(expected = "less than or equal to max_lines")]
+    fn min_lines_above_max_lines_is_rejected() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("x").min_lines(5).max_lines(2).build(ctx);
+        });
+    }
+
+    /// The payload compares callbacks by identity: a SHARED one keeps two rebuilds equal (so the slot
+    /// can Skip), a fresh closure each build does not.
+    #[test]
+    fn a_shared_callback_lets_the_leaf_skip() {
+        let payload_shared = |callback: std::sync::Arc<dyn Fn(&TextLayoutResult) + Send + Sync>| {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("x").font_size(14.0).on_text_layout_shared(callback).build(ctx);
+            });
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].modifier.clone()
+        };
+        let payload_closure = || {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("x").font_size(14.0).on_text_layout(|_: &TextLayoutResult| {}).build(ctx);
+            });
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].modifier.clone()
+        };
+        let shared = std::sync::Arc::new(|_: &TextLayoutResult| {});
+        assert!(
+            payload_shared(shared.clone()).param_eq(&payload_shared(shared.clone())),
+            "one shared sink compares equal across rebuilds"
+        );
+        assert!(
+            !payload_closure().param_eq(&payload_closure()),
+            "a closure built per frame is a changed parameter"
+        );
+        assert!(
+            !payload_shared(shared).param_eq(&payload_closure()),
+            "a shared sink and a closure are different parameters"
+        );
     }
 }

@@ -60,7 +60,11 @@ alignment from the layout direction. `max_lines(0)` is passed to Skia, which dra
 **`min_lines`** — the box reserves that many line boxes even when the text is shorter. skia-safe 0.99
 does not expose `set_min_lines`, so the RESULT is padded instead of the paragraph: the height is
 `max(text height, min_lines * line height)` and the glyphs stay at the top, which is what Compose's
-`minLines` does anyway.
+`minLines` does anyway. The pair is VALIDATED the way Compose validates it
+(`HeightInLinesModifier.kt:454-461`, from `BasicText.kt:102`): both caps must be positive and
+`min_lines <= max_lines`, otherwise `build` panics with Compose's own wording. Without that,
+`max_lines(0)` measured 44 x 27 (one line, `did_exceed_max_lines` set) and `min_lines(5)` with
+`max_lines(2)` reserved three lines the cap can never fill.
 
 **`on_text_layout`** — called after every MEASURE (never from an intrinsic probe, which is a question
 about a hypothetical width) with a `TextLayoutResult`: `size` (the box, `min_lines` included),
@@ -68,6 +72,11 @@ about a hypothetical width) with a `TextLayoutResult`: `size` (the box, `min_lin
 `has_visual_overflow()`. CAVEAT: TRIGGERING A RECOMPOSITION from inside the callback (writing a
 `State` it also reads) trips the materialiser in this build — the demo fixture panicked with
 `[dup-key]` until the write was removed — so treat it as an observer, or write a `Backchannel`.
+
+The payload compares callbacks by IDENTITY, so a closure built per rebuild is a changed parameter and
+the leaf re-measures. A caller that rebuilds often (a text beside an animation, say) creates the sink
+once and uses `on_text_layout_shared(Arc<..>)`: the parameter then compares equal and the slot can
+Skip. Compose gets the same effect from `rememberUpdatedState`.
 
 **`text_decoration`** — `TextDecoration::UNDERLINE`, `LINE_THROUGH`, or the two combined with `|`;
 the plain leaf draws it now (the `TextStyle` flags used to reach only `RichText`).
@@ -111,6 +120,8 @@ Semantics: nothing is declared on the node; the tree reads its name out of the `
 | a centred nowrap ellipsis stays inside its box (pixels) | `tests/ui_text_test.rs::a_centred_nowrap_ellipsis_stays_inside_its_box` |
 | `min_lines` reserves the box height | `components::text::tests::min_lines_reserves_the_box_height` and `tests/ui_text_test.rs::min_lines_reserves_the_box_height` |
 | `on_text_layout` reports the layout | `components::text::tests::on_text_layout_reports_what_was_laid_out` |
+| a zero line cap, and `min_lines` above `max_lines`, are rejected | `components::text::tests::a_zero_line_cap_is_rejected`, `::min_lines_above_max_lines_is_rejected` |
+| a shared `on_text_layout` sink compares equal, a fresh closure does not | `components::text::tests::a_shared_callback_lets_the_leaf_skip` |
 | a decoration reaches the payload, and draws under the glyphs | `components::text::tests::the_payload_carries_decoration_and_family`, `render_snapshot.rs::a_text_decoration_draws_under_the_glyphs` |
 
 Demo: `cargo run -p winia --example text_demo`. Fixture scenario: `text`.

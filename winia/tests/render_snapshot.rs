@@ -790,3 +790,28 @@ fn a_text_decoration_draws_under_the_glyphs() {
         "the underline draws a rule under the glyphs: {underlined} samples"
     );
 }
+
+#[test]
+fn probe_underline_color() {
+    let (mut surface, _) = render_ui(200.0, 60.0, winia::app_root!(|ctx| {
+        Text::new("IIII")
+            .font_size(40.0)
+            .color(Color::RED)
+            .text_decoration(winia::text::TextDecoration::UNDERLINE)
+            .build(ctx);
+    }));
+    let mut rows = Vec::new();
+    for y in 38..56 {
+        let mut seen: Vec<(u8, u8, u8)> = Vec::new();
+        for x in (4..170).step_by(6) {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r > 40 || g > 40 || b > 40 {
+                seen.push((r, g, b));
+            }
+        }
+        if !seen.is_empty() {
+            rows.push((y, seen.len(), seen[0]));
+        }
+    }
+    panic!("PROBE {rows:?}");
+}

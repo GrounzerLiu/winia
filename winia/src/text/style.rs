@@ -102,7 +102,8 @@ pub struct TextStyle {
     pub soft_wrap: Option<bool>,
     pub letter_spacing: Option<f32>,
     pub line_height: Option<TextUnit>,
-    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`.
+    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`. Callers must
+    /// keep `1 <= min_lines <= max_lines`; `Text` enforces it the way Compose does.
     pub min_lines: Option<usize>,
     /// A font family name resolved against the platform's font collection — Compose's
     /// `TextStyle.fontFamily`, as a name here (winia has no `FontFamily` resolver type yet).
@@ -132,7 +133,8 @@ impl TextStyle {
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
-    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`.
+    /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`. Callers must
+    /// keep `1 <= min_lines <= max_lines`; `Text` enforces it the way Compose does.
     pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
     /// A font family name, resolved against the platform's font collection.
     pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
