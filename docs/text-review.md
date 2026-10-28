@@ -215,7 +215,7 @@ reader can re-check.
   Fix: `n.dirty = n.dirty || dirty || children_changed` (`runtime/materialize.rs:441`).
   Test: `ui_text_test::a_weight_pick_repaints_the_sample_leaf` — counts glyph pixels in the sample
   box, picks Bold, requires at least +25% (red without the fix: `regular=656 bold=656`; green with
-  it). Commit 8b3c595.
+  it). Commit 7f399b2.
 ## Deviations from Compose
 
 - [x] **D-1 — `ProvideTextStyle` ORed decorations, so a child could not turn an inherited
