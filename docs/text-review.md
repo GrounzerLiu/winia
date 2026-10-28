@@ -16,13 +16,13 @@
 
 | Bucket | Open | Fixed | Blocked by Skia |
 |---|---|---|---|
-| Defects (wrong behaviour) | 0 | 9 | 0 |
+| Defects (wrong behaviour) | 0 | 10 | 0 |
 | Deviations from Compose (deliberate or accepted) | 0 | 4 | 1 (the ellipsis half of D-4) |
 | Missing API surface | 2 | 7 | 1 (the shadow item of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
-Fixed on 2026-10-28: T-1..T-8 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2, M-8, M-9,
-M-10. See each row for the mechanism and the test, and "Second pass" below for the index plus the
+Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
+M-8, M-9, M-10. See each row for the mechanism and the test, and "Second pass" below for the index plus the
 items `skia-safe 0.99` cannot express at all.
 
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
@@ -201,25 +201,21 @@ reader can re-check.
   vanishes (measured: `min_lines(3)` reserved 19 dp instead of 57). That is why the rule cannot be
   transplanted without the probe-text indirection Compose uses.
 
-- [ ] **T-10 — a payload-only change on a text leaf does not reach its measure, so the painted text
-  stays stale.** Reproduced through the debug server on the text demo (`tools/ws_text_weight.py`,
-  local): picking `weight Bold` in the segmented row flips the check and the playground summary, and
-  the sample keeps painting Regular. Evidence chain from the instrumented build:
-  `[slot]` for the leaf prints `clean=true mod_changed=true dirty=true weight=FontWeight(700)` on the
-  transition frame, so the descriptor IS dirty; `[measure]` for that node never prints again after
-  startup; `[paint]` prints the same `intrinsic=595.3` on every frame, i.e. the renderer keeps
-  painting the old `cached_paragraph`. The paragraph cache is the paint source, and a rebuild with
-  `weight=700` was traced for the same content, but on a node that the paint never sees.
-  Ruled out: `Modifier::param_eq` compares every `TextContent` field including weight and alignment;
-  `node_modifier_changed` uses that comparison; `node.text_snapshot_matches` compares the same set;
-  declaring the parameters with `ctx.changed` on the leaf does not change the outcome.
-  Tried and reverted: carrying the descriptor's `dirty` through the Skip-restore arm of
-  `materialize` (`n.dirty = n.dirty || dirty`) — no effect, so that arm is not where it is lost.
-  Next: follow `desc.dirty=true` from `start_node` (`runtime/composer/engine.rs:544`) to the node the
-  layout measures. The trace above shows a node whose fold check reports `dirty=false` with equal
-  constraints, while the paint reads a different node id — so the remaining question is which node
-  carries the new modifier and why the layout never visits it.
-
+- [x] **T-10 — a second materialisation in the same frame cleared a node's `dirty` flag, so a
+  payload-only change never reached its measure.** Found through the debug server on the text demo
+  (`tools/ws_text_weight.py`, local): picking `weight Bold` flipped the segment and the summary,
+  and the sample kept painting Regular. Instrumented run, one frame, same node:
+  `[slot] clean=true mod_changed=true dirty=true weight=700` (compose), then
+  `[mat-reuse] desc_dirty=true now_dirty=true weight=700` (first materialisation), then
+  `[mat-reuse] desc_dirty=false now_dirty=false weight=700` (second compose pass in the SAME frame
+  rebuilt the descriptor with `dirty=false`), then `[paint] node=20 intrinsic=595.3` on every frame.
+  Root cause: `materialize` assigned `n.dirty = dirty || children_changed`, which OVERWRITES a flag an
+  earlier pass in the same frame had set. A node's dirty is cleared by its measure at the end of
+  layout, so it must never be cleared by a later materialisation of the same frame.
+  Fix: `n.dirty = n.dirty || dirty || children_changed` (`runtime/materialize.rs:441`).
+  Test: `ui_text_test::a_weight_pick_repaints_the_sample_leaf` — counts glyph pixels in the sample
+  box, picks Bold, requires at least +25% (red without the fix: `regular=656 bold=656`; green with
+  it). Commit 8b3c595.
 ## Deviations from Compose
 
 - [x] **D-1 — `ProvideTextStyle` ORed decorations, so a child could not turn an inherited

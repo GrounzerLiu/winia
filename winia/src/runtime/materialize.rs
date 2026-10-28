@@ -438,10 +438,17 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.slot_key = key;
             // Removing the last child has no dirty descendant to bubble. A changed child count must
             // invalidate the parent directly, or its cached placement can overwrite a removed node.
-            n.dirty = dirty || children_changed;
+            // NEVER clear a dirty flag that an earlier materialization in the SAME frame set: a
+            // second compose pass (state written during the frame, multi-pass convergence) rebuilds
+            // the descriptor with `dirty=false`, and overwriting here dropped the re-measure the first
+            // pass had asked for. Measured on the text demo through the debug server: picking `weight
+            // Bold` gave `desc_dirty=true now_dirty=true weight=700` and then, in the same frame,
+            // `desc_dirty=false now_dirty=false weight=700` — the sample painted its old paragraph
+            // (intrinsic 595.3) forever, while the slot and summary had already moved to Bold.
+            n.dirty = n.dirty || dirty || children_changed;
             // A subcomposing node is re-measured when the COMPOSITION changed, not every frame: the
             // descriptor's `dirty` (a slot that re-ran, or a node that was rebuilt) is what says its
-            // content may differ, and `n.dirty = dirty` above already carries it. The unconditional
+            // content may differ, and the assignment above already carries it. The unconditional
             // version of this rule is what re-composed every subcomposition on every frame — measured on
             // the bench's `subcompose` scene as 63233 µs for an idle 800-row frame against 621 µs for the
             // same tree with plain containers, ≈78 µs per node (docs/benchmarks.md, "What a

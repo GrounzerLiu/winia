@@ -420,13 +420,15 @@ fn text_demo(ctx: &mut ComposeCtx) {
                     });
             });
 
-            // 5. Overflow: the box is narrower than the string, on purpose.
+            // 5. Overflow: the box is narrower than the string, on purpose. The three text nodes
+            // are DIRECT siblings of the row (a per-item Column clipped their spill, which is what
+            // `a_nowrap_ellipsis_stops_at_the_box_and_visible_does_not` measures).
             card(ctx, "nowrap", "overflow (nowrap, 140 dp box)", |ctx| {
                 Row::new()
                     .spacing(24.0)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                        for (index, (label, overflow)) in [
+                        for (index, (_, overflow)) in [
                             ("Ellipsis", TextOverflow::Ellipsis),
                             ("Visible", TextOverflow::Visible),
                             ("Clip", TextOverflow::Clip),
@@ -434,26 +436,37 @@ fn text_demo(ctx: &mut ComposeCtx) {
                         .into_iter()
                         .enumerate()
                         {
-                            let tag = format!("tx-nowrap-{index}");
-                            Column::new().spacing(4.0).build(ctx, |ctx| {
-                                Text::new(label).font_size(11.0).color(MUTED).build(ctx);
-                                Text::new(LONG)
-                                    .font_size(15.0)
-                                    .soft_wrap(false)
-                                    .max_lines(1)
-                                    .overflow(overflow)
-                                    .modifier(
-                                        Modifier::new()
-                                            .width(140.0)
-                                            .background(Color::from_argb(28, 255, 255, 255), Shape::Rectangle)
-                                            .test_tag(tag),
-                                    )
-                                    .build(ctx);
-                            });
+                            Text::new(LONG)
+                                .font_size(15.0)
+                                .soft_wrap(false)
+                                .max_lines(1)
+                                .overflow(overflow)
+                                .modifier(
+                                    Modifier::new()
+                                        .width(140.0)
+                                        .background(Color::from_argb(28, 255, 255, 255), Shape::Rectangle)
+                                        .test_tag(format!("tx-nowrap-{index}")),
+                                )
+                                .build(ctx);
                         }
                     });
+                // A centred, nowrap, ellipsized line in a 300 dp box: the case where the alignment
+                // slack was once computed from the PRE-ellipsis intrinsic width and shifted the line
+                // out of its own box (`a_centred_nowrap_ellipsis_stays_inside_its_box`).
+                Text::new(LONG)
+                    .font_size(15.0)
+                    .soft_wrap(false)
+                    .max_lines(1)
+                    .align(TextAlign::Center)
+                    .overflow(TextOverflow::Ellipsis)
+                    .modifier(
+                        Modifier::new()
+                            .width(300.0)
+                            .background(Color::from_argb(28, 255, 255, 255), Shape::Rectangle)
+                            .test_tag("tx-nowrap-center"),
+                    )
+                    .build(ctx);
             });
-
             // 6. Alignment.
             card(ctx, "align", "alignment (300 dp box)", |ctx| {
                 for (index, (label, align)) in ALIGNS.into_iter().enumerate() {

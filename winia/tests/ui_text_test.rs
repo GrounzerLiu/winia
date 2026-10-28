@@ -65,6 +65,9 @@ fn max_lines_caps_the_height() {
 #[test]
 fn a_nowrap_ellipsis_stops_at_the_box_and_visible_does_not() {
     let mut app = UiTest::launch("text");
+    // The demo is taller than the default window; the sampling reads FRAME pixels, which only exist
+    // inside it.
+    app.resize(900.0, 1500.0);
     let ellipsis = app.expect_tag("tx-nowrap-0");
     let visible = app.expect_tag("tx-nowrap-1");
     assert_eq!(ellipsis.2, 140.0, "the box is 140 dp: {ellipsis:?}");
@@ -89,6 +92,7 @@ fn a_nowrap_ellipsis_stops_at_the_box_and_visible_does_not() {
 #[test]
 fn a_centred_nowrap_ellipsis_stays_inside_its_box() {
     let mut app = UiTest::launch("text");
+    app.resize(900.0, 1500.0);
     let rect = app.expect_tag("tx-nowrap-center");
     assert_eq!(rect.2, 300.0, "the box is 300 dp: {rect:?}");
     assert_eq!(rect.3, 20.0, "one ellipsized line: {rect:?}");
@@ -130,6 +134,53 @@ fn a_segmented_pick_updates_the_playground() {
     assert!(
         app.all_texts().iter().any(|t| t.contains("align Center")),
         "the summary must follow the pick without any other event: {:?}",
+        app.all_texts()
+    );
+}
+
+/// A payload-only change must reach the leaf's MEASURE, not just its modifier.
+///
+/// The demo drives `Text` from state read in an ancestor; the leaf slot stays clean, the descriptor
+/// carries `dirty`, and inside one frame a second compose pass rebuilt that descriptor with
+/// `dirty=false`. The materialiser overwrote the flag and the node kept its old `cached_paragraph`,
+/// so the painted text never changed (Regular stayed Regular while the row and the summary moved).
+/// Bold has visibly more glyph pixels than Regular in the same box, which is what this measures.
+#[test]
+fn a_weight_pick_repaints_the_sample_leaf() {
+    fn box_ink(app: &mut UiTest, rect: (f32, f32, f32, f32)) -> usize {
+        let mut points = Vec::new();
+        let mut y = rect.1;
+        while y < rect.1 + rect.3 {
+            let mut x = rect.0;
+            while x < rect.0 + rect.2 {
+                points.push((x, y));
+                x += 2.0;
+            }
+            y += 2.0;
+        }
+        app.pixels_at_logical(&points)
+            .into_iter()
+            .filter(|p| match p {
+                Some((r, g, b, a)) => *a == 255 && (*r as u32 + *g as u32 + *b as u32) > 400,
+                None => false,
+            })
+            .count()
+    }
+
+    let mut app = UiTest::launch("text");
+    let sample = app.expect_tag("tx-play-sample");
+    let regular = box_ink(&mut app, sample);
+    let (x, y, w, h) = app.expect_tag("tx-play-weight-4-off");
+    app.click(x + w / 2.0, y + h / 2.0);
+    app.expect_tag("tx-play-weight-4-on");
+    let bold = box_ink(&mut app, sample);
+    assert!(
+        bold > regular + regular / 4,
+        "Bold must repaint the sample: regular={regular} bold={bold}"
+    );
+    assert!(
+        app.all_texts().iter().any(|t| t.contains("weight Bold")),
+        "the summary follows the pick: {:?}",
         app.all_texts()
     );
 }
