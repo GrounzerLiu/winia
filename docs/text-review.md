@@ -16,8 +16,8 @@
 
 | Bucket | Open | Fixed | Blocked by Skia |
 |---|---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 1 | 8 | 0 |
-| Deviations from Compose (deliberate or accepted) | 1 | 3 | 1 (the ellipsis half of D-4) |
+| Defects (wrong behaviour) | 0 | 9 | 0 |
+| Deviations from Compose (deliberate or accepted) | 0 | 4 | 1 (the ellipsis half of D-4) |
 | Missing API surface | 2 | 7 | 1 (the shadow item of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
@@ -180,30 +180,42 @@ reader can re-check.
   Commit `5467c12`. Full `--lib` suite: 2027 passed; `--test render_snapshot`: 31 passed;
   `--test ui_text_test` (debug-server): 7 passed; `--test ui_test`: 6 passed.
 
-- [ ] **T-9 — `min_lines` height uses the average line height, where Compose uses the first line
-  plus `(n-1) × step`.** `measure/paragraph.rs:187-195` computes
-  `text_size.height / line_count * min_lines`; Compose precomputes from a same-style 1-line and
-  2-line paragraph (`HeightInLinesModifier.kt:414-443`).
-  Measured at one font size they coincide exactly (`16 sp`: 21 → 84 for `min_lines(4)`;
-  `40 sp`: 53 / 106 → 212 both ways), and a plain `Text` cannot mix line heights (one font size per
-  leaf).
-  **Status changed: this is now REACHABLE.** T-3 gave `RichText` `min_lines`, and a rich block can
-  mix font sizes inside one paragraph, so `height / line_count * min_lines` can disagree with
-  Compose's `first + (n-1) × step`. Nothing measures it yet.
-  Fix plan: build the paragraph twice more with `max_lines = 1` and `2` (what
-  `HeightInLinesModifier.kt:414-443` does with the same `TextLayoutInput`), take
-  `h1` and `step = h2 - h1`, and reserve `h1 + (n-1) × step`. Only when `min_lines` asks for more
-  lines than were laid out, so the two extra builds stay off the common path.
+- [x] **T-9 — `min_lines` height used the average line height; resolved as a documented deviation,
+  not a defect.**
+  The row originally compared `text_size.height / line_count * min_lines`
+  (`measure/paragraph.rs`) against `first + (n-1) × step` and assumed the second came from the
+  REAL text. Reading the source settles it: `HeightInLinesModifier.kt:414-443` builds a PROBE
+  paragraph with `computeSizeForDefaultText` (a placeholder string in the paragraph's style), once
+  for one line and once for two, and takes `first + lineHeight × (n - 1)`. It never looks at the
+  content.
+  For every leaf winia has, the two rules give the same number, and that is measured, not argued:
+  `16 sp` gives 21 → 84 for `min_lines(4)` and `40 sp` gives 53 / 106 → 212, both exactly on the
+  average formula.
+  The one case where they could diverge is a rich block mixing font sizes, where Compose would
+  reserve against the paragraph's BASE style while winia averages the lines it actually laid out.
+  `RichTextContent` does not carry a base style — each span carries its own size — so reproducing
+  Compose's rule there would need a payload field AND would reserve less than the content needs.
+  Recorded as a deviation with the numbers above rather than changed.
+  A probe attempt was written and reverted: building the same paragraph with `max_lines = 1` and
+  `2` returns one line for both on short text, so the step collapses to 0 and the reservation
+  vanishes (measured: `min_lines(3)` reserved 19 dp instead of 57). That is why the rule cannot be
+  transplanted without the probe-text indirection Compose uses.
 
 ## Deviations from Compose
 
-- [ ] **D-1 — `ProvideTextStyle` ORs decorations, so a child cannot turn an inherited underline
-  off.** `components/text.rs` (`merge_text_styles`) merges `underline`/`strikethrough` with
-  `||`, where `TextStyle.merge` replaces the decoration when the child specifies one. Already
-  recorded in `docs/text.md` (§ Differences). Reason not fixed: the flags are `bool` here, so
-  "the child said nothing" and "the child said none" are the same value — fixing it needs an
-  `Option<TextDecoration>` in `TextStyle`, which is a breaking payload change across
-  `param_eq` and every `ProvideTextStyle` caller.
+- [x] **D-1 — `ProvideTextStyle` ORed decorations, so a child could not turn an inherited
+  underline off.**
+  `merge_text_styles` merged `underline`/`strikethrough` with `||`, where Compose's
+  `TextStyle.merge` REPLACES the decoration when the child specifies one. The flags were `bool`,
+  so "the child said nothing" and "the child said none" were the same value.
+  Fixed the way the row suggested: `TextStyle` now carries `decoration: Option<TextDecoration>`
+  (Compose's nullable `textDecoration`), the merge is `override_.decoration.or(base.decoration)`,
+  and `Text::build` falls back to `NONE`. `text_decoration(d)` stores `Some(d)`; `.underline()`
+  and `.strikethrough()` keep their additive meaning by ORing into whatever is already there.
+  A RichText span's `TextStyle` replaces the span decoration the same way.
+  Test: `components::text::tests::a_child_style_can_clear_an_inherited_decoration` — fails on the
+  old merge with `TextDecoration { underline: true, line_through: false }` where it should be
+  `false`. Full `--lib` suite: 2056 passed.
 
 - [x] **D-2 — line height distributes the extra leading proportionally, not centred.**
   `measure/paragraph.rs` sets `set_height(lh/size)` + `set_height_override(true)`, which scales

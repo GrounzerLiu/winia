@@ -145,8 +145,11 @@ impl<'a> RichTextScope<'a> {
         s.font_size.map(|v| self.style.fs = Some(v.to_logical_px(crate::runtime::density::current_density())));
         s.font_weight.map(|v| self.style.fw = Some(v));
         s.font_style.map(|v| self.style.slant = Some(v));
-        if s.underline { self.style.ul = true; }
-        if s.strikethrough { self.style.st = true; }
+        if let Some(d) = s.decoration {
+            // A span-level style REPLACES the decoration, the way `TextStyle.merge` does (D-1).
+            self.style.ul = d.underline;
+            self.style.st = d.line_through;
+        }
         s.background.map(|v| self.style.bg = Some(v));
     }
 

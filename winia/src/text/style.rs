@@ -112,17 +112,20 @@ pub struct TextStyle {
     /// A font family name resolved against the platform's font collection — Compose's
     /// `TextStyle.fontFamily`, as a name here (winia has no `FontFamily` resolver type yet).
     pub font_family: Option<String>,
-    /// 下划线（仅 RichText 生效）
-    pub underline: bool,
-    /// 删除线（仅 RichText 生效）
-    pub strikethrough: bool,
+    /// The line decoration, or `None` for "this style says nothing about it".
+    ///
+    /// Compose's `TextStyle.textDecoration` is nullable, and that nullability is the whole point of
+    /// D-1: a child style that specifies `TextDecoration.None` must be able to turn off an
+    /// underline it inherited from `ProvideTextStyle`. Two `bool`s could not express that — "the
+    /// child said nothing" and "the child said none" were the same value, so the merge ORed them.
+    pub decoration: Option<TextDecoration>,
     /// 背景色（仅 RichText 生效）
     pub background: Option<Color>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, underline: false, strikethrough: false, background: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -144,17 +147,27 @@ impl TextStyle {
     pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
-        self.underline = decoration.underline;
-        self.strikethrough = decoration.line_through;
+        self.decoration = Some(decoration);
         self
     }
-    /// The decoration these flags describe.
+    /// The decoration this style specifies, with `NONE` when it says nothing.
     pub fn decoration(&self) -> TextDecoration {
-        TextDecoration { underline: self.underline, line_through: self.strikethrough }
+        self.decoration.unwrap_or(TextDecoration::NONE)
     }
     pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
-    pub fn underline(mut self) -> Self { self.underline = true; self }
-    pub fn strikethrough(mut self) -> Self { self.strikethrough = true; self }
+    /// Adds an underline to whatever decoration this style already specifies.
+    pub fn underline(mut self) -> Self {
+        let d = self.decoration.unwrap_or(TextDecoration::NONE);
+        self.decoration = Some(d | TextDecoration::UNDERLINE);
+        self
+    }
+
+    /// Adds a line-through to whatever decoration this style already specifies.
+    pub fn strikethrough(mut self) -> Self {
+        let d = self.decoration.unwrap_or(TextDecoration::NONE);
+        self.decoration = Some(d | TextDecoration::LINE_THROUGH);
+        self
+    }
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
 }
 

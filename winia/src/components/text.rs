@@ -47,8 +47,9 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         line_height: override_.line_height.or(base.line_height),
         min_lines: override_.min_lines.or(base.min_lines),
         font_family: override_.font_family.clone().or_else(|| base.font_family.clone()),
-        underline: override_.underline || base.underline,
-        strikethrough: override_.strikethrough || base.strikethrough,
+        // Compose's `TextStyle.merge` REPLACES the decoration when the child specifies one, so a
+        // child that says `TextDecoration.NONE` clears an inherited underline (D-1).
+        decoration: override_.decoration.or(base.decoration),
         background: override_.background.or(base.background),
     }
 }
@@ -258,7 +259,10 @@ impl Text {
             final_min_lines <= final_max_lines,
             "min_lines ({final_min_lines}) must be less than or equal to max_lines ({final_max_lines})"
         );
-        let final_decoration = self.text_decoration.unwrap_or_else(|| style.decoration());
+        let final_decoration = self
+            .text_decoration
+            .or(style.decoration)
+            .unwrap_or(TextDecoration::NONE);
         let final_font_family = self.font_family.clone().or_else(|| style.font_family.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
@@ -567,6 +571,30 @@ mod tests {
         assert!(
             shrunk <= 40.5,
             "the shrunk layout fits the box: {shrunk} in {shrunk_box}"
+        );
+    }
+    /// A child style can CLEAR an inherited decoration (D-1).
+    ///
+    /// `merge_text_styles` used to OR the two `bool` flags, so `TextDecoration::NONE` on the child
+    /// was indistinguishable from "the child said nothing" and the underline survived. Compose's
+    /// `TextStyle.merge` replaces the decoration when the child specifies one, and the field is an
+    /// `Option` now so that "none" is a value the child can state.
+    #[test]
+    fn a_child_style_can_clear_an_inherited_decoration() {
+        let base = crate::text::TextStyle::new()
+            .text_decoration(crate::text::TextDecoration::UNDERLINE);
+        let cleared = merge_text_styles(&base, &crate::text::TextStyle::new().text_decoration(crate::text::TextDecoration::NONE));
+        assert!(
+            !cleared.decoration().underline,
+            "an explicit NONE must clear the inherited underline: {:?}",
+            cleared.decoration()
+        );
+
+        let kept = merge_text_styles(&base, &crate::text::TextStyle::new().font_size(20.0));
+        assert!(
+            kept.decoration().underline,
+            "a child that says nothing keeps what it inherited: {:?}",
+            kept.decoration()
         );
     }
     /// `TextUnit::Em` is a multiple of the ENCLOSING size, not an absolute one.
