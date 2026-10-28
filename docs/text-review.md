@@ -16,12 +16,12 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 4 | 5 |
+| Defects (wrong behaviour; T-9 is latent, see its row) | 3 | 6 |
 | Deviations from Compose (deliberate or accepted) | 4 | 0 |
 | Missing API surface | 10 | 0 |
 | Investigated and ruled out | — | 5 |
 
-T-1, T-2, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
+T-1, T-2, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
 rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
 next reader can re-check.
 
@@ -82,16 +82,30 @@ next reader can re-check.
   Reason open: the correct fix depends on T-2's settling — if the maps are reworked, this should be
   re-derived rather than patched twice.
 
-- [ ] **T-5 — `TextLayout::new(paragraph, 0)` makes every caret query return the first cluster's
-  position instead of failing.** `text/text_layout.rs:22-27`: when `length == 0` the "empty text"
-  shortcut returns cluster 0 for *any* index. Measured `"abc"`: `len=0` gives
-  `x=0.0` for indices 0/1/2/3, while `len=3` gives `0.0 / 8.14 / 17.55 / 24.94`.
-  Three call sites pass 0 (`app/per_window/pointer.rs:331`, `:744`,
-  `app/overlay_host/input.rs:289`), and `render/pass.rs:907` passes `content.len()` — the same
-  struct is used with two incompatible contracts.
-  Reason open: the shape of the fix is a decision (drop the field and special-case empty paragraphs
-  explicitly vs. validate the index against the map), and it touches three event paths that need
-  their own re-verification.
+- [x] **T-5 — `TextLayout::new(paragraph, 0)` made every caret query return the first cluster's
+  position instead of failing.**
+  The constructor took a `length` and used `length == 0` as an "empty text" shortcut that answered
+  with cluster 0 for *any* index. Measured on `"abc"`: with `len=0` every index reported `x=0.0`,
+  while the correct positions are `0.0 / 8.14 / 17.55 / 24.94`.
+  Four call sites disagreed about the unit: `render/pass.rs` passed `content.len()` (bytes),
+  `app/per_window/pointer.rs:331` and `:744` and `app/overlay_host/input.rs:289` passed `0`, and the
+  IME path in `app/app_state/handlers.rs` passed `paragraph_byte_to_real_indices.len()` — a map
+  ENTRY COUNT. So the three hit-test/IME sites all took the collapse branch.
+  Fix: the field is gone — the paragraph is the only authority on its own length
+  (`Paragraph::text_len`, the last real index the map knows). `TextLayout::new(paragraph)` takes
+  nothing else, so the units cannot disagree again. The caret index is now clamped like Compose
+  instead of returning `None`: past the end parks at the end, mid-character parks at that
+  character's start (`Paragraph::paragraph_byte_for_real_index`). The first-cluster test also had
+  to compare the PARAGRAPH cluster index rather than the raw offset, because a clamped
+  mid-character offset used to fall into the previous-cluster branch and ask for glyph index -1.
+  The hit-test walk is bounded by the paragraph's own byte length instead of the removed field,
+  and its two `.unwrap()`s use the T-6 clamping helper. The public name also loses its doubled
+  word: `get_closest_grapheme_cluster_cluster_at` → `get_closest_grapheme_cluster_at`.
+  Tests: `text::text_layout::tests::a_caret_position_belongs_to_the_index_that_was_asked_for`
+  (fails on the old behaviour with "each index must advance the caret: [0.0, 0.0, 0.0, 0.0]"),
+  plus `a_caret_past_the_end_parks_at_the_end`, `a_caret_mid_character_parks_at_the_character_start`,
+  `an_empty_paragraph_puts_the_caret_at_the_origin` and `a_hit_test_stays_inside_the_text`.
+  Commit `f892c8e`. Full `--lib` suite: 2032 passed; `--test ui_text_test`: 7 passed.
 
 - [x] **T-6 — `Paragraph::get_closest_glyph_cluster_at` panicked on an unmapped cluster endpoint.**
   The mapping from Skia's paragraph byte space to the real content space used two `expect(...)`
