@@ -336,7 +336,7 @@ reader can re-check.
   Tests: `text::annotated::annotated_tests::{spans_merge_in_the_order_they_were_pushed,`
   `a_substring_rebases_the_spans_that_survive, a_range_outside_the_text_is_clamped_or_dropped}`, and
   `rich_text::tests::an_annotated_string_seeds_the_text_and_its_spans` (the styled range survives
-  into the payload as `2..4` bold). Demo: the rich-text demo's `AnnotatedString` card.
+  into the payload as `2..4` bold). Demo: the rich-text demo's `AnnotatedString` card. Commit c9cb356.
   Not done: `Text` has no `annotated` overload of its own (use `RichText::annotated`, which is the
   same node), and there is no `ParagraphStyle` half — paragraph-level fields stay on `RichText`.
 - [x] **M-8 — rich-text spans do not participate in `param_eq`.** `modifier/param_eq.rs:166-170`
