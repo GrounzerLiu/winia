@@ -267,13 +267,24 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             while ci < total {
                 // Whether this character belongs to a drawable
                 if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
-                    // Placeholder: add it once at the start of the range and skip the rest of it
+                    // Placeholder: add it once at the start of the range and skip the rest of it.
+                    //
+                    // The string handed to `add_placeholder` is NOT drawn (Skia sees one U+FFFC), but
+                    // its LENGTH advances the builder's real-index space, and that space has to agree
+                    // with `content` byte for byte or every later index drifts. The range's own text is
+                    // therefore what gets passed: a one-char image still occupies 3 bytes (U+FFFC), and
+                    // a multi-char placeholder (`RichTextScope::placeholder("XYZ", ..)`) occupies all
+                    // of its own bytes. Measured before this fix: `"ab" + image + "cd"` put `"cd"`
+                    // at real bytes 3..5 where the content has it at 5..7, so a selection over the tail
+                    // returned no rectangles at all.
                     if ci == drawable_ranges[di].start {
                         if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
                             builder.push_style(&to_sktextstyle(s));
                         }
                         let d = drawables[di].clone();
-                        builder.add_placeholder(" ", d, &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
+                        let placeholder_text: String =
+                            chars[drawable_ranges[di].start..drawable_ranges[di].end.min(total)].iter().collect();
+                        builder.add_placeholder(&placeholder_text, d, &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
                         if let Some(_s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
                     }
                     ci += 1;

@@ -590,6 +590,47 @@
         assert_eq!(size.width, 0.0, "Compose coerces a negative max to 0 instead of panicking");
     }
 
+    /// A placeholder must advance the real-index space by the bytes its CONTENT occupies, not by
+    /// the length of some stand-in string.
+    ///
+    /// Measured before this fix: an inline image (one U+FFFC = 3 bytes) advanced the builder by 1,
+    /// so text after it was mapped two bytes early and `get_rects_for_range` over that text came
+    /// back empty — the tail could not be selected or highlighted. A multi-char placeholder drifted
+    /// by its whole length the same way. See docs/text-review.md T-2.
+    #[test]
+    fn text_after_an_inline_element_keeps_its_real_indices() {
+        use std::sync::Arc;
+        struct BoxImage;
+        impl crate::text::InlineDrawable for BoxImage {
+            fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
+            fn size(&self) -> (f32, f32) { (20.0, 16.0) }
+        }
+        let modifier = Modifier::new().push(crate::modifier::ModifierElement::RichTextContent {
+            // content: "ab" + U+FFFC + "cd" = 7 bytes; the tail "cd" lives at 5..7.
+            content: "ab\u{FFFC}cd".to_string(),
+            drawables: vec![Arc::new(BoxImage) as Arc<dyn crate::text::InlineDrawable>],
+            drawable_ranges: vec![2..3],
+            spans: Vec::new(),
+        });
+        let mut nodes = vec![LayoutNode::leaf(modifier)];
+        let _ = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let paragraph = nodes[0].cached_paragraph.borrow();
+        let paragraph = paragraph.as_ref().expect("a real measure caches the paragraph");
+        let tail = paragraph.get_rects_for_range(
+            5..7,
+            skia_safe::textlayout::RectHeightStyle::Max,
+            skia_safe::textlayout::RectWidthStyle::Tight,
+        );
+        assert!(
+            !tail.is_empty(),
+            "the text after an inline image must be addressable: the paragraph is {:?} wide",
+            paragraph.max_intrinsic_width()
+        );
+        // And the image itself is still addressable.
+        assert!(!paragraph
+            .get_rects_for_range(2..5, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Tight)
+            .is_empty());
+    }
     #[test]
     fn an_intrinsic_probe_does_not_write_the_rich_text_render_cache() {
         let modifier = Modifier::new().push(crate::modifier::ModifierElement::RichTextContent {
