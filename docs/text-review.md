@@ -318,7 +318,7 @@ reader can re-check.
   application: plain (24,42) vs shadow (24,42)),
   `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
   `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
-  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`.
+  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`. Commit eff2d7d.
   Still missing, with reasons: `lineHeightStyle` needs the leading trimmed per line (Skia's
   `set_half_leading` is the closest primitive and D-2 already spends it on centring);
   `fontSynthesis` needs synthetic bold/italic control that the paragraph API does not expose;
