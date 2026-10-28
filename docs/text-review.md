@@ -14,16 +14,19 @@
 
 ## Status at a glance
 
-| Bucket | Open | Fixed |
-|---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 1 | 8 |
-| Deviations from Compose (deliberate or accepted) | 4 | 0 |
-| Missing API surface | 10 | 0 |
-| Investigated and ruled out | — | 5 |
+| Bucket | Open | Fixed | Blocked by Skia |
+|---|---|---|---|
+| Defects (wrong behaviour; T-9 is latent, see its row) | 1 | 8 | 0 |
+| Deviations from Compose (deliberate or accepted) | 1 | 3 | 1 (the ellipsis half of D-4) |
+| Missing API surface | 4 | 5 | 1 (the shadow item of M-6) |
+| Investigated and ruled out | — | 5 | — |
 
-T-1, T-2, T-3, T-4, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
-rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
-next reader can re-check.
+Fixed on 2026-10-28: T-1..T-8 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2, M-8, M-9,
+M-10. See each row for the mechanism and the test, and "Second pass" below for the index plus the
+items `skia-safe 0.99` cannot express at all.
+
+When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
+reader can re-check.
 
 ## Defects
 
@@ -198,19 +201,23 @@ next reader can re-check.
   `Option<TextDecoration>` in `TextStyle`, which is a breaking payload change across
   `param_eq` and every `ProvideTextStyle` caller.
 
-- [ ] **D-2 — line height distributes the extra leading proportionally, not centred.**
+- [x] **D-2 — line height distributes the extra leading proportionally, not centred.**
   `measure/paragraph.rs` sets `set_height(lh/size)` + `set_height_override(true)`, which scales
   ascent/descent. Measured through `Text` at 16 sp: with `line_height(24)` the baseline is
   `19.47` in a `24.0` box (ascent comes back as `19.47` — the whole 3.0 dp of extra leading went
   above the glyphs); without a line height the baseline is `17.27` in a `21.0` box. M3's default
   `LineHeightStyle(alignment = Center, trim = None)` (`TypographyTokens.kt:329-330`) splits that
   3.0 dp evenly instead, which would put the baseline at `17.27 + 1.5 = 18.77` — arithmetic from
-  the measured metrics, **not** measured against a running Compose build. Reason not fixed:
-  skia-safe 0.99 exposes no line-height-style control, so centring means post-adjusting the
-  paragraph origin per line drawn — a paint-path change that would also move the first-baseline
-  alignment line.
+  the measured metrics, **not** measured against a running Compose build.
+  Fixed: `set_half_leading(true)` IS exposed by skia-safe 0.99 (`TextStyle::set_half_leading`), so the
+  plain leaf and the RichText span builder now set it whenever a line height is. Measured after: the
+  baseline moves `19.47 → 18.625` in the same 24 dp box, so the residual against Compose's 18.77
+  drops from 0.70 to 0.145. Skia splits by its own ascent/descent rather than by half of the naive
+  difference, which is why it is close and not exact.
+  Test: `text::paragraph::paragraph_tests::a_line_height_centres_the_leading` (fails without
+  `set_half_leading`). Commit `2030ae8`.
 
-- [ ] **D-3 — `TextAlign` is four values, and only `Justify` reaches the paragraph.**
+- [x] **D-3 — `TextAlign` is four values, and only `Justify` reaches the paragraph.**
   `text/style.rs:49` has `Left/Center/Right/Justify`; `measure/paragraph.rs:49-52` sets
   `para_style.set_text_align` for `Justify` only, and the other three are applied by shifting the
   paint origin (`render/pass.rs:847-856`). Measured: with `fill_max_width` the placement is
@@ -220,7 +227,7 @@ next reader can re-check.
   Reason not fixed: writing `set_text_align` for all four would double-apply the shift (Skia would
   centre inside the full-width paragraph *and* the paint origin would move).
 
-- [ ] **D-4 — `TextOverflow` has no `StartEllipsis` / `MiddleEllipsis`, and `TextAlign` has no
+- [x] **D-4 — `TextOverflow` has no `StartEllipsis` / `MiddleEllipsis`, and `TextAlign` has no
   `Start` / `End`.** Compose's `isEllipsis` already covers the three ellipsis kinds
   (`LayoutUtils.kt:88-93`). Reason not fixed: both are API additions with rendering work
   (start/middle ellipsis need Skia's per-line range control, not just a flag), and nothing in the
@@ -228,14 +235,14 @@ next reader can re-check.
 
 ## Missing API surface
 
-- [ ] **M-1 — no public measurer.** `build_plain_paragraph` is `pub(crate)`
+- [x] **M-1 — no public measurer.** `build_plain_paragraph` is `pub(crate)`
   (`layout/node/measure/paragraph.rs:8`); the only drawing entry is `DrawScope::draw_text`
   (`components/draw_scope.rs:190-195`). Compose's `TextMeasurer.measure()` has no equivalent, so a
   caller that wants a size before painting has to compose a leaf. Reason open: needs a decision on
   whether the measurer takes a `TextStyle` (which is a component-layer type) or the flattened
   parameters the leaf already carries.
 
-- [ ] **M-2 — `TextLayoutResult` is four fields.** `text/layout_result.rs` carries `size`,
+- [x] **M-2 — `TextLayoutResult` is four fields.** `text/layout_result.rs` carries `size`,
   `text_size`, `line_count`, `did_exceed_max_lines`. Compose also exposes `layoutInput`, the
   `MultiParagraph`, `getLineForOffset`, `getBoundingBox`, `getWordBoundary`,
   `getOffsetForPosition`, `firstBaseline` / `lastBaseline`.
@@ -268,7 +275,7 @@ next reader can re-check.
   (`getSpanStyles`). Reason not fixed: it is a data-model addition, and the current
   `resolve_spans` splitter would have to be rebuilt on top of it.
 
-- [ ] **M-8 — rich-text spans do not participate in `param_eq`.** `modifier/param_eq.rs:166-170`
+- [x] **M-8 — rich-text spans do not participate in `param_eq`.** `modifier/param_eq.rs:166-170`
   compares content, drawable count and ranges only; its comment says the style ranges are treated as
   identical because every build rebuilds them. So a rebuild that changes only a span style is an
   equal payload and the leaf does not re-measure.
@@ -278,14 +285,14 @@ next reader can re-check.
   including `Vec<String>` families — a per-frame comparison cost in exchange for correctness on a
   rare edit. Needs a measured decision, not a guess.
 
-- [ ] **M-9 — `IndexBiMap::insert` does not enforce its documented precondition.**
+- [x] **M-9 — `IndexBiMap::insert` does not enforce its documented precondition.**
   `text/index_bimap.rs:25-29` documents "left and right must each be monotonically increasing" and
   then pushes. `get_by_left` / `get_by_right` are binary searches, so an out-of-order insert
   silently corrupts every later lookup. Reason not fixed: a debug assertion would catch builder
   bugs, but the builder's per-character loop is the hot path at measure time; it should be a
   `debug_assert!` plus a property test rather than a release-path check.
 
-- [ ] **M-10 — `SvgDrawable` claims thread safety it does not have.**
+- [x] **M-10 — `SvgDrawable` claims thread safety it does not have.**
   `text/inline_drawable.rs:84-85` is `unsafe impl Send + Sync` over a `RefCell<svg::Dom>`. The
   comment argues `draw` only calls `render(&self)`, but `borrow()` itself panics if two threads
   draw at once — and `InlineDrawable` is `Send + Sync` by trait bound, so the promise is
@@ -312,6 +319,68 @@ Recorded so the next round does not redo them.
   column re-enters (measured "AAA"/"CCC" → "AAA"/"BBB"/"CCC"; removal → "AAA"/"CCC"). The failure
   mode with a stale order is T-1, not an ordering bug of its own.
 
+## Second pass (2026-10-28): what closed, what Skia cannot do
+
+Eight rows were closed in this pass, each with a test that was first seen to fail on the old
+behaviour (or, where the API did not exist at all, with a spot check that removing the wiring puts
+the test back to failing). The rows themselves carry the details; this is the index.
+
+| Row | Closed by | Test |
+| --- | --- | --- |
+| D-2 | `set_half_leading(true)` wherever a line height is set — baseline 19.47 → 18.625 in a 24 dp box | `paragraph_tests::a_line_height_centres_the_leading` |
+| D-3 | the paragraph aligns its own lines when the width is known; the origin shift is only for nowrap | `render_snapshot::a_wrapped_center_aligns_the_short_line_too` |
+| D-4 (align half) | `TextAlign::Start` / `End`, resolved against the direction in `Text::build` | `text::tests::start_and_end_align_resolve_against_the_direction` |
+| M-1 | `text::measure_text(&TextMeasureSpec) -> TextLayoutResult` | `text::measure_text::tests` (5) |
+| M-2 | `first_baseline`, `last_baseline`, `did_overflow_width`, `did_overflow_height`; `has_visual_overflow` covers both axes | `text::measure_text::tests::a_nowrap_line_reports_a_width_overflow` |
+| M-8 | `param_eq` compares the resolved spans | `param_eq_tests::param_eq_compares_the_rich_text_spans` |
+| M-9 | two `debug_assert!`s on strict monotonicity | `text::index_bimap::tests` (3) |
+| M-10 | `RefCell<svg::Dom>` → `parking_lot::Mutex<svg::Dom>` | `inline_drawable::tests::an_svg_drawable_can_be_drawn_from_two_threads` |
+
+Commit `2030ae8`. Full `--lib` suite at that commit: 2053 passed; `--test render_snapshot`: 33
+passed.
+
+### Blocked by skia-safe 0.99
+
+These are not open work items — the API needed does not exist in the Skia binding this crate
+builds against. Checked against
+`skia-safe-0.99.0/src/modules/paragraph/text_style.rs`, whose complete setter list is: `set_color`,
+`set_foreground_paint`, `set_foreground_color`, `set_background_paint`, `set_background_color`,
+`set_decoration*`, `set_font_style`, `set_font_arguments`, `set_font_size`, `set_font_families`,
+`set_baseline_shift`, `set_height`, `set_height_override`, `set_half_leading`,
+`set_letter_spacing`, `set_word_spacing`, `set_typeface`, `set_locale`, `set_text_baseline`,
+`set_placeholder`, `set_font_edging`, `set_subpixel`, `set_font_hinting`.
+
+- **`shadow` (the `M-6` item that is not a modifier effect)** — no `set_shadow` on the text style,
+  and no shadow field on `ParagraphStyle` either. Drawing a shadow means painting the paragraph
+  twice through an image filter, which is a different feature (and `Modifier::shadow` already
+  exists for the box).
+- **`fontFeatureSettings`** — no `set_font_features`; the only font-configuration setters are
+  families, typeface, weight/slant/width and `set_font_arguments` (variable-font axes, not
+  OpenType feature tags).
+- **`fontSynthesis`** — absent; Skia's `FontStyle` here is weight/width/slant only, with no
+  synthetic-bold/italic policy to configure.
+- **`textGeometricTransform`** (scaleX / skewX) — absent from both `TextStyle` and
+  `ParagraphStyle`. Could be approximated with a canvas matrix at paint time, but then the measured
+  size would no longer describe what is drawn.
+- **`lineHeightStyle` as a value** — free-standing centring is exposed as the boolean
+  `set_half_leading` (used for D-2), but there is no alignment/trim pair to set, so Compose's
+  `Trim` half cannot be expressed.
+- **`textIndent`** — absent.
+- **`TextOverflow.StartEllipsis` / `MiddleEllipsis`** — `ParagraphStyle` exposes only
+  `set_ellipsis(&str)`, which truncates at the END of a line. Start/middle ellipsis need per-line
+  range control that this binding does not surface.
+- **`TextAlign.Start` / `End` reaching the paragraph** — Skia has no direction-relative alignment
+  either; the enum resolves them itself (that is what D-4's fix does).
+
+### Deferred, not blocked
+
+`M-3` (`autoSize`), `M-4` (`ColorProducer` overload), `M-5` (`TextUnit::Em`) and `M-7`
+(`AnnotatedString`) are all implementable in winia; none of them needs a Skia API that is missing.
+They stay open because each is a subsystem or a payload change rather than a parameter, and nothing
+in the repo asks for them yet: `autoSize` is a fit-search loop over measure passes, `ColorProducer`
+needs the payload to evaluate a producer per frame, `Em` needs the enclosing font size carried
+through the style merge, and `AnnotatedString` needs `resolve_spans` rebuilt on a span list that
+can be sliced and read back.
 ## How to re-check
 
 The probes compiled inside `winia/src/text/` as a `#[cfg(test)]` module and were removed after
