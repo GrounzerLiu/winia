@@ -979,10 +979,7 @@ impl ApplicationHandler for AppState {
                                         let (cx, cy, ch) = if empty {
                                             (0.0, 0.0, 20.0)
                                         } else {
-                                            let tl = crate::text::TextLayout::new(
-                                                p,
-                                                p.paragraph_byte_to_real_indices.len(),
-                                            );
+                                            let tl = crate::text::TextLayout::new(p);
                                             match tl.get_cursor_position(caret_idx) {
                                                 Some(v) => v,
                                                 None => (0.0, 0.0, 20.0),

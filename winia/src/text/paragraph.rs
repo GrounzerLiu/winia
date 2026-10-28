@@ -66,13 +66,51 @@ impl Paragraph {
         self.line_breaks.contains(&range)
     }
 
+    /// Total length of the REAL (content) text, in bytes.
+    ///
+    /// This is what a caret offset is expressed in, and the bound `TextLayout` clamps to. It is not
+    /// `content.len()` on the caller's side: a `RichText` placeholder may stand for more or fewer
+    /// content bytes than the single U+FFFC it renders as, and the paragraph is the authority on
+    /// the space it actually maps.
+    pub fn text_len(&self) -> usize {
+        self.paragraph_byte_to_real_indices.right_keys().last().copied().unwrap_or(0)
+    }
+
+    /// Total length of the PARAGRAPH's own byte space (what Skia's clusters are reported in).
+    pub(crate) fn paragraph_byte_len(&self) -> usize {
+        self.paragraph_byte_to_real_indices.left_keys().last().copied().unwrap_or(0)
+    }
+
+    /// Map a REAL (content) byte index to the paragraph's byte space, clamping to the nearest
+    /// preceding mapped position when the exact one does not exist.
+    ///
+    /// The caret is an editing offset: it can arrive past the end (a field that just shrank) or
+    /// inside a multi-byte character (a click that landed mid-glyph). Compose clamps both;
+    /// returning `None` made the caret silently disappear instead.
+    pub(crate) fn paragraph_byte_for_real_index(&self, real: usize) -> usize {
+        if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_right(&real) {
+            return *mapped;
+        }
+        let mut best = 0usize;
+        for (left, right) in self
+            .paragraph_byte_to_real_indices
+            .left_keys()
+            .iter()
+            .zip(self.paragraph_byte_to_real_indices.right_keys().iter())
+        {
+            if *right > real { break; }
+            best = *left;
+        }
+        best
+    }
+
     /// Map a PARAGRAPH byte index to the real (content) byte index, clamping to the nearest
     /// preceding mapped position when the exact one does not exist.
     ///
     /// The two spaces differ wherever a placeholder stands in for text of another length — the
     /// paragraph holds one U+FFFC while the content may hold a whole word. Callers that hit-test
     /// must never panic because a cluster boundary fell inside such a span.
-    fn real_index_for_paragraph_byte(&self, paragraph_byte: usize) -> usize {
+    pub(crate) fn real_index_for_paragraph_byte(&self, paragraph_byte: usize) -> usize {
         if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(&paragraph_byte) {
             return *mapped;
         }

@@ -285,8 +285,8 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                     let (ax, ay) = node_abs_position(nodes, r, nodes[anchor_node].id);
                     let (pad_s, pad_t, pad_e, _) = nodes[anchor_node].modifier.get_padding_sides();
                     let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-                    let tl = crate::text::TextLayout::new(para, 0);
-                    let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
+                    let tl = crate::text::TextLayout::new(para);
+                    let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
                     let edit = crate::text::field::offset_mapping_for_node(nodes, r, anchor_node)
                         .map(|m| m.transformed_to_original(hit))
                         .unwrap_or(hit);

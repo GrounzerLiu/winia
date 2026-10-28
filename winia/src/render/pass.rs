@@ -928,7 +928,7 @@ pub(super) fn render_pass1(
                         // ⚠ length = 文本真实字节数（空文本为 0 → 空特判）——
                         // 映射表长度恒 ≥1（含 end-of-text 映射），传它空文本
                         // 时走主路径 get_by_right(0) 失败 → 光标不显示
-                        let tl = crate::text::TextLayout::new(para, content.len());
+                        let tl = crate::text::TextLayout::new(para);
                         // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
                         // （密码掩码/格式化输入显示文本 ≠ 编辑文本；
                         // TextFieldVisual 在容器——向上找）

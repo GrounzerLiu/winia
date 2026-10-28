@@ -327,8 +327,8 @@ pub(crate) fn handle_pointer_down(
             // position is off by the padding and the cursor jumps to the wrong place).
             let (pad_s, pad_t, pad_e, _) = nodes[ai].modifier.get_padding_sides();
             let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-            let tl = crate::text::TextLayout::new(para, 0);
-            let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
+            let tl = crate::text::TextLayout::new(para);
+            let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
             // The result is a display-text offset (the paragraph holds the displayed text), so it
             // goes back through the OffsetMapping to an editing offset (password masking / formatted
             // input).
@@ -734,14 +734,14 @@ pub(crate) fn handle_pointer_move(
                         // padding).
                         let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
                         let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-                        let tl = crate::text::TextLayout::new(para, 0);
+                        let tl = crate::text::TextLayout::new(para);
                         {
                             let down = pw.input.down.as_ref().unwrap();
                             // A non-selectable node (not registered with any SelectionContainer) → do not
                             // update the selection (wrapped in `if let` rather than `else return`, because a
                             // return would skip `dispatch_ptr_event`/`request_redraw`).
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
-                                let current_index = tl.get_closest_grapheme_cluster_cluster_at(
+                                let current_index = tl.get_closest_grapheme_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 // Display offset → editing offset (password masking / formatted input;
                                 // `TextFieldVisual` is on the container, so look upward).
