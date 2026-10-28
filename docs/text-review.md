@@ -345,6 +345,9 @@ reader can re-check.
   (measurement + `map_x`/`unmap_x` inverse),
   `render_snapshot::a_geometric_transform_scales_the_painted_run` (paint). Demo: the paint card
   shows a scaled and a skewed run.
+  Limitation, recorded: `skew_x` leans the glyphs at paint and is carried by `map_x`/`unmap_x`, but
+  it is NOT added to the measured width — a skewed run can therefore ink a little past its box, and
+  a box that must contain the lean needs padding. `scale_x` is exact.
   Still missing: `lineHeightStyle` (`alignment` + `trim`). Only the boolean `set_half_leading` exists
   (spent on D-2's centring) and there is no `alignment`/`trim` pair; the trim half also changes the
   box height that the caret and the overflow clip read, so it needs the same geometry pass the
