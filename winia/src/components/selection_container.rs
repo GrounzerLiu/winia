@@ -52,10 +52,15 @@ impl SelectionContainer {
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 ctx.set_selection_registrar(registrar.clone());
                 // content 闭包自动成为组合 scope（与 Column/Row/Stack/Button 一致）
+                // No table reset on Enter: a text whose parameters did not change Skips, so it never
+                // re-registers, and wiping here dropped it (measured before this fix: a State read in
+                // the body took `total` from 10 to 0 and the selection from Some to None). Offsets are
+                // rebuilt from the layout tree at the end of every layout pass instead —
+                // `Composer::reindex_selection_registrars`, which keeps a skipped text's segment and
+                // drops one whose node actually left the tree.
                 match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
-                        registrar.reset_offsets();
                         content(ctx);
                     }
                 }
@@ -130,6 +135,53 @@ pub(crate) fn compute_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+/// End-to-end T-1 regression: a container that re-enters while its texts Skip keeps its
+    /// segments, and the selection still resolves.
+    ///
+    /// Before the fix `reset_offsets()` ran on every `GroupStatus::Enter`, so the second frame had
+    /// an empty table (`total=0`) and `build_selection()` returned None.
+    #[test]
+    fn a_container_reentering_with_skipped_texts_keeps_its_selection() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+
+        let head = State::new("hello");
+        let tick = State::new(0i32);
+        let seen: std::sync::Arc<std::sync::Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let mut composer = Composer::new();
+        let mut totals = Vec::new();
+        for frame in 0..2 {
+            let seen = seen.clone();
+            let head_value = head.get();
+            composer.compose(|ctx| {
+                SelectionContainer::new().build(ctx, |ctx| {
+                    *seen.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                    // Reading the state INSIDE the container body is what makes the container's own
+                    // group re-enter next frame — and the two texts below keep their parameters, so
+                    // they Skip instead of re-registering. This is the exact shape that lost the
+                    // table before the fix.
+                    let _ = tick.get();
+                    crate::layout::components::Column::new().build(ctx, |ctx| {
+                        crate::components::Text::new(head_value.clone()).build(ctx);
+                        crate::components::Text::new("world").build(ctx);
+                    });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 400.0));
+            let reg = seen.lock().unwrap().clone().expect("registrar captured");
+            totals.push(reg.total_text_len());
+            if frame == 0 { tick.set(1); }
+        }
+        assert_eq!(totals, vec![10, 10], "the skipped texts must keep their segments");
+        let reg = seen.lock().unwrap().clone().unwrap();
+        reg.set_selection(0, reg.total_text_len());
+        assert_eq!(
+            reg.build_selection().map(|s| s.text().to_string()),
+            Some("helloworld".to_string()),
+            "the selection still resolves after the container re-entered"
+        );
+    }
 
     #[test]
     fn test_new_registrar_no_selection() {
@@ -247,17 +299,39 @@ mod tests {
         assert!(!*called.lock().unwrap());
     }
 
+    /// `reindex` keeps the segments the tree still reports, in the order the tree reports them.
+    ///
+    /// The old behaviour (a full clear on container re-entry) lost every text that skipped — see
+    /// `docs/text-review.md` T-1.
     #[test]
-    fn test_reset_offsets_clears_and_restarts() {
+    fn test_reindex_orders_by_tree_and_drops_dead_segments() {
         let reg = SelectionRegistrar::new();
         reg.register(1, "abcdefghij");
         reg.register(2, "klmnopqrstuvwxy");
         assert_eq!(reg.total_text_len(), 25);
-        reg.reset_offsets();
-        assert_eq!(reg.total_text_len(), 0);
-        // re-register starts from offset 0
-        reg.register(3, "12345");
-        assert_eq!(reg.segment_info(3), Some((0, 5)));
+        // The tree reports them in the opposite order and no longer has slot 1.
+        reg.reindex(&[2]);
+        assert_eq!(reg.segment_info(2), Some((0, 15)), "the survivor moves to offset 0");
+        assert_eq!(reg.segment_info(1), None, "a slot the tree dropped is gone");
+        assert_eq!(reg.total_text_len(), 15, "no hole is left behind");
+    }
+
+    /// A text inserted between two existing ones lands in document order, not at the end.
+    #[test]
+    fn test_reindex_follows_document_order() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "AAA");
+        reg.register(3, "CCC");
+        assert_eq!(reg.segment_info(3), Some((3, 3)), "registered third, placed second");
+        reg.register(2, "BBB");
+        assert_eq!(reg.segment_info(2), Some((6, 3)), "registration order appends");
+        // Layout says the document order is 1, 2, 3.
+        reg.reindex(&[1, 2, 3]);
+        assert_eq!(reg.segment_info(1), Some((0, 3)));
+        assert_eq!(reg.segment_info(2), Some((3, 3)), "the inserted text sits in the middle");
+        assert_eq!(reg.segment_info(3), Some((6, 3)));
+        reg.set_selection(0, reg.total_text_len());
+        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("AAABBBCCC".to_string()));
     }
 
     #[test]

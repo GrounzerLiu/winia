@@ -126,10 +126,38 @@ impl SelectionRegistrar {
         inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
     }
 
-    pub(crate) fn reset_offsets(&self) {
+    /// Recompute every segment's offset from the ORDER the layout tree reports, and drop the
+    /// segments whose slot is no longer in the tree.
+    ///
+    /// This is the one place offsets are authoritative. A container re-entering composition does NOT
+    /// mean its texts re-run — a `Text` whose parameters did not change Skips, and a skipped text
+    /// never calls [`Self::register`]. Wiping the table on re-entry therefore lost every text that
+    /// skipped (measured: a State read in the container body took `total` from 10 to 0 and the
+    /// selection from Some to None). Rebuilding from the tree instead keeps a skipped text's
+    /// segment and still drops a text that actually left the tree, because the walk sees only live
+    /// nodes.
+    ///
+    /// Order is document order — the order Compose's `SelectionRegistrarImpl` gets from layout —
+    /// not registration order: a text inserted between two existing ones must land between them.
+    /// Offsets are contiguous again afterwards, so a shrink does not leave a hole.
+    pub(crate) fn reindex(&self, ordered_slots: &[u64]) {
         let mut inner = self.inner.lock();
-        inner.next_global_offset = 0;
-        inner.segments.clear();
+        let mut next_offset = 0usize;
+        let mut rebuilt: HashMap<u64, RegisteredSegment> = HashMap::with_capacity(ordered_slots.len());
+        for &slot_key in ordered_slots {
+            if let Some(mut seg) = inner.segments.remove(&slot_key) {
+                seg.global_offset = next_offset;
+                next_offset += seg.text_len;
+                rebuilt.insert(slot_key, seg);
+            }
+        }
+        // Anything left in `segments` belongs to a slot the tree did not report: it left.
+        inner.segments = rebuilt;
+        inner.next_global_offset = next_offset;
+        // The selection space just changed under the stored range; clamp instead of leaving a range
+        // that points past the end (`build_selection` would clamp anyway, `selected_range` would not).
+        if let Some(s) = inner.selection_start { inner.selection_start = Some(s.min(next_offset)); }
+        if let Some(e) = inner.selection_end { inner.selection_end = Some(e.min(next_offset)); }
     }
 
     pub fn total_text_len(&self) -> usize {

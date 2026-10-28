@@ -1407,6 +1407,11 @@ impl Composer {
             self.rebuild_layout_reverse_deps();
         }
 
+        // Selection registration lives on the nodes, not in composition: a text that Skips never
+        // re-registers, so the table can only be ordered/pruned from the tree. Do it here, after the
+        // walk, where every live node is known and document order is the arena's child order.
+        self.reindex_selection_registrars();
+
         self.cleanup_signal_subscriptions();
         self.debug_assert_dependency_graphs();
         self.pending_states
@@ -1416,6 +1421,36 @@ impl Composer {
         dependency_frame.commit();
         layout_transaction.commit();
         self.dispatch_layout_callbacks();
+    }
+
+    /// Rebuild every selection registrar's offset table from the layout tree, in document order.
+    ///
+    /// A text leaf carries the registrar it registered into (`LayoutNode::registrar`), so the walk
+    /// sees exactly the live text nodes of each container — skipped ones included, removed ones
+    /// absent. Each registrar gets its own slot list, in the order the children are visited.
+    fn reindex_selection_registrars(&mut self) {
+        let Some(root) = self.arena.root else { return };
+        // Cheap guard: most trees have no selection at all, and the walk allocates per registrar.
+        if !self.arena.nodes.iter().any(|n| n.registrar.borrow().is_some()) {
+            return;
+        }
+        let mut groups: Vec<(crate::text::selection::SelectionRegistrar, Vec<u64>)> = Vec::new();
+        let mut stack = vec![root];
+        // Pre-order, children in document order: push them reversed so the pop order is forward.
+        while let Some(idx) = stack.pop() {
+            let node = &self.arena.nodes[idx];
+            if let Some(reg) = node.registrar.borrow().as_ref() {
+                match groups.iter_mut().find(|(r, _)| r.is_same(reg)) {
+                    Some((_, slots)) => slots.push(node.slot_key),
+                    None => groups.push((reg.clone(), vec![node.slot_key])),
+                }
+            }
+            if let Some(sub) = node.subcomposed_child { stack.push(sub); }
+            for &child in node.children.iter().rev() { stack.push(child); }
+        }
+        for (reg, slots) in groups {
+            reg.reindex(&slots);
+        }
     }
 
     /// Fire the position callbacks whose box changed this pass, then serve bring-into-view requests.
