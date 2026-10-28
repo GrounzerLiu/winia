@@ -375,7 +375,10 @@ pub(super) fn draw_text(
         max_width - para.max_intrinsic_width()
     };
     let x_offset = match align {
-        crate::text::TextAlign::Left | crate::text::TextAlign::Justify => x,
+        crate::text::TextAlign::Left
+        | crate::text::TextAlign::Justify
+        | crate::text::TextAlign::Start
+        | crate::text::TextAlign::End => x,
         crate::text::TextAlign::Center => x + slack / 2.0,
         crate::text::TextAlign::Right => x + slack,
     };

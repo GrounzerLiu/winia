@@ -209,14 +209,14 @@ impl Text {
         let final_font_size = self.font_size.or(style.font_size).unwrap_or(TextUnit::Sp(crate::unit::Sp(14.0)));
         let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
         let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
-        let final_align = self.text_align.or(style.text_align).unwrap_or_else(|| {
-            // 默认对齐随布局方向（对标 Compose：Rtl 默认右对齐）
-            if crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl {
-                TextAlign::Right
-            } else {
-                TextAlign::Left
-            }
-        });
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
+        let final_align = self.text_align.or(style.text_align).map(|a| match a {
+            // Compose's `TextAlign.Start` / `End` are direction-relative; the measurement and paint
+            // layers only understand physical edges, and the direction is known here.
+            TextAlign::Start => if rtl { TextAlign::Right } else { TextAlign::Left },
+            TextAlign::End => if rtl { TextAlign::Left } else { TextAlign::Right },
+            other => other,
+        }).unwrap_or_else(|| if rtl { TextAlign::Right } else { TextAlign::Left });
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
         let final_soft_wrap = self.soft_wrap.or(style.soft_wrap).unwrap_or(true);
@@ -510,6 +510,44 @@ mod tests {
             result.text_size.width, 12.0,
             "text_size stays the paragraph's own width: {result:?}"
         );
+    }
+    /// `TextAlign::Start` / `End` resolve against the layout direction at build time.
+    ///
+    /// They never reach the payload, which is why the paint path keeps working unchanged; this
+    /// pins the resolution itself.
+    #[test]
+    fn start_and_end_align_resolve_against_the_direction() {
+        use crate::layout::LayoutDirection;
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut seen = Vec::new();
+        for (direction, align) in [
+            (LayoutDirection::Ltr, TextAlign::Start),
+            (LayoutDirection::Ltr, TextAlign::End),
+            (LayoutDirection::Rtl, TextAlign::Start),
+            (LayoutDirection::Rtl, TextAlign::End),
+        ] {
+            composer.compose(|ctx| {
+                crate::layout::direction::provides(direction, || {
+                    Text::new("hi").align(align).build(ctx);
+                });
+            });
+            let nodes = composer.arena_nodes();
+            let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+            let resolved = node
+                .modifier
+                .elements()
+                .iter()
+                .find_map(|el| match el {
+                    crate::modifier::ModifierElement::TextContent { align, .. } => Some(*align),
+                    _ => None,
+                })
+                .expect("the payload carries an alignment");
+            seen.push((direction, align, resolved));
+        }
+        assert_eq!(seen[0].2, TextAlign::Left, "Start is left in LTR");
+        assert_eq!(seen[1].2, TextAlign::Right, "End is right in LTR");
+        assert_eq!(seen[2].2, TextAlign::Right, "Start is right in RTL");
+        assert_eq!(seen[3].2, TextAlign::Left, "End is left in RTL");
     }
     /// The decoration and the family reach the payload (the plain leaf used to ignore both).
     #[test]

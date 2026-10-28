@@ -1012,6 +1012,12 @@ pub(crate) fn measure_node_inner(
                     text_size: measured.text_size,
                     line_count: measured.line_count,
                     did_exceed_max_lines: measured.did_exceed_max_lines,
+                    first_baseline: measured.first_baseline,
+                    last_baseline: measured.last_baseline,
+                    // Compose's `didOverflowWidth` / `didOverflowHeight`: the laid-out text is
+                    // wider or taller than the box it was measured into.
+                    did_overflow_width: measured.longest_line > final_text_size.width + 0.5,
+                    did_overflow_height: measured.size.height > final_text_size.height + 0.5,
                 });
             }
             final_text_size

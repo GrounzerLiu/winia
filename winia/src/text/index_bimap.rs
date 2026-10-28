@@ -22,8 +22,23 @@ impl IndexBiMap {
         }
     }
 
-    /// 插入一对映射。left 和 right 必须各自单调递增。
+    /// Insert one pair. Both keys must be strictly increasing.
+    ///
+    /// The lookups are binary searches, so an out-of-order or duplicated pair silently corrupts
+    /// every later lookup instead of failing. The check is a `debug_assert!`: the builder inserts
+    /// once per character on the measure path, so a release-mode scan would be a real cost for a
+    /// bug that can only come from the builder itself.
     pub fn insert(&mut self, left: usize, right: usize) {
+        debug_assert!(
+            self.left.last().is_none_or(|last| *last < left),
+            "IndexBiMap left keys must strictly increase: {left} after {:?}",
+            self.left.last()
+        );
+        debug_assert!(
+            self.right.last().is_none_or(|last| *last < right),
+            "IndexBiMap right keys must strictly increase: {right} after {:?}",
+            self.right.last()
+        );
         self.left.push(left);
         self.right.push(right);
     }
@@ -81,5 +96,39 @@ impl IndexBiMap {
 impl Default for IndexBiMap {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IndexBiMap;
+
+    #[test]
+    fn an_increasing_insert_round_trips() {
+        let mut map = IndexBiMap::new();
+        map.insert(0, 0);
+        map.insert(1, 1);
+        map.insert(3, 2);
+        assert_eq!(map.get_by_left(&3), Some(&2));
+        assert_eq!(map.get_by_right(&2), Some(&3));
+        assert!(map.get_by_left(&2).is_none());
+    }
+
+    /// A repeated key breaks the binary search, so the builder must not be able to insert one
+    /// silently. `debug_assert!` makes the bug loud in tests and free in release.
+    #[test]
+    #[should_panic(expected = "must strictly increase")]
+    fn a_repeated_left_key_is_rejected_in_debug_builds() {
+        let mut map = IndexBiMap::new();
+        map.insert(4, 0);
+        map.insert(4, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "must strictly increase")]
+    fn a_backwards_right_key_is_rejected_in_debug_builds() {
+        let mut map = IndexBiMap::new();
+        map.insert(0, 5);
+        map.insert(1, 4);
     }
 }

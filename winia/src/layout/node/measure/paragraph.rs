@@ -46,9 +46,22 @@ pub(crate) fn build_plain_paragraph(
         para_style.set_ellipsis("\u{2026}");
     }
 
-    // justify alignment
-    if align == crate::text::TextAlign::Justify {
-        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+    // Alignment. When the WIDTH MATTERS the paragraph knows the box, so Skia can align every line
+    // inside it — which is the only way a wrapped block's short lines sit under the right edge
+    // (Compose's `textAlign` is per line). When it does not (a nowrap, non-ellipsizing paragraph
+    // laid out at an infinite width) there is no box to align in, and the paint origin is shifted
+    // instead: see the text branch in `render::pass`.
+    if width_matters {
+        match align {
+            crate::text::TextAlign::Center => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Center); }
+            crate::text::TextAlign::Right => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Right); }
+            crate::text::TextAlign::Justify => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify); }
+            // `Start`/`End` never reach a built paragraph (`Text::build` resolves them), but a
+            // caller can hand one straight to the builder, so treat them as the physical default.
+            crate::text::TextAlign::Left
+            | crate::text::TextAlign::Start
+            | crate::text::TextAlign::End => {}
+        }
     }
 
     // A nowrap paragraph is laid out at an infinite width so nothing wraps — unless it ellipsizes, in
@@ -76,6 +89,12 @@ pub(crate) fn build_plain_paragraph(
         if lh > 0.0 && font_size > 0.0 {
             text_style.set_height(lh / font_size);
             text_style.set_height_override(true);
+            // Compose's default `LineHeightStyle(alignment = Center, trim = None)` splits the extra
+            // leading evenly above and below the glyphs (M3's `TypographyTokens.kt:329-330`).
+            // Skia's plain `set_height` puts ALL of it above the text — measured at 16 sp with a
+            // 24 dp line height, the baseline landed at 19.47 in a 24 dp box; `half_leading`
+            // centres it (see D-2 in docs/text-review.md).
+            text_style.set_half_leading(true);
         }
     }
     // A font family, when the caller named one (Compose's `fontFamily`).
@@ -181,6 +200,11 @@ pub(crate) struct TextMeasure {
     pub text_size: Size,
     pub line_count: usize,
     pub did_exceed_max_lines: bool,
+    /// Width of the widest laid-out line, used for `didOverflowWidth`.
+    pub longest_line: f32,
+    /// The first and last alphabetic baselines relative to the box top.
+    pub first_baseline: f32,
+    pub last_baseline: f32,
     pub on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
 }
 
@@ -191,6 +215,9 @@ pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> TextM
             text_size: Size::ZERO,
             line_count: 0,
             did_exceed_max_lines: false,
+            longest_line: 0.0,
+            first_baseline: 0.0,
+            last_baseline: 0.0,
             on_text_layout: None,
         };
     };
@@ -216,9 +243,25 @@ pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> TextM
         size.height = size.height.max(line_height * min_lines as f32);
     }
 
-    *node.cached_paragraph.borrow_mut() = Some(para);
+    let longest_line = para.longest_line();
+    let first_baseline = para.alphabetic_baseline();
+    let last_baseline = if line_count <= 1 {
+        first_baseline
+    } else {
+        para.get_line_metrics().last().map(|m| m.baseline as f32).unwrap_or(first_baseline)
+    };
 
-    TextMeasure { size, text_size, line_count, did_exceed_max_lines, on_text_layout }
+    *node.cached_paragraph.borrow_mut() = Some(para);
+    TextMeasure {
+        size,
+        text_size,
+        line_count,
+        did_exceed_max_lines,
+        longest_line,
+        first_baseline,
+        last_baseline,
+        on_text_layout,
+    }
 }
 
 /// The text element's measure-side extras: how many lines to reserve, and the `onTextLayout` sink.
@@ -277,8 +320,15 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             // Only `Justify` reaches the paragraph: `Center`/`Right` are applied by shifting the
             // paint origin, exactly like the plain leaf (see D-3 in docs/text-review.md — doing
             // both would double-apply the shift).
-            if *align == crate::text::TextAlign::Justify {
-                para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+            if width_matters {
+                match align {
+                    crate::text::TextAlign::Center => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Center); }
+                    crate::text::TextAlign::Right => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Right); }
+                    crate::text::TextAlign::Justify => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify); }
+                    crate::text::TextAlign::Left
+                    | crate::text::TextAlign::Start
+                    | crate::text::TextAlign::End => {}
+                }
             }
             let layout_width = if width_matters { max_width.min(f32::MAX) } else { f32::MAX };
             let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
@@ -372,6 +422,8 @@ fn styled_for_span(s: &RichSpanStyle, line_height: Option<f32>) -> SkTextStyle {
         if lh > 0.0 && s.height_multiple == 0.0 && s.font_size > 0.0 {
             ts.set_height(lh / s.font_size);
             ts.set_height_override(true);
+            // Centred leading, the same rule the plain leaf uses (D-2).
+            ts.set_half_leading(true);
         }
     }
     ts

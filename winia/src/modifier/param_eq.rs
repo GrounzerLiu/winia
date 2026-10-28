@@ -166,14 +166,19 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar,
                             align: aal, max_lines: aml, overflow: aov, soft_wrap: asw,
-                            line_height: alh, min_lines: amin, .. },
+                            line_height: alh, min_lines: amin, spans: aspans, .. },
          RichTextContent { content: bc, drawables: bd, drawable_ranges: br,
                             align: bal, max_lines: bml, overflow: bov, soft_wrap: bsw,
-                            line_height: blh, min_lines: bmin, .. }) => {
+                            line_height: blh, min_lines: bmin, spans: bspans, .. }) => {
             // Every paragraph parameter takes part: a changed `max_lines` or `overflow` has to
             // re-measure just like a changed `content` does. Before this, only content, the
             // drawable count and the ranges were compared.
-            ac == bc && ad.len() == bd.len() && ar == br
+            //
+            // The resolved spans take part too (T-3's M-8): a rebuild that only flips `.bold(..)`
+            // produces an equal payload otherwise, and the leaf then never re-measures — measured
+            // before: toggling bold left both the payload's weight and the cached paragraph's
+            // fonts and width unchanged.
+            ac == bc && ad.len() == bd.len() && ar == br && aspans == bspans
                 && aal == bal && aml == bml && aov == bov && asw == bsw && alh == blh
                 && amin == bmin
         }

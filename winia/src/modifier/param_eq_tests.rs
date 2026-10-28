@@ -571,3 +571,63 @@
         assert_eq!(reps.len(), 2, "宽度变化应再次回调");
         assert_eq!(reps[1].0, 300.0, "第二次上报应反映新宽度");
     }
+
+    /// A span-only edit has to re-enter: the resolved spans are the parameter, not a cache of it.
+    ///
+    /// Before this they were compared as "same" on purpose, so flipping `.bold(..)` between frames
+    /// produced an equal payload and the leaf kept its old paragraph (measured: identical width and
+    /// fonts across frames).
+    #[test]
+    fn param_eq_compares_the_rich_text_spans() {
+        use crate::text::{FontSlant, FontWeight, RichSpanStyle};
+        use crate::graphics::Color;
+        let span = |weight: FontWeight| RichSpanStyle {
+            start: 0,
+            end: 3,
+            font_size: 16.0,
+            color: Color::BLACK,
+            font_weight: weight,
+            font_style: FontSlant::Upright,
+            underline: false,
+            overline: false,
+            strikethrough: false,
+            decoration_color: None,
+            decoration_style: None,
+            decoration_mode: None,
+            baseline_shift: 0.0,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            height_multiple: 0.0,
+            half_leading: false,
+            font_families: Vec::new(),
+            font_width: 5,
+            font_edging: None,
+            font_hinting: None,
+            subpixel: false,
+            foreground_color: None,
+            background: None,
+            locale: None,
+        };
+        let rich = |spans: Vec<RichSpanStyle>| {
+            Modifier::new().push(ModifierElement::RichTextContent {
+                content: "abc".to_string(),
+                drawables: Vec::new(),
+                drawable_ranges: Vec::new(),
+                spans,
+                align: crate::text::TextAlign::Left,
+                max_lines: usize::MAX,
+                overflow: crate::text::TextOverflow::Clip,
+                soft_wrap: true,
+                line_height: None,
+                min_lines: 1,
+            })
+        };
+        let normal = rich(vec![span(FontWeight::NORMAL)]);
+        let same = rich(vec![span(FontWeight::NORMAL)]);
+        let bold = rich(vec![span(FontWeight::BOLD)]);
+        assert!(normal.param_eq(&same), "the same span list is the same parameter");
+        assert!(
+            !normal.param_eq(&bold),
+            "a weight change inside a span must re-enter the leaf"
+        );
+    }

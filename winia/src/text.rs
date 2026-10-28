@@ -13,9 +13,11 @@ mod paragraph;
 mod paragraph_builder;
 mod text_layout;
 mod inline_drawable;
+mod measure_text;
 
 pub use style::{FontSlant, FontWeight, TextAlign, TextDecoration, TextOverflow, TextStyle};
 pub use layout_result::TextLayoutResult;
+pub use measure_text::{measure_text, TextMeasureSpec};
 pub use index_bimap::IndexBiMap;
 pub use paragraph::{build_plain_paragraph, Paragraph};
 pub use paragraph_builder::ParagraphBuilder;

@@ -435,6 +435,7 @@ impl RichText {
         // 注册到选区容器（支持文本选中）——仅在 SelectionContainer 的 provides
         // 作用域内注册；register 须在 move content 之前（借用），
         // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         let key = ctx.next_key();
         let reg_for_node = {
             if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
@@ -448,7 +449,11 @@ impl RichText {
             drawables,
             drawable_ranges,
             spans,
-            align: self.align,
+            align: match self.align {
+                crate::text::TextAlign::Start => if rtl { crate::text::TextAlign::Right } else { crate::text::TextAlign::Left },
+                crate::text::TextAlign::End => if rtl { crate::text::TextAlign::Left } else { crate::text::TextAlign::Right },
+                other => other,
+            },
             max_lines: self.max_lines,
             overflow: self.overflow,
             soft_wrap: self.soft_wrap,

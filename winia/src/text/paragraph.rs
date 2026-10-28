@@ -457,6 +457,38 @@ mod paragraph_tests {
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
     use crate::text::ParagraphBuilder;
 
+    /// The extra leading is centred instead of all sitting above the glyphs.
+    ///
+    /// `set_height` alone put every extra pixel above the text: measured baseline 19.47 in a 24 dp
+    /// box at 16 sp. `set_half_leading` moves it to 18.625. Compose's `LineHeightStyle(Center)`
+    /// arithmetic over the same metrics gives 17.27 + 1.5 = 18.77, so the residual drops from 0.70
+    /// to 0.145 — close, but Skia's half-leading splits by its own ascent/descent, not by half of
+    /// the naive difference, which is why this is not an exact match.
+    #[test]
+    fn a_line_height_centres_the_leading() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            crate::components::Text::new("IIII")
+                .font_size(16.0)
+                .line_height(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0)))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+        let paragraph = node.cached_paragraph.borrow();
+        let paragraph = paragraph.as_ref().expect("measured");
+        let baseline = paragraph.alphabetic_baseline();
+        assert!(
+            (baseline - 18.625).abs() < 0.05,
+            "centred leading puts the baseline at 18.625, not {} (uncentred it was 19.47)",
+            baseline
+        );
+        assert!(
+            baseline < 19.0,
+            "the leading must no longer sit entirely above the glyphs: {baseline}"
+        );
+    }
     /// `get_actual_text_range` answers in CONTENT bytes.
     ///
     /// Skia reports paragraph bytes for this call; the wrapper went through `get_index`, which

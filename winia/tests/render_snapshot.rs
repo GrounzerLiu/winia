@@ -108,6 +108,46 @@ fn text_renders_something() {
     assert!(dark_pixels > 5, "expected dark text pixels, found {dark_pixels}");
 }
 
+/// A wrapped block aligns EACH line, which is what Compose's `textAlign` means.
+///
+/// The old model laid one full-width paragraph out and shifted the paint origin, so a short second
+/// line stayed at the left edge under the first line's centre. Measured then: a 300 dp box with
+/// "First line is fairly long\nshort" reported line 1 at 95..204 and line 2 at 94..121.
+#[test]
+fn a_wrapped_center_aligns_the_short_line_too() {
+    let (mut surface, _) = render_ui(300.0, 80.0, winia::app_root!(|ctx| {
+        Text::new("First line is fairly long\nshort")
+            .font_size(16.0)
+            .color(Color::BLACK)
+            .align(winia::text::TextAlign::Center)
+            .modifier(Modifier::new().fill_max_width())
+            .build(ctx);
+    }));
+    // Ink span per row band.
+    let mut rows: Vec<(i32, i32, i32)> = Vec::new(); // (y, first_x, last_x)
+    for y in 0..80 {
+        let (mut first, mut last) = (-1, -1);
+        for x in 0..300 {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r < 200 && g < 200 && b < 200 {
+                if first < 0 { first = x; }
+                last = x;
+            }
+        }
+        if first >= 0 { rows.push((y, first, last)); }
+    }
+    // The two lines are separated by a blank row band; take the last row of each band.
+    let line1 = rows.iter().find(|(y, _, _)| *y > 4).map(|(_, f, l)| (*f, *l)).expect("first line ink");
+    let line2 = rows.iter().rev().find(|(y, _, _)| *y > 20).map(|(_, f, l)| (*f, *l)).expect("second line ink");
+    assert!(
+        line2.0 > 100,
+        "the short second line must be centred under the first, not left-aligned: line1={line1:?} line2={line2:?}"
+    );
+    assert!(
+        (line1.0 as i32 + line1.1 as i32) / 2 > 100,
+        "the first line stays centred: {line1:?}"
+    );
+}
 /// `RichText` aligns its painted block, the way the plain leaf does (a paint-origin shift).
 ///
 /// `align` did not exist before: the rich measure path built a bare `ParagraphStyle`, so there was

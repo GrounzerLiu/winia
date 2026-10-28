@@ -1000,7 +1000,10 @@ impl ApplicationHandler for AppState {
                                             (abs.0 + pad_x) as f64
                                         } else {
                                             let x_off = match align {
-                                                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => abs.0,
+                                                crate::text::TextAlign::Left
+                                                | crate::text::TextAlign::Justify
+                                                | crate::text::TextAlign::Start
+                                                | crate::text::TextAlign::End => abs.0,
                                                 crate::text::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
                                                 crate::text::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
                                             };

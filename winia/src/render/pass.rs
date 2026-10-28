@@ -83,6 +83,15 @@ fn capture_item(
 
 /// Draw the retained exit pictures after the live tree. Each store owns its own exits, so two
 /// lists cannot steal each other's ghosts.
+/// Whether a text paragraph is laid out at a KNOWN width, which is when Skia can align its lines.
+///
+/// Mirrors the `width_matters` rule in `build_plain_paragraph` (Compose's `TextDelegate`: the width
+/// matters when the text wraps or when it ellipsizes). Kept next to the draw branch so the two
+/// cannot drift apart: aligning inside the paragraph AND shifting the origin would double-apply the
+/// offset.
+fn width_matters_for(soft_wrap: bool, overflow: crate::text::TextOverflow) -> bool {
+    soft_wrap || overflow == crate::text::TextOverflow::Ellipsis
+}
 fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAnimationHost) {
     let mut store = host.store().lock().unwrap_or_else(|e| e.into_inner());
     let mut finished = Vec::new();
@@ -868,13 +877,21 @@ pub(super) fn render_pass1(
             } else {
                 para.max_width().min(para.max_intrinsic_width())
             };
-            let slack = if soft_wrap {
-                (content_w - drawn_width).max(0.0)
+            // The paragraph aligned itself when it knew the box (see `build_plain_paragraph`);
+            // shifting the origin as well would double-apply. Only a paragraph laid out at an
+            // infinite width — nowrap and not ellipsizing — needs the shift.
+            let aligns_in_paragraph = width_matters_for(soft_wrap, overflow);
+            let slack = if aligns_in_paragraph {
+                0.0
             } else {
                 content_w - drawn_width
             };
             let x_off = match align {
-                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
+                crate::text::TextAlign::Left
+                | crate::text::TextAlign::Justify
+                // Resolved before the payload, but a leaf built by hand may carry one.
+                | crate::text::TextAlign::Start
+                | crate::text::TextAlign::End => content_x,
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };
@@ -997,13 +1014,16 @@ pub(super) fn render_pass1(
             } else {
                 para.max_width().min(para.max_intrinsic_width())
             };
-            let slack = if rich_soft_wrap {
-                (content_w - drawn_width).max(0.0)
+            let slack = if width_matters_for(rich_soft_wrap, rich_overflow) {
+                0.0
             } else {
                 content_w - drawn_width
             };
             let rich_x = match rich_align {
-                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
+                crate::text::TextAlign::Left
+                | crate::text::TextAlign::Justify
+                | crate::text::TextAlign::Start
+                | crate::text::TextAlign::End => content_x,
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };

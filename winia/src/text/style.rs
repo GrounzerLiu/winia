@@ -45,8 +45,12 @@ impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
 // ═══════════════════════════════════════════════════════════
 
 /// 文本对齐方式
+///
+/// Compose's `TextAlign`. `Start`/`End` are resolved against the layout direction when a leaf is
+/// built (`Text::build`), so the payload and the paint path only ever see the physical four — which
+/// is what makes them safe under RTL without every call site having to ask for the direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextAlign { Left, Center, Right, Justify }
+pub enum TextAlign { Left, Center, Right, Justify, Start, End }
 impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
 
 /// Compose's `TextDecoration`: a set of line decorations, combinable with `|` (`+` in Kotlin).
