@@ -275,7 +275,7 @@ reader can re-check.
   Test: `render_snapshot::start_and_middle_ellipsis_move_the_marker_off_the_end` — all three modes
   stay inside the 120 dp box, and the start mode's leftmost ink sits to the right of the end mode's
   (it is the marker's dots, not the first letter); with the truncation disabled the two coincide
-  (`start=0 end=0`) and the test fails. Demo: the overflow row shows all five modes.
+  (`start=0 end=0`) and the test fails. Demo: the overflow row shows all five modes. Commit e3b3a71.
 - [x] **D-5 — no `ColorProducer` overload; colour stays a value (deliberate, closed 2026-10-29).**
   `material3/Text.kt` has a second `Text` whose `color` is a producer, so a frequently-changing
   colour does not recompose. winia's `TextContent` carries a `Color` VALUE and the payload compares
