@@ -108,6 +108,70 @@ fn text_renders_something() {
     assert!(dark_pixels > 5, "expected dark text pixels, found {dark_pixels}");
 }
 
+/// `TextOverflow::Clip` clips the text to its own box; `Visible` is the one value that spills.
+///
+/// Measured before this fix: in a 40 dp box with 16 sp nowrap text, both painted ink out to
+/// x=176 on a 200 px surface; only `Ellipsis` stopped at 25. Compose clips whenever its layout
+/// overflowed (`TextStringSimpleNode.kt:443-448`), which is exactly the `Clip` case.
+#[test]
+fn text_overflow_clip_stops_ink_at_the_box_and_visible_does_not() {
+    fn ink_right_edge(overflow: winia::text::TextOverflow) -> i32 {
+        let (mut surface, _) = render_ui(200.0, 30.0, winia::app_root!(move |ctx| {
+            Text::new("WWWWWWWWWWWW")
+                .font_size(16.0)
+                .color(Color::BLACK)
+                .soft_wrap(false)
+                .overflow(overflow)
+                .modifier(Modifier::new().size(40.0, 24.0))
+                .build(ctx);
+        }));
+        let mut right = -1;
+        for x in 0..200 {
+            for y in 0..30 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 && x > right { right = x; }
+            }
+        }
+        right
+    }
+    let clip = ink_right_edge(winia::text::TextOverflow::Clip);
+    let visible = ink_right_edge(winia::text::TextOverflow::Visible);
+    assert!(clip >= 0, "Clip must still draw the part that fits");
+    assert!(
+        clip < 41,
+        "Clip must stop at the 40 px box edge, ink reached x={clip} (Visible reached x={visible})"
+    );
+    assert!(
+        visible > 41,
+        "Visible must paint outside the box, ink stopped at x={visible}"
+    );
+}
+
+/// The ellipsis case also clips now, and still ends inside the box.
+#[test]
+fn text_overflow_ellipsis_stays_inside_its_box() {
+    let (mut surface, _) = render_ui(200.0, 30.0, winia::app_root!(|ctx| {
+        Text::new("WWWWWWWWWWWW")
+            .font_size(16.0)
+            .color(Color::BLACK)
+            .soft_wrap(false)
+            .overflow(winia::text::TextOverflow::Ellipsis)
+            .modifier(Modifier::new().size(40.0, 24.0))
+            .build(ctx);
+    }));
+    let mut right = -1;
+    for x in 0..200 {
+        for y in 0..30 {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r < 200 && g < 200 && b < 200 && x > right { right = x; }
+        }
+    }
+    assert!(
+        right >= 0 && right < 41,
+        "ellipsis text must stay inside the 40 px box, ink reached x={right}"
+    );
+}
+
 #[test]
 fn column_stacks_vertically() {
     // Column: 上方 30px 红色 + 下方填满蓝色
@@ -791,27 +855,3 @@ fn a_text_decoration_draws_under_the_glyphs() {
     );
 }
 
-#[test]
-fn probe_underline_color() {
-    let (mut surface, _) = render_ui(200.0, 60.0, winia::app_root!(|ctx| {
-        Text::new("IIII")
-            .font_size(40.0)
-            .color(Color::RED)
-            .text_decoration(winia::text::TextDecoration::UNDERLINE)
-            .build(ctx);
-    }));
-    let mut rows = Vec::new();
-    for y in 38..56 {
-        let mut seen: Vec<(u8, u8, u8)> = Vec::new();
-        for x in (4..170).step_by(6) {
-            let (r, g, b, _) = pixel(&mut surface, x, y);
-            if r > 40 || g > 40 || b > 40 {
-                seen.push((r, g, b));
-            }
-        }
-        if !seen.is_empty() {
-            rows.push((y, seen.len(), seen[0]));
-        }
-    }
-    panic!("PROBE {rows:?}");
-}

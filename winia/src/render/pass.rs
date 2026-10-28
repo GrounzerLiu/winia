@@ -828,6 +828,30 @@ pub(super) fn render_pass1(
             if soft_wrap {
                 para.layout(content_w);
             }
+            // Compose's `TextOverflow`: the node clips its own drawing whenever the layout
+            // overflows, and `Visible` is the one value that asks for no clipping at all
+            // (`TextStringSimpleNode.kt:443-448` — `willClip = layoutCache.didOverflow`).
+            // winia used to build the paragraph with the ellipsis (or at an infinite width) and
+            // then paint it unclipped, so `Clip` and `Visible` were indistinguishable: measured in
+            // a 40 dp box with 16 sp nowrap text, both painted ink out to x=176 while only
+            // `Ellipsis` stopped at 25.
+            //
+            // The clip is the CONTENT box, not `paint_rect`: padding belongs to the node's
+            // outside in Compose (a `Modifier.padding` wraps the text node), so text never spills
+            // into its own padding.
+            let clips_overflow = overflow != crate::text::TextOverflow::Visible;
+            let overflows = para.did_exceed_max_lines()
+                || para.longest_line() > content_w + 0.5
+                || para.height() > content_h + 0.5;
+            let text_clipped = clips_overflow && overflows;
+            if text_clipped {
+                canvas.save();
+                canvas.clip_rect(
+                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    None,
+                    Some(false),
+                );
+            }
             // Slack is how far the drawn paragraph can move inside its box. A WRAPPED paragraph
             // is clamped to the box, so a negative slack would push it out of it. An unwrapped one
             // was laid out at its intrinsic width and can be WIDER than the box — then centring or
@@ -938,6 +962,9 @@ pub(super) fn render_pass1(
                         canvas.draw_line(skia_safe::Point::new(x_off + r.left, content_y + r.bottom), skia_safe::Point::new(x_off + r.right, content_y + r.bottom), &und_paint);
                     }
                 }
+            }
+            if text_clipped {
+                canvas.restore();
             }
         } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key);
