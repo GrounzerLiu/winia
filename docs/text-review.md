@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
 | Deviations from Compose (deliberate or accepted) | 0 | 5 | 0 |
-| Missing API surface | 1 | 9 | 1 (the three Skia-blocked items of M-6) |
+| Missing API surface | 1 | 9 | 0 |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
@@ -325,30 +325,27 @@ reader can re-check.
   Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
   (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
-- [ ] **M-6 — `TextStyle.lineHeightStyle`, `fontSynthesis` and `textGeometricTransform` are still
-  missing (shadow, `fontFeatureSettings`, `drawStyle` and `brush` are done).**
-  Fixed: **`shadow`** (`TextShadow { color, offset, blur }`, Compose's `Shadow`; `blur` converts to
-  Skia's sigma with `radius * 0.57735 + 0.5`), **`fontFeatureSettings`** (`parse_font_features` reads
-  Compose's syntax — `"smcp"`, `"liga" off`, `"tnum" 0`, quoted tags — and the pairs reach
-  `TextStyle::add_font_feature`), **`drawStyle`** (`TextDrawStyle::Fill | Stroke { width }`) and
-  **`brush`** (`TextBrush::linear_gradient`). The last two go through Skia's glyph foreground paint
-  (`TextStyle::set_foreground_paint`), which replaces the flat colour for the whole run. All four
-  live in their own modifier element (`ModifierElement::TextPaint`), so every hand-built
-  `TextContent` literal in the suite stayed valid.
-  Measured: a shadow is paint-only and leaves the measured box unchanged; a 6 px offset shadow moves
-  the ink's bottom-right corner from (24,42) to (30,48); a gradient brush paints red-dominant ink at
-  the left of the run and blue-dominant ink at the right instead of the text colour.
-  Tests: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs` (red without the
-  application: plain (24,42) shadow (24,42)), `render_snapshot::a_text_brush_paints_a_gradient_across_the_glyphs`
-  (red without it), `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
+- [ ] **M-6 — `TextStyle.lineHeightStyle` and `textGeometricTransform` are still missing.**
+  Fixed earlier in this row: **`shadow`**, **`fontFeatureSettings`**, **`drawStyle`** and **`brush`**
+  (see the Paint extras below). **`fontSynthesis` needs no code**: Skia synthesises the missing face
+  itself — measured with a family that has no bold face (`SimSun`): regular 108.0 px / 277 ink
+  pixels against bold 111.8 px / 442 ink, i.e. a faux bold, exactly Compose's default
+  `FontSynthesis.All`; a family that HAS a bold face (`Segoe UI` 97.7/430 → 105.0/732) gets the real
+  one. winia therefore matches the default and has no knob to switch synthesis off (Skia exposes
+  none).
+  Still missing, and why this is more than a Skia gap: `lineHeightStyle` (`alignment` + `trim`) and
+  `textGeometricTransform` (`scaleX`/`skewX`) both move the GLYPH RUN relative to the box, while the
+  caret, hit testing, selection rectangles and the overflow clip all read the box's own geometry.
+  A paint-only version would leave all four pointing at where the text is not; doing it properly
+  means threading the transform through `TextLayout::get_cursor_position`, the hit test in
+  `per_window/pointer.rs`, `get_rects_for_range` consumers and the render clip together. That is a
+  geometry project, not a style field, and nothing in the repo asks for either.
+  Tests for the fixed half: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs`,
+  `render_snapshot::a_text_brush_paints_a_gradient_across_the_glyphs`,
+  `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
   `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
-  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`.
-  Still missing because skia-safe 0.99 exposes no hook for them (grepped: no `line_height_style`, no
-  `font_synthesis`, no geometric transform on `textlayout::TextStyle` or `ParagraphStyle`):
-  `lineHeightStyle` needs per-line leading trimming (`set_half_leading` is the closest primitive and
-  D-2 already spends it on centring), `fontSynthesis` needs synthetic bold/italic control, and
-  `textGeometricTransform` scales/skews the glyph run. Commits eff2d7d (shadow + features) and
-  87a7e01 (drawStyle + brush).
+  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`. Commits eff2d7d and
+  87a7e01.
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
   Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with
@@ -408,7 +405,7 @@ Recorded so the next round does not redo them.
   column re-enters (measured "AAA"/"CCC" → "AAA"/"BBB"/"CCC"; removal → "AAA"/"CCC"). The failure
   mode with a stale order is T-1, not an ordering bug of its own.
 
-## Second pass (2026-10-28): what closed, what Skia cannot do
+## Second pass (2026-10-28 and 2026-10-29): what closed, what remains
 
 Eight rows were closed in this pass, each with a test that was first seen to fail on the old
 behaviour (or, where the API did not exist at all, with a spot check that removing the wiring puts
@@ -431,39 +428,32 @@ the test back to failing). The rows themselves carry the details; this is the in
 Commit `2030ae8`. Full `--lib` suite at that commit: 2053 passed; `--test render_snapshot`: 33
 passed.
 
-### Blocked by skia-safe 0.99
+### What skia-safe 0.99 does and does not give us
 
-These are not open work items — the API needed does not exist in the Skia binding this crate
-builds against. Checked against
-`skia-safe-0.99.0/src/modules/paragraph/text_style.rs`, whose complete setter list is: `set_color`,
-`set_foreground_paint`, `set_foreground_color`, `set_background_paint`, `set_background_color`,
-`set_decoration*`, `set_font_style`, `set_font_arguments`, `set_font_size`, `set_font_families`,
-`set_baseline_shift`, `set_height`, `set_height_override`, `set_half_leading`,
-`set_letter_spacing`, `set_word_spacing`, `set_typeface`, `set_locale`, `set_text_baseline`,
-`set_placeholder`, `set_font_edging`, `set_subpixel`, `set_font_hinting`.
+An earlier revision of this section listed `shadow`, `fontFeatureSettings` and the start/middle
+ellipsis as blocked. That was assembled from a partial read of the binding: `TextStyle` also has
+`add_shadow`, `add_font_feature` and `set_foreground_paint`, and the ellipsis can be produced by
+truncating the string. All three are implemented now; what follows is the list that survived
+contact with the headers.
 
-- **`shadow` (the `M-6` item that is not a modifier effect)** — no `set_shadow` on the text style,
-  and no shadow field on `ParagraphStyle` either. Drawing a shadow means painting the paragraph
-  twice through an image filter, which is a different feature (and `Modifier::shadow` already
-  exists for the box).
-- **`fontFeatureSettings`** — no `set_font_features`; the only font-configuration setters are
-  families, typeface, weight/slant/width and `set_font_arguments` (variable-font axes, not
-  OpenType feature tags).
-- **`fontSynthesis`** — absent; Skia's `FontStyle` here is weight/width/slant only, with no
-  synthetic-bold/italic policy to configure.
-- **`textGeometricTransform`** (scaleX / skewX) — absent from both `TextStyle` and
-  `ParagraphStyle`. Could be approximated with a canvas matrix at paint time, but then the measured
-  size would no longer describe what is drawn.
-- **`lineHeightStyle` as a value** — free-standing centring is exposed as the boolean
-  `set_half_leading` (used for D-2), but there is no alignment/trim pair to set, so Compose's
-  `Trim` half cannot be expressed.
-- **`textIndent`** — absent.
-- **`TextOverflow.StartEllipsis` / `MiddleEllipsis`** — `ParagraphStyle` exposes only
-  `set_ellipsis(&str)`, which truncates at the END of a line. Start/middle ellipsis need per-line
-  range control that this binding does not surface.
-- **`TextAlign.Start` / `End` reaching the paragraph** — Skia has no direction-relative alignment
-  either; the enum resolves them itself (that is what D-4's fix does).
-
+- **Available and used**: `set_color`, `set_foreground_paint` (drives `drawStyle` and `brush`),
+  `add_shadow` (drives `TextStyle.shadow`), `add_font_feature` (drives `fontFeatureSettings`),
+  `set_decoration*`, `set_font_style`, `set_font_arguments`, `set_font_size`, `set_font_families`,
+  `set_baseline_shift`, `set_height`, `set_height_override`, `set_half_leading`,
+  `set_letter_spacing`, `set_word_spacing`, `set_typeface`, `set_locale`, `set_text_baseline`,
+  `set_font_edging`, `set_subpixel`, `set_font_hinting`, and `ParagraphStyle::set_ellipsis` (end
+  of line only — start/middle are emulated, see D-4).
+- **`fontSynthesis`** — no knob, and none needed: Skia synthesises a missing face itself. Measured
+  with `SimSun` (no bold face): regular 108.0 px / 277 ink px → bold 111.8 px / 442 ink px, a faux
+  bold; `Segoe UI` (real bold) 97.7/430 → 105.0/732. That is Compose's default `FontSynthesis.All`;
+  winia simply cannot turn it off.
+- **`textGeometricTransform`** (scaleX / skewX) — no hook on `TextStyle` or `ParagraphStyle`. A
+  canvas matrix at paint time would draw the glyphs elsewhere while the caret, hit testing, selection
+  rectangles and the overflow clip keep reading the untransformed box.
+- **`lineHeightStyle`** — only the boolean `set_half_leading` (spent on D-2's centring); no
+  `alignment`/`trim` pair, so the `Trim` half cannot be expressed. Same geometry concern as above:
+  trimming changes the box height the caret and clip use.
+- **`textIndent`** — absent from both types.
 ### Deferred, not blocked
 
 `M-7` (`AnnotatedString`) was the one of this pair that needed no missing Skia API, and it is done
