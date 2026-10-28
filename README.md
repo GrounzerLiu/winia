@@ -55,7 +55,7 @@ cargo test -p winia --lib                     # 730 个单元/布局/渲染测�
 cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗口）
 ```
 
-更多示例见 `winia/examples/`（动画、组件、手势、GraphicsLayer、交互、Overlay、TextField、选区等 21 个）。
+更多示例见 `winia/examples/`（动画、组件、手势、GraphicsLayer、交互、Overlay、TextField、选区、文本与富文本等 13 个）。
 
 ## 文档
 
