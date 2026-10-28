@@ -17,8 +17,8 @@
 | Bucket | Open | Fixed | Blocked by Skia |
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
-| Deviations from Compose (deliberate or accepted) | 0 | 4 | 1 (the ellipsis half of D-4) |
-| Missing API surface | 1 | 9 | 0 |
+| Deviations from Compose (deliberate or accepted) | 0 | 5 | 1 (the ellipsis half of D-4) |
+| Missing API surface | 1 | 9 | 1 (the three Skia-blocked items of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
@@ -264,6 +264,20 @@ reader can re-check.
   (start/middle ellipsis need Skia's per-line range control, not just a flag), and nothing in the
   repo asks for them yet.
 
+- [x] **D-5 — no `ColorProducer` overload; colour stays a value (deliberate, closed 2026-10-29).**
+  `material3/Text.kt` has a second `Text` whose `color` is a producer, so a frequently-changing
+  colour does not recompose. winia's `TextContent` carries a `Color` VALUE and the payload compares
+  it by field, so a colour change re-enters the leaf and re-measures — the same picture, one
+  measure later, and it costs no parent recomposition either (the leaf declares the parameter).
+  A producer variant would have to be evaluated while PAINTING, but Skia bakes the colour into the
+  paragraph at build time (`TextStyle::set_color`), so the only shape it could take is
+  "evaluate at measure" — which moves the recomposition into a re-measure and buys nothing.
+  The escape hatch that does buy something is the glyph foreground paint
+  (`set_foreground_paint`, used by `drawStyle`/`brush`), and a draw-time colour would ride the same
+  path once the payload can carry a shader instead of a colour.
+  Reopen if: the paragraph cache gains a draw-time colour channel (a shader or a paint callback),
+  at which point `Text::color_source` becomes a thin wrapper over `TextPaint`.
+
 ## Missing API surface
 
 - [x] **M-1 — no public measurer.** `build_plain_paragraph` is `pub(crate)`
@@ -289,12 +303,6 @@ reader can re-check.
   not monotonic in the size once wrapping is involved.
   Test: `components::text::tests::auto_size_shrinks_the_font_until_the_text_fits` (24 sp of a long
   sentence is taller than the 40 dp box; with the window it fits and is strictly shorter).
-
-- [ ] **M-4 — no `ColorProducer` overload.** `material3/Text.kt` has a second `Text` whose
-  `color` is a producer so a frequently-changing colour does not recompose. Reason not fixed:
-  winia's `TextContent` payload already compares colour by value and re-measures on change, and the
-  escape hatch is a `State`-backed dynamic value; adding a producer variant before the payload
-  supports dynamic evaluation would only move the recomposition.
 
 - [x] **M-5 — `TextUnit` has no `Em`.** `unit.rs` had `Sp` | `Px` only.
   Fixed: `TextUnit::Em(f32)` exists and is resolved where the enclosing size IS known —
@@ -445,11 +453,10 @@ builds against. Checked against
 
 ### Deferred, not blocked
 
-`M-4` (`ColorProducer`) and `M-7` (`AnnotatedString`) are implementable in winia — neither needs a
-Skia API that is missing — but each is a payload/data-model change rather than a parameter, and
-nothing in the repo asks for either yet: `ColorProducer` needs `TextContent` to evaluate a producer
-per frame instead of comparing a value, and `AnnotatedString` needs `resolve_spans` rebuilt on a span
-list that can be sliced, merged and read back.
+`M-7` (`AnnotatedString`) was the one of this pair that needed no missing Skia API, and it is done
+(see its row). `M-4` (`ColorProducer`) is closed as the deliberate deviation **D-5**: Skia bakes the
+colour into the paragraph, so a producer could only be evaluated at measure time, which moves the
+recomposition into a re-measure without buying anything.
 
 `T-9` is the one defect still open and it is now reachable (see its row): `RichText` can mix font
 sizes and has `min_lines`, so the average-line-height reservation can disagree with Compose.
