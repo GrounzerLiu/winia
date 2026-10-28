@@ -16,12 +16,12 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 5 | 4 |
+| Defects (wrong behaviour; T-9 is latent, see its row) | 4 | 5 |
 | Deviations from Compose (deliberate or accepted) | 4 | 0 |
 | Missing API surface | 10 | 0 |
 | Investigated and ruled out | — | 5 |
 
-T-1, T-2, T-6 and T-7 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
+T-1, T-2, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
 rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
 next reader can re-check.
 
@@ -125,14 +125,23 @@ next reader can re-check.
   callback width equals the node's measured width, 300, and `text_size.width` stays 12); it fails
   on the old behaviour. Commit `bdba091`. Full `--lib` suite: 2025 passed.
 
-- [ ] **T-8 — `TextOverflow::Clip` draws exactly like `Visible`; neither clips.**
-  `render/pass.rs:821-943` uses `overflow` only to build the paragraph (ellipsis), never to clip.
-  Measured, 40 dp box, nowrap 16 sp text: both `Clip` and `Visible` paint out to `x=176`; only
-  `Ellipsis` stops (`x=25`). Compose clips when `layoutCache.didOverflow`
-  (`TextStringSimpleNode.kt:448`), which is exactly the `Clip` case.
-  Reason open: the clip has to go inside the same canvas save/restore the modifier chain uses, so it
-  needs a decision about whether it clips to `content_box` or `paint_rect` (the padding question
-  `clip_shape` already answers differently).
+- [x] **T-8 — `TextOverflow::Clip` drew exactly like `Visible`; neither clipped.**
+  `render/pass.rs` used `overflow` only to build the paragraph (the ellipsis), never to clip.
+  Measured, 40 dp box, nowrap 16 sp text on a 200 px surface: both `Clip` and `Visible` painted
+  ink out to `x=176`; only `Ellipsis` stopped (`x=25`). Compose clips whenever its layout
+  overflowed — `TextStringSimpleNode.kt:443-448`, `willClip = layoutCache.didOverflow` — which is
+  the `Clip` and `Ellipsis` cases, while `Visible` is the documented no-clip value.
+  Fix: the text branch saves the canvas and clips to the CONTENT box when the overflow value is
+  not `Visible` and the paragraph actually overflows (`did_exceed_max_lines`, `longest_line`
+  wider than the box, or `height` taller than it). Content box, not `paint_rect`: in Compose a
+  `Modifier.padding` wraps the text node, so text must not spill into its own padding.
+  Tests: `render_snapshot::text_overflow_clip_stops_ink_at_the_box_and_visible_does_not` (fails on
+  the old behaviour with "Clip must stop at the 40 px box edge, ink reached x=178") and
+  `render_snapshot::text_overflow_ellipsis_stays_inside_its_box`. Visually re-checked from a
+  rendered PNG: `Clip` stops at the box edge, `Visible` runs far past it, `Ellipsis` ends `W...`
+  inside it.
+  Commit `5467c12`. Full `--lib` suite: 2027 passed; `--test render_snapshot`: 31 passed;
+  `--test ui_text_test` (debug-server): 7 passed; `--test ui_test`: 6 passed.
 
 - [ ] **T-9 — `min_lines` height uses the average line height, where Compose uses the first line
   plus `(n-1) × step`.** `measure/paragraph.rs:187-195` computes
