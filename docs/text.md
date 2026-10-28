@@ -107,6 +107,7 @@ measurements behind each and the reason a row is still open — in
 | Compose | winia |
 | --- | --- |
 | `autoSize: TextAutoSize?` | `Text::auto_size(min, max)` — the same fit search, run at measure time |
+| `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph then holds the truncated text |
 | `TextStyle.shadow` | `Text::shadow(TextShadow { color, offset, blur })`; paint-only, so the measured box does not change |
 | `TextStyle.fontFeatureSettings` | `Text::font_feature_settings("tnum", "liga off", …)`, parsed into Skia features in order |
 | `color: ColorProducer` overload | deliberately absent (D-5): a colour value re-measures the leaf once, and the draw-time channel is the glyph foreground paint that `drawStyle`/`brush` use |

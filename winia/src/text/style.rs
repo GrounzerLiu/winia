@@ -83,8 +83,19 @@ impl std::ops::BitOr for TextDecoration {
 pub enum TextOverflow {
     /// Cut off at the node's own box.
     Clip,
-    /// Cut off, with an ellipsis.
+    /// Cut off, with an ellipsis at the END of the line (Compose's `TextOverflow.Ellipsis`).
     Ellipsis,
+    /// Cut off, with an ellipsis at the START of the line (Compose's `TextOverflow.StartEllipsis`).
+    ///
+    /// Skia's `ParagraphStyle` can only ellipsize the END of a line (`set_ellipsis`), so this is
+    /// emulated: the text is truncated to the longest tail that fits with a leading ellipsis and the
+    /// truncated string is what gets laid out (see `truncate_for_ellipsis`). The consequence worth
+    /// knowing: the paragraph then holds the TRUNCATED text, so cursor and selection offsets map
+    /// onto what is shown, not onto the original string.
+    StartEllipsis,
+    /// Cut off, with an ellipsis in the MIDDLE of the line (Compose's `TextOverflow.MiddleEllipsis`).
+    /// Emulated the same way as [`TextOverflow::StartEllipsis`]: a prefix and a suffix are kept.
+    MiddleEllipsis,
     /// NOT cut off: the glyphs are laid out at their intrinsic width and painted past the node's
     /// box (an ancestor that clips, such as a Button's shape, still clips them). This is Compose's
     /// `TextOverflow.Visible`, and it is what material3's button-group item uses for its label
@@ -92,6 +103,16 @@ pub enum TextOverflow {
     Visible,
 }
 impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
+
+impl TextOverflow {
+    /// Whether this overflow truncates with an ellipsis (Compose's `isEllipsis`).
+    pub fn is_ellipsis(self) -> bool {
+        matches!(
+            self,
+            TextOverflow::Ellipsis | TextOverflow::StartEllipsis | TextOverflow::MiddleEllipsis
+        )
+    }
+}
 
 /// How the glyphs are filled — Compose's `TextStyle.drawStyle`.
 #[derive(Debug, Clone, Copy, PartialEq)]

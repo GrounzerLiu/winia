@@ -32,8 +32,8 @@ pub(crate) fn build_plain_paragraph(
     // layout cannot produce several of them, so Compose overwrites maxLines with 1 there. Laying a
     // nowrap ellipsis out at an infinite width (what this did) makes Skia believe the line fits and no
     // ellipsis is ever produced.
-    let width_matters = soft_wrap || overflow == crate::text::TextOverflow::Ellipsis;
-    let effective_max_lines = if !soft_wrap && overflow == crate::text::TextOverflow::Ellipsis {
+    let width_matters = soft_wrap || overflow.is_ellipsis();
+    let effective_max_lines = if !soft_wrap && overflow.is_ellipsis() {
         1
     } else {
         max_lines
@@ -43,6 +43,8 @@ pub(crate) fn build_plain_paragraph(
     }
 
     // ellipsis overflow: show an ellipsis when the text does not fit
+    // Only the END ellipsis is a Skia flag. Start/middle ellipsis truncate the STRING before layout
+    // (see `truncate_for_ellipsis`) — `set_ellipsis` cannot move the marker.
     if overflow == crate::text::TextOverflow::Ellipsis {
         para_style.set_ellipsis("\u{2026}");
     }
@@ -186,6 +188,19 @@ pub(crate) fn build_plain_paragraph(
         }
     }
     let fc = crate::text::font::get_font_collection();
+    // Start/middle ellipsis: truncate the STRING, because `set_ellipsis` only marks the end.
+    let truncated;
+    let content = if matches!(
+        overflow,
+        crate::text::TextOverflow::StartEllipsis | crate::text::TextOverflow::MiddleEllipsis
+    ) {
+        match truncate_for_ellipsis(content, max_width, &text_style, &fc, overflow) {
+            Some(text) => { truncated = text; truncated.as_str() }
+            None => content,
+        }
+    } else {
+        content
+    };
     let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
@@ -213,6 +228,75 @@ pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
             })
         }
         _ => None,
+    })
+}
+
+/// Skia can only ellipsize the END of a line, so start/middle ellipsis truncate the string here.
+///
+/// Compose's `TextOverflow.StartEllipsis` / `MiddleEllipsis` keep the tail (or both ends) and put
+/// the marker at the front (or in the middle). `ParagraphStyle::set_ellipsis` has no such control, so
+/// the longest string that fits with a `…` in that position is found by binary search and laid out
+/// instead. Returns `None` when the whole text already fits — the caller then lays out the original.
+fn truncate_for_ellipsis(
+    content: &str,
+    max_width: f32,
+    text_style: &skia_safe::textlayout::TextStyle,
+    fc: &skia_safe::textlayout::FontCollection,
+    overflow: crate::text::TextOverflow,
+) -> Option<String> {
+    let probe = |candidate: &str| -> f32 {
+        let mut style = skia_safe::textlayout::ParagraphStyle::new();
+        style.set_text_align(skia_safe::textlayout::TextAlign::Left);
+        let mut builder = crate::text::ParagraphBuilder::new(&style, fc);
+        builder.push_style(text_style);
+        builder.add_text(candidate);
+        let mut para = builder.build();
+        para.layout(f32::MAX);
+        para.max_intrinsic_width()
+    };
+    if probe(content) <= max_width {
+        return None;
+    }
+    let chars: Vec<char> = content.chars().collect();
+    // `lo` keeps `0` kept characters (the bare marker), `hi` is the first count that does not fit.
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let candidate = match overflow {
+            crate::text::TextOverflow::StartEllipsis => {
+                format!("\u{2026}{}", chars[chars.len() - mid..].iter().collect::<String>())
+            }
+            _ => {
+                // Middle: keep the head and the tail in equal share, head first.
+                let head = mid / 2;
+                let tail = mid - head;
+                format!(
+                    "{}\u{2026}{}",
+                    chars[..head].iter().collect::<String>(),
+                    chars[chars.len() - tail..].iter().collect::<String>()
+                )
+            }
+        };
+        if probe(&candidate) <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let kept = lo;
+    Some(match overflow {
+        crate::text::TextOverflow::StartEllipsis => {
+            format!("\u{2026}{}", chars[chars.len() - kept..].iter().collect::<String>())
+        }
+        _ => {
+            let head = kept / 2;
+            let tail = kept - head;
+            format!(
+                "{}\u{2026}{}",
+                chars[..head].iter().collect::<String>(),
+                chars[chars.len() - tail..].iter().collect::<String>()
+            )
+        }
     })
 }
 
@@ -411,14 +495,17 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             // (`build_plain_paragraph`), not a second interpretation: a nowrap ellipsis is a
             // one-line ellipsis, and a nowrap paragraph is laid out at an infinite width so
             // nothing wraps.
-            let width_matters = *soft_wrap || *overflow == crate::text::TextOverflow::Ellipsis;
+            let width_matters = *soft_wrap || overflow.is_ellipsis();
             let effective_max_lines =
-                if !*soft_wrap && *overflow == crate::text::TextOverflow::Ellipsis { 1 } else { *max_lines };
+                if !*soft_wrap && overflow.is_ellipsis() { 1 } else { *max_lines };
             let mut para_style = ParagraphStyle::new();
             if effective_max_lines < usize::MAX {
                 para_style.set_max_lines(effective_max_lines);
             }
-            if *overflow == crate::text::TextOverflow::Ellipsis {
+            // Rich text keeps the END ellipsis for all three modes: truncating inside a span run
+            // would have to move the spans with it, which the plain-leaf truncation (see
+            // `truncate_for_ellipsis`) does not do. Documented in D-4.
+            if overflow.is_ellipsis() {
                 para_style.set_ellipsis("\u{2026}");
             }
             // Only `Justify` reaches the paragraph: `Center`/`Right` are applied by shifting the

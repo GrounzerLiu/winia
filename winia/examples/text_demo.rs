@@ -428,13 +428,14 @@ fn text_demo(ctx: &mut ComposeCtx) {
                     .spacing(24.0)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                        for (index, (_, overflow)) in [
+                        for (label, overflow) in [
                             ("Ellipsis", TextOverflow::Ellipsis),
+                            ("StartEllipsis", TextOverflow::StartEllipsis),
+                            ("MiddleEllipsis", TextOverflow::MiddleEllipsis),
                             ("Visible", TextOverflow::Visible),
                             ("Clip", TextOverflow::Clip),
                         ]
                         .into_iter()
-                        .enumerate()
                         {
                             Text::new(LONG)
                                 .font_size(15.0)
@@ -445,7 +446,7 @@ fn text_demo(ctx: &mut ComposeCtx) {
                                     Modifier::new()
                                         .width(140.0)
                                         .background(Color::from_argb(28, 255, 255, 255), Shape::Rectangle)
-                                        .test_tag(format!("tx-nowrap-{index}")),
+                                        .test_tag(format!("tx-nowrap-{}", label.to_lowercase())),
                                 )
                                 .build(ctx);
                         }

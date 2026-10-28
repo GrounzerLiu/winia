@@ -90,7 +90,7 @@ fn capture_item(
 /// cannot drift apart: aligning inside the paragraph AND shifting the origin would double-apply the
 /// offset.
 fn width_matters_for(soft_wrap: bool, overflow: crate::text::TextOverflow) -> bool {
-    soft_wrap || overflow == crate::text::TextOverflow::Ellipsis
+    soft_wrap || overflow.is_ellipsis()
 }
 fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAnimationHost) {
     let mut store = host.store().lock().unwrap_or_else(|e| e.into_inner());

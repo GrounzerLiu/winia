@@ -68,8 +68,8 @@ fn a_nowrap_ellipsis_stops_at_the_box_and_visible_does_not() {
     // The demo is taller than the default window; the sampling reads FRAME pixels, which only exist
     // inside it.
     app.resize(900.0, 1500.0);
-    let ellipsis = app.expect_tag("tx-nowrap-0");
-    let visible = app.expect_tag("tx-nowrap-1");
+    let ellipsis = app.expect_tag("tx-nowrap-ellipsis");
+    let visible = app.expect_tag("tx-nowrap-visible");
     assert_eq!(ellipsis.2, 140.0, "the box is 140 dp: {ellipsis:?}");
     assert_eq!(visible.2, 140.0);
 

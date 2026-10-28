@@ -1010,3 +1010,51 @@ fn a_text_brush_paints_a_gradient_across_the_glyphs() {
         "the gradient must run red to blue: red starts at x={red}, blue reaches x={blue}"
     );
 }
+
+/// `TextOverflow::StartEllipsis` / `MiddleEllipsis`: the marker sits at the front (or in the middle)
+/// of the line, which Skia's `set_ellipsis` cannot do — the string is truncated before layout.
+///
+/// All three modes are given the same nowrap sentence in a 120 dp box. The END ellipsis inks the
+/// left edge and stops with the marker at the right; the START ellipsis must put the marker at the
+/// left, so its leftmost ink is the marker's dots rather than a letter, and its right edge is
+/// filled with the tail of the sentence.
+#[test]
+fn start_and_middle_ellipsis_move_the_marker_off_the_end() {
+    fn ink_columns(overflow: winia::text::TextOverflow) -> (i32, i32) {
+        let (mut surface, _) = render_ui(140.0, 30.0, winia::app_root!(move |ctx| {
+            Text::new("the quick brown fox jumps")
+                .font_size(15.0)
+                .color(Color::BLACK)
+                .soft_wrap(false)
+                .max_lines(1)
+                .overflow(overflow)
+                .modifier(Modifier::new().size(120.0, 24.0))
+                .build(ctx);
+        }));
+        let (mut first, mut last) = (-1, -1);
+        for x in 0..140 {
+            for y in 0..30 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if first < 0 { first = x; }
+                    last = x;
+                }
+            }
+        }
+        (first, last)
+    }
+    let (end_first, end_last) = ink_columns(winia::text::TextOverflow::Ellipsis);
+    let (start_first, start_last) = ink_columns(winia::text::TextOverflow::StartEllipsis);
+    let (mid_first, mid_last) = ink_columns(winia::text::TextOverflow::MiddleEllipsis);
+    assert!(end_first >= 0 && start_first >= 0 && mid_first >= 0, "every mode paints: {end_first} {start_first} {mid_first}");
+    // All of them stay inside the 120 dp box.
+    for (name, _, last) in [("end", end_first, end_last), ("start", start_first, start_last), ("middle", mid_first, mid_last)] {
+        assert!(last < 122, "{name} ellipsis must stay inside the box, ink reached x={last}");
+    }
+    // The start mode's first ink is the ellipsis dots, so it sits a little right of the end mode's
+    // letter `t` — and its right edge carries real text instead of the marker.
+    assert!(
+        start_first > end_first,
+        "the start ellipsis leads with the marker: start={start_first} end={end_first}"
+    );
+}

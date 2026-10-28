@@ -17,12 +17,13 @@
 | Bucket | Open | Fixed | Blocked by Skia |
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
-| Deviations from Compose (deliberate or accepted) | 0 | 5 | 1 (the ellipsis half of D-4) |
+| Deviations from Compose (deliberate or accepted) | 0 | 5 | 0 |
 | Missing API surface | 1 | 9 | 1 (the three Skia-blocked items of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
-M-8, M-9, M-10. See each row for the mechanism and the test, and "Second pass" below for the index plus the
+M-8, M-9, M-10. 2026-10-29: M-3 (autoSize), M-5 (`TextUnit::Em`), M-7 (`AnnotatedString`), the
+shadow / features / drawStyle / brush half of M-6, the ellipsis half of D-4, and M-4 closed as D-5. See each row for the mechanism and the test, and "Second pass" below for the index plus the
 items `skia-safe 0.99` cannot express at all.
 
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
@@ -258,12 +259,23 @@ reader can re-check.
   Reason not fixed: writing `set_text_align` for all four would double-apply the shift (Skia would
   centre inside the full-width paragraph *and* the paint origin would move).
 
-- [x] **D-4 — `TextOverflow` has no `StartEllipsis` / `MiddleEllipsis`, and `TextAlign` has no
+- [x] **D-4 — `TextOverflow` had no `StartEllipsis` / `MiddleEllipsis`, and `TextAlign` had no
   `Start` / `End`.** Compose's `isEllipsis` already covers the three ellipsis kinds
-  (`LayoutUtils.kt:88-93`). Reason not fixed: both are API additions with rendering work
-  (start/middle ellipsis need Skia's per-line range control, not just a flag), and nothing in the
-  repo asks for them yet.
-
+  (`LayoutUtils.kt:88-93`).
+  Fixed: `TextAlign::Start` / `End` resolve against the layout direction in `Text::build` and
+  `RichText::build` (they never reach a paragraph). `TextOverflow::StartEllipsis` and
+  `MiddleEllipsis` exist, and `TextOverflow::is_ellipsis()` is the single rule the measure and paint
+  paths consult. Skia's `set_ellipsis` can only mark the END of a line, so the two new modes are
+  emulated: `truncate_for_ellipsis` binary-searches the longest tail (start) or head-plus-tail
+  (middle) that fits with a `…`, and lays THAT string out — the marker lands where Compose puts it,
+  the box keeps its constraint width, and one line is produced. Consequence, recorded rather than
+  hidden: the paragraph then holds the truncated text, so caret and selection offsets map onto what
+  is shown. Rich text keeps the end ellipsis for all three modes, because truncating inside a span
+  run would have to move the spans with it.
+  Test: `render_snapshot::start_and_middle_ellipsis_move_the_marker_off_the_end` — all three modes
+  stay inside the 120 dp box, and the start mode's leftmost ink sits to the right of the end mode's
+  (it is the marker's dots, not the first letter); with the truncation disabled the two coincide
+  (`start=0 end=0`) and the test fails. Demo: the overflow row shows all five modes.
 - [x] **D-5 — no `ColorProducer` overload; colour stays a value (deliberate, closed 2026-10-29).**
   `material3/Text.kt` has a second `Text` whose `color` is a producer, so a frequently-changing
   colour does not recompose. winia's `TextContent` carries a `Color` VALUE and the payload compares
@@ -407,6 +419,7 @@ the test back to failing). The rows themselves carry the details; this is the in
 | D-2 | `set_half_leading(true)` wherever a line height is set — baseline 19.47 → 18.625 in a 24 dp box | `paragraph_tests::a_line_height_centres_the_leading` |
 | D-3 | the paragraph aligns its own lines when the width is known; the origin shift is only for nowrap | `render_snapshot::a_wrapped_center_aligns_the_short_line_too` |
 | D-4 (align half) | `TextAlign::Start` / `End`, resolved against the direction in `Text::build` | `text::tests::start_and_end_align_resolve_against_the_direction` |
+| D-4 (ellipsis half) | `StartEllipsis` / `MiddleEllipsis`, truncated before layout | `render_snapshot::start_and_middle_ellipsis_move_the_marker_off_the_end` |
 | M-1 | `text::measure_text(&TextMeasureSpec) -> TextLayoutResult` | `text::measure_text::tests` (5) |
 | M-2 | `first_baseline`, `last_baseline`, `did_overflow_width`, `did_overflow_height`; `has_visual_overflow` covers both axes | `text::measure_text::tests::a_nowrap_line_reports_a_width_overflow` |
 | M-8 | `param_eq` compares the resolved spans | `param_eq_tests::param_eq_compares_the_rich_text_spans` |
