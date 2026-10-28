@@ -520,3 +520,104 @@
         assert_eq!(bold_spans[0].start, 2);
         assert_eq!(bold_spans[0].end, 5);
     }
+
+    // ── Paragraph parameters (T-3) ──
+    //
+    // Each of these used to be ignored: `measure_and_cache_richtext` built a bare
+    // `ParagraphStyle`, so a rich block could only wrap. They are read back from the cached
+    // paragraph, which is what the render pass paints.
+
+    fn measure_rich(build: RichText, text: &str) -> (usize, f32, f32, f32, f32) {
+        // Returns (line_count, paragraph height, longest_line, intrinsic width, measured height).
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            build
+                .modifier(Modifier::new().width(120.0))
+                .build(ctx, |x| { x.text(text); });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let node = nodes.iter().find(|n| n.has_richtext_content).expect("a rich text node");
+        let measured = node.measured_size;
+        let paragraph = node.cached_paragraph.borrow();
+        let paragraph = paragraph.as_ref().expect("a real measure caches the paragraph");
+        (
+            paragraph.inner_paragraph().line_number(),
+            paragraph.height(),
+            paragraph.longest_line(),
+            paragraph.max_intrinsic_width(),
+            measured.height,
+        )
+    }
+
+    const LONG: &str = "The quick brown fox jumps over the lazy dog";
+
+    /// The baseline this set of tests compares against: the same text without any parameter wraps.
+    #[test]
+    fn rich_text_wraps_by_default() {
+        let (lines, _, _, _, _) = measure_rich(RichText::new(), LONG);
+        assert!(lines >= 3, "a long line in a 120 dp box wraps: {lines} lines");
+    }
+
+    #[test]
+    fn rich_text_max_lines_caps_the_height() {
+        let (lines, height, _, _, _) = measure_rich(RichText::new().max_lines(1), LONG);
+        assert_eq!(lines, 1, "max_lines(1) must leave one line");
+        let (default_lines, default_height, _, _, _) = measure_rich(RichText::new(), LONG);
+        assert!(default_lines > 1);
+        assert!(
+            height < default_height,
+            "one capped line must be shorter than {default_lines} natural ones: {height} vs {default_height}"
+        );
+    }
+
+    #[test]
+    fn rich_text_soft_wrap_off_keeps_one_line() {
+        let (lines, _, longest, intrinsic, _) = measure_rich(RichText::new().soft_wrap(false), LONG);
+        assert_eq!(lines, 1, "nowrap must not wrap");
+        assert!(
+            longest > 120.0 && intrinsic > 120.0,
+            "the single line is wider than the box: longest={longest} intrinsic={intrinsic}"
+        );
+    }
+
+    #[test]
+    fn rich_text_ellipsis_fits_the_box() {
+        let (lines, _, longest, _, _) = measure_rich(
+            RichText::new().soft_wrap(false).max_lines(1).overflow(crate::text::TextOverflow::Ellipsis),
+            LONG,
+        );
+        assert_eq!(lines, 1);
+        assert!(
+            longest <= 120.5,
+            "an ellipsized nowrap line is truncated against the box, not its own width: {longest}"
+        );
+    }
+
+    #[test]
+    fn rich_text_line_height_sets_the_line_box() {
+        let (_, height, _, _, _) = measure_rich(RichText::new().max_lines(1).line_height(40.0), "Hi");
+        assert!(
+            (height - 40.0).abs() < 1.0,
+            "a 40 dp line height should make a one-line block 40 dp tall: {height}"
+        );
+    }
+
+    #[test]
+    fn rich_text_min_lines_reserves_the_box() {
+        // `min_lines` grows the BOX, not the paragraph (skia-safe has no set_min_lines), so the
+        // measurement is what has to change.
+        let (_, one_line_paragraph, _, _, one_line_box) = measure_rich(RichText::new().max_lines(1), "Hi");
+        let (_, _, _, _, three_line_box) = measure_rich(
+            RichText::new().max_lines(1).min_lines(3),
+            "Hi",
+        );
+        assert!(
+            (one_line_box - one_line_paragraph).abs() < 1.0,
+            "one line needs no reservation: box {one_line_box} vs paragraph {one_line_paragraph}"
+        );
+        assert!(
+            (three_line_box - one_line_paragraph * 3.0).abs() < 1.5,
+            "min_lines(3) reserves three lines: box {three_line_box} vs one line {one_line_paragraph}"
+        );
+    }

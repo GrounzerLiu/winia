@@ -581,6 +581,17 @@ pub(crate) enum ModifierElement {
         drawable_ranges: Vec<Range<usize>>,
         /// 已解析的样式范围列表
         spans: Vec<RichSpanStyle>,
+        /// Paragraph parameters. `RichText` used to build a bare `ParagraphStyle`, so a rich
+        /// block could not cap its lines, ellipsize, align or space its lines at all — it just
+        /// wrapped. Compose hands the same set to `BasicText` whether the text is annotated or
+        /// not, and these are that set.
+        align: crate::text::TextAlign,
+        max_lines: usize,
+        overflow: crate::text::TextOverflow,
+        soft_wrap: bool,
+        /// Fixed line height in logical pixels (`None` = the font's own).
+        line_height: Option<f32>,
+        min_lines: usize,
     },
 
     // ── Input 类 ──

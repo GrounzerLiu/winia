@@ -254,8 +254,33 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
     let fc = crate::text::font::get_font_collection();
 
     for el in node.modifier.elements() {
-        if let ModifierElement::RichTextContent { content, drawables, drawable_ranges, spans } = el {
-            let para_style = ParagraphStyle::new();
+        if let ModifierElement::RichTextContent {
+            content, drawables, drawable_ranges, spans,
+            align, max_lines, overflow, soft_wrap, line_height, min_lines,
+        } = el {
+            // Compose hands `BasicText` the same paragraph parameters whether the string is
+            // annotated or not; this path used to build a bare `ParagraphStyle` and ignore every
+            // one of them, so a rich block could only wrap. The rules below are the text leaf's
+            // (`build_plain_paragraph`), not a second interpretation: a nowrap ellipsis is a
+            // one-line ellipsis, and a nowrap paragraph is laid out at an infinite width so
+            // nothing wraps.
+            let width_matters = *soft_wrap || *overflow == crate::text::TextOverflow::Ellipsis;
+            let effective_max_lines =
+                if !*soft_wrap && *overflow == crate::text::TextOverflow::Ellipsis { 1 } else { *max_lines };
+            let mut para_style = ParagraphStyle::new();
+            if effective_max_lines < usize::MAX {
+                para_style.set_max_lines(effective_max_lines);
+            }
+            if *overflow == crate::text::TextOverflow::Ellipsis {
+                para_style.set_ellipsis("\u{2026}");
+            }
+            // Only `Justify` reaches the paragraph: `Center`/`Right` are applied by shifting the
+            // paint origin, exactly like the plain leaf (see D-3 in docs/text-review.md — doing
+            // both would double-apply the shift).
+            if *align == crate::text::TextAlign::Justify {
+                para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+            }
+            let layout_width = if width_matters { max_width.min(f32::MAX) } else { f32::MAX };
             let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
 
             // Walk the spans, tracking the drawable ranges
@@ -279,7 +304,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     // returned no rectangles at all.
                     if ci == drawable_ranges[di].start {
                         if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
-                            builder.push_style(&to_sktextstyle(s));
+                            builder.push_style(&styled_for_span(s, *line_height));
                         }
                         let d = drawables[di].clone();
                         let placeholder_text: String =
@@ -298,7 +323,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     let run_end = spans[span_idx].end.min(total);
                     let text: String = chars[ci..run_end].iter().collect();
                     if !text.is_empty() {
-                        builder.push_style(&to_sktextstyle(&spans[span_idx]));
+                        builder.push_style(&styled_for_span(&spans[span_idx], *line_height));
                         builder.add_text(&text);
                         builder.pop();
                     }
@@ -312,16 +337,44 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             }
 
             let mut para = builder.build();
-            para.layout(max_width);
-            let size = Size::new(
+            para.layout(layout_width);
+            let text_size = Size::new(
                 para.max_intrinsic_width().ceil().min(max_width),
                 para.height().ceil(),
             );
+            // `minLines` reserves the box height, the way the plain leaf does it (skia-safe exposes
+            // no `set_min_lines`): pad the RESULT, leave the glyphs at the top.
+            let line_count = para.inner_paragraph().line_number();
+            let mut size = text_size;
+            if *min_lines > line_count.max(1) {
+                let line_height_avg = if line_count > 0 {
+                    text_size.height / line_count as f32
+                } else {
+                    text_size.height
+                };
+                size.height = size.height.max(line_height_avg * *min_lines as f32);
+            }
             *node.cached_paragraph.borrow_mut() = Some(para);
             return size;
         }
     }
     Size::ZERO
+}
+
+/// A span's Skia style, with the paragraph's fixed line height applied when the span has none.
+///
+/// Compose's `lineHeight` is a paragraph-level parameter that a span-level override wins over
+/// (`TextStyle.lineHeight` per span is what `RichSpanStyle::height_multiple` models), so a span
+/// that set its own height keeps it.
+fn styled_for_span(s: &RichSpanStyle, line_height: Option<f32>) -> SkTextStyle {
+    let mut ts = to_sktextstyle(s);
+    if let Some(lh) = line_height {
+        if lh > 0.0 && s.height_multiple == 0.0 && s.font_size > 0.0 {
+            ts.set_height(lh / s.font_size);
+            ts.set_height_override(true);
+        }
+    }
+    ts
 }
 
 /// Converts a RichSpanStyle into a Skia TextStyle.

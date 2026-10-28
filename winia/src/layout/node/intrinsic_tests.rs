@@ -611,6 +611,13 @@
             drawables: vec![Arc::new(BoxImage) as Arc<dyn crate::text::InlineDrawable>],
             drawable_ranges: vec![2..3],
             spans: Vec::new(),
+            // Compose's `BasicText` defaults.
+            align: crate::text::TextAlign::Left,
+            max_lines: usize::MAX,
+            overflow: crate::text::TextOverflow::Clip,
+            soft_wrap: true,
+            line_height: None,
+            min_lines: 1,
         });
         let mut nodes = vec![LayoutNode::leaf(modifier)];
         let _ = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -638,6 +645,13 @@
             drawables: Vec::new(),
             drawable_ranges: Vec::new(),
             spans: Vec::new(),
+            // Compose's `BasicText` defaults.
+            align: crate::text::TextAlign::Left,
+            max_lines: usize::MAX,
+            overflow: crate::text::TextOverflow::Clip,
+            soft_wrap: true,
+            line_height: None,
+            min_lines: 1,
         });
         let mut nodes = vec![LayoutNode::leaf(modifier)];
         assert!(nodes[0].has_richtext_content);

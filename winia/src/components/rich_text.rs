@@ -345,13 +345,66 @@ impl StyleModifier {
 
 pub struct RichText {
     modifier: Modifier,
+    align: crate::text::TextAlign,
+    max_lines: usize,
+    overflow: crate::text::TextOverflow,
+    soft_wrap: bool,
+    line_height: Option<f32>,
+    min_lines: usize,
 }
 
 impl RichText {
-    pub fn new() -> Self { RichText { modifier: Modifier::new() } }
+    pub fn new() -> Self {
+        RichText {
+            modifier: Modifier::new(),
+            // Compose's defaults for `BasicText`
+            align: crate::text::TextAlign::Left,
+            max_lines: usize::MAX,
+            overflow: crate::text::TextOverflow::Clip,
+            soft_wrap: true,
+            line_height: None,
+            min_lines: 1,
+        }
+    }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    /// Horizontal alignment of each line (Compose's `textAlign`).
+    pub fn align(mut self, align: crate::text::TextAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Maximum number of lines; the rest is cut (or ellipsized — see [`Self::overflow`]).
+    pub fn max_lines(mut self, max_lines: usize) -> Self {
+        self.max_lines = max_lines;
+        self
+    }
+
+    /// What to do when the text does not fit: `Clip`, `Ellipsis` or `Visible`.
+    pub fn overflow(mut self, overflow: crate::text::TextOverflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    /// Whether the text wraps at the box width. `false` lays every line out at its own width.
+    pub fn soft_wrap(mut self, soft_wrap: bool) -> Self {
+        self.soft_wrap = soft_wrap;
+        self
+    }
+
+    /// A fixed line height in logical pixels (Compose's `lineHeight`).
+    pub fn line_height(mut self, line_height: f32) -> Self {
+        self.line_height = Some(line_height);
+        self
+    }
+
+    /// Minimum number of lines the box reserves room for.
+    pub fn min_lines(mut self, min_lines: usize) -> Self {
+        self.min_lines = min_lines;
         self
     }
 
@@ -395,6 +448,12 @@ impl RichText {
             drawables,
             drawable_ranges,
             spans,
+            align: self.align,
+            max_lines: self.max_lines,
+            overflow: self.overflow,
+            soft_wrap: self.soft_wrap,
+            line_height: self.line_height,
+            min_lines: self.min_lines,
         });
         ctx.start_leaf(key, modifier);
         if let Some(reg) = reg_for_node {

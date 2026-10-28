@@ -108,6 +108,48 @@ fn text_renders_something() {
     assert!(dark_pixels > 5, "expected dark text pixels, found {dark_pixels}");
 }
 
+/// `RichText` aligns its painted block, the way the plain leaf does (a paint-origin shift).
+///
+/// `align` did not exist before: the rich measure path built a bare `ParagraphStyle`, so there was
+/// nothing to align. This is the pixel proof that the parameter reaches the paint origin.
+#[test]
+fn rich_text_alignment_moves_the_painted_block() {
+    fn ink_span(align: winia::text::TextAlign) -> (i32, i32) {
+        let (mut surface, _) = render_ui(300.0, 40.0, winia::app_root!(move |ctx| {
+            winia::components::RichText::new()
+                .align(align)
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx, |x| { x.text("Hi"); });
+        }));
+        let (mut first, mut last) = (-1, -1);
+        for x in 0..300 {
+            for y in 0..40 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if first < 0 { first = x; }
+                    last = x;
+                }
+            }
+        }
+        (first, last)
+    }
+    let left = ink_span(winia::text::TextAlign::Left);
+    let center = ink_span(winia::text::TextAlign::Center);
+    let right = ink_span(winia::text::TextAlign::Right);
+    assert!(left.0 >= 0, "Left must paint something");
+    assert!(
+        left.0 < 20,
+        "Left starts at the box edge: {left:?}"
+    );
+    assert!(
+        center.0 > 100,
+        "Center moves the block towards the middle: center={center:?} left={left:?}"
+    );
+    assert!(
+        right.0 > center.0,
+        "Right is further right than Center: right={right:?} center={center:?}"
+    );
+}
 /// `TextOverflow::Clip` clips the text to its own box; `Visible` is the one value that spills.
 ///
 /// Measured before this fix: in a 40 dp box with 16 sp nowrap text, both painted ink out to

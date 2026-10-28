@@ -974,7 +974,39 @@ pub(super) fn render_pass1(
     // ═══ 富文本（RichText）渲染 ═══
     if node.has_richtext_content {
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-            para.layout(content_w);
+            // The paragraph parameters travel with the payload now, so the paint side has to make
+            // the same decisions the measure side did: a nowrap paragraph keeps its infinite-width
+            // layout (re-laying it out at the box width would truncate it), and Center/Right are a
+            // paint-origin shift, not a paragraph style (see D-3 in docs/text-review.md).
+            let (rich_align, rich_overflow, rich_soft_wrap) = node
+                .modifier
+                .elements()
+                .iter()
+                .find_map(|el| match el {
+                    ModifierElement::RichTextContent { align, overflow, soft_wrap, .. } => {
+                        Some((*align, *overflow, *soft_wrap))
+                    }
+                    _ => None,
+                })
+                .unwrap_or((crate::text::TextAlign::Left, crate::text::TextOverflow::Clip, true));
+            if rich_soft_wrap {
+                para.layout(content_w);
+            }
+            let drawn_width = if rich_soft_wrap {
+                para.max_intrinsic_width()
+            } else {
+                para.max_width().min(para.max_intrinsic_width())
+            };
+            let slack = if rich_soft_wrap {
+                (content_w - drawn_width).max(0.0)
+            } else {
+                content_w - drawn_width
+            };
+            let rich_x = match rich_align {
+                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
+                crate::text::TextAlign::Center => content_x + slack / 2.0,
+                crate::text::TextAlign::Right => content_x + slack,
+            };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 let rects: Vec<_> = if range.start < range.end {
@@ -982,10 +1014,27 @@ pub(super) fn render_pass1(
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(content_x + tb.rect.left, content_y + tb.rect.top, content_x + tb.rect.right, content_y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(skia_safe::Rect::new(rich_x + tb.rect.left, content_y + tb.rect.top, rich_x + tb.rect.right, content_y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, content_x, content_y);
+            // Same clip rule as the plain leaf (T-8): an overflowing rich layout is cut to its
+            // content box unless the caller asked for `Visible`.
+            let rich_clips = rich_overflow != crate::text::TextOverflow::Visible
+                && (para.did_exceed_max_lines()
+                    || para.longest_line() > content_w + 0.5
+                    || para.height() > content_h + 0.5);
+            if rich_clips {
+                canvas.save();
+                canvas.clip_rect(
+                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    None,
+                    Some(false),
+                );
+            }
+            para.paint(canvas, rich_x, content_y);
+            if rich_clips {
+                canvas.restore();
+            }
         }
     }
 
