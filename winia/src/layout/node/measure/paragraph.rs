@@ -139,6 +139,16 @@ pub(crate) fn build_plain_paragraph(
 /// a paragraph laid out at its own width in `cached_paragraph` — the renderer reads that cache,
 /// and a probe runs with the intrinsic query's width, not the frame's.
 pub(crate) fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<crate::text::Paragraph> {
+    build_text_paragraph_at(node, max_width, None)
+}
+
+/// The same build, with the font size overridden — the `autoSize` fit search needs to lay the leaf
+/// out at a candidate size without touching the payload.
+pub(crate) fn build_text_paragraph_at(
+    node: &LayoutNode,
+    max_width: f32,
+    font_size_override: Option<f32>,
+) -> Option<crate::text::Paragraph> {
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
@@ -146,7 +156,7 @@ pub(crate) fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<
         } = el {
             return Some(build_plain_paragraph(
                 content.as_str(),
-                *font_size,
+                font_size_override.unwrap_or(*font_size),
                 color,
                 *font_weight,
                 *font_style,
@@ -209,7 +219,17 @@ pub(crate) struct TextMeasure {
 }
 
 pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> TextMeasure {
-    let Some(para) = build_text_paragraph(node, max_width) else {
+    measure_and_cache_text_at(node, max_width, None)
+}
+
+/// The same measure at a candidate font size (the `autoSize` search); the LAST call caches, so the
+/// search has to end on the size it chose.
+pub(crate) fn measure_and_cache_text_at(
+    node: &LayoutNode,
+    max_width: f32,
+    font_size_override: Option<f32>,
+) -> TextMeasure {
+    let Some(para) = build_text_paragraph_at(node, max_width, font_size_override) else {
         return TextMeasure {
             size: Size::ZERO,
             text_size: Size::ZERO,

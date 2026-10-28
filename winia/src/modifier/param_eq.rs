@@ -151,10 +151,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
         (Blur { radius: ar }, Blur { radius: br }) => ar.same_parameter(br),
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar.same_parameter(br),
-        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh, min_lines: amin, underline: au, line_through: alt, font_family: afam, on_text_layout: aotl },
-         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh, min_lines: bmin, underline: bu, line_through: blt, font_family: bfam, on_text_layout: botl }) => {
+        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh, min_lines: amin, underline: au, line_through: alt, font_family: afam, on_text_layout: aotl, auto_size: aauto },
+         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh, min_lines: bmin, underline: bu, line_through: blt, font_family: bfam, on_text_layout: botl, auto_size: bauto }) => {
             ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw && als == bls && alh == blh
                 && amin == bmin && au == bu && alt == blt && afam == bfam
+                // Compose's `autoSize`: a changed fit window must re-search.
+                && aauto == bauto
                 // The callback is compared by IDENTITY: a rebuild produces a new closure, which is a
                 // changed parameter, so the leaf re-enters and always calls the latest one.
                 && match (aotl, botl) {

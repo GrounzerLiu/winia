@@ -17,6 +17,8 @@ pub(crate) struct TextExtras {
     pub on_text_layout: Option<
         std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>,
     >,
+    /// Compose's `autoSize`: `(min, max)` in logical pixels, or `None` to lay out at the stated size.
+    pub auto_size: Option<(f32, f32)>,
 }
 
 impl Modifier {
@@ -126,6 +128,7 @@ impl Modifier {
             soft_wrap,
             letter_spacing,
             line_height,
+            auto_size: extras.auto_size,
         })
     }
 

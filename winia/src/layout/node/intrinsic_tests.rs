@@ -22,6 +22,7 @@
             line_through: false,
             font_family: None,
             on_text_layout: None,
+            auto_size: None,
         })
     }
 

@@ -77,6 +77,8 @@ pub struct Text {
     font_family: Option<String>,
     /// Compose's `onTextLayout`: called after every measure with the layout the text produced.
     on_text_layout: Option<Arc<dyn Fn(&TextLayoutResult) + Send + Sync>>,
+    /// Compose's `autoSize`: the (min, max) logical-pixel window the fit search runs in.
+    auto_size: Option<(f32, f32)>,
 }
 
 impl std::fmt::Debug for Text {
@@ -112,6 +114,7 @@ impl Text {
             text_decoration: None,
             font_family: None,
             on_text_layout: None,
+            auto_size: None,
         }
     }
 
@@ -141,6 +144,15 @@ impl Text {
     }
 
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
+
+    /// Compose's `autoSize`: shrink the font from `max` towards `min` until the text fits the box.
+    ///
+    /// The search runs at measure time, where the constraints are known; the chosen size is the
+    /// largest one whose laid-out box fits both axes.
+    pub fn auto_size(mut self, min: f32, max: f32) -> Self {
+        self.auto_size = Some((min, max));
+        self
+    }
 
     /// 行高（`TextUnit`；裸 `f32` 按 Sp 解释，对标 Compose `TextStyle.lineHeight`）
     pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
@@ -206,7 +218,17 @@ impl Text {
         let base = LOCAL_TEXT_STYLE.current();
         let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
 
-        let final_font_size = self.font_size.or(style.font_size).unwrap_or(TextUnit::Sp(crate::unit::Sp(14.0)));
+        // Compose's `TextUnitType.Em`: a multiple of the ENCLOSING size, so it resolves against
+        // whatever `ProvideTextStyle` supplied (14 sp when nobody did), not against itself.
+        let inherited_font_size = style
+            .font_size
+            .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
+            .unwrap_or(14.0);
+        let final_font_size = match self.font_size.or(style.font_size) {
+            Some(TextUnit::Em(em)) => TextUnit::Sp(crate::unit::Sp(inherited_font_size * em)),
+            Some(other) => other,
+            None => TextUnit::Sp(crate::unit::Sp(14.0)),
+        };
         let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
         let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
@@ -277,6 +299,7 @@ impl Text {
                 line_through: final_decoration.line_through,
                 font_family: final_font_family,
                 on_text_layout: self.on_text_layout.clone(),
+                auto_size: self.auto_size,
             },
         );
 
@@ -510,6 +533,70 @@ mod tests {
             result.text_size.width, 12.0,
             "text_size stays the paragraph's own width: {result:?}"
         );
+    }
+    /// Compose's `autoSize`: the font shrinks until the text fits the box.
+    ///
+    /// The payload carries the window and the search runs at measure time, where the constraints
+    /// exist. Before this the only way to fit text was to guess a size and read `on_text_layout`.
+    #[test]
+    fn auto_size_shrinks_the_font_until_the_text_fits() {
+        fn measure(auto: bool) -> (f32, f32) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                let text = Text::new("The quick brown fox jumps over the lazy dog").font_size(24.0);
+                let text = if auto { text.auto_size(8.0, 24.0) } else { text };
+                text.modifier(Modifier::new().size(120.0, 40.0)).build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let nodes = composer.arena_nodes();
+            let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+            let paragraph = node.cached_paragraph.borrow();
+            let paragraph = paragraph.as_ref().expect("measured");
+            (paragraph.height(), node.measured_size.height)
+        }
+        let (natural, natural_box) = measure(false);
+        let (shrunk, shrunk_box) = measure(true);
+        assert!(
+            natural > 40.0,
+            "24 sp of that sentence is taller than the 40 dp box: {natural}"
+        );
+        assert!(
+            shrunk < natural,
+            "autoSize must shrink the layout: {shrunk} vs {natural}"
+        );
+        assert!(
+            shrunk <= 40.5,
+            "the shrunk layout fits the box: {shrunk} in {shrunk_box}"
+        );
+    }
+    /// `TextUnit::Em` is a multiple of the ENCLOSING size, not an absolute one.
+    ///
+    /// Compose's `TextUnitType.Em`: `2.em` under a 16 sp style is 32 sp. Before this variant
+    /// existed there was no way to say it at all (`Sp` and `Px` only), and the payload stores
+    /// resolved logical pixels, so the resolution has to happen in `Text::build` where the
+    /// inherited style is in hand.
+    #[test]
+    fn an_em_font_size_resolves_against_the_inherited_size() {
+        use crate::text::TextStyle;
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            crate::components::ProvideTextStyle(
+                TextStyle::new().font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0))),
+                ctx,
+                |ctx| {
+                    Text::new("hi")
+                        .font_size(crate::unit::TextUnit::Em(2.0))
+                        .build(ctx);
+                },
+            );
+        });
+        let nodes = composer.arena_nodes();
+        let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+        let size = node.modifier.elements().iter().find_map(|el| match el {
+            crate::modifier::ModifierElement::TextContent { font_size, .. } => Some(*font_size),
+            _ => None,
+        }).expect("the payload carries a size");
+        assert!((size - 32.0).abs() < 0.01, "2 em of 16 sp is 32 logical px, got {size}");
     }
     /// `TextAlign::Start` / `End` resolve against the layout direction at build time.
     ///

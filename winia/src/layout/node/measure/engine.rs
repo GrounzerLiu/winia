@@ -961,7 +961,34 @@ pub(crate) fn measure_node_inner(
             // The parent's max_width is the layout width, which makes the text wrap inside the space
             // it has. For a scroll container inner_constraints.max_width is already f32::MAX.
             let layout_width = inner_constraints.max_width;
-            let measured = measure_and_cache_text(&nodes[idx], layout_width);
+            // Compose's `autoSize`: find the largest size in the declared window whose laid-out
+            // box fits the constraints, and cache THAT paragraph. The search runs here because
+            // this arm is the only place that knows the constraints; a leaf without the parameter
+            // takes the single measure below.
+            let auto_size = nodes[idx].modifier.elements().iter().find_map(|el| match el {
+                ModifierElement::TextContent { auto_size, .. } => *auto_size,
+                _ => None,
+            });
+            let measured = match auto_size {
+                Some((min, max)) if max > min => {
+                    let min = min.max(1.0);
+                    let box_w = inner_constraints.max_width;
+                    let box_h = inner_constraints.max_height;
+                    let mut size = max;
+                    // Linear from the top: the fit window is small and a leaf measures in
+                    // microseconds; a binary search would need the height to be monotonic in the
+                    // size, which wrapping does not guarantee.
+                    while size > min {
+                        let candidate = measure_and_cache_text_at(&nodes[idx], layout_width, Some(size));
+                        if candidate.size.width <= box_w + 0.5 && candidate.size.height <= box_h + 0.5 {
+                            break;
+                        }
+                        size = (size - 1.0).max(min);
+                    }
+                    measure_and_cache_text_at(&nodes[idx], layout_width, Some(size))
+                }
+                _ => measure_and_cache_text(&nodes[idx], layout_width),
+            };
             let text_size = measured.size;
             // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its text
             // baselines, measured from the node's own top, exactly as Compose's text does. Taken from

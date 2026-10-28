@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Defects (wrong behaviour; T-9 is latent, see its row) | 1 | 8 | 0 |
 | Deviations from Compose (deliberate or accepted) | 1 | 3 | 1 (the ellipsis half of D-4) |
-| Missing API surface | 4 | 5 | 1 (the shadow item of M-6) |
+| Missing API surface | 2 | 7 | 1 (the shadow item of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2, M-8, M-9,
@@ -186,10 +186,14 @@ reader can re-check.
   2-line paragraph (`HeightInLinesModifier.kt:414-443`).
   Measured at one font size they coincide exactly (`16 sp`: 21 → 84 for `min_lines(4)`;
   `40 sp`: 53 / 106 → 212 both ways), and a plain `Text` cannot mix line heights (one font size per
-  leaf), so **this is latent, not reachable through `Text` today**: `RichText` is the only leaf
-  that could mix heights and it has no `min_lines` at all (T-3).
-  Reason open: fixing it only matters once T-3 gives `RichText` the parameter; doing it now would
-  add a same-style helper paragraph that nothing can exercise.
+  leaf).
+  **Status changed: this is now REACHABLE.** T-3 gave `RichText` `min_lines`, and a rich block can
+  mix font sizes inside one paragraph, so `height / line_count * min_lines` can disagree with
+  Compose's `first + (n-1) × step`. Nothing measures it yet.
+  Fix plan: build the paragraph twice more with `max_lines = 1` and `2` (what
+  `HeightInLinesModifier.kt:414-443` does with the same `TextLayoutInput`), take
+  `h1` and `step = h2 - h1`, and reserve `h1 + (n-1) × step`. Only when `min_lines` asks for more
+  lines than were laid out, so the two extra builds stay off the common path.
 
 ## Deviations from Compose
 
@@ -249,10 +253,15 @@ reader can re-check.
   Reason open: the paragraph itself is borrowed mutably at measure time, so handing it out from the
   callback needs an ownership decision (clone the handle? hand out an immutable view?).
 
-- [ ] **M-3 — no `autoSize` / `TextAutoSize`.** Compose 1.13 has it on both `BasicText` and
-  `Text` (`BasicText.kt:100`, `material3/Text.kt:82`). Reason not fixed: it is a fit-search loop
-  over measure passes, i.e. a new subsystem rather than a parameter, and no caller in the repo
-  needs it. Tracked here so it is not rediscovered as a bug.
+- [x] **M-3 — no `autoSize` / `TextAutoSize`.** Compose 1.13 has it on both `BasicText` and
+  `Text` (`BasicText.kt:100`, `material3/Text.kt:82`).
+  Fixed as a fit window rather than a strategy object: `Text::auto_size(min, max)` carries a
+  `(f32, f32)` in the payload, and the text arm of `measure_node_inner` — the only place that knows
+  the constraints — walks down from `max` one logical pixel at a time until the laid-out box fits
+  both axes, then caches THAT paragraph. Linear rather than binary on purpose: the box height is
+  not monotonic in the size once wrapping is involved.
+  Test: `components::text::tests::auto_size_shrinks_the_font_until_the_text_fits` (24 sp of a long
+  sentence is taller than the 40 dp box; with the window it fits and is strictly shorter).
 
 - [ ] **M-4 — no `ColorProducer` overload.** `material3/Text.kt` has a second `Text` whose
   `color` is a producer so a frequently-changing colour does not recompose. Reason not fixed:
@@ -260,10 +269,14 @@ reader can re-check.
   escape hatch is a `State`-backed dynamic value; adding a producer variant before the payload
   supports dynamic evaluation would only move the recomposition.
 
-- [ ] **M-5 — `TextUnit` has no `Em`.** `unit.rs:357-362` is `Sp` | `Px`. Reason not fixed:
-  `Em` resolves against the *enclosing* font size, which the current payload does not carry (it
-  stores a resolved logical pixel size). Adding the variant without that context would resolve every
-  `Em` against 1.0.
+- [x] **M-5 — `TextUnit` has no `Em`.** `unit.rs` had `Sp` | `Px` only.
+  Fixed: `TextUnit::Em(f32)` exists and is resolved where the enclosing size IS known —
+  `Text::build` (against the inherited `LOCAL_TEXT_STYLE` size, 14 sp when nobody set one) and
+  RichText's `resolve_base` — so the payload keeps storing resolved logical pixels. An `Em` that
+  somehow reaches `to_logical_px` answers its raw multiple instead of panicking; a wrong size in
+  the measure path beats a crash.
+  Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
+  (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
 - [ ] **M-6 — no `TextStyle.lineHeightStyle`, `fontSynthesis`, `fontFeatureSettings`,
   `textGeometricTransform`, `shadow`, `drawStyle`, `brush`.** See D-2 for the line-height half.
@@ -334,6 +347,8 @@ the test back to failing). The rows themselves carry the details; this is the in
 | M-2 | `first_baseline`, `last_baseline`, `did_overflow_width`, `did_overflow_height`; `has_visual_overflow` covers both axes | `text::measure_text::tests::a_nowrap_line_reports_a_width_overflow` |
 | M-8 | `param_eq` compares the resolved spans | `param_eq_tests::param_eq_compares_the_rich_text_spans` |
 | M-9 | two `debug_assert!`s on strict monotonicity | `text::index_bimap::tests` (3) |
+| M-3 | `Text::auto_size(min, max)`: a measure-time fit search, `measure_node_inner` walks down until the box fits | `text::tests::auto_size_shrinks_the_font_until_the_text_fits` |
+| M-5 | `TextUnit::Em`, resolved against the inherited size in `Text::build` / `resolve_base` | `text::tests::an_em_font_size_resolves_against_the_inherited_size` |
 | M-10 | `RefCell<svg::Dom>` → `parking_lot::Mutex<svg::Dom>` | `inline_drawable::tests::an_svg_drawable_can_be_drawn_from_two_threads` |
 
 Commit `2030ae8`. Full `--lib` suite at that commit: 2053 passed; `--test render_snapshot`: 33
@@ -374,13 +389,14 @@ builds against. Checked against
 
 ### Deferred, not blocked
 
-`M-3` (`autoSize`), `M-4` (`ColorProducer` overload), `M-5` (`TextUnit::Em`) and `M-7`
-(`AnnotatedString`) are all implementable in winia; none of them needs a Skia API that is missing.
-They stay open because each is a subsystem or a payload change rather than a parameter, and nothing
-in the repo asks for them yet: `autoSize` is a fit-search loop over measure passes, `ColorProducer`
-needs the payload to evaluate a producer per frame, `Em` needs the enclosing font size carried
-through the style merge, and `AnnotatedString` needs `resolve_spans` rebuilt on a span list that
-can be sliced and read back.
+`M-4` (`ColorProducer`) and `M-7` (`AnnotatedString`) are implementable in winia — neither needs a
+Skia API that is missing — but each is a payload/data-model change rather than a parameter, and
+nothing in the repo asks for either yet: `ColorProducer` needs `TextContent` to evaluate a producer
+per frame instead of comparing a value, and `AnnotatedString` needs `resolve_spans` rebuilt on a span
+list that can be sliced, merged and read back.
+
+`T-9` is the one defect still open and it is now reachable (see its row): `RichText` can mix font
+sizes and has `min_lines`, so the average-line-height reservation can disagree with Compose.
 ## How to re-check
 
 The probes compiled inside `winia/src/text/` as a `#[cfg(test)]` module and were removed after

@@ -359,6 +359,13 @@ pub enum TextUnit {
     Sp(Sp),
     /// 物理像素（需 Density 转逻辑像素）
     Px(Px),
+    /// A multiple of the ENCLOSING font size (Compose's `TextUnitType.Em`).
+    ///
+    /// It has no absolute value on its own — `to_logical_px` has no base to multiply — so the
+    /// style merge resolves it against the inherited size before a leaf sees it (`Text::build`,
+    /// RichText's `resolve_base`). `to_logical_px` still answers something for one that slipped
+    /// through (the raw multiple) because a panic in the measure path would be worse than a size.
+    Em(f32),
 }
 
 impl TextUnit {
@@ -372,6 +379,9 @@ impl TextUnit {
         match self {
             TextUnit::Sp(s) => s.value(),
             TextUnit::Px(p) => p.to_logical(density),
+            // Unresolved `Em`: see the variant's note. The style merge is supposed to have
+            // replaced it with an `Sp` before a leaf sees it.
+            TextUnit::Em(em) => *em,
         }
     }
 }

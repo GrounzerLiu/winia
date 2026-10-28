@@ -19,6 +19,7 @@ use crate::graphics::{Color};
 use crate::text::InlineDrawable;
 use crate::components::text::{LOCAL_TEXT_STYLE};
 use crate::text::{FontWeight, FontSlant, TextStyle};
+use crate::unit::TextUnit;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 use std::ops::Range;
@@ -86,7 +87,12 @@ fn resolve_base() -> Style {
     let theme = WiniaTheme::colors();
     let base = LOCAL_TEXT_STYLE.current();
     Style {
-        fs: base.font_size.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
+        // An `Em` in the inherited style is a multiple of the 14 sp default here (Compose resolves
+        // `Em` against the enclosing size, and `LOCAL_TEXT_STYLE` is that enclosing level).
+        fs: base.font_size.map(|u| match u {
+            TextUnit::Em(em) => 14.0 * em,
+            other => other.to_logical_px(crate::runtime::density::current_density()),
+        }),
         color: base.color.or(Some(theme.on_surface)),
         fw: base.font_weight,
         slant: base.font_style,

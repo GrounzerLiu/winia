@@ -572,7 +572,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32>, min_lines: usize, underline: bool, line_through: bool, font_family: Option<String>, on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>> },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32>, min_lines: usize, underline: bool, line_through: bool, font_family: Option<String>, on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>, auto_size: Option<(f32, f32)> },
     /// 富文本内容（含内联 drawable，由 RichText 组件设置）
     RichTextContent {
         content: String,
