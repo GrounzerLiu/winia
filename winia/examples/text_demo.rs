@@ -217,17 +217,19 @@ fn segmented(
                     for (index, label) in options.iter().enumerate() {
                         clone!(state);
                         let current = selected == index;
+                        // Every option is the SAME button; the pick is marked in the LABEL, with a
+                        // bullet. Two earlier attempts changed the button itself (an accent-coloured
+                        // label on a filled container, then filled-vs-text styling) and both broke
+                        // the rendering: the selected label disappeared, and the previously selected
+                        // one dimmed. Changing only the text keeps every slot on one shape.
+                        let text = if current { format!("• {label}") } else { (*label).to_string() };
                         Button::filled()
                             .on_click(move || state.set(index))
                             .modifier(Modifier::new().test_tag(format!(
                                 "{tag}-{index}-{}",
                                 if current { "on" } else { "off" }
                             )))
-                            .build(ctx, |ctx| {
-                                let text = Text::new(*label).font_size(10.0);
-                                let text = if current { text.color(ACCENT) } else { text };
-                                text.build(ctx);
-                            });
+                            .build(ctx, |ctx| Text::new(text).font_size(10.0).build(ctx));
                     }
                 });
         });
