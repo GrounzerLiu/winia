@@ -323,10 +323,11 @@ reader can re-check.
   (red without it), `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
   `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
   `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`.
-  Still missing, with reasons: `lineHeightStyle` needs per-line leading trimming (Skia's
-  `set_half_leading` is the closest primitive and D-2 already spends it on centring); `fontSynthesis`
-  needs synthetic bold/italic control the paragraph API does not expose; `textGeometricTransform`
-  (scale/skew of the glyph run) has no Skia paragraph hook. Commits eff2d7d (shadow + features) and
+  Still missing because skia-safe 0.99 exposes no hook for them (grepped: no `line_height_style`, no
+  `font_synthesis`, no geometric transform on `textlayout::TextStyle` or `ParagraphStyle`):
+  `lineHeightStyle` needs per-line leading trimming (`set_half_leading` is the closest primitive and
+  D-2 already spends it on centring), `fontSynthesis` needs synthetic bold/italic control, and
+  `textGeometricTransform` scales/skews the glyph run. Commits eff2d7d (shadow + features) and
   87a7e01 (drawStyle + brush).
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
