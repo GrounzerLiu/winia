@@ -16,12 +16,12 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 2 | 7 |
+| Defects (wrong behaviour; T-9 is latent, see its row) | 1 | 8 |
 | Deviations from Compose (deliberate or accepted) | 4 | 0 |
 | Missing API surface | 10 | 0 |
 | Investigated and ruled out | — | 5 |
 
-T-1, T-2, T-4, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
+T-1, T-2, T-3, T-4, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
 rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
 next reader can re-check.
 
@@ -64,13 +64,27 @@ next reader can re-check.
   (fails on the old behaviour with "the text after an inline image must be addressable").
   Commit `b2bfb14`. Full `--lib` suite: 2027 passed.
 
-- [ ] **T-3 — `RichText` has no `align` / `max_lines` / `overflow` / `soft_wrap` /
-  `line_height`, and the measure path builds a default `ParagraphStyle` anyway.**
-  `measure/paragraph.rs:246` is `ParagraphStyle::new()` with no fields set; `RichTextContent`
-  (`modifier/element.rs`) carries only content, drawables, ranges and spans, so the parameters do
-  not exist to pass. Measured: `RichText` in a 120 dp box wraps to 4 lines with no way to cap it,
-  where `Text` with `max_lines(1)` reports 1 line.
-  Reason open: it is an API addition (payload fields + builder + param_eq), not a bug fix.
+- [x] **T-3 — `RichText` had no `align` / `max_lines` / `overflow` / `soft_wrap` / `line_height`,
+  and its measure path built a bare `ParagraphStyle` anyway.**
+  `RichTextContent` carried only content, drawables, ranges and spans, so the parameters did not
+  even exist to pass: a rich block in a 120 dp box wrapped to 4 lines with no way to cap it, where
+  `Text` with `max_lines(1)` reported 1 line.
+  Fix, end to end: the payload carries `align`, `max_lines`, `overflow`, `soft_wrap`,
+  `line_height`, `min_lines`; `RichText` gained the matching builder methods with Compose's
+  `BasicText` defaults; `param_eq` compares all six (before this only content, the drawable count
+  and the ranges were compared, so a changed cap would not have re-measured); the measure path
+  applies them with the SAME rules as the plain leaf (nowrap ellipsis is a one-line ellipsis,
+  nowrap lays out at an infinite width, `min_lines` pads the box, a span's own height beats the
+  paragraph's); and the paint side re-lays out only when wrapping, shifts the origin for
+  Center/Right (D-3) and clips an overflowing layout when it is not `Visible` (T-8).
+  Tests: six measurement tests in `components::rich_text::tests` (default wraps; `max_lines(1)`
+  leaves one line and a shorter box; `soft_wrap(false)` keeps one line wider than the box;
+  `Ellipsis` truncates against the box; `line_height(40)` makes a one-line block 40 dp;
+  `min_lines(3)` reserves three lines) plus the pixel test
+  `render_snapshot::rich_text_alignment_moves_the_painted_block`. Spot-checked that the wiring is
+  real: forcing `max_lines` back to `usize::MAX` makes the cap test report 3 lines, and dropping
+  the line height makes it report 19 instead of 40.
+  Commit `3ad3a22`. Full `--lib` suite: 2041 passed; `--test render_snapshot`: 32 passed.
 
 - [x] **T-4 — `Paragraph::get_actual_text_range` converted Skia's paragraph bytes through the
   UTF-16 map.**
