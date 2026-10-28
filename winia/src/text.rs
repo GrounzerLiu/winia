@@ -15,7 +15,7 @@ mod text_layout;
 mod inline_drawable;
 mod measure_text;
 
-pub use style::{FontSlant, FontWeight, TextAlign, TextDecoration, TextOverflow, TextStyle};
+pub use style::{FontSlant, FontWeight, TextAlign, TextDecoration, TextOverflow, TextStyle, TextShadow};
 pub use layout_result::TextLayoutResult;
 pub use measure_text::{measure_text, TextMeasureSpec};
 pub use index_bimap::IndexBiMap;

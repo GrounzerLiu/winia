@@ -937,3 +937,39 @@ fn a_text_decoration_draws_under_the_glyphs() {
     );
 }
 
+/// A text shadow paints behind the glyphs, offset — Compose's `TextStyle.shadow`.
+///
+/// The glyph is drawn at the node's origin, so a shadow offset down and right leaves ink where the
+/// glyph alone never reaches. Without a shadow the ink's bottom-right corner is the glyph's own;
+/// with one it moves out by the offset.
+#[test]
+fn a_text_shadow_paints_offset_ink_beyond_the_glyphs() {
+    fn ink_corner(shadow: Option<winia::text::TextShadow>) -> (i32, i32) {
+        let (mut surface, _) = render_ui(120.0, 60.0, winia::app_root!(move |ctx| {
+            let text = Text::new("H")
+                .font_size(40.0)
+                .color(Color::BLACK)
+                .modifier(Modifier::new().size(120.0, 60.0));
+            let text = if let Some(shadow) = shadow { text.shadow(shadow) } else { text };
+            text.build(ctx);
+        }));
+        let (mut right, mut bottom) = (-1, -1);
+        for x in 0..120 {
+            for y in 0..60 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if x > right { right = x; }
+                    if y > bottom { bottom = y; }
+                }
+            }
+        }
+        (right, bottom)
+    }
+    let (plain_right, plain_bottom) = ink_corner(None);
+    let shadow = winia::text::TextShadow::new(Color::from_argb(255, 0, 0, 0), (6.0, 6.0), 0.0);
+    let (shadow_right, shadow_bottom) = ink_corner(Some(shadow));
+    assert!(
+        shadow_right >= plain_right + 3 && shadow_bottom >= plain_bottom + 3,
+        "the shadow must extend the ink: plain=({plain_right},{plain_bottom}) shadow=({shadow_right},{shadow_bottom})"
+    );
+}

@@ -73,6 +73,7 @@ pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
         false,
         false,
         spec.font_family,
+        None,
         spec.max_width,
     );
 

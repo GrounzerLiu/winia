@@ -100,6 +100,7 @@ pub(super) fn draw_text_field_aux_text(
         false,
         false,
         None,
+        None,
         max_width,
     );
     // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
@@ -338,7 +339,7 @@ pub(super) fn draw_text_with_selection(
     let para = crate::layout::node::build_plain_paragraph(
         content, font_size, color, font_weight, font_style,
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
-        false, false, None, w,
+        false, false, None, None, w,
     );
     // Same rule as the cached path (see the text branch in `render::pass`): an overflowing layout
     // is clipped to the text node's own box unless the caller asked for `Visible`. Without this the

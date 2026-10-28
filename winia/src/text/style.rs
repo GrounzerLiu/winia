@@ -93,6 +93,30 @@ pub enum TextOverflow {
 }
 impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 
+/// A text shadow — Compose's `Shadow`: a colour, an offset and a blur radius.
+///
+/// Compose carries one optional shadow per `TextStyle` (`shadow: Shadow?`) and appends it to the
+/// glyph run, so the shadow follows the glyphs through wrapping and ellipsis. `blur` is Compose's
+/// `blurRadius` in logical pixels; Skia wants a sigma, and the conversion is Skia's own
+/// `SkBlurMask::ConvertRadiusToSigma` (radius * 0.57735 + 0.5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub color: Color,
+    pub offset: (f32, f32),
+    pub blur: f32,
+}
+
+impl TextShadow {
+    pub fn new(color: Color, offset: (f32, f32), blur: f32) -> Self {
+        Self { color, offset, blur }
+    }
+
+    /// The sigma Skia's paragraph wants for this blur radius.
+    pub fn blur_sigma(&self) -> f64 {
+        if self.blur <= 0.0 { 0.0 } else { (self.blur * 0.577_35 + 0.5) as f64 }
+    }
+}
+
 /// 文本样式——对标 Compose TextStyle
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
@@ -121,11 +145,16 @@ pub struct TextStyle {
     pub decoration: Option<TextDecoration>,
     /// 背景色（仅 RichText 生效）
     pub background: Option<Color>,
+    /// Compose's `TextStyle.shadow`: one optional glyph shadow.
+    pub shadow: Option<TextShadow>,
+    /// Compose's `TextStyle.fontFeatureSettings`: an OpenType feature string such as `"smcp"`, or
+    /// `"liga" off`. Parsed by [`parse_font_features`] into (tag, value) pairs for Skia.
+    pub font_feature_settings: Option<String>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -145,6 +174,10 @@ impl TextStyle {
     pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
     /// A font family name, resolved against the platform's font collection.
     pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+    /// Compose's `TextStyle.shadow`.
+    pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
+    /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
+    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
         self.decoration = Some(decoration);
@@ -173,4 +206,73 @@ impl TextStyle {
 
 impl Default for TextStyle {
     fn default() -> Self { Self::new() }
+}
+
+/// Parse Compose's `fontFeatureSettings` string into the pairs Skia takes.
+///
+/// The syntax is a comma or space separated list. Each entry is a four-character OpenType tag,
+/// optionally with a value: `"smcp"` (on, i.e. 1), `"liga" off` / `"liga" on`, `"tnum" 0`, and the
+/// quoted form `"\"ss01\"" 1`. Tags longer than four characters are truncated the way CSS does it,
+/// and an entry with no letters is skipped; the order is preserved because Skia applies the list in
+/// order.
+pub fn parse_font_features(settings: &str) -> Vec<(String, i32)> {
+    let mut out: Vec<(String, i32)> = Vec::new();
+    for part in settings.split([',', ' ']).filter(|p| !p.trim().is_empty()) {
+        let token = part.trim();
+        // A token is either a tag, or a value that belongs to the tag before it.
+        match token.to_ascii_lowercase().as_str() {
+            "on" => {
+                if let Some(last) = out.last_mut() { last.1 = 1; }
+                continue;
+            }
+            "off" => {
+                if let Some(last) = out.last_mut() { last.1 = 0; }
+                continue;
+            }
+            _ => {}
+        }
+        if let Ok(value) = token.parse::<i32>() {
+            if let Some(last) = out.last_mut() { last.1 = value; }
+            continue;
+        }
+        let tag = token.trim_matches('"');
+        if tag.is_empty() {
+            continue;
+        }
+        let tag: String = tag.chars().take(4).collect();
+        out.push((tag, 1));
+    }
+    out
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn font_feature_settings_parse_the_compose_syntax() {
+        // A bare tag is ON; `off`/`on`/a number apply to the tag before it; quotes are allowed.
+        assert_eq!(parse_font_features("smcp"), vec![("smcp".to_string(), 1)]);
+        assert_eq!(
+            parse_font_features("liga off, smcp on"),
+            vec![("liga".to_string(), 0), ("smcp".to_string(), 1)]
+        );
+        assert_eq!(parse_font_features("tnum 0"), vec![("tnum".to_string(), 0)]);
+        assert_eq!(
+            parse_font_features("\"ss01\" 1"),
+            vec![("ss01".to_string(), 1)]
+        );
+        assert!(parse_font_features("").is_empty());
+        assert!(parse_font_features("  ,  ").is_empty());
+    }
+
+    #[test]
+    fn a_shadow_converts_its_radius_to_a_sigma() {
+        // Skia's ConvertRadiusToSigma: radius * 0.57735 + 0.5; a zero radius stays a hard shadow.
+        let hard = TextShadow::new(Color::BLACK, (1.0, 2.0), 0.0);
+        assert_eq!(hard.blur_sigma(), 0.0);
+        let soft = TextShadow::new(Color::BLACK, (1.0, 2.0), 4.0);
+        let sigma = soft.blur_sigma();
+        assert!((sigma - 2.8094).abs() < 0.01, "sigma for a 4 px radius: {sigma}");
+    }
 }

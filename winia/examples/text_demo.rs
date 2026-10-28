@@ -9,7 +9,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::text::{measure_text, TextMeasureSpec};
+use winia::text::{measure_text, TextMeasureSpec, TextShadow};
 
 #[path = "common/settings.rs"]
 mod settings;
@@ -497,7 +497,37 @@ fn text_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
-            // 8. Inheritance: ProvideTextStyle, and a child clearing a decoration.
+            // 8. Paint-only extras: Compose's TextStyle.shadow and fontFeatureSettings.
+            card(ctx, "paint", "shadow and OpenType features (TextStyle.shadow, fontFeatureSettings)", |ctx| {
+                Row::new()
+                    .spacing(20.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        // The shadow is drawn behind the glyphs and never enters the metrics, so the
+                        // box is the same with and without it (proved in
+                        // `components::text::tests::a_text_shadow_does_not_change_the_measured_box`).
+                        for (index, shadow) in [None, Some(TextShadow::new(Color::from_argb(180, 0, 0, 0), (3.0, 3.0), 4.0))]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            let text = Text::new("shadow").font_size(20.0).color(Color::BLACK);
+                            let text = if let Some(shadow) = shadow { text.shadow(shadow) } else { text };
+                            text.modifier(
+                                Modifier::new()
+                                    .padding(6.0)
+                                    .background(Color::WHITE, Shape::rounded(6.0))
+                                    .test_tag(format!("tx-shadow-{index}")),
+                            )
+                            .build(ctx);
+                        }
+                        Text::new("1111 fifi")
+                            .font_size(20.0)
+                            .font_feature_settings("tnum")
+                            .modifier(Modifier::new().test_tag("tx-feature-tnum"))
+                            .build(ctx);
+                    });
+            });
+            // 9. Inheritance: ProvideTextStyle, and a child clearing a decoration.
             card(ctx, "inherit", "ProvideTextStyle inheritance", |ctx| {
                 ProvideTextStyle(
                     TextStyle::new()

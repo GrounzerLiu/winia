@@ -165,6 +165,11 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                     _ => false,
                 }
         }
+        // Paint-only text extras: a shadow or a feature string changes the shaped paragraph, so a
+        // difference has to re-enter the leaf.
+        (TextPaint { shadow: ash, font_feature_settings: afs }, TextPaint { shadow: bsh, font_feature_settings: bfs }) => {
+            ash == bsh && afs == bfs
+        }
         // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar,
                             align: aal, max_lines: aml, overflow: aov, soft_wrap: asw,

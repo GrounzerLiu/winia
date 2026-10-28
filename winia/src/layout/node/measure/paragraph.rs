@@ -20,6 +20,7 @@ pub(crate) fn build_plain_paragraph(
     underline: bool,
     line_through: bool,
     font_family: Option<&str>,
+    paint: Option<(Option<crate::text::TextShadow>, Option<String>)>,
     max_width: f32,
 ) -> crate::text::Paragraph {
     use skia_safe::textlayout::ParagraphStyle;
@@ -124,6 +125,21 @@ pub(crate) fn build_plain_paragraph(
         };
         text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
     }
+    // Compose's `TextStyle.shadow`: Skia draws it behind the glyphs and it does not take part in
+    // metrics (a shadow never grows the measured box — measured in the same run that added it).
+    if let Some(shadow) = paint.as_ref().and_then(|(s, _)| *s) {
+        text_style.add_shadow(skia_safe::textlayout::TextShadow::new(
+            skia_safe::Color::from_argb(shadow.color.a, shadow.color.r, shadow.color.g, shadow.color.b),
+            (shadow.offset.0, shadow.offset.1),
+            shadow.blur_sigma(),
+        ));
+    }
+    // Compose's `TextStyle.fontFeatureSettings`: OpenType features, applied in order.
+    if let Some(settings) = paint.as_ref().and_then(|(_, f)| f.clone()) {
+        for (tag, value) in crate::text::style::parse_font_features(settings.as_str()) {
+            text_style.add_font_feature(tag.as_str(), value);
+        }
+    }
     let fc = crate::text::font::get_font_collection();
     let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
@@ -131,6 +147,16 @@ pub(crate) fn build_plain_paragraph(
     let mut para = builder.build();
     para.layout(layout_width);
     para
+}
+
+/// The paint-only text extras (shadow, OpenType features) the modifier carries, if any.
+pub(crate) fn text_paint(node: &LayoutNode) -> Option<(Option<crate::text::TextShadow>, Option<String>)> {
+    node.modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::TextPaint { shadow, font_feature_settings } => {
+            Some((*shadow, font_feature_settings.clone()))
+        }
+        _ => None,
+    })
 }
 
 /// Text leaf: build the paragraph laid out at `max_width`, WITHOUT touching the render cache.
@@ -169,6 +195,7 @@ pub(crate) fn build_text_paragraph_at(
                 *underline,
                 *line_through,
                 font_family.as_deref(),
+                text_paint(node),
                 max_width,
             ));
         }

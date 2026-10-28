@@ -123,6 +123,11 @@ impl Debug for ModifierElement {
                 .field("content", content)
                 .field("font_size", font_size)
                 .finish(),
+            Self::TextPaint { shadow, font_feature_settings } => f
+                .debug_struct("TextPaint")
+                .field("shadow", &shadow.is_some())
+                .field("features", font_feature_settings)
+                .finish(),
             Self::RichTextContent { content, drawable_ranges, .. } => f
                 .debug_struct("RichTextContent")
                 .field("content", content)

@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
 | Deviations from Compose (deliberate or accepted) | 0 | 4 | 1 (the ellipsis half of D-4) |
-| Missing API surface | 2 | 7 | 1 (the shadow item of M-6) |
+| Missing API surface | 2 | 8 | 1 (the paint-only items of M-6) |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
@@ -305,11 +305,25 @@ reader can re-check.
   Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
   (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
-- [ ] **M-6 — no `TextStyle.lineHeightStyle`, `fontSynthesis`, `fontFeatureSettings`,
-  `textGeometricTransform`, `shadow`, `drawStyle`, `brush`.** See D-2 for the line-height half.
-  Reason not fixed: each is a separate paint/shaping feature; `shadow` and `brush` already exist as
-  `Modifier`-level effects, and the rest have no caller.
-
+- [ ] **M-6 — `TextStyle.lineHeightStyle`, `fontSynthesis`, `textGeometricTransform`, `drawStyle`,
+  `brush` are still missing (the shadow and font-feature halves are done).**
+  Fixed: **`shadow`** (`TextShadow { color, offset: (f32, f32), blur }`, Compose's `Shadow`;
+  `blur` converts to Skia's sigma with `radius * 0.57735 + 0.5`) and **`fontFeatureSettings`**
+  (`parse_font_features` reads Compose's syntax — `"smcp"`, `"liga" off`, `"tnum" 0`, quoted tags —
+  and the pairs reach `TextStyle::add_font_feature`). Both live in their own modifier element
+  (`ModifierElement::TextPaint`) rather than in `TextContent`, so every hand-built `TextContent`
+  literal in the suite stayed valid. Measured: a shadow is paint-only and leaves the measured box
+  unchanged; a 6 px offset shadow moves the ink's bottom-right corner from (24,42) to (30,48).
+  Tests: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs` (red without the
+  application: plain (24,42) vs shadow (24,42)),
+  `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
+  `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
+  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`.
+  Still missing, with reasons: `lineHeightStyle` needs the leading trimmed per line (Skia's
+  `set_half_leading` is the closest primitive and D-2 already spends it on centring);
+  `fontSynthesis` needs synthetic bold/italic control that the paragraph API does not expose;
+  `textGeometricTransform` (scale/skew) has no Skia paragraph hook; `drawStyle`/`brush` are stroke
+  and gradient text, which need a foreground `Paint` per glyph run.
 - [ ] **M-7 — `RichText` has no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product; there is no span list that can be sliced, merged, re-parsed or read back
   (`getSpanStyles`). Reason not fixed: it is a data-model addition, and the current

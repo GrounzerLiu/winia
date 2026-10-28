@@ -19,6 +19,10 @@ pub(crate) struct TextExtras {
     >,
     /// Compose's `autoSize`: `(min, max)` in logical pixels, or `None` to lay out at the stated size.
     pub auto_size: Option<(f32, f32)>,
+    /// Compose's `TextStyle.shadow`.
+    pub shadow: Option<crate::text::TextShadow>,
+    /// Compose's `TextStyle.fontFeatureSettings`.
+    pub font_feature_settings: Option<String>,
 }
 
 impl Modifier {
@@ -129,6 +133,10 @@ impl Modifier {
             letter_spacing,
             line_height,
             auto_size: extras.auto_size,
+        })
+        .push(ModifierElement::TextPaint {
+            shadow: extras.shadow,
+            font_feature_settings: extras.font_feature_settings,
         })
     }
 

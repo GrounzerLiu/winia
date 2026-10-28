@@ -10,7 +10,7 @@ use crate::runtime::composition_local::CompositionLocal;
 use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
-use crate::text::{FontSlant, FontWeight, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle};
+use crate::text::{FontSlant, FontWeight, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextShadow, TextStyle};
 use std::sync::{Arc, LazyLock};
 
 
@@ -51,6 +51,8 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         // child that says `TextDecoration.NONE` clears an inherited underline (D-1).
         decoration: override_.decoration.or(base.decoration),
         background: override_.background.or(base.background),
+        shadow: override_.shadow.or(base.shadow),
+        font_feature_settings: override_.font_feature_settings.clone().or_else(|| base.font_feature_settings.clone()),
     }
 }
 
@@ -80,6 +82,10 @@ pub struct Text {
     on_text_layout: Option<Arc<dyn Fn(&TextLayoutResult) + Send + Sync>>,
     /// Compose's `autoSize`: the (min, max) logical-pixel window the fit search runs in.
     auto_size: Option<(f32, f32)>,
+    /// Compose's `TextStyle.shadow`.
+    shadow: Option<TextShadow>,
+    /// Compose's `TextStyle.fontFeatureSettings`.
+    font_feature_settings: Option<String>,
 }
 
 impl std::fmt::Debug for Text {
@@ -116,6 +122,8 @@ impl Text {
             font_family: None,
             on_text_layout: None,
             auto_size: None,
+            shadow: None,
+            font_feature_settings: None,
         }
     }
 
@@ -134,6 +142,10 @@ impl Text {
 
     /// Compose's `fontFamily`: a family name resolved against the platform's font collection.
     pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+    /// Compose's `TextStyle.shadow`: a colour, an offset and a blur radius, drawn under the glyphs.
+    pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
+    /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
+    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
@@ -260,6 +272,11 @@ impl Text {
             .or(style.decoration)
             .unwrap_or(TextDecoration::NONE);
         let final_font_family = self.font_family.clone().or_else(|| style.font_family.clone());
+        let final_shadow = self.shadow.or(style.shadow);
+        let final_font_features = self
+            .font_feature_settings
+            .clone()
+            .or_else(|| style.font_feature_settings.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
         // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
@@ -301,6 +318,8 @@ impl Text {
         ctx.changed(&final_soft_wrap);
         ctx.changed(&final_decoration);
         ctx.changed(&self.auto_size);
+        ctx.changed(&final_shadow);
+        ctx.changed(&final_font_features);
 
         let modifier = self.modifier.text_content_full(
             self.content,
@@ -315,6 +334,8 @@ impl Text {
             final_letter_spacing,
             final_line_height.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
             crate::modifier::TextExtras {
+                shadow: final_shadow,
+                font_feature_settings: final_font_features.clone(),
                 min_lines: final_min_lines,
                 underline: final_decoration.underline,
                 line_through: final_decoration.line_through,
@@ -554,6 +575,68 @@ mod tests {
             result.text_size.width, 12.0,
             "text_size stays the paragraph's own width: {result:?}"
         );
+    }
+
+    /// Compose's `TextStyle.shadow` is paint-only: it must not change the measured box.
+    ///
+    /// Skia draws shadows behind the glyphs and keeps them out of the metrics, which is what makes a
+    /// shadow safe to add to a layout that already fits.
+    #[test]
+    fn a_text_shadow_does_not_change_the_measured_box() {
+        fn measure(with_shadow: bool) -> crate::unit::Size {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx| {
+                let text = Text::new("hello shadow").font_size(18.0);
+                let text = if with_shadow {
+                    text.shadow(TextShadow::new(Color::BLACK, (3.0, 3.0), 2.0))
+                } else {
+                    text
+                };
+                text.build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size
+        }
+        let plain = measure(false);
+        let shadowed = measure(true);
+        assert_eq!(plain, shadowed, "a shadow is paint-only: plain={plain:?} shadowed={shadowed:?}");
+    }
+
+    /// A shadow change is a changed parameter, so the leaf re-enters and the cached paragraph (which
+    /// carries the shadow) is rebuilt. Compared through `Modifier::param_eq`, the Skip gate.
+    #[test]
+    fn a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison() {
+        let base = Modifier::new().text_content_full(
+            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
+            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            crate::modifier::TextExtras {
+                shadow: None,
+                font_feature_settings: None,
+                ..Default::default()
+            },
+        );
+        let shadow = Modifier::new().text_content_full(
+            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
+            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            crate::modifier::TextExtras {
+                shadow: Some(TextShadow::new(Color::BLACK, (1.0, 1.0), 0.0)),
+                font_feature_settings: None,
+                ..Default::default()
+            },
+        );
+        let features = Modifier::new().text_content_full(
+            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
+            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            crate::modifier::TextExtras {
+                shadow: None,
+                font_feature_settings: Some("smcp".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(base.param_eq(&base), "identical modifiers are the same parameter set");
+        assert!(!base.param_eq(&shadow), "a new shadow must re-enter the leaf");
+        assert!(!base.param_eq(&features), "a new feature string must re-enter the leaf");
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///

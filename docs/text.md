@@ -106,10 +106,12 @@ measurements behind each and the reason a row is still open — in
 
 | Compose | winia |
 | --- | --- |
-| `autoSize: TextAutoSize?` | missing (needs a fit-search strategy API plus a measure-time loop) |
+| `autoSize: TextAutoSize?` | `Text::auto_size(min, max)` — the same fit search, run at measure time |
+| `TextStyle.shadow` | `Text::shadow(TextShadow { color, offset, blur })`; paint-only, so the measured box does not change |
+| `TextStyle.fontFeatureSettings` | `Text::font_feature_settings("tnum", "liga off", …)`, parsed into Skia features in order |
 | `color: ColorProducer` overload | only a static `Color` |
 | `minLines` is passed to Skia | padding the RESULT height (skia-safe exposes no `set_min_lines`) — same box, same top alignment |
-| `TextStyle.merge` takes the child's decoration when specified | `ProvideTextStyle` ORs `underline`/`strikethrough` with the parent, so a child cannot turn an inherited decoration off |
+| `TextStyle.merge` takes the child's decoration when specified | matches: the decoration is `Option<TextDecoration>`, so a child can clear an inherited one |
 | density | layout is logical pixels and the app scales the canvas by the window scale factor, so `Sp` and `Dp` are both raw here — text still scales with the display |
 
 ## Tests
