@@ -100,6 +100,10 @@ Semantics: nothing is declared on the node; the tree reads its name out of the `
 
 ## Differences from Compose
 
+The open defects, the deviations below and the missing API are tracked row-by-row — with the
+measurements behind each and the reason a row is still open — in
+[`docs/text-review.md`](text-review.md). This table is the short version.
+
 | Compose | winia |
 | --- | --- |
 | `autoSize: TextAutoSize?` | missing (needs a fit-search strategy API plus a measure-time loop) |
