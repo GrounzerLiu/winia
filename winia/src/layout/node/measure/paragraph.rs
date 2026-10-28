@@ -168,9 +168,31 @@ pub(crate) fn supporting_text_height(node: &LayoutNode) -> f32 {
 /// Pulls every parameter out of the TextContent modifier (font_size, max_lines, overflow, align),
 /// applies them to a ParagraphStyle, builds the Paragraph ONCE, measures it and caches it for the
 /// render pass. The old code built it twice (measure + cache_text_paragraph).
-pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
+/// What one text measure produced, plus the callback the engine fires once the box is final.
+///
+/// The callback cannot run here: this function sees the paragraph's own size, while Compose's
+/// `TextLayoutResult.size` is `constraints.constrain(...)` of it (a `fill_max_width` text reports
+/// the filled width, not its intrinsic one). The engine owns the constraints, so it fires the
+/// callback after clamping — see the text arm of `measure_node_inner`.
+pub(crate) struct TextMeasure {
+    /// The paragraph's size, grown to `min_lines`.
+    pub size: Size,
+    /// The paragraph's own size, before `min_lines` grew the box.
+    pub text_size: Size,
+    pub line_count: usize,
+    pub did_exceed_max_lines: bool,
+    pub on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
+}
+
+pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> TextMeasure {
     let Some(para) = build_text_paragraph(node, max_width) else {
-        return Size::ZERO;
+        return TextMeasure {
+            size: Size::ZERO,
+            text_size: Size::ZERO,
+            line_count: 0,
+            did_exceed_max_lines: false,
+            on_text_layout: None,
+        };
     };
 
     let text_size = Size::new(
@@ -196,17 +218,7 @@ pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size 
 
     *node.cached_paragraph.borrow_mut() = Some(para);
 
-    // Compose's `onTextLayout`: report what this pass laid out (never from an intrinsic probe — that
-    // is a question about a hypothetical width, not a frame).
-    if let Some(callback) = on_text_layout {
-        callback(&crate::text::TextLayoutResult {
-            size,
-            text_size,
-            line_count,
-            did_exceed_max_lines,
-        });
-    }
-    size
+    TextMeasure { size, text_size, line_count, did_exceed_max_lines, on_text_layout }
 }
 
 /// The text element's measure-side extras: how many lines to reserve, and the `onTextLayout` sink.

@@ -479,6 +479,38 @@ mod tests {
         assert!(!result.has_visual_overflow(), "nothing was cut off: {result:?}");
     }
 
+    /// Compose's `TextLayoutResult.size` is the CONSTRAINED box, not the paragraph's own width.
+    ///
+    /// Measured before the fix: a `fill_max_width` text in a 300 dp box reported width 12, because
+    /// the callback fired inside `measure_and_cache_text` — before the engine clamped the size.
+    #[test]
+    fn on_text_layout_reports_the_constrained_size() {
+        let seen: std::sync::Arc<std::sync::Mutex<Option<crate::text::TextLayoutResult>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = seen.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("hi")
+                .on_text_layout(move |result| {
+                    *sink.lock().unwrap() = Some(*result);
+                })
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let measured = composer.arena_nodes()[root].measured_size;
+        let result = seen.lock().unwrap().expect("the callback ran during measure");
+        assert!(
+            (result.size.width - measured.width).abs() < 0.01,
+            "the callback reports the box the node measured: result={result:?} node={measured:?}"
+        );
+        assert_eq!(result.size.width, 300.0, "fill_max_width fills the constraint: {result:?}");
+        assert_eq!(
+            result.text_size.width, 12.0,
+            "text_size stays the paragraph's own width: {result:?}"
+        );
+    }
     /// The decoration and the family reach the payload (the plain leaf used to ignore both).
     #[test]
     fn the_payload_carries_decoration_and_family() {

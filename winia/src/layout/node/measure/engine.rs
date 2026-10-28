@@ -961,7 +961,8 @@ pub(crate) fn measure_node_inner(
             // The parent's max_width is the layout width, which makes the text wrap inside the space
             // it has. For a scroll container inner_constraints.max_width is already f32::MAX.
             let layout_width = inner_constraints.max_width;
-            let text_size = measure_and_cache_text(&nodes[idx], layout_width);
+            let measured = measure_and_cache_text(&nodes[idx], layout_width);
+            let text_size = measured.size;
             // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its text
             // baselines, measured from the node's own top, exactly as Compose's text does. Taken from
             // the paragraph just cached, so they are the baselines of the layout the size came from.
@@ -997,10 +998,23 @@ pub(crate) fn measure_node_inner(
             // them, so the text fills the width it was given). The height is the paragraph's real
             // height (wrapping included) plus the supporting line — never approximated from the
             // explicit newline count, which would crop wrapped text; a raised min_height floors it.
-            Size::new(
+            let final_text_size = Size::new(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height + supporting_h),
-            )
+            );
+            // Compose's `onTextLayout` runs AFTER the layout is final: its `TextLayoutResult.size`
+            // is `constraints.constrain(...)` of the paragraph, so a `fill_max_width` text reports
+            // the filled width (measured before this fix: 12 where the box was 300). The callback
+            // is fired from here because this arm is the only place that knows the constraints.
+            if let Some(callback) = &measured.on_text_layout {
+                callback(&crate::text::TextLayoutResult {
+                    size: final_text_size,
+                    text_size: measured.text_size,
+                    line_count: measured.line_count,
+                    did_exceed_max_lines: measured.did_exceed_max_lines,
+                });
+            }
+            final_text_size
         } else if nodes[idx].has_richtext_content {
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_richtext(&nodes[idx], layout_width);
