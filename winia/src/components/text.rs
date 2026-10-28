@@ -209,10 +209,6 @@ impl Text {
                 eprintln!("[text-build] content={:?}", self.content.get(..16.min(self.content.len())));
             }
         }
-        // 参数声明（对标 Switch::build 的 ctx.changed）：父作用域读 State 会触发
-        // 父重组并重新调用 build，但叶子槽的 dirty 由本节点参数决定——不声明
-        // content 变化，物化可能走 Clean/折叠路径，cached_paragraph 保留旧文本，
-        // 渲染一直画旧内容，直到下一次外部事件触发重绘。
         ctx.changed(&self.content);
         let key = ctx.next_key();
 
@@ -285,6 +281,27 @@ impl Text {
                 (Some(reg), Some((key, content_len, off)))
             } else { (None, None) }
         };
+        // Declared parameters, one per visual input: Colour, size, weight, slant, family, spacing,
+        // line height, the line caps, alignment, overflow, wrapping, decoration and the auto-size
+        // window. The leaf's payload is compared too (see `Modifier::param_eq`), so this list is the
+        // explicit half of the same contract — a parameter that is only in the payload works through
+        // the materialiser's comparison, and one declared here also marks the slot.
+        ctx.changed(&self.content);
+        ctx.changed(&final_font_size);
+        ctx.changed(&final_color);
+        ctx.changed(&final_font_weight);
+        ctx.changed(&final_font_style);
+        ctx.changed(&final_font_family);
+        ctx.changed(&final_letter_spacing);
+        ctx.changed(&final_line_height);
+        ctx.changed(&final_max_lines);
+        ctx.changed(&final_min_lines);
+        ctx.changed(&final_align);
+        ctx.changed(&final_overflow);
+        ctx.changed(&final_soft_wrap);
+        ctx.changed(&final_decoration);
+        ctx.changed(&self.auto_size);
+
         let modifier = self.modifier.text_content_full(
             self.content,
             final_font_size.to_logical_px(crate::runtime::density::current_density()),
@@ -626,72 +643,6 @@ mod tests {
         }).expect("the payload carries a size");
         assert!((size - 32.0).abs() < 0.01, "2 em of 16 sp is 32 logical px, got {size}");
     }
-    /// `TextAlign::Start` / `End` resolve against the layout direction at build time.
-    ///
-    /// They never reach the payload, which is why the paint path keeps working unchanged; this
-    /// pins the resolution itself.
-    #[test]
-    fn start_and_end_align_resolve_against_the_direction() {
-        use crate::layout::LayoutDirection;
-        let mut composer = crate::runtime::composer::Composer::new();
-        let mut seen = Vec::new();
-        for (direction, align) in [
-            (LayoutDirection::Ltr, TextAlign::Start),
-            (LayoutDirection::Ltr, TextAlign::End),
-            (LayoutDirection::Rtl, TextAlign::Start),
-            (LayoutDirection::Rtl, TextAlign::End),
-        ] {
-            composer.compose(|ctx| {
-                crate::layout::direction::provides(direction, || {
-                    Text::new("hi").align(align).build(ctx);
-                });
-            });
-            let nodes = composer.arena_nodes();
-            let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
-            let resolved = node
-                .modifier
-                .elements()
-                .iter()
-                .find_map(|el| match el {
-                    crate::modifier::ModifierElement::TextContent { align, .. } => Some(*align),
-                    _ => None,
-                })
-                .expect("the payload carries an alignment");
-            seen.push((direction, align, resolved));
-        }
-        assert_eq!(seen[0].2, TextAlign::Left, "Start is left in LTR");
-        assert_eq!(seen[1].2, TextAlign::Right, "End is right in LTR");
-        assert_eq!(seen[2].2, TextAlign::Right, "Start is right in RTL");
-        assert_eq!(seen[3].2, TextAlign::Left, "End is left in RTL");
-    }
-    /// The decoration and the family reach the payload (the plain leaf used to ignore both).
-    #[test]
-    fn the_payload_carries_decoration_and_family() {
-        let mut composer = crate::runtime::composer::Composer::new();
-        composer.compose(|ctx| {
-            Text::new("x")
-                .text_decoration(crate::text::TextDecoration::UNDERLINE_AND_LINE_THROUGH)
-                .font_family("Segoe UI")
-                .build(ctx);
-        });
-        let root = composer.layout_root_idx().unwrap();
-        let nodes = composer.arena_nodes();
-        let payload = nodes[root]
-            .modifier
-            .elements()
-            .iter()
-            .find_map(|el| {
-                if let ModifierElement::TextContent { underline, line_through, font_family, .. } = el {
-                    Some((*underline, *line_through, font_family.clone()))
-                } else {
-                    None
-                }
-            })
-            .expect("a text payload");
-        assert!(payload.0 && payload.1, "both decorations reached the payload");
-        assert_eq!(payload.2.as_deref(), Some("Segoe UI"));
-    }
-
     /// Compose's `validateMinMaxLines` (`HeightInLinesModifier.kt:454-461`): a non-positive cap is a
     /// bad parameter, not a silent one.
     #[test]

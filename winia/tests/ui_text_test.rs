@@ -112,3 +112,24 @@ fn min_lines_reserves_the_box_height() {
         "three reserved lines are three line boxes: one={one:?} three={three:?}"
     );
 }
+
+/// A segmented pick must take effect on the SAME frame chain: the row re-enters, the tag flips, and
+/// the playground summary follows. This is the runtime check for the complaint that picking a
+/// segment changed nothing until the window was resized.
+#[test]
+fn a_segmented_pick_updates_the_playground() {
+    let mut app = UiTest::launch("text");
+    assert!(
+        app.all_texts().iter().any(|t| t.contains("align Left")),
+        "the summary starts on Left: {:?}",
+        app.all_texts()
+    );
+    let (x, y, w, h) = app.expect_tag("tx-play-align-1-off");
+    app.click(x + w / 2.0, y + h / 2.0);
+    app.expect_tag("tx-play-align-1-on");
+    assert!(
+        app.all_texts().iter().any(|t| t.contains("align Center")),
+        "the summary must follow the pick without any other event: {:?}",
+        app.all_texts()
+    );
+}

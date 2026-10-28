@@ -186,13 +186,11 @@ fn switch(ctx: &mut ComposeCtx, state: State<bool>, tag: &str, title: &str) {
     });
 }
 
-/// A single-choice control: one small button per option, the current one labelled in the accent
-/// colour.
+/// A single-choice row: one segment per option, tagged with the selection so a test can see it move.
 ///
-/// The first version used a `SingleChoiceSegmentedButtonRow`, and a pick from it did not repaint
-/// until the window was resized — while a font-size slider did. That is a frame-request question
-/// (the click writes a `State`; something has to ask for the next frame), not a layout one, so the
-/// demo uses plain buttons, which the other demos already drive from clicks.
+/// `ui_text_test::a_segmented_pick_updates_the_playground` drives this at runtime: the pick flips the
+/// tag and the playground summary follows on the same frame chain, so a segment click needs no other
+/// event to take effect.
 #[composable]
 fn segmented(
     ctx: &mut ComposeCtx,
@@ -201,34 +199,24 @@ fn segmented(
     options: &'static [&'static str],
     state: State<usize>,
 ) {
-    let selected = state.get().min(options.len() - 1);
-    Column::new()
+    Row::new()
         .modifier(Modifier::new().fill_max_width())
-        .spacing(2.0)
+        .spacing(8.0)
         .build(ctx, |ctx| {
             Text::new(title).font_size(11.0).color(MUTED).build(ctx);
-            Row::new()
-                .spacing(4.0)
-                .modifier(Modifier::new().fill_max_width())
-                .build(ctx, |ctx| {
-                    for (index, label) in options.iter().enumerate() {
-                        clone!(state);
-                        let current = selected == index;
-                        // Every option is the SAME button; the pick is marked in the LABEL, with a
-                        // bullet. Two earlier attempts changed the button itself (an accent-coloured
-                        // label on a filled container, then filled-vs-text styling) and both broke
-                        // the rendering: the selected label disappeared, and the previously selected
-                        // one dimmed. Changing only the text keeps every slot on one shape.
-                        let text = if current { format!("• {label}") } else { (*label).to_string() };
-                        Button::filled()
-                            .on_click(move || state.set(index))
-                            .modifier(Modifier::new().test_tag(format!(
-                                "{tag}-{index}-{}",
-                                if current { "on" } else { "off" }
-                            )))
-                            .build(ctx, |ctx| Text::new(text).font_size(10.0).build(ctx));
-                    }
-                });
+            SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                let selected = state.get();
+                for (index, label) in options.iter().enumerate() {
+                    clone!(state);
+                    SegmentedButton::new(selected == index, move || state.set(index))
+                        .shape(SegmentedButtonDefaults::item_shape(index, options.len()))
+                        .modifier(Modifier::new().test_tag(format!(
+                            "{tag}-{index}-{}",
+                            if selected == index { "on" } else { "off" }
+                        )))
+                        .build(ctx, |ctx| Text::new(*label).font_size(10.0).build(ctx));
+                }
+            });
         });
 }
 

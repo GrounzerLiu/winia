@@ -201,6 +201,25 @@ reader can re-check.
   vanishes (measured: `min_lines(3)` reserved 19 dp instead of 57). That is why the rule cannot be
   transplanted without the probe-text indirection Compose uses.
 
+- [ ] **T-10 — a payload-only change on a text leaf does not reach its measure, so the painted text
+  stays stale.** Reproduced through the debug server on the text demo (`tools/ws_text_weight.py`,
+  local): picking `weight Bold` in the segmented row flips the check and the playground summary, and
+  the sample keeps painting Regular. Evidence chain from the instrumented build:
+  `[slot]` for the leaf prints `clean=true mod_changed=true dirty=true weight=FontWeight(700)` on the
+  transition frame, so the descriptor IS dirty; `[measure]` for that node never prints again after
+  startup; `[paint]` prints the same `intrinsic=595.3` on every frame, i.e. the renderer keeps
+  painting the old `cached_paragraph`. The paragraph cache is the paint source, and a rebuild with
+  `weight=700` was traced for the same content, but on a node that the paint never sees.
+  Ruled out: `Modifier::param_eq` compares every `TextContent` field including weight and alignment;
+  `node_modifier_changed` uses that comparison; `node.text_snapshot_matches` compares the same set;
+  declaring the parameters with `ctx.changed` on the leaf does not change the outcome.
+  Tried and reverted: carrying the descriptor's `dirty` through the Skip-restore arm of
+  `materialize` (`n.dirty = n.dirty || dirty`) — no effect, so that arm is not where it is lost.
+  Next: follow `desc.dirty=true` from `start_node` (`runtime/composer/engine.rs:544`) to the node the
+  layout measures. The trace above shows a node whose fold check reports `dirty=false` with equal
+  constraints, while the paint reads a different node id — so the remaining question is which node
+  carries the new modifier and why the layout never visits it.
+
 ## Deviations from Compose
 
 - [x] **D-1 — `ProvideTextStyle` ORed decorations, so a child could not turn an inherited
