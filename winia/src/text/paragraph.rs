@@ -66,6 +66,31 @@ impl Paragraph {
         self.line_breaks.contains(&range)
     }
 
+    /// Map a PARAGRAPH byte index to the real (content) byte index, clamping to the nearest
+    /// preceding mapped position when the exact one does not exist.
+    ///
+    /// The two spaces differ wherever a placeholder stands in for text of another length — the
+    /// paragraph holds one U+FFFC while the content may hold a whole word. Callers that hit-test
+    /// must never panic because a cluster boundary fell inside such a span.
+    fn real_index_for_paragraph_byte(&self, paragraph_byte: usize) -> usize {
+        if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(&paragraph_byte) {
+            return *mapped;
+        }
+        // Walk back to the nearest mapped paragraph byte (monotonic insertion, so a reverse scan
+        // finds the largest key at or below the target).
+        let mut best = 0usize;
+        for (left, right) in self
+            .paragraph_byte_to_real_indices
+            .left_keys()
+            .iter()
+            .zip(self.paragraph_byte_to_real_indices.right_keys().iter())
+        {
+            if *left > paragraph_byte { break; }
+            best = *right;
+        }
+        best
+    }
+
     fn get_utf16_index(&self, index: usize) -> Option<usize> {
         // 精确命中
         if let Some(paragraph_index) = self.paragraph_byte_to_real_indices.get_by_right(&index) {
@@ -330,21 +355,17 @@ impl Paragraph {
         d: impl Into<Point>,
     ) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_info) = self.paragraph.get_closest_glyph_cluster_at(d) {
-            glyph_info.text_range.start = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_info.text_range.start).expect(
-                format!("start index {} not found in paragraph_byte_to_real_index: {:?}, byte_to_utf16_indices: {:?}",
-                        glyph_info.text_range.start,
-                        self.paragraph_byte_to_real_indices,
-                        self.byte_to_utf16_indices
-                ).as_str(),
-            );
-            glyph_info.text_range.end = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_info.text_range.end).expect(
-
-                format!("end index {} not found in paragraph_byte_to_real_index: {:?}, byte_to_utf16_indices: {:?}",
-                        glyph_info.text_range.end,
-                        self.paragraph_byte_to_real_indices,
-                        self.byte_to_utf16_indices
-                ).as_str(),
-            );
+            // Skia reports the cluster in PARAGRAPH byte space, which differs from the real space
+            // wherever a placeholder replaced shorter text: an inline image is one U+FFFC in the
+            // paragraph (3 bytes) but may stand for a multi-byte span in the content. A cluster
+            // boundary that lands inside such a span therefore has no exact key.
+            //
+            // This used to `expect(...)` and take the window down; Compose clamps instead, and a
+            // hit-test that runs on every pointer move must never panic. Mapping to the nearest
+            // preceding real index keeps the caret inside the text and is what the caller's own
+            // grapheme walk assumes anyway.
+            glyph_info.text_range.start = self.real_index_for_paragraph_byte(glyph_info.text_range.start);
+            glyph_info.text_range.end = self.real_index_for_paragraph_byte(glyph_info.text_range.end);
             Some(glyph_info)
         } else {
             None
@@ -393,7 +414,56 @@ mod paragraph_tests {
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
     use crate::text::ParagraphBuilder;
 
+/// A placeholder whose content text is short enough to leave a hole in the paragraph→real
+    /// map must CLAMP the hit-test, not panic on it.
+    ///
+    /// Skia reports the cluster in paragraph byte space; an inline element is one U+FFFC there
+    /// (3 bytes) but may stand for a different number of content bytes, so a cluster boundary can
+    /// fall where no key exists. This used to `expect(...)` and take the window down — measured as
+    /// unreachable across ASCII/CJK/emoji sweeps before, but it is one edit to T-2's placeholder
+    /// length away. See docs/text-review.md T-6.
     #[test]
+    fn a_cluster_boundary_with_no_mapping_clamps_instead_of_panicking() {
+        use skia_safe::textlayout::{PlaceholderAlignment, TextBaseline};
+        use std::sync::Arc;
+        struct Box2;
+        impl crate::text::InlineDrawable for Box2 {
+            fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
+            fn size(&self) -> (f32, f32) { (20.0, 16.0) }
+        }
+        let mut fc = FontCollection::new();
+        fc.set_default_font_manager(FontMgr::default(), None);
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        let mut ts = TextStyle::new();
+        ts.set_font_size(16.0);
+        b.push_style(&ts);
+        b.add_text("ab");
+        // Two content bytes against a 3-byte U+FFFC: the paragraph and real index spaces differ by
+        // one near the placeholder, so paragraph byte 3 has no exact key.
+        b.add_placeholder("XY", Arc::new(Box2), &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
+        b.add_text("cd");
+        let mut p = b.build();
+        p.layout(200.0);
+        // Paragraph byte 3 sits INSIDE the 3-byte U+FFFC and has no entry: the placeholder started
+        // at paragraph byte 2 / real byte 2, and the next text starts at paragraph byte 5 / real
+        // byte 4. The old code indexed this with `.expect(...)`; the contract is a clamp to the
+        // nearest preceding real index (2), never a panic.
+        assert_eq!(p.real_index_for_paragraph_byte(3), 2, "a hole clamps to the placeholder's start");
+        assert_eq!(p.real_index_for_paragraph_byte(4), 2);
+        assert_eq!(p.real_index_for_paragraph_byte(2), 2, "an exact key is unchanged");
+        assert_eq!(p.real_index_for_paragraph_byte(5), 4, "the text after the placeholder");
+        assert_eq!(p.real_index_for_paragraph_byte(99), 6, "past the end clamps to the last index");
+        // And the public entry point stays inside the content for every x.
+        let mut x = 0.0f32;
+        while x < 80.0 {
+            if let Some(info) = p.get_closest_glyph_cluster_at((x, 8.0)) {
+                assert!(info.text_range.start <= 6, "start out of range at x={x}: {:?}", info.text_range);
+                assert!(info.text_range.end <= 6, "end out of range at x={x}: {:?}", info.text_range);
+            }
+            x += 1.0;
+        }
+    }    #[test]
     fn test_paragraph_layout_and_hit_test() {
         let mut fc = FontCollection::new();
         fc.set_default_font_manager(FontMgr::default(), None);
