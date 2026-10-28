@@ -16,13 +16,13 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 7 | 2 |
+| Defects (wrong behaviour; T-9 is latent, see its row) | 5 | 4 |
 | Deviations from Compose (deliberate or accepted) | 4 | 0 |
 | Missing API surface | 10 | 0 |
 | Investigated and ruled out | — | 5 |
 
-T-1 and T-7 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the rest are
-open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
+T-1, T-2, T-6 and T-7 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
+rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
 next reader can re-check.
 
 ## Defects
@@ -45,17 +45,24 @@ next reader can re-check.
   `test_reindex_orders_by_tree_and_drops_dead_segments`,
   `test_reindex_follows_document_order`. Commit `7ffe80f`. Full `--lib` suite: 2025 passed.
 
-- [ ] **T-2 — indices drift past a multi-character RichText placeholder, so selection and caret on
-  trailing text map to the wrong bytes.** `components/rich_text.rs:167` records the drawable range
-  as `len` characters and writes those characters into `content`, but
-  `layout/node/measure/paragraph.rs:264` inserts a one-byte `U+FFFC` placeholder, and
-  `text/paragraph_builder.rs` advances the real-index map by that placeholder's own length only.
-  Measured with `x.placeholder("XYZ", ..)`: content is `"abXYZcd"` (7 bytes) while the paragraph's
-  real index space ends at 5; `get_rects_for_range(5..7)` (the trailing `"cd"`) returns an empty
-  vec, so dragging over that text highlights nothing.
-  Reason open: needs an index model decision — either the placeholder advances `last_real_index`
-  by the declared range length, or the range is restricted to one character (Compose's
-  `Placeholder` is a single replacement char by contract).
+- [x] **T-2 — indices drifted past a RichText placeholder, so selection and caret on trailing text
+  mapped to the wrong bytes.**
+  `RichTextScope::placeholder`/`image` write the element's text into `content` and record its
+  character range, but `measure_and_cache_richtext` always passed the one-byte string `" "` to
+  `ParagraphBuilder::add_placeholder`, and that call advances the real-index space by the LENGTH
+  of the string it is given. Every placeholder therefore shifted the real space by the wrong
+  amount — including a plain `image()`, which is one U+FFFC (3 content bytes) against a 1-byte
+  stand-in.
+  Measured before the fix: `"ab" + image + "cd"` mapped the trailing `"cd"` to real bytes 3..5
+  where the content has it at 5..7, so `get_rects_for_range(5..7)` returned an empty vec and the
+  tail could not be selected at all. A multi-char placeholder drifted by its whole length.
+  Fix: the measure path passes the RANGE'S OWN TEXT, so the real space advances by exactly the
+  bytes the content occupies; Skia still sees one U+FFFC per element (the string is not drawn,
+  only measured). No public API changed and no contract was narrowed to one character — the
+  content range is whatever `RichTextScope` recorded.
+  Test: `layout::node::intrinsic_tests::text_after_an_inline_element_keeps_its_real_indices`
+  (fails on the old behaviour with "the text after an inline image must be addressable").
+  Commit `b2bfb14`. Full `--lib` suite: 2027 passed.
 
 - [ ] **T-3 — `RichText` has no `align` / `max_lines` / `overflow` / `soft_wrap` /
   `line_height`, and the measure path builds a default `ParagraphStyle` anyway.**
@@ -86,15 +93,22 @@ next reader can re-check.
   explicitly vs. validate the index against the map), and it touches three event paths that need
   their own re-verification.
 
-- [ ] **T-6 — `Paragraph::get_closest_glyph_cluster_at` panics on an unmapped cluster endpoint.**
-  `text/paragraph.rs:333-346` uses two `expect(...)` on
-  `paragraph_byte_to_real_indices.get_by_left(...)`, carrying a formatted dump in the panic
-  message. `TextLayout::get_closest_grapheme_cluster_cluster_at` (drag/selection/caret placement)
-  is built on it. Probes over ASCII, CJK, emoji with ZWJ sequences and a placeholder paragraph did
-  not trigger it (0 panics across the sweeps), so this is a latent crash rather than a live one —
-  but a selectable text that reaches the branch takes the whole window down instead of clamping.
-  Reason open: fixing it properly means deciding the documented fallback (nearest preceding mapped
-  index), which interacts with T-2.
+- [x] **T-6 — `Paragraph::get_closest_glyph_cluster_at` panicked on an unmapped cluster endpoint.**
+  The mapping from Skia's paragraph byte space to the real content space used two `expect(...)`
+  with a formatted dump in the message, on the path `TextLayout`'s hit-testing (drag, selection,
+  caret placement) runs on every pointer move.
+  Skia reports a cluster in PARAGRAPH bytes; a placeholder is one U+FFFC there (3 bytes) while
+  standing for a different number of content bytes, so a boundary inside such a span has no exact
+  key. Probes over ASCII, CJK, emoji with ZWJ sequences and placeholders never reached it, so it
+  was latent rather than live — one edit to a placeholder's length away from being live, and a
+  panic there takes the whole window down instead of clamping.
+  Fix: `real_index_for_paragraph_byte` — exact key when there is one, otherwise the nearest
+  preceding mapped index, which is the fallback Compose's own clamping amounts to.
+  Test: `text::paragraph::paragraph_tests::a_cluster_boundary_with_no_mapping_clamps_instead_of_panicking`
+  pins the contract directly (a 2-byte placeholder leaves paragraph bytes 3 and 4 unmapped: they
+  clamp to 2, an exact key is unchanged, past-the-end clamps to the last index, and the public
+  entry point stays inside the content for every x).
+  Commit `92fc7a6`. Full `--lib` suite: 2027 passed.
 
 - [x] **T-7 — `on_text_layout` reported a size that was not constraint-clamped.**
   The callback fired inside `measure_and_cache_text`, before `measure/engine.rs:1000-1003` applied
