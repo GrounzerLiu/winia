@@ -16,12 +16,12 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour; T-9 is latent, see its row) | 3 | 6 |
+| Defects (wrong behaviour; T-9 is latent, see its row) | 2 | 7 |
 | Deviations from Compose (deliberate or accepted) | 4 | 0 |
 | Missing API surface | 10 | 0 |
 | Investigated and ruled out | — | 5 |
 
-T-1, T-2, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
+T-1, T-2, T-4, T-5, T-6, T-7 and T-8 were fixed on 2026-10-28 (see their rows for the mechanism and the tests); the
 rest are open. When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the
 next reader can re-check.
 
@@ -72,15 +72,21 @@ next reader can re-check.
   where `Text` with `max_lines(1)` reports 1 line.
   Reason open: it is an API addition (payload fields + builder + param_eq), not a bug fix.
 
-- [ ] **T-4 — `Paragraph::get_actual_text_range` converts Skia's UTF-16 offsets through the wrong
-  map.** `text/paragraph.rs:302-313` feeds the result through `get_index` (UTF-16 → real byte),
-  but the value Skia returns for this call is already in UTF-16 units, so a second conversion is
-  applied. Measured on a four-character sample (two 3-byte CJK glyphs then `ab`, 8 bytes): the raw
-  call reports `0..8` (the correct UTF-8 length) while the wrapper reports `0..0`; ASCII is
-  unaffected because the two units coincide (`"hello"` → `0..5` both ways).
-  No caller exists today, which is why this is not a user-visible bug yet.
-  Reason open: the correct fix depends on T-2's settling — if the maps are reworked, this should be
-  re-derived rather than patched twice.
+- [x] **T-4 — `Paragraph::get_actual_text_range` converted Skia's paragraph bytes through the
+  UTF-16 map.**
+  The wrapper fed the result through `get_index`, which expects UTF-16 units, but this call
+  returns PARAGRAPH BYTES in this skia-safe build (it has no `_utf16_offset` sibling). Measured on
+  a four-character sample (two 3-byte CJK glyphs then `ab`, 8 bytes): the raw call reported `0..8`
+  while the wrapper reported `0..0`, because the byte offset missed the UTF-16 map and fell back
+  to 0. ASCII hid it — with `"hello"` both units are `0..5`.
+  Fix: mapped through `real_index_for_paragraph_byte` (the same clamped byte-space helper T-6
+  introduced), which is now also used by `get_glyph_cluster_at` — that one had the identical
+  double `unwrap()` and would have panicked at the same boundary.
+  Tests: `text::paragraph::paragraph_tests::an_actual_text_range_is_reported_in_content_bytes`
+  (fails on the old behaviour with `left: (0, 0)` against `right: (0, 8)`), plus
+  `an_actual_text_range_of_ascii_matches_its_byte_length` and
+  `an_actual_text_range_stays_inside_the_content_after_a_placeholder`.
+  Commit `52edf37`. Full `--lib` suite: 2035 passed.
 
 - [x] **T-5 — `TextLayout::new(paragraph, 0)` made every caret query return the first cluster's
   position instead of failing.**
