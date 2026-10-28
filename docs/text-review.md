@@ -326,7 +326,8 @@ reader can re-check.
   Still missing, with reasons: `lineHeightStyle` needs per-line leading trimming (Skia's
   `set_half_leading` is the closest primitive and D-2 already spends it on centring); `fontSynthesis`
   needs synthetic bold/italic control the paragraph API does not expose; `textGeometricTransform`
-  (scale/skew of the glyph run) has no Skia paragraph hook.
+  (scale/skew of the glyph run) has no Skia paragraph hook. Commits eff2d7d (shadow + features) and
+  87a7e01 (drawStyle + brush).
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
   Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with
