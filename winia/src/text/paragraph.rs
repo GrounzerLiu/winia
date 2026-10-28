@@ -370,8 +370,13 @@ impl Paragraph {
         let mut text_range = self
             .paragraph
             .get_actual_text_range(line_number, include_spaces);
-        text_range.start = self.get_index(text_range.start);
-        text_range.end = self.get_index(text_range.end);
+        // These are PARAGRAPH BYTES in this skia-safe build (`get_actual_text_range` has no
+        // `_utf16_offset` sibling and reports 0..8 for a 4-character CJK+ASCII line), so they go
+        // through the byte map. They used to go through `get_index`, which expects UTF-16 units:
+        // the value missed the map and collapsed to 0, so a CJK line reported 0..0 where its
+        // content is 0..8. ASCII hid it because there the two units coincide.
+        text_range.start = self.real_index_for_paragraph_byte(text_range.start);
+        text_range.end = self.real_index_for_paragraph_byte(text_range.end);
         text_range
     }
 
@@ -380,8 +385,8 @@ impl Paragraph {
         index: usize,
     ) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_cluster_info) = self.paragraph.get_glyph_cluster_at(index) {
-            glyph_cluster_info.text_range.start = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_cluster_info.text_range.start).unwrap();
-            glyph_cluster_info.text_range.end = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_cluster_info.text_range.end).unwrap();
+            glyph_cluster_info.text_range.start = self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.start);
+            glyph_cluster_info.text_range.end = self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.end);
             Some(glyph_cluster_info)
         } else {
             None
@@ -452,7 +457,59 @@ mod paragraph_tests {
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
     use crate::text::ParagraphBuilder;
 
-/// A placeholder whose content text is short enough to leave a hole in the paragraph→real
+    /// `get_actual_text_range` answers in CONTENT bytes.
+    ///
+    /// Skia reports paragraph bytes for this call; the wrapper went through `get_index`, which
+    /// expects UTF-16 units, so the lookup missed the map and collapsed to 0. Measured on
+    /// two 3-byte CJK glyphs then `ab` (8 content bytes): the raw call said 0..8, the wrapper 0..0.
+    #[test]
+    fn an_actual_text_range_is_reported_in_content_bytes() {
+        let mut p = crate::text::build_plain_paragraph("\u{4f60}\u{597d}ab", 16.0, crate::graphics::Color::BLACK, 400.0);
+        p.layout(400.0);
+        let range = p.get_actual_text_range(0, false);
+        assert_eq!((range.start, range.end), (0, 8), "two 3-byte glyphs then ab is 8 bytes");
+    }
+
+    /// ASCII cannot tell the two units apart, so it must keep working.
+    #[test]
+    fn an_actual_text_range_of_ascii_matches_its_byte_length() {
+        let mut p = crate::text::build_plain_paragraph("hello", 16.0, crate::graphics::Color::BLACK, 400.0);
+        p.layout(400.0);
+        let range = p.get_actual_text_range(0, false);
+        assert_eq!((range.start, range.end), (0, 5));
+    }
+
+    /// With a placeholder the paragraph space is shorter than the content space, and the answer
+    /// must still land inside the content.
+    #[test]
+    fn an_actual_text_range_stays_inside_the_content_after_a_placeholder() {
+        use skia_safe::textlayout::{PlaceholderAlignment, TextBaseline};
+        use std::sync::Arc;
+        struct Box2;
+        impl crate::text::InlineDrawable for Box2 {
+            fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
+            fn size(&self) -> (f32, f32) { (20.0, 16.0) }
+        }
+        let mut fc = FontCollection::new();
+        fc.set_default_font_manager(FontMgr::default(), None);
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        let mut ts = TextStyle::new();
+        ts.set_font_size(16.0);
+        b.push_style(&ts);
+        b.add_text("ab");
+        b.add_placeholder("XY", Arc::new(Box2), &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
+        b.add_text("cd");
+        let mut p = b.build();
+        p.layout(400.0);
+        assert_eq!(p.text_len(), 6, "ab + XY + cd is 6 content bytes");
+        let range = p.get_actual_text_range(0, false);
+        assert!(
+            range.start <= range.end && range.end <= 6,
+            "the range must stay inside the content: {range:?}"
+        );
+    }
+    /// A placeholder whose content text is short enough to leave a hole in the paragraph→real
     /// map must CLAMP the hit-test, not panic on it.
     ///
     /// Skia reports the cluster in paragraph byte space; an inline element is one U+FFFC there
