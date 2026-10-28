@@ -27,6 +27,8 @@ pub(crate) struct TextExtras {
     pub draw_style: Option<crate::text::TextDrawStyle>,
     /// Compose's `TextStyle.brush`.
     pub brush: Option<crate::text::TextBrush>,
+    /// Compose's `TextStyle.textGeometricTransform`.
+    pub transform: Option<crate::text::TextGeometricTransform>,
 }
 
 impl Modifier {
@@ -143,6 +145,7 @@ impl Modifier {
             font_feature_settings: extras.font_feature_settings,
             draw_style: extras.draw_style,
             brush: extras.brush,
+            transform: extras.transform,
         })
     }
 

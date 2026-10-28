@@ -582,6 +582,7 @@ pub(crate) enum ModifierElement {
         font_feature_settings: Option<String>,
         draw_style: Option<crate::text::TextDrawStyle>,
         brush: Option<crate::text::TextBrush>,
+        transform: Option<crate::text::TextGeometricTransform>,
     },
     /// 富文本内容（含内联 drawable，由 RichText 组件设置）
     RichTextContent {

@@ -215,16 +215,23 @@ pub(crate) struct TextPaintSpec {
     pub font_feature_settings: Option<String>,
     pub draw_style: Option<crate::text::TextDrawStyle>,
     pub brush: Option<crate::text::TextBrush>,
+    pub transform: Option<crate::text::TextGeometricTransform>,
+}
+
+/// The horizontal glyph transform this node carries, if any (Compose's `textGeometricTransform`).
+pub(crate) fn text_transform(node: &LayoutNode) -> Option<crate::text::TextGeometricTransform> {
+    text_paint(node).and_then(|p| p.transform).filter(|t| !t.is_identity())
 }
 
 pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
     node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush } => {
+        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush, transform } => {
             Some(TextPaintSpec {
                 shadow: *shadow,
                 font_feature_settings: font_feature_settings.clone(),
                 draw_style: *draw_style,
                 brush: brush.clone(),
+                transform: *transform,
             })
         }
         _ => None,
@@ -397,7 +404,12 @@ pub(crate) fn measure_and_cache_text_at(
     max_width: f32,
     font_size_override: Option<f32>,
 ) -> TextMeasure {
-    let Some(para) = build_text_paragraph_at(node, max_width, font_size_override) else {
+    // A horizontal transform widens what the run DRAWS, so the paragraph is laid out in its own
+    // (unscaled) space and the measured box is the scaled one. Compose does the same: the transform
+    // is applied to the glyph run, not to the paragraph's layout width.
+    let scale_x = text_transform(node).map(|t| t.scale_x.max(0.0001)).unwrap_or(1.0);
+    let layout_width = max_width / scale_x;
+    let Some(para) = build_text_paragraph_at(node, layout_width, font_size_override) else {
         return TextMeasure {
             size: Size::ZERO,
             text_size: Size::ZERO,
@@ -411,7 +423,7 @@ pub(crate) fn measure_and_cache_text_at(
     };
 
     let text_size = Size::new(
-        para.max_intrinsic_width().ceil().min(max_width),
+        (para.max_intrinsic_width() * scale_x).ceil().min(max_width),
         para.height().ceil(),
     );
     let (min_lines, on_text_layout) = text_layout_extras(node);
@@ -431,7 +443,7 @@ pub(crate) fn measure_and_cache_text_at(
         size.height = size.height.max(line_height * min_lines as f32);
     }
 
-    let longest_line = para.longest_line();
+    let longest_line = para.longest_line() * scale_x;
     let first_baseline = para.alphabetic_baseline();
     let last_baseline = if line_count <= 1 {
         first_baseline

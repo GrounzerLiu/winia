@@ -328,7 +328,18 @@ pub(crate) fn handle_pointer_down(
             let (pad_s, pad_t, pad_e, _) = nodes[ai].modifier.get_padding_sides();
             let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
             let tl = crate::text::TextLayout::new(para);
-            let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
+            // A `textGeometricTransform` widens/leans the GLYPH run, and the paragraph is laid out in
+            // its own space, so the pointer has to be mapped back into that space before the hit
+            // test (`unmap_x` is the inverse of the paint matrix).
+            let local = (
+                scene_pos.0 - ax - pad_x,
+                scene_pos.1 - ay - pad_t,
+            );
+            let local = match crate::layout::node::text_transform(&nodes[ai]) {
+                Some(t) => (t.unmap_x(local.0, local.1), local.1),
+                None => local,
+            };
+            let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(local.0, local.1));
             // The result is a display-text offset (the paragraph holds the displayed text), so it
             // goes back through the OffsetMapping to an editing offset (password masking / formatted
             // input).

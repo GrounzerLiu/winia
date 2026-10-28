@@ -17,6 +17,8 @@ static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
 
 
+pub(crate) use measure::text_transform;
+
 /// Whether the modifier carries a TextContent.
 pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))

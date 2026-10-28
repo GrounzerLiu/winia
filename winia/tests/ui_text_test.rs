@@ -173,7 +173,16 @@ fn a_weight_pick_repaints_the_sample_leaf() {
     let (x, y, w, h) = app.expect_tag("tx-play-weight-4-off");
     app.click(x + w / 2.0, y + h / 2.0);
     app.expect_tag("tx-play-weight-4-on");
-    let bold = box_ink(&mut app, sample);
+    // The frame that carries the repaint may land a beat after the click; poll instead of sampling
+    // once, or the test races the frame capture (it did: 656 vs 656 in a parallel run).
+    let mut bold = regular;
+    for _ in 0..40 {
+        bold = box_ink(&mut app, sample);
+        if bold > regular + regular / 4 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     assert!(
         bold > regular + regular / 4,
         "Bold must repaint the sample: regular={regular} bold={bold}"

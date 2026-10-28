@@ -9,7 +9,9 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::text::{measure_text, TextBrush, TextDrawStyle, TextMeasureSpec, TextShadow};
+use winia::text::{
+    measure_text, TextBrush, TextDrawStyle, TextGeometricTransform, TextMeasureSpec, TextShadow,
+};
 
 #[path = "common/settings.rs"]
 mod settings;
@@ -537,6 +539,16 @@ fn text_demo(ctx: &mut ComposeCtx) {
                             .color(ACCENT)
                             .draw_style(TextDrawStyle::Stroke { width: 1.2 })
                             .modifier(Modifier::new().test_tag("tx-stroke"))
+                            .build(ctx);
+                        Text::new("scaled")
+                            .font_size(20.0)
+                            .text_geometry(TextGeometricTransform::new(1.8, 0.0))
+                            .modifier(Modifier::new().test_tag("tx-scaled"))
+                            .build(ctx);
+                        Text::new("skewed")
+                            .font_size(20.0)
+                            .text_geometry(TextGeometricTransform::new(1.0, 0.25))
+                            .modifier(Modifier::new().test_tag("tx-skewed"))
                             .build(ctx);
                         Text::new("gradient")
                             .font_size(24.0)

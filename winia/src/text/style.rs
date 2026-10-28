@@ -142,6 +142,38 @@ impl TextBrush {
     }
 }
 
+/// Compose's `TextGeometricTransform`: a horizontal scale and skew applied to the glyph run.
+///
+/// Both are horizontal only, like Compose's. `scale_x` widens the run and the box it measures
+/// (1.0 is identity); `skew_x` leans the glyphs, shifting the top of the run by `-skew_x * y`.
+/// The paint applies them as a canvas matrix around the text origin, and every geometry reader
+/// (caret, hit test, selection rectangles, the measured width) applies the same mapping — see
+/// `TextGeometry` in `render::pass`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextGeometricTransform {
+    pub scale_x: f32,
+    pub skew_x: f32,
+}
+
+impl TextGeometricTransform {
+    pub fn new(scale_x: f32, skew_x: f32) -> Self {
+        Self { scale_x, skew_x }
+    }
+    /// Whether this transform leaves the glyphs alone.
+    pub fn is_identity(&self) -> bool {
+        (self.scale_x - 1.0).abs() < f32::EPSILON && self.skew_x.abs() < f32::EPSILON
+    }
+    /// A paragraph-space x → node-space x, for a glyph at `y` (the skew term is vertical).
+    pub fn map_x(&self, x: f32, y: f32) -> f32 {
+        x * self.scale_x - self.skew_x * y
+    }
+    /// The inverse: a node-space x → paragraph-space x, at `y`.
+    pub fn unmap_x(&self, x: f32, y: f32) -> f32 {
+        if self.scale_x.abs() < f32::EPSILON { return x; }
+        (x + self.skew_x * y) / self.scale_x
+    }
+}
+
 /// A text shadow — Compose's `Shadow`: a colour, an offset and a blur radius.
 ///
 /// Compose carries one optional shadow per `TextStyle` (`shadow: Shadow?`) and appends it to the
@@ -203,11 +235,13 @@ pub struct TextStyle {
     pub draw_style: Option<TextDrawStyle>,
     /// Compose's `TextStyle.brush`: a gradient that replaces the flat colour.
     pub brush: Option<TextBrush>,
+    /// Compose's `TextStyle.textGeometricTransform`.
+    pub text_geometric_transform: Option<TextGeometricTransform>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None, text_geometric_transform: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -235,6 +269,8 @@ impl TextStyle {
     pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
     /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
     pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
+    /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew.
+    pub fn text_geometric_transform(mut self, t: TextGeometricTransform) -> Self { self.text_geometric_transform = Some(t); self }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
         self.decoration = Some(decoration);

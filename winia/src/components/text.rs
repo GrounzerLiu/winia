@@ -11,8 +11,8 @@ use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
 use crate::text::{
-    FontSlant, FontWeight, TextAlign, TextBrush, TextDecoration, TextDrawStyle, TextLayoutResult,
-    TextOverflow, TextShadow, TextStyle,
+    FontSlant, FontWeight, TextAlign, TextBrush, TextDecoration, TextDrawStyle,
+    TextGeometricTransform, TextLayoutResult, TextOverflow, TextShadow, TextStyle,
 };
 use std::sync::{Arc, LazyLock};
 
@@ -58,6 +58,9 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         font_feature_settings: override_.font_feature_settings.clone().or_else(|| base.font_feature_settings.clone()),
         draw_style: override_.draw_style.or(base.draw_style),
         brush: override_.brush.clone().or_else(|| base.brush.clone()),
+        text_geometric_transform: override_
+            .text_geometric_transform
+            .or(base.text_geometric_transform),
     }
 }
 
@@ -95,6 +98,8 @@ pub struct Text {
     draw_style: Option<TextDrawStyle>,
     /// Compose's `TextStyle.brush`.
     brush: Option<TextBrush>,
+    /// Compose's `TextStyle.textGeometricTransform`.
+    text_geometry: Option<TextGeometricTransform>,
 }
 
 impl std::fmt::Debug for Text {
@@ -135,6 +140,7 @@ impl Text {
             font_feature_settings: None,
             draw_style: None,
             brush: None,
+            text_geometry: None,
         }
     }
 
@@ -161,6 +167,11 @@ impl Text {
     pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
     /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
     pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
+    /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew of the glyph run.
+    pub fn text_geometry(mut self, transform: TextGeometricTransform) -> Self {
+        self.text_geometry = Some(transform);
+        self
+    }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
@@ -293,6 +304,9 @@ impl Text {
             .clone()
             .or_else(|| style.font_feature_settings.clone());
         let final_draw_style = self.draw_style.or(style.draw_style);
+        let final_transform = self
+            .text_geometry
+            .or(style.text_geometric_transform);
         let final_brush = self.brush.clone().or_else(|| style.brush.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
@@ -339,6 +353,7 @@ impl Text {
         ctx.changed(&final_font_features);
         ctx.changed(&final_draw_style);
         ctx.changed(&final_brush);
+        ctx.changed(&final_transform);
 
         let modifier = self.modifier.text_content_full(
             self.content,
@@ -357,6 +372,7 @@ impl Text {
                 font_feature_settings: final_font_features.clone(),
                 draw_style: final_draw_style,
                 brush: final_brush.clone(),
+                transform: final_transform,
                 min_lines: final_min_lines,
                 underline: final_decoration.underline,
                 line_through: final_decoration.line_through,
@@ -658,6 +674,52 @@ mod tests {
         assert!(base.param_eq(&base), "identical modifiers are the same parameter set");
         assert!(!base.param_eq(&shadow), "a new shadow must re-enter the leaf");
         assert!(!base.param_eq(&features), "a new feature string must re-enter the leaf");
+    }
+
+    /// Compose's `textGeometricTransform` — the horizontal mapping is an invertible pair, and a
+    /// scale widens the MEASURED box (the run draws wider, so the box must know it).
+    #[test]
+    fn a_geometric_transform_scales_the_measured_width_and_maps_back() {
+        use crate::text::TextGeometricTransform;
+        let plain = {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("wide").font_size(20.0).build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size
+        };
+        let scaled = {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("wide")
+                    .font_size(20.0)
+                    .text_geometry(TextGeometricTransform::new(2.0, 0.0))
+                    .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let node = &composer.arena_nodes()[root];
+            let para = node.cached_paragraph.borrow();
+            let para = para.as_ref().expect("measured");
+            (node.measured_size, para.max_intrinsic_width())
+        };
+        assert_eq!(plain.height, scaled.0.height, "a horizontal transform leaves the height alone");
+        assert!(
+            (scaled.0.width - plain.width * 2.0).abs() <= 2.0,
+            "scale 2 doubles the measured box: plain={:?} scaled={:?} (paragraph at {:.1})",
+            plain, scaled.0, scaled.1
+        );
+        let t = TextGeometricTransform::new(2.0, 0.3);        for x in [0.0, 5.0, 40.0] {
+            for y in [0.0, 8.0, 20.0] {
+                let mapped = t.map_x(x, y);
+                let back = t.unmap_x(mapped, y);
+                assert!((back - x).abs() < 0.001, "map/unmap must invert: x={x} y={y} back={back}");
+            }
+        }
+        assert!(t.is_identity() == false);
+        assert!(TextGeometricTransform::new(1.0, 0.0).is_identity());
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///

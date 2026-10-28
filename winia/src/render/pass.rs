@@ -895,6 +895,11 @@ pub(super) fn render_pass1(
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };
+            // Compose's `textGeometricTransform`: a horizontal scale/skew of the GLYPH RUN. The
+            // paragraph was laid out in its own space and the box was measured scaled, so the paint
+            // applies the matrix around the paragraph's origin. Caret, selection and hit testing use
+            // the same mapping (`map_x` / `unmap_x`).
+            let transform = crate::layout::node::text_transform(node);
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
@@ -903,10 +908,34 @@ pub(super) fn render_pass1(
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, content_y + tb.rect.top, x_off + tb.rect.right, content_y + tb.rect.bottom), &paint);
+                    // The highlight follows the same horizontal mapping as the glyphs.
+                    let (left, right) = match transform {
+                        Some(t) => (
+                            x_off + t.map_x(tb.rect.left, content_y + tb.rect.top - content_y),
+                            x_off + t.map_x(tb.rect.right, content_y + tb.rect.top - content_y),
+                        ),
+                        None => (x_off + tb.rect.left, x_off + tb.rect.right),
+                    };
+                    canvas.draw_rect(skia_safe::Rect::new(left, content_y + tb.rect.top, right, content_y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, x_off, content_y);
+            // Compose's `textGeometricTransform`: a horizontal scale/skew of the GLYPH RUN. The
+            // paragraph was laid out in its own space and the box was measured scaled, so the paint
+            // applies the matrix around the paragraph's origin. Caret, selection and hit testing use
+            // the same mapping (`map_x` / `unmap_x`).
+            match transform {
+                Some(t) => {
+                    canvas.save();
+                    canvas.translate((x_off, content_y));
+                    canvas.scale((t.scale_x, 1.0));
+                    if t.skew_x.abs() > f32::EPSILON {
+                        canvas.skew((t.skew_x, 0.0));
+                    }
+                    para.paint(canvas, 0.0, 0.0);
+                    canvas.restore();
+                }
+                None => para.paint(canvas, x_off, content_y),
+            }
             // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））。
             // ⚠ 有选区（非零宽）时不显示——对齐 Compose：光标仅 collapsed
             // selection 时绘制
@@ -954,6 +983,11 @@ pub(super) fn render_pass1(
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
                             .unwrap_or_else(|| node.cursor_index.get());
                         if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
+                            // The caret follows the same horizontal mapping as the glyphs.
+                            let cx = match transform {
+                                Some(t) => t.map_x(cx, cy),
+                                None => cx,
+                            };
                             debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                             canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
                         } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
@@ -976,7 +1010,12 @@ pub(super) fn render_pass1(
                     und_paint.set_stroke_width(1.0);
                     for tb in &rects {
                         let r = tb.rect;
-                        canvas.draw_line(skia_safe::Point::new(x_off + r.left, content_y + r.bottom), skia_safe::Point::new(x_off + r.right, content_y + r.bottom), &und_paint);
+                        // The underline follows the glyphs' horizontal mapping.
+                        let (left, right) = match transform {
+                            Some(t) => (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0)),
+                            None => (x_off + r.left, x_off + r.right),
+                        };
+                        canvas.draw_line(skia_safe::Point::new(left, content_y + r.bottom), skia_safe::Point::new(right, content_y + r.bottom), &und_paint);
                     }
                 }
             }

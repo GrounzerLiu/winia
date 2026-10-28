@@ -976,7 +976,7 @@ impl ApplicationHandler for AppState {
                                         let caret_idx = crate::text::field::offset_mapping_for_node(nodes, r, pidx)
                                             .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
                                             .unwrap_or_else(|| nodes[pidx].cursor_index.get());
-                                        let (cx, cy, ch) = if empty {
+                                        let (mut cx, cy, ch) = if empty {
                                             (0.0, 0.0, 20.0)
                                         } else {
                                             let tl = crate::text::TextLayout::new(p);
@@ -985,6 +985,12 @@ impl ApplicationHandler for AppState {
                                                 None => (0.0, 0.0, 20.0),
                                             }
                                         };
+                                        // The IME window follows the same horizontal mapping the
+                                        // renderer uses for the caret (a geometric transform widens
+                                        // the drawn run, not the laid-out one).
+                                        if let Some(t) = crate::layout::node::text_transform(&nodes[pidx]) {
+                                            cx = t.map_x(cx, cy);
+                                        }
                                         let align = nodes[pidx].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                                         // CONTENT box: the painter uses it, so the IME
                                         // candidate window must too — under a flight layout

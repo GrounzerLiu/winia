@@ -1058,3 +1058,40 @@ fn start_and_middle_ellipsis_move_the_marker_off_the_end() {
         "the start ellipsis leads with the marker: start={start_first} end={end_first}"
     );
 }
+
+/// `TextGeometricTransform`: a horizontal scale draws the glyph run wider than it was laid out.
+///
+/// The paragraph is laid out in its own space and the paint applies the matrix, so the ink is twice
+/// as wide at scale 2 while the glyph count (and therefore the height) is unchanged.
+#[test]
+fn a_geometric_transform_scales_the_painted_run() {
+    fn ink_right(scale: f32) -> i32 {
+        let (mut surface, _) = render_ui(260.0, 60.0, winia::app_root!(move |ctx| {
+            let text = Text::new("wide")
+                .font_size(30.0)
+                .color(Color::BLACK)
+                .modifier(Modifier::new().size(240.0, 60.0));
+            let text = if scale != 1.0 {
+                text.text_geometry(winia::text::TextGeometricTransform::new(scale, 0.0))
+            } else {
+                text
+            };
+            text.build(ctx);
+        }));
+        let mut right = -1;
+        for x in 0..260 {
+            for y in 0..60 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 && x > right { right = x; }
+            }
+        }
+        right
+    }
+    let plain = ink_right(1.0);
+    let scaled = ink_right(2.0);
+    assert!(plain > 0, "the text paints");
+    assert!(
+        (scaled as f32 - plain as f32 * 2.0).abs() <= 4.0,
+        "scale 2 must double the painted run: plain right={plain} scaled right={scaled}"
+    );
+}

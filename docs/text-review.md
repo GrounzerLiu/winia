@@ -325,21 +325,31 @@ reader can re-check.
   Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
   (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
-- [ ] **M-6 — `TextStyle.lineHeightStyle` and `textGeometricTransform` are still missing.**
-  Fixed earlier in this row: **`shadow`**, **`fontFeatureSettings`**, **`drawStyle`** and **`brush`**
-  (see the Paint extras below). **`fontSynthesis` needs no code**: Skia synthesises the missing face
-  itself — measured with a family that has no bold face (`SimSun`): regular 108.0 px / 277 ink
-  pixels against bold 111.8 px / 442 ink, i.e. a faux bold, exactly Compose's default
-  `FontSynthesis.All`; a family that HAS a bold face (`Segoe UI` 97.7/430 → 105.0/732) gets the real
-  one. winia therefore matches the default and has no knob to switch synthesis off (Skia exposes
-  none).
-  Still missing, and why this is more than a Skia gap: `lineHeightStyle` (`alignment` + `trim`) and
-  `textGeometricTransform` (`scaleX`/`skewX`) both move the GLYPH RUN relative to the box, while the
-  caret, hit testing, selection rectangles and the overflow clip all read the box's own geometry.
-  A paint-only version would leave all four pointing at where the text is not; doing it properly
-  means threading the transform through `TextLayout::get_cursor_position`, the hit test in
-  `per_window/pointer.rs`, `get_rects_for_range` consumers and the render clip together. That is a
-  geometry project, not a style field, and nothing in the repo asks for either.
+- [ ] **M-6 — `TextStyle.lineHeightStyle` is still missing.**
+  Fixed: **`shadow`**, **`fontFeatureSettings`**, **`drawStyle`**, **`brush`** and now
+  **`textGeometricTransform`** (`TextGeometricTransform { scale_x, skew_x }`, Compose's
+  `TextStyle.textGeometricTransform`). **`fontSynthesis` needs no code**: Skia synthesises the
+  missing face itself (measured on `SimSun`, which has no bold face: regular 108.0 px / 277 ink
+  pixels against bold 111.8 px / 442, a faux bold — Compose's default `FontSynthesis.All`; there is
+  no way to switch it off, which is the only difference).
+  The geometric transform goes through ALL the geometry readers rather than the paint alone, which
+  is what the earlier note in this file said would be the expensive part: `build_text_paragraph`
+  lays the paragraph out in its own space, `measure_and_cache_text_at` multiplies the measured width
+  (and `longest_line`) by `scale_x`, the paint applies `canvas.scale`/`canvas.skew` around the text
+  origin, and `map_x`/`unmap_x` carry the same mapping into the caret, the composing underline, the
+  selection rectangles, the IME candidate window and the two pointer hit tests
+  (`per_window/pointer.rs`, `overlay_host/input.rs`).
+  Measured: scale 2 doubles the measured box (42.0 px → 84.0 px with the same 27.0 height) and the
+  painted run (ink right edge 60 → 120); both fail with their half disabled.
+  Tests: `components::text::tests::a_geometric_transform_scales_the_measured_width_and_maps_back`
+  (measurement + `map_x`/`unmap_x` inverse),
+  `render_snapshot::a_geometric_transform_scales_the_painted_run` (paint). Demo: the paint card
+  shows a scaled and a skewed run.
+  Still missing: `lineHeightStyle` (`alignment` + `trim`). Only the boolean `set_half_leading` exists
+  (spent on D-2's centring) and there is no `alignment`/`trim` pair; the trim half also changes the
+  box height that the caret and the overflow clip read, so it needs the same geometry pass the
+  transform just got — the hook to hang it on is now there (`text_transform`'s pattern) but the
+  leading arithmetic is not written.
   Tests for the fixed half: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs`,
   `render_snapshot::a_text_brush_paints_a_gradient_across_the_glyphs`,
   `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
