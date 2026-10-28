@@ -360,6 +360,9 @@ pub struct RichText {
     soft_wrap: bool,
     line_height: Option<f32>,
     min_lines: usize,
+    /// A value built ahead of time (`Text::annotated`'s Compose counterpart); its text is laid out
+    /// BEFORE anything the build closure appends.
+    annotated: Option<crate::text::AnnotatedString>,
 }
 
 impl RichText {
@@ -373,6 +376,7 @@ impl RichText {
             soft_wrap: true,
             line_height: None,
             min_lines: 1,
+            annotated: None,
         }
     }
 
@@ -417,6 +421,15 @@ impl RichText {
         self
     }
 
+    /// Lay out a pre-built [`crate::text::AnnotatedString`] — Compose's `Text(AnnotatedString)`.
+    ///
+    /// The value carries text plus style ranges, so it can be stored, sliced and reused; the build
+    /// closure can still append more text after it.
+    pub fn annotated(mut self, text: &crate::text::AnnotatedString) -> Self {
+        self.annotated = Some(text.clone());
+        self
+    }
+
     /// 构建富文本。`f` 接收一个 `RichTextScope`，在其上调用 `.text()` / `.bold()` 等。
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, f: impl FnOnce(&mut RichTextScope)) {
@@ -426,6 +439,17 @@ impl RichText {
         let mut annotations: Vec<(Style, Range<usize>)> = Vec::new();
         let base = resolve_base();
 
+        // A pre-built annotated value comes first; the closure appends after it (the cursor starts
+        // at its length, so the appended text's spans are offset correctly).
+        let mut cursor_start = 0;
+        if let Some(annotated) = &self.annotated {
+            content.push_str(annotated.text());
+            cursor_start = annotated.len();
+            for (range, span) in annotated.span_styles() {
+                annotations.push((span_style_to_style(span), range.clone()));
+            }
+        }
+
         {
             let mut scope = RichTextScope {
                 content: &mut content,
@@ -433,7 +457,7 @@ impl RichText {
                 drawable_ranges: &mut drawable_ranges,
                 annotations: &mut annotations,
                 style: base,
-                cursor: 0,
+                cursor: cursor_start,
             };
             f(&mut scope);
         }
@@ -505,6 +529,27 @@ impl Seg {
     fn clone_at(&self, range: Range<usize>) -> Self {
         Seg { range, ..self.clone() }
     }
+}
+
+/// Map one [`crate::text::SpanStyle`] onto the internal `Style` the span resolver consumes.
+///
+/// `font_size` arrives as a `TextUnit`, which needs the density to become the logical pixels the
+/// resolver works in; everything else is a direct field.
+fn span_style_to_style(span: &crate::text::SpanStyle) -> Style {
+    let mut style = Style::default();
+    style.fs = span
+        .font_size
+        .map(|u| u.to_logical_px(crate::runtime::density::current_density()));
+    style.color = span.color;
+    style.fw = span.font_weight;
+    style.slant = span.font_style;
+    style.letter_spacing = span.letter_spacing.unwrap_or(0.0);
+    style.bg = span.background;
+    if let Some(decoration) = span.decoration {
+        style.ul = decoration.underline;
+        style.st = decoration.line_through;
+    }
+    style
 }
 
 pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {

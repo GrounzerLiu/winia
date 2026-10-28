@@ -621,3 +621,37 @@
             "min_lines(3) reserves three lines: box {three_line_box} vs one line {one_line_paragraph}"
         );
     }
+
+    /// A value built ahead of time lays out its own text and styles — Compose's
+    /// `Text(AnnotatedString)` — and the build closure can still append after it.
+    #[test]
+    fn an_annotated_string_seeds_the_text_and_its_spans() {
+        use crate::text::{AnnotatedString, SpanStyle};
+        let annotated = AnnotatedString::new("abCD")
+            .with_style(2..4, SpanStyle::new().bold().font_size(24.0));
+        let style = span_style_to_style(&annotated.style_at(2));
+        assert_eq!(style.fw, Some(crate::text::FontWeight::BOLD));
+        assert_eq!(style.fs, Some(24.0));
+        let plain = span_style_to_style(&annotated.style_at(0));
+        assert_eq!(plain.fw, None);
+        assert_eq!(plain.fs, None);
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            RichText::new().annotated(&annotated).build(ctx, |_| {});
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let node = composer
+            .arena_nodes()
+            .iter()
+            .find(|n| n.has_richtext_content)
+            .expect("a rich text node");
+        let spans = node.modifier.elements().iter().find_map(|el| match el {
+            crate::modifier::ModifierElement::RichTextContent { spans, .. } => Some(spans.clone()),
+            _ => None,
+        }).expect("the payload carries spans");
+        assert!(
+            spans.iter().any(|s| s.start == 2 && s.end == 4 && s.font_weight == crate::text::FontWeight::BOLD),
+            "the styled range survives into the payload: {spans:?}"
+        );
+    }

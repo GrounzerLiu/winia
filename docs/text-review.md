@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
 | Deviations from Compose (deliberate or accepted) | 0 | 4 | 1 (the ellipsis half of D-4) |
-| Missing API surface | 2 | 8 | 1 (the paint-only items of M-6) |
+| Missing API surface | 1 | 9 | 0 |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
@@ -324,11 +324,21 @@ reader can re-check.
   `fontSynthesis` needs synthetic bold/italic control that the paragraph API does not expose;
   `textGeometricTransform` (scale/skew) has no Skia paragraph hook; `drawStyle`/`brush` are stroke
   and gradient text, which need a foreground `Paint` per glyph run.
-- [ ] **M-7 — `RichText` has no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
-  product; there is no span list that can be sliced, merged, re-parsed or read back
-  (`getSpanStyles`). Reason not fixed: it is a data-model addition, and the current
-  `resolve_spans` splitter would have to be rebuilt on top of it.
-
+- [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
+  product, so styled text could not be stored, sliced or queried.
+  Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with
+  `with_style`/`push_style`, `span_styles`, `style_at` (spans merge field by field in push order,
+  like Compose), `substring` (rebases the spans that survive) and `len` in CHARACTERS. A span is a
+  `SpanStyle` (colour, size, weight, slant, letter spacing, background, decoration), every field
+  optional. `RichText::new().annotated(&value)` lays it out through the existing span resolver —
+  `span_style_to_style` maps one span onto the internal style — and the build closure can still
+  append after it, with the cursor starting at the value's length.
+  Tests: `text::annotated::annotated_tests::{spans_merge_in_the_order_they_were_pushed,`
+  `a_substring_rebases_the_spans_that_survive, a_range_outside_the_text_is_clamped_or_dropped}`, and
+  `rich_text::tests::an_annotated_string_seeds_the_text_and_its_spans` (the styled range survives
+  into the payload as `2..4` bold). Demo: the rich-text demo's `AnnotatedString` card.
+  Not done: `Text` has no `annotated` overload of its own (use `RichText::annotated`, which is the
+  same node), and there is no `ParagraphStyle` half — paragraph-level fields stay on `RichText`.
 - [x] **M-8 — rich-text spans do not participate in `param_eq`.** `modifier/param_eq.rs:166-170`
   compares content, drawable count and ranges only; its comment says the style ranges are treated as
   identical because every build rebuilds them. So a rebuild that changes only a span style is an

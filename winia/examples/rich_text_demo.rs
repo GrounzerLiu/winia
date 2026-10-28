@@ -8,7 +8,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::text::{DecoStyle, SvgDrawable, TextAlign, TextOverflow};
+use winia::text::{AnnotatedString, DecoStyle, SpanStyle, SvgDrawable, TextAlign, TextOverflow};
 use winia::components::RichTextScope;
 
 #[path = "common/settings.rs"]
@@ -417,7 +417,18 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
-            // 8. ProvideTextStyle: a rich block inherits the base style, spans override it.
+            // 8. A value built ahead of time: Compose's `Text(AnnotatedString)`. The same value could
+            // be stored, sliced with `substring`, or queried with `style_at`.
+            card(ctx, "annotated", "AnnotatedString", |ctx| {
+                let annotated = AnnotatedString::new("annotated: plain, then bold accent, tracked")
+                    .with_style(22..32, SpanStyle::new().bold().color(ACCENT))
+                    .with_style(0..9, SpanStyle::new().letter_spacing(1.5));
+                RichText::new()
+                    .annotated(&annotated)
+                    .modifier(Modifier::new().test_tag("rt-annotated"))
+                    .build(ctx, |_| {});
+            });
+            // 9. ProvideTextStyle: a rich block inherits the base style, spans override it.
             card(ctx, "inherit", "inherits ProvideTextStyle", |ctx| {
                 ProvideTextStyle(
                     TextStyle::new().font_size(18.0).color(WARM),
