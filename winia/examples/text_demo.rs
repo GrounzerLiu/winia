@@ -9,7 +9,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::text::{measure_text, TextMeasureSpec, TextShadow};
+use winia::text::{measure_text, TextBrush, TextDrawStyle, TextMeasureSpec, TextShadow};
 
 #[path = "common/settings.rs"]
 mod settings;
@@ -524,6 +524,31 @@ fn text_demo(ctx: &mut ComposeCtx) {
                             .font_size(20.0)
                             .font_feature_settings("tnum")
                             .modifier(Modifier::new().test_tag("tx-feature-tnum"))
+                            .build(ctx);
+                    });
+                // Paint styles: an outline and a gradient, both through the glyph foreground paint.
+                Row::new()
+                    .spacing(20.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        Text::new("outline")
+                            .font_size(24.0)
+                            .color(ACCENT)
+                            .draw_style(TextDrawStyle::Stroke { width: 1.2 })
+                            .modifier(Modifier::new().test_tag("tx-stroke"))
+                            .build(ctx);
+                        Text::new("gradient")
+                            .font_size(24.0)
+                            .color(Color::WHITE)
+                            .brush(TextBrush::linear_gradient(
+                                (0.0, 0.0),
+                                (200.0, 0.0),
+                                vec![
+                                    Color::from_argb(255, 0xD0, 0xBC, 0xFF),
+                                    Color::from_argb(255, 0xFF, 0xB4, 0xAB),
+                                ],
+                            ))
+                            .modifier(Modifier::new().test_tag("tx-brush"))
                             .build(ctx);
                     });
             });

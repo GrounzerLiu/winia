@@ -93,6 +93,34 @@ pub enum TextOverflow {
 }
 impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 
+/// How the glyphs are filled — Compose's `TextStyle.drawStyle`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextDrawStyle {
+    /// Filled glyphs (the default).
+    Fill,
+    /// Outlined glyphs: only the outline is painted, `width` logical pixels thick.
+    Stroke { width: f32 },
+}
+impl Default for TextDrawStyle { fn default() -> Self { TextDrawStyle::Fill } }
+
+/// A paint for the glyphs that a plain colour cannot express — Compose's `TextStyle.brush`.
+///
+/// Only the linear gradient is modelled: it is the brush every Material surface uses for a
+/// decorative headline, and it is enough to prove the foreground-paint path works. The colours are
+/// distributed evenly from `start` to `end`, in node-local logical pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBrush {
+    pub start: (f32, f32),
+    pub end: (f32, f32),
+    pub colors: Vec<Color>,
+}
+
+impl TextBrush {
+    pub fn linear_gradient(start: (f32, f32), end: (f32, f32), colors: Vec<Color>) -> Self {
+        Self { start, end, colors }
+    }
+}
+
 /// A text shadow — Compose's `Shadow`: a colour, an offset and a blur radius.
 ///
 /// Compose carries one optional shadow per `TextStyle` (`shadow: Shadow?`) and appends it to the
@@ -150,11 +178,15 @@ pub struct TextStyle {
     /// Compose's `TextStyle.fontFeatureSettings`: an OpenType feature string such as `"smcp"`, or
     /// `"liga" off`. Parsed by [`parse_font_features`] into (tag, value) pairs for Skia.
     pub font_feature_settings: Option<String>,
+    /// Compose's `TextStyle.drawStyle`: fill (the default) or an outline.
+    pub draw_style: Option<TextDrawStyle>,
+    /// Compose's `TextStyle.brush`: a gradient that replaces the flat colour.
+    pub brush: Option<TextBrush>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -178,6 +210,10 @@ impl TextStyle {
     pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
     /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
     pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
+    /// Compose's `TextStyle.drawStyle` — `Fill` or an outline `Stroke { width }`.
+    pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
+    /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
+    pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
         self.decoration = Some(decoration);

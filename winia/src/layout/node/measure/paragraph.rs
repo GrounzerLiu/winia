@@ -20,7 +20,7 @@ pub(crate) fn build_plain_paragraph(
     underline: bool,
     line_through: bool,
     font_family: Option<&str>,
-    paint: Option<(Option<crate::text::TextShadow>, Option<String>)>,
+    paint: Option<TextPaintSpec>,
     max_width: f32,
 ) -> crate::text::Paragraph {
     use skia_safe::textlayout::ParagraphStyle;
@@ -127,7 +127,7 @@ pub(crate) fn build_plain_paragraph(
     }
     // Compose's `TextStyle.shadow`: Skia draws it behind the glyphs and it does not take part in
     // metrics (a shadow never grows the measured box — measured in the same run that added it).
-    if let Some(shadow) = paint.as_ref().and_then(|(s, _)| *s) {
+    if let Some(shadow) = paint.as_ref().and_then(|p| p.shadow) {
         text_style.add_shadow(skia_safe::textlayout::TextShadow::new(
             skia_safe::Color::from_argb(shadow.color.a, shadow.color.r, shadow.color.g, shadow.color.b),
             (shadow.offset.0, shadow.offset.1),
@@ -135,9 +135,54 @@ pub(crate) fn build_plain_paragraph(
         ));
     }
     // Compose's `TextStyle.fontFeatureSettings`: OpenType features, applied in order.
-    if let Some(settings) = paint.as_ref().and_then(|(_, f)| f.clone()) {
+    if let Some(settings) = paint.as_ref().and_then(|p| p.font_feature_settings.clone()) {
         for (tag, value) in crate::text::style::parse_font_features(settings.as_str()) {
             text_style.add_font_feature(tag.as_str(), value);
+        }
+    }
+    // Compose's `TextStyle.drawStyle` and `TextStyle.brush`: both are a FOREGROUND PAINT on the Skia
+    // style, which replaces the flat colour the paragraph would otherwise paint with.
+    if let Some(paint_spec) = paint.as_ref() {
+        let brush = paint_spec.brush.as_ref();
+        let stroke = match paint_spec.draw_style {
+            Some(crate::text::TextDrawStyle::Stroke { width }) if width > 0.0 => Some(width),
+            _ => None,
+        };
+        if brush.is_some() || stroke.is_some() {
+            let mut glyph_paint = skia_safe::Paint::default();
+            glyph_paint.set_anti_alias(true);
+            if let Some(brush) = brush {
+                use skia_safe::gradient::{Gradient, Interpolation};
+                use skia_safe::gradient::Colors;
+                let colors: Vec<skia_safe::Color4f> = brush
+                    .colors
+                    .iter()
+                    .map(|c| skia_safe::Color4f::new(
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        c.a as f32 / 255.0,
+                    ))
+                    .collect();
+                if colors.len() >= 2 {
+                    let gradient_colors = Colors::new_evenly_spaced(&colors, skia_safe::TileMode::Clamp, None);
+                    let gradient = Gradient::new(gradient_colors, Interpolation::default());
+                    if let Some(shader) = skia_safe::shaders::linear_gradient(
+                        (brush.start, brush.end),
+                        &gradient,
+                        None,
+                    ) {
+                        glyph_paint.set_shader(shader);
+                    }
+                }
+            } else {
+                glyph_paint.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+            }
+            if let Some(width) = stroke {
+                glyph_paint.set_style(skia_safe::PaintStyle::Stroke);
+                glyph_paint.set_stroke_width(width);
+            }
+            text_style.set_foreground_paint(&glyph_paint);
         }
     }
     let fc = crate::text::font::get_font_collection();
@@ -150,10 +195,22 @@ pub(crate) fn build_plain_paragraph(
 }
 
 /// The paint-only text extras (shadow, OpenType features) the modifier carries, if any.
-pub(crate) fn text_paint(node: &LayoutNode) -> Option<(Option<crate::text::TextShadow>, Option<String>)> {
+pub(crate) struct TextPaintSpec {
+    pub shadow: Option<crate::text::TextShadow>,
+    pub font_feature_settings: Option<String>,
+    pub draw_style: Option<crate::text::TextDrawStyle>,
+    pub brush: Option<crate::text::TextBrush>,
+}
+
+pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
     node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { shadow, font_feature_settings } => {
-            Some((*shadow, font_feature_settings.clone()))
+        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush } => {
+            Some(TextPaintSpec {
+                shadow: *shadow,
+                font_feature_settings: font_feature_settings.clone(),
+                draw_style: *draw_style,
+                brush: brush.clone(),
+            })
         }
         _ => None,
     })
@@ -665,5 +722,4 @@ fn relative_spacing(
         }
     }
 }
-
 

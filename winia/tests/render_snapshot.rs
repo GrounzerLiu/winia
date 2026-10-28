@@ -973,3 +973,40 @@ fn a_text_shadow_paints_offset_ink_beyond_the_glyphs() {
         "the shadow must extend the ink: plain=({plain_right},{plain_bottom}) shadow=({shadow_right},{shadow_bottom})"
     );
 }
+
+/// A brush replaces the flat colour with a gradient: the same glyphs, a different hue left to right.
+///
+/// Compose's `TextStyle.brush` is a `Brush` painted through the glyph foreground; winia's
+/// `TextBrush` is the linear gradient, and this pins that the paragraph paints with it (red on the
+/// left, blue on the right) rather than with the text colour.
+#[test]
+fn a_text_brush_paints_a_gradient_across_the_glyphs() {
+    let (mut surface, _) = render_ui(160.0, 60.0, winia::app_root!(|ctx| {
+        Text::new("WWWW")
+            .font_size(40.0)
+            .color(Color::WHITE)
+            .brush(winia::text::TextBrush::linear_gradient(
+                (0.0, 0.0),
+                (160.0, 0.0),
+                vec![Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)],
+            ))
+            .modifier(Modifier::new().size(160.0, 60.0))
+            .build(ctx);
+    }));
+    // The gradient turns the glyphs from red on the left to blue on the right; the page background
+    // is white, so a pixel only counts when one channel clearly dominates the other.
+    let (mut first_red, mut last_blue) = (None, None);
+    for x in 0..160 {
+        for y in 0..60 {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r as i32 - b as i32 > 60 && first_red.is_none() { first_red = Some(x); }
+            if b as i32 - r as i32 > 60 { last_blue = Some(x); }
+        }
+    }
+    let red = first_red.expect("red glyph ink on the left");
+    let blue = last_blue.expect("blue glyph ink on the right");
+    assert!(
+        red < blue,
+        "the gradient must run red to blue: red starts at x={red}, blue reaches x={blue}"
+    );
+}

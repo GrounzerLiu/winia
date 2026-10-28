@@ -23,6 +23,10 @@ pub(crate) struct TextExtras {
     pub shadow: Option<crate::text::TextShadow>,
     /// Compose's `TextStyle.fontFeatureSettings`.
     pub font_feature_settings: Option<String>,
+    /// Compose's `TextStyle.drawStyle`.
+    pub draw_style: Option<crate::text::TextDrawStyle>,
+    /// Compose's `TextStyle.brush`.
+    pub brush: Option<crate::text::TextBrush>,
 }
 
 impl Modifier {
@@ -137,6 +141,8 @@ impl Modifier {
         .push(ModifierElement::TextPaint {
             shadow: extras.shadow,
             font_feature_settings: extras.font_feature_settings,
+            draw_style: extras.draw_style,
+            brush: extras.brush,
         })
     }
 

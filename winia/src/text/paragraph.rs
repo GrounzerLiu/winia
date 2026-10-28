@@ -453,6 +453,7 @@ impl Paragraph {
 
 #[cfg(test)]
 mod paragraph_tests {
+
     use skia_safe::FontMgr;
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
     use crate::text::ParagraphBuilder;

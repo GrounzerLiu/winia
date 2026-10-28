@@ -10,7 +10,10 @@ use crate::runtime::composition_local::CompositionLocal;
 use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
-use crate::text::{FontSlant, FontWeight, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextShadow, TextStyle};
+use crate::text::{
+    FontSlant, FontWeight, TextAlign, TextBrush, TextDecoration, TextDrawStyle, TextLayoutResult,
+    TextOverflow, TextShadow, TextStyle,
+};
 use std::sync::{Arc, LazyLock};
 
 
@@ -53,6 +56,8 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         background: override_.background.or(base.background),
         shadow: override_.shadow.or(base.shadow),
         font_feature_settings: override_.font_feature_settings.clone().or_else(|| base.font_feature_settings.clone()),
+        draw_style: override_.draw_style.or(base.draw_style),
+        brush: override_.brush.clone().or_else(|| base.brush.clone()),
     }
 }
 
@@ -86,6 +91,10 @@ pub struct Text {
     shadow: Option<TextShadow>,
     /// Compose's `TextStyle.fontFeatureSettings`.
     font_feature_settings: Option<String>,
+    /// Compose's `TextStyle.drawStyle`.
+    draw_style: Option<TextDrawStyle>,
+    /// Compose's `TextStyle.brush`.
+    brush: Option<TextBrush>,
 }
 
 impl std::fmt::Debug for Text {
@@ -124,6 +133,8 @@ impl Text {
             auto_size: None,
             shadow: None,
             font_feature_settings: None,
+            draw_style: None,
+            brush: None,
         }
     }
 
@@ -146,6 +157,10 @@ impl Text {
     pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
     /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
     pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
+    /// Compose's `TextStyle.drawStyle` — `Fill` or an outline `Stroke { width }`.
+    pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
+    /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
+    pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
@@ -277,6 +292,8 @@ impl Text {
             .font_feature_settings
             .clone()
             .or_else(|| style.font_feature_settings.clone());
+        let final_draw_style = self.draw_style.or(style.draw_style);
+        let final_brush = self.brush.clone().or_else(|| style.brush.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
         // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
@@ -320,6 +337,8 @@ impl Text {
         ctx.changed(&self.auto_size);
         ctx.changed(&final_shadow);
         ctx.changed(&final_font_features);
+        ctx.changed(&final_draw_style);
+        ctx.changed(&final_brush);
 
         let modifier = self.modifier.text_content_full(
             self.content,
@@ -336,6 +355,8 @@ impl Text {
             crate::modifier::TextExtras {
                 shadow: final_shadow,
                 font_feature_settings: final_font_features.clone(),
+                draw_style: final_draw_style,
+                brush: final_brush.clone(),
                 min_lines: final_min_lines,
                 underline: final_decoration.underline,
                 line_through: final_decoration.line_through,

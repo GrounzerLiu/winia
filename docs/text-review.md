@@ -305,25 +305,28 @@ reader can re-check.
   Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
   (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
-- [ ] **M-6 — `TextStyle.lineHeightStyle`, `fontSynthesis`, `textGeometricTransform`, `drawStyle`,
-  `brush` are still missing (the shadow and font-feature halves are done).**
-  Fixed: **`shadow`** (`TextShadow { color, offset: (f32, f32), blur }`, Compose's `Shadow`;
-  `blur` converts to Skia's sigma with `radius * 0.57735 + 0.5`) and **`fontFeatureSettings`**
-  (`parse_font_features` reads Compose's syntax — `"smcp"`, `"liga" off`, `"tnum" 0`, quoted tags —
-  and the pairs reach `TextStyle::add_font_feature`). Both live in their own modifier element
-  (`ModifierElement::TextPaint`) rather than in `TextContent`, so every hand-built `TextContent`
-  literal in the suite stayed valid. Measured: a shadow is paint-only and leaves the measured box
-  unchanged; a 6 px offset shadow moves the ink's bottom-right corner from (24,42) to (30,48).
+- [ ] **M-6 — `TextStyle.lineHeightStyle`, `fontSynthesis` and `textGeometricTransform` are still
+  missing (shadow, `fontFeatureSettings`, `drawStyle` and `brush` are done).**
+  Fixed: **`shadow`** (`TextShadow { color, offset, blur }`, Compose's `Shadow`; `blur` converts to
+  Skia's sigma with `radius * 0.57735 + 0.5`), **`fontFeatureSettings`** (`parse_font_features` reads
+  Compose's syntax — `"smcp"`, `"liga" off`, `"tnum" 0`, quoted tags — and the pairs reach
+  `TextStyle::add_font_feature`), **`drawStyle`** (`TextDrawStyle::Fill | Stroke { width }`) and
+  **`brush`** (`TextBrush::linear_gradient`). The last two go through Skia's glyph foreground paint
+  (`TextStyle::set_foreground_paint`), which replaces the flat colour for the whole run. All four
+  live in their own modifier element (`ModifierElement::TextPaint`), so every hand-built
+  `TextContent` literal in the suite stayed valid.
+  Measured: a shadow is paint-only and leaves the measured box unchanged; a 6 px offset shadow moves
+  the ink's bottom-right corner from (24,42) to (30,48); a gradient brush paints red-dominant ink at
+  the left of the run and blue-dominant ink at the right instead of the text colour.
   Tests: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs` (red without the
-  application: plain (24,42) vs shadow (24,42)),
-  `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
+  application: plain (24,42) shadow (24,42)), `render_snapshot::a_text_brush_paints_a_gradient_across_the_glyphs`
+  (red without it), `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
   `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
-  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`. Commit eff2d7d.
-  Still missing, with reasons: `lineHeightStyle` needs the leading trimmed per line (Skia's
-  `set_half_leading` is the closest primitive and D-2 already spends it on centring);
-  `fontSynthesis` needs synthetic bold/italic control that the paragraph API does not expose;
-  `textGeometricTransform` (scale/skew) has no Skia paragraph hook; `drawStyle`/`brush` are stroke
-  and gradient text, which need a foreground `Paint` per glyph run.
+  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`.
+  Still missing, with reasons: `lineHeightStyle` needs per-line leading trimming (Skia's
+  `set_half_leading` is the closest primitive and D-2 already spends it on centring); `fontSynthesis`
+  needs synthetic bold/italic control the paragraph API does not expose; `textGeometricTransform`
+  (scale/skew of the glyph run) has no Skia paragraph hook.
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
   Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with

@@ -17,7 +17,10 @@ mod inline_drawable;
 mod measure_text;
 
 pub use annotated::{AnnotatedString, SpanStyle};
-pub use style::{FontSlant, FontWeight, TextAlign, TextDecoration, TextOverflow, TextStyle, TextShadow};
+pub use style::{
+    FontSlant, FontWeight, TextAlign, TextBrush, TextDecoration, TextDrawStyle, TextOverflow,
+    TextShadow, TextStyle,
+};
 pub use layout_result::TextLayoutResult;
 pub use measure_text::{measure_text, TextMeasureSpec};
 pub use index_bimap::IndexBiMap;
