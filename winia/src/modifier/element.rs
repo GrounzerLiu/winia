@@ -573,6 +573,12 @@ pub(crate) enum ModifierElement {
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
     TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32>, min_lines: usize, underline: bool, line_through: bool, font_family: Option<String>, on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>, auto_size: Option<(f32, f32)> },
+    /// Compose's richer `onTextLayout` sink: the snapshot plus the paragraph, so the per-line queries
+    /// (`getLineForOffset`, `getBoundingBox`, …) can answer. Its own element, because the callback
+    /// type would otherwise grow every hand-written `TextContent { .. }` literal in the suite.
+    TextLayoutCallback {
+        callback: std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>,
+    },
     /// How the glyphs are PAINTED, kept beside `TextContent` instead of inside it: a shadow and an
     /// OpenType feature string change the shaped paragraph without changing any of the measure-time
     /// parameters, and giving them their own element keeps every existing `TextContent { .. }`

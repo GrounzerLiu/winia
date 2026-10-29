@@ -165,6 +165,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                     _ => false,
                 }
         }
+        // The richer layout sink: identity, like the plain one. A rebuild produces a new closure.
+        (TextLayoutCallback { callback: a }, TextLayoutCallback { callback: b }) => std::sync::Arc::ptr_eq(a, b),
         // Paint-only text extras: a shadow or a feature string changes the shaped paragraph, so a
         // difference has to re-enter the leaf.
         (TextPaint { shadow: ash, font_feature_settings: afs, draw_style: ads, brush: abr, transform: atr, line_height_style: alh },

@@ -501,6 +501,10 @@ pub(crate) struct TextMeasure {
     pub first_baseline: f32,
     pub last_baseline: f32,
     pub on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
+    /// The richer sink: the same snapshot plus the paragraph, for Compose's per-line queries.
+    pub on_text_layout_layout: Option<
+        std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>,
+    >,
 }
 
 pub(crate) fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> TextMeasure {
@@ -518,6 +522,7 @@ pub(crate) fn measure_and_cache_text_at(
     // (unscaled) space and the measured box is the scaled one. Compose does the same: the transform
     // is applied to the glyph run, not to the paragraph's layout width.
     let scale_x = text_transform(node).map(|t| t.scale_x.max(0.0001)).unwrap_or(1.0);
+    let sink = text_layout_layout_sink(node);
     let layout_width = max_width / scale_x;
     let Some(para) = build_text_paragraph_at(node, layout_width, font_size_override) else {
         return TextMeasure {
@@ -529,6 +534,7 @@ pub(crate) fn measure_and_cache_text_at(
             first_baseline: 0.0,
             last_baseline: 0.0,
             on_text_layout: None,
+            on_text_layout_layout: None,
         };
     };
 
@@ -578,6 +584,7 @@ pub(crate) fn measure_and_cache_text_at(
         first_baseline,
         last_baseline,
         on_text_layout,
+        on_text_layout_layout: sink,
     }
 }
 
@@ -600,6 +607,18 @@ fn text_layout_extras(
         }
     }
     (1, None)
+}
+
+/// The richer `onTextLayout` sink, if the leaf carries one.
+fn text_layout_layout_sink(
+    node: &LayoutNode,
+) -> Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>> {
+    for el in node.modifier.elements() {
+        if let ModifierElement::TextLayoutCallback { callback } = el {
+            return Some(callback.clone());
+        }
+    }
+    None
 }
 
 /// Remap a character range from the ORIGINAL rich content into the TRUNCATED one.

@@ -1033,8 +1033,7 @@ pub(crate) fn measure_node_inner(
             // is `constraints.constrain(...)` of the paragraph, so a `fill_max_width` text reports
             // the filled width (measured before this fix: 12 where the box was 300). The callback
             // is fired from here because this arm is the only place that knows the constraints.
-            if let Some(callback) = &measured.on_text_layout {
-                callback(&crate::text::TextLayoutResult {
+            let result = crate::text::TextLayoutResult {
                     size: final_text_size,
                     text_size: measured.text_size,
                     line_count: measured.line_count,
@@ -1045,7 +1044,18 @@ pub(crate) fn measure_node_inner(
                     // wider or taller than the box it was measured into.
                     did_overflow_width: measured.longest_line > final_text_size.width + 0.5,
                     did_overflow_height: measured.size.height > final_text_size.height + 0.5,
-                });
+            };
+            if let Some(callback) = &measured.on_text_layout {
+                callback(&result);
+            }
+            // The richer sink: same point, with the paragraph still borrowed so the per-line
+            // queries (`getLineForOffset`, `getBoundingBox`, …) can answer. They cannot ride the
+            // snapshot — `Paragraph`'s Skia handle is not `Send`.
+            if let Some(callback) = &measured.on_text_layout_layout {
+                let paragraph = nodes[idx].cached_paragraph.borrow();
+                if let Some(para) = paragraph.as_ref() {
+                    callback(&result, &crate::text::TextLayout::new(para));
+                }
             }
             final_text_size
         } else if nodes[idx].has_richtext_content {

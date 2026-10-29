@@ -58,12 +58,145 @@ impl<'a> TextMeasureSpec<'a> {
     }
 }
 
+
+// ── The measurer's cache ──
+
+/// A key that covers every field `TextMeasureSpec` lays out with.
+///
+/// `PartialEq` rather than a hash: the spec holds an `f32` per knob and a `&str`, and a hash of
+/// floats would have to be lossy to be cheap (two sizes a ULP apart would collide and answer each
+/// other's size). Comparison on a hit is a handful of float compares, which is far cheaper than the
+/// paragraph it saves.
+#[derive(Clone, PartialEq)]
+struct MeasureKey {
+    content: String,
+    font_size: f32,
+    color: Color,
+    max_width_bits: u32,
+    font_weight: FontWeight,
+    font_style: FontSlant,
+    max_lines: usize,
+    align: TextAlign,
+    overflow: TextOverflow,
+    soft_wrap: bool,
+    letter_spacing_bits: u32,
+    line_height_bits: Option<u32>,
+    min_lines: usize,
+    font_family: Option<String>,
+    transform_bits: Option<(u32, u32)>,
+    line_height_style: Option<crate::text::LineHeightStyle>,
+}
+
+impl MeasureKey {
+    fn of(spec: &TextMeasureSpec<'_>) -> Self {
+        MeasureKey {
+            content: spec.content.to_string(),
+            font_size: spec.font_size,
+            color: spec.color,
+            max_width_bits: spec.max_width.to_bits(),
+            font_weight: spec.font_weight,
+            font_style: spec.font_style,
+            max_lines: spec.max_lines,
+            align: spec.align,
+            overflow: spec.overflow,
+            soft_wrap: spec.soft_wrap,
+            letter_spacing_bits: spec.letter_spacing.to_bits(),
+            line_height_bits: spec.line_height.map(|v| v.to_bits()),
+            min_lines: spec.min_lines,
+            font_family: spec.font_family.map(|f| f.to_string()),
+            transform_bits: spec.transform.map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits())),
+            line_height_style: spec.line_height_style,
+        }
+    }
+}
+
+/// How many distinct measures the cache keeps — Compose's `TextMeasurer` default is 8.
+const DEFAULT_CAPACITY: usize = 8;
+
+/// The measurer's cache, oldest-use first.
+struct MeasureCache {
+    entries: Vec<(MeasureKey, TextLayoutResult)>,
+    capacity: usize,
+
+    /// How many times a measure was answered from the cache, and how many times it was not.
+    pub stats: (usize, usize),
+}
+
+impl MeasureCache {
+    const fn new() -> Self { MeasureCache { entries: Vec::new(), capacity: DEFAULT_CAPACITY, stats: (0, 0) } }
+
+    fn get(&mut self, key: &MeasureKey) -> Option<TextLayoutResult> {
+        let at = self.entries.iter().position(|(k, _)| k == key)?;
+        // Touch: the entry moves to the back (most recently used).
+        let (k, v) = self.entries.remove(at);
+        self.entries.push((k, v));
+        self.stats.0 += 1;
+        Some(v)
+    }
+
+    fn put(&mut self, key: MeasureKey, value: TextLayoutResult) {
+        self.stats.1 += 1;
+        if let Some(at) = self.entries.iter().position(|(k, _)| *k == key) {
+            self.entries.remove(at);
+        } else if self.entries.len() == self.capacity {
+            self.entries.remove(0);
+        }
+        self.entries.push((key, value));
+    }
+
+    fn clear(&mut self) { self.entries.clear(); }
+}
+
+thread_local! {
+    /// One cache per thread: a paragraph is built with the thread-local font collection, and a
+    /// measure is a layout-layer question — a `Mutex` here would serialise every measuring thread.
+    static CACHE: std::cell::RefCell<MeasureCache> = const { std::cell::RefCell::new(MeasureCache::new()) };
+}
+
+/// How many distinct measures the cache keeps (Compose's `TextMeasurer` default).
+pub fn measure_cache_capacity() -> usize {
+    CACHE.with(|c| c.borrow().capacity)
+}
+
+/// Keep at most `capacity` distinct measures. Dropping the bound below the current count evicts
+/// the oldest entries immediately, which is what Compose's `TextMeasurer` does on construction.
+pub fn set_measure_cache_capacity(capacity: usize) {
+    CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        cache.capacity = capacity.max(1);
+        while cache.entries.len() > cache.capacity {
+            cache.entries.remove(0);
+        }
+    });
+}
+
+/// For tests and for a density/theme switch that invalidates every cached size: empty the cache.
+pub fn clear_measure_cache() {
+    CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// The cache's `(hits, misses)` since it was last cleared.
+pub fn measure_cache_stats() -> (usize, usize) {
+    CACHE.with(|c| c.borrow().stats)
+}
+
 /// Lay one text out and report what it measured — the same numbers `Text::on_text_layout` sees.
 ///
 /// The result is a snapshot: `size` is the box (grown to `min_lines`), `text_size` is the
 /// paragraph's own size, and the baselines and overflow flags come from the same pass. Nothing is
 /// cached, so this is safe to call from a layout callback or from code that has no node at all.
 pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
+    let key = MeasureKey::of(spec);
+    if let Some(hit) = CACHE.with(|c| c.borrow_mut().get(&key)) {
+        return hit;
+    }
+    let result = measure_text_uncached(spec);
+    CACHE.with(|c| c.borrow_mut().put(key, result));
+    result
+}
+
+/// The layout itself, without the cache — what a miss runs.
+fn measure_text_uncached(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
     let para = crate::layout::node::build_plain_paragraph(
         spec.content,
         spec.font_size,
@@ -181,7 +314,56 @@ mod tests {
         assert!(result.has_visual_overflow());
     }
 
-/// `measure_text` must answer what the leaf measures, for the two options that change the BOX:
+    /// The cache answers the SAME numbers and reports the hit; a changed knob is a miss (the key
+    /// covers every field), and the bound evicts the oldest.
+    ///
+    /// The counters are read as DELTAS: the cache is thread-local and the suite runs single
+    /// threaded, so other tests have already measured through it.
+    #[test]
+    fn the_measurer_cache_answers_repeats_and_misses_on_change() {
+        clear_measure_cache();
+        let base = measure_cache_stats();
+        let hits = || measure_cache_stats().0 - base.0;
+        let misses = || measure_cache_stats().1 - base.1;
+        let spec = TextMeasureSpec::new("Hi", 16.0, 300.0);
+        let first = measure_text(&spec);
+        assert_eq!((hits(), misses()), (0, 1), "the first call is a miss");
+        let again = measure_text(&spec);
+        assert_eq!((hits(), misses()), (1, 1), "the repeat is a hit");
+        assert_eq!(first, again, "a hit answers the identical result");
+
+        // Every field of the spec is part of the key: change one, get a miss.
+        let mut moved = TextMeasureSpec::new("Hi", 16.0, 300.0);
+        moved.max_width = 301.0;
+        let _ = measure_text(&moved);
+        assert_eq!((hits(), misses()), (1, 2), "a different width is a miss");
+
+        let mut scaled = TextMeasureSpec::new("Hi", 16.0, 300.0);
+        scaled.transform = Some(crate::text::TextGeometricTransform::new(2.0, 0.0));
+        let _ = measure_text(&scaled);
+        assert_eq!((hits(), misses()), (1, 3), "a different transform is a miss");
+
+        // The bound: capacity 2 keeps the two most recent.
+        clear_measure_cache();
+        set_measure_cache_capacity(2);
+        let a = TextMeasureSpec::new("a", 16.0, 300.0);
+        let b = TextMeasureSpec::new("b", 16.0, 300.0);
+        let c = TextMeasureSpec::new("c", 16.0, 300.0);
+        let _ = measure_text(&a);
+        let _ = measure_text(&b);
+        let _ = measure_text(&c);
+        assert_eq!(measure_cache_capacity(), 2);
+        assert_eq!((hits(), misses()), (1, 6), "three new measures");
+        // "a" was evicted, so asking again is a miss; "c" is still there.
+        let _ = measure_text(&a);
+        assert_eq!((hits(), misses()), (1, 7), "the oldest entry was evicted");
+        let _ = measure_text(&c);
+        assert_eq!((hits(), misses()), (2, 7), "the newest is still cached");
+        set_measure_cache_capacity(8);
+        clear_measure_cache();
+    }
+
+    /// `measure_text` must answer what the leaf measures, for the two options that change the BOX:
     /// a geometric transform widens it, a line-height trim shortens it. Both were ignored, so the
     /// public measurer disagreed with `on_text_layout` for the same text.
     #[test]
@@ -212,6 +394,7 @@ mod tests {
             trimmed.size.height
         );
     }
+
     #[test]
     fn min_lines_grows_the_box_not_the_paragraph() {
         let one = measure_text(&TextMeasureSpec::new("Hi", 16.0, 300.0));

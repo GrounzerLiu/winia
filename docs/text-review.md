@@ -29,6 +29,25 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Eighth pass (2026-10-29): the line queries and the measurer cache
+
+The last two gaps from the seventh answer.
+
+| Item | What it is now | Test |
+| --- | --- | --- |
+| N-3 | Compose's per-line queries, answered on `text::TextLayout`: `get_line_for_offset`, `get_line_range` (Compose's `getLineStart`/`getLineEnd`), `get_bounding_box`, `get_cursor_rect`, `get_offset_for_position`, `get_word_boundary`. All of them take and return CONTENT byte offsets and go through the `DisplaySpan` mapping, so a truncated paragraph answers in content space. Reachable from a component through `Text::on_text_layout_with_layout(|result, layout| ..)`, which fires at the same point as `on_text_layout` and leaves it available (a leaf may carry both). The sink rides its own `TextLayoutCallback` element | `components::text::tests::the_layout_callback_answers_the_per_line_queries` |
+| N-4 | `measure_text` keeps an LRU of 8 measures per thread, keyed on EVERY spec field (floats by `to_bits`, so two sizes a ULP apart are distinct). `measure_cache_capacity` / `set_measure_cache_capacity` / `clear_measure_cache` / `measure_cache_stats` are public, `TextMeasurer`-style | `text::measure_text::tests::the_measurer_cache_answers_repeats_and_misses_on_change` (hit, miss per knob, eviction order by capacity) |
+
+Why the queries are not ON `TextLayoutResult`, decided by measurement rather than by preference:
+`Paragraph` wraps a `RefHandle` around Skia's native paragraph, and `assert_send::<Paragraph>()`
+does not compile (`RefHandle<..> cannot be sent between threads safely`). A `Copy` snapshot that
+outlives the measure pass cannot carry one, so the queries live on a borrow of it. That is also what
+Compose needs `MultiParagraph` for.
+
+Also recorded: `on_text_layout` fires more than once per frame when a leaf is measured at a
+candidate width (the first pass included), so a consumer that keeps only the first snapshot sees the
+narrow pass. The test reads the LAST one, which is what the frame drew; the demo has always shown
+the latest.
 ## Seventh pass (2026-10-29): the three RichText gaps from the sixth pass
 
 The previous answer listed three things `RichText` still lacked. All three are closed.

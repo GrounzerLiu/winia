@@ -89,6 +89,8 @@ pub struct Text {
     font_family: Option<String>,
     /// Compose's `onTextLayout`: called after every measure with the layout the text produced.
     on_text_layout: Option<Arc<dyn Fn(&TextLayoutResult) + Send + Sync>>,
+    /// The richer sink: the snapshot plus the paragraph, for the per-line queries.
+    on_text_layout_layout: Option<Arc<dyn Fn(&TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>>,
     /// Compose's `autoSize`: the (min, max) logical-pixel window the fit search runs in.
     auto_size: Option<(f32, f32)>,
     /// Compose's `TextStyle.shadow`.
@@ -138,6 +140,7 @@ impl Text {
             text_decoration: None,
             font_family: None,
             on_text_layout: None,
+            on_text_layout_layout: None,
             auto_size: None,
             shadow: None,
             font_feature_settings: None,
@@ -238,6 +241,23 @@ impl Text {
         callback: Arc<dyn Fn(&TextLayoutResult) + Send + Sync>,
     ) -> Self {
         self.on_text_layout = Some(callback);
+        self
+    }
+
+    /// Compose's richer `onTextLayout`: the same snapshot, PLUS a [`crate::text::TextLayout`] for the
+    /// per-line queries Compose exposes on `TextLayoutResult` (`getLineForOffset`,
+    /// `getLineStart`/`getLineEnd`, `getBoundingBox`, `getCursorRect`, `getOffsetForPosition`,
+    /// `getWordBoundary`).
+    ///
+    /// The paragraph cannot ride the `Copy` snapshot — its Skia handle is not `Send` (measured by
+    /// compiling `assert_send::<Paragraph>()`) — so those queries are answered while the paragraph is
+    /// borrowed, and this callback is that window. It fires at the same point as `on_text_layout`
+    /// (after the constraint clamp, once per measure) and does NOT replace it: a leaf may carry both.
+    pub fn on_text_layout_with_layout(
+        mut self,
+        callback: impl Fn(&TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_text_layout_layout = Some(Arc::new(callback));
         self
     }
 
@@ -394,6 +414,7 @@ impl Text {
             final_letter_spacing,
             final_line_height.map(|u| u.to_logical_px(density)),
             crate::modifier::TextExtras {
+                on_text_layout_layout: self.on_text_layout_layout.clone(),
                 shadow: final_shadow,
                 font_feature_settings: final_font_features.clone(),
                 draw_style: final_draw_style,
@@ -1063,6 +1084,66 @@ mod tests {
         assert!((payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.0) - 2.0).abs() < 0.01);
         // A bare f32 is an `sp`, so the old call shape still means the same thing at scale 1.
         assert!((payload_spacing(20.0, 2.0.into(), 1.0) - 2.0).abs() < 0.01);
+    }
+
+    /// The richer `onTextLayout`: the same snapshot plus the paragraph, so Compose's per-line
+    /// queries answer. Measured on a two-line run: offset 0 is on the first line and offset 3 (after
+    /// the newline) on the second, the first line ends at the newline, and every range has a box.
+    ///
+    /// The callback fires once per measure — including the narrow first pass — so the assertions use
+    /// the LAST snapshot, which is the one the frame drew.
+    #[test]
+    fn the_layout_callback_answers_the_per_line_queries() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone, Debug)]
+        #[allow(dead_code)]
+        struct Seen {
+            line_of_0: usize,
+            line_of_3: usize,
+            line_count: usize,
+            line0: Option<std::ops::Range<usize>>,
+            box0: Option<f32>,
+            caret0: Option<f32>,
+            word0: std::ops::Range<usize>,
+            hit: usize,
+        }
+        let seen: Arc<Mutex<Vec<Seen>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let sink = sink.clone();
+            Text::new("ab\ncd")
+                .font_size(16.0)
+                .modifier(Modifier::new().fill_max_width())
+                .on_text_layout_with_layout(
+                    move |result: &TextLayoutResult, layout: &crate::text::TextLayout<'_>| {
+                        let row = Seen {
+                            line_of_0: layout.get_line_for_offset(0),
+                            line_of_3: layout.get_line_for_offset(3),
+                            line_count: result.line_count,
+                            line0: layout.get_line_range(0),
+                            box0: layout.get_bounding_box(0..2).map(|b| b.top),
+                            caret0: layout.get_cursor_rect(0).map(|c| c.top),
+                            word0: layout.get_word_boundary(0),
+                            hit: layout.get_offset_for_position(skia_safe::Point::new(2.0, 4.0)),
+                        };
+                        sink.lock().unwrap().push(row);
+                    },
+                )
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let rows = seen.lock().unwrap().clone();
+        let last = rows.last().expect("the callback fired").clone();
+        assert!(!rows.is_empty());
+        assert_eq!(last.line_count, 2, "two lines: {last:?}");
+        assert_eq!(last.line_of_0, 0, "offset 0 is on the first line: {last:?}");
+        assert_eq!(last.line_of_3, 1, "offset 3 is past the newline: {last:?}");
+        assert_eq!(last.line0, Some(0..2), "line 0 runs to the newline: {last:?}");
+        assert!(last.box0.is_some(), "the range has a box: {last:?}");
+        assert!(last.caret0.is_some(), "the caret has a rect: {last:?}");
+        assert_eq!(last.word0, 0..2, "the word at 0 is `ab`: {last:?}");
+        assert!(last.hit <= 2, "a click at the top-left answers the first characters: {last:?}");
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///

@@ -1,5 +1,22 @@
 use crate::text::Paragraph;
 use skia_safe::textlayout::TextDirection;
+use skia_safe::Rect;
+use std::ops::Range;
+
+/// The smallest rectangle covering every measured box, or `None` when there are none.
+fn union_of(boxes: &[skia_safe::textlayout::TextBox]) -> Option<Rect> {
+    let first = boxes.first()?;
+    let mut rect = first.rect;
+    for b in &boxes[1..] {
+        rect = Rect::new(
+            rect.left.min(b.rect.left),
+            rect.top.min(b.rect.top),
+            rect.right.max(b.rect.right),
+            rect.bottom.max(b.rect.bottom),
+        );
+    }
+    Some(rect)
+}
 
 /// Caret and hit-test geometry over a laid-out [`Paragraph`].
 ///
@@ -140,6 +157,58 @@ impl<'a> TextLayout<'a> {
         0
     }
 
+
+    /// Which line a CONTENT byte offset lands on (Compose's `getLineForOffset`).
+    ///
+    /// Offsets clamp exactly like the caret: past the end parks on the last line, mid-character
+    /// parks on that character's line.
+    pub fn get_line_for_offset(&self, offset: usize) -> usize {
+        let display = self.paragraph.display_offset(offset.min(self.paragraph.text_len()));
+        self.paragraph
+            .inner_paragraph()
+            .get_line_number_at(self.paragraph.paragraph_byte_for_real_index(display))
+            .unwrap_or(0)
+    }
+
+    /// The CONTENT offsets a line starts and ends at (Compose's `getLineStart` / `getLineEnd`).
+    ///
+    /// Skia reports line ranges in the paragraph's own space; both ends go through the display
+    /// mapping, so a truncated run reports the content offsets it actually shows.
+    pub fn get_line_range(&self, line: usize) -> Option<Range<usize>> {
+        let metrics = self.paragraph.get_line_metrics_at(line)?;
+        let start = self.paragraph.real_index_for_paragraph_byte(metrics.start_index);
+        let end = self.paragraph.real_index_for_paragraph_byte(metrics.end_index);
+        Some(start..end.max(start))
+    }
+
+    /// The visual box of a CONTENT range (Compose's `getBoundingBox`).
+    pub fn get_bounding_box(&self, range: Range<usize>) -> Option<Rect> {
+        let rects = self.paragraph.get_rects_for_range(
+            self.paragraph.display_offset(range.start)..self.paragraph.display_offset(range.end),
+            skia_safe::textlayout::RectHeightStyle::Max,
+            skia_safe::textlayout::RectWidthStyle::Tight,
+        );
+        union_of(&rects)
+    }
+
+    /// The caret box at a CONTENT offset (Compose's `getCursorRect`).
+    pub fn get_cursor_rect(&self, offset: usize) -> Option<Rect> {
+        let (x, y, height) = self.get_cursor_position(offset)?;
+        Some(Rect::new(x, y, x, y + height))
+    }
+
+    /// The CONTENT offset nearest a point (Compose's `getOffsetForPosition`).
+    pub fn get_offset_for_position(&self, point: impl Into<skia_safe::Point>) -> usize {
+        let display = self.get_closest_grapheme_cluster_at(point);
+        self.paragraph.content_offset(display)
+    }
+
+    /// The word around a CONTENT offset (Compose's `getWordBoundary`), in content bytes.
+    pub fn get_word_boundary(&self, offset: usize) -> Range<usize> {
+        let display = self.paragraph.display_offset(offset.min(self.paragraph.text_len()));
+        let word = self.paragraph.get_word_boundary(display);
+        self.paragraph.content_offset(word.start)..self.paragraph.content_offset(word.end)
+    }
     pub fn inner_paragraph(&self) -> &Paragraph {
         self.paragraph
     }

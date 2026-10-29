@@ -649,16 +649,26 @@ fn text_demo(ctx: &mut ComposeCtx) {
             // 10. on_text_layout, without a state write during measure.
             card(ctx, "callback", "onTextLayout", |ctx| {
                 let _ = refresh.get();
-                Text::new("this leaf reports its layout")
+                // The RICHER callback: the same snapshot plus the paragraph, so the per-line
+                // queries Compose puts on `TextLayoutResult` answer too (they cannot ride the
+                // snapshot — a Skia paragraph handle is not `Send`).
+                Text::new("this leaf reports its layout\nsecond line")
                     .font_size(15.0)
-                    .on_text_layout({
+                    .on_text_layout_with_layout({
                         clone!(layout_log);
-                        move |result| {
+                        move |result: &TextLayoutResult, layout: &winia::text::TextLayout<'_>| {
+                            let line0 = layout.get_line_range(0).unwrap_or(0..0);
+                            let line1 = layout.get_line_for_offset(line0.end + 1);
+                            let box1 = layout.get_bounding_box(line0.end + 1..line0.end + 3);
                             *layout_log.lock().unwrap() = Some(format!(
-                                "{:.0}x{:.0}, {} line(s), baseline {:.1}/{:.1}, overflow w:{} h:{}",
+                                "{:.0}x{:.0}, {} line(s), baseline {:.1}/{:.1}, overflow w:{} h:{}; \
+                                 line0 {:?}, offset->line {line1}, bbox1 top {}",
                                 result.size.width, result.size.height, result.line_count,
                                 result.first_baseline, result.last_baseline,
                                 result.did_overflow_width, result.did_overflow_height,
+                                line0,
+                                box1.map(|b: skia_safe::Rect| format!("{:.1}", b.top))
+                                    .unwrap_or_else(|| "-".into()),
                             ));
                         }
                     })

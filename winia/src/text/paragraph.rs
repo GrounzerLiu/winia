@@ -721,4 +721,3 @@ mod paragraph_tests {
         assert!(!rects.is_empty());
     }
 }
-

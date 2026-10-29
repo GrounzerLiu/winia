@@ -27,6 +27,8 @@ pub(crate) struct TextExtras {
     pub draw_style: Option<crate::text::TextDrawStyle>,
     /// Compose's `TextStyle.brush`.
     pub brush: Option<crate::text::TextBrush>,
+    /// The richer `onTextLayout` sink — carried here so the leaf can hand it the paragraph.
+    pub on_text_layout_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>>,
     /// Compose's `TextStyle.textGeometricTransform`.
     pub transform: Option<crate::text::TextGeometricTransform>,
     /// Compose's `TextStyle.lineHeightStyle`.
@@ -164,7 +166,13 @@ impl Modifier {
                 line_height_style: None,
             }
         );
-        if says_something { m.push(paint) } else { m }
+        let m = if says_something { m.push(paint) } else { m };
+        // The richer `onTextLayout` sink rides its own element, so a leaf that does not use it carries
+        // nothing extra.
+        match extras.on_text_layout_layout.clone() {
+            Some(callback) => m.push(ModifierElement::TextLayoutCallback { callback }),
+            None => m,
+        }
     }
     /// 设置边框。颜色可以是一个 `Color`，也可以是渲染期求值的闭包/状态
     /// （`impl Into<BorderColor>`）——同一个元素存载体：静态值内联，闭包在绘制期求值

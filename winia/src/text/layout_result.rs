@@ -9,8 +9,14 @@ use crate::unit::Size;
 /// caller's to inspect, and handing out a borrow of the `Paragraph` would tie the callback to the
 /// measure pass. Everything a layout consumer needs to place a caret, a selection handle or a
 /// popup — the box, the baselines, the overflow flags — is therefore computed here, once, and
-/// copied out. Compose's per-line queries (`getBoundingBox`, `getLineTop`, …) are not part of the
-/// snapshot; they need the paragraph itself.
+/// copied out.
+///
+/// Compose's per-line queries (`getLineForOffset`, `getBoundingBox`, `getCursorRect`, …) need the
+/// paragraph itself and are answered by [`crate::text::TextLayout`] instead. They cannot live on
+/// this snapshot: `Paragraph` wraps a `RefHandle` around Skia's native paragraph, which is NOT
+/// `Send` (checked by compiling `assert_send::<Paragraph>()`), so a value that outlives the measure
+/// pass cannot carry one. `Text::on_text_layout` still hands the snapshot out; a consumer that
+/// needs the queries reads them from the paragraph while it is borrowed, through `TextLayout`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TextLayoutResult {
     /// The measured box: the paragraph's size, grown to `min_lines` when the content is shorter.

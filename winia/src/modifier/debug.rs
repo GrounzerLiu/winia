@@ -123,6 +123,7 @@ impl Debug for ModifierElement {
                 .field("content", content)
                 .field("font_size", font_size)
                 .finish(),
+            Self::TextLayoutCallback { .. } => f.debug_struct("TextLayoutCallback").finish(),
             Self::TextPaint { shadow, font_feature_settings, draw_style, brush, transform, line_height_style } => f
                 .debug_struct("TextPaint")
                 .field("shadow", &shadow.is_some())
