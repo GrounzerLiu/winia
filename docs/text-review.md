@@ -16,8 +16,8 @@
 
 | Bucket | Open | Fixed | Blocked by Skia |
 |---|---|---|---|
-| Defects (wrong behaviour) | 0 | 10 | 0 |
-| Deviations from Compose (deliberate or accepted) | 0 | 5 | 0 |
+| Defects (wrong behaviour) | 0 | 9 | 0 |
+| Deviations from Compose (deliberate or accepted) | 0 | 6 | 0 |
 | Missing API surface | 0 | 10 | 0 |
 | Investigated and ruled out | — | 5 | — |
 
@@ -29,6 +29,27 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Fifth pass (2026-10-29): a fresh review of the whole stack
+
+This pass re-read the module from scratch and found ONE live defect plus fourteen documentation
+claims that no longer matched the code. The docs were re-checked claim by claim against the source;
+rows whose row text described an unfixed state are rewritten to say what the code does now, and the
+numbers that no live test pins are labelled historical.
+
+| Row | Finding | Evidence | Status |
+| --- | --- | --- | --- |
+| F-1 | A paragraph truncated by start/middle ellipsis answered every hit test in DISPLAY bytes, while the caret, the selection registrar and the drag path store CONTENT offsets | measured on a 20-byte content truncated to 16: the left edge answered 0 where the content offset is 4, the right edge 16 where it is 20 | fixed (`e625a7d`): `Paragraph` carries a `DisplaySpan`, `content_offset`/`display_offset` are the two directions, all four hit sites and both highlight sites use them; tests `a_hit_test_on_a_truncated_run_maps_back_to_the_content`, `the_display_mapping_round_trips_and_collapses_the_dropped_gap` |
+| F-2 | `measure_text` ignored `transform` and `line_height_style`, so the public measurer and `on_text_layout` disagreed about the box | the two are fields of `TextMeasureSpec` now | fixed (`e625a7d`); test `the_measurer_honours_the_transform_and_the_line_height_trim` |
+| D-6 | `docs/text.md` said `width_matters` counted only `Ellipsis`; the code counts all three (`is_ellipsis()`) | `measure/paragraph.rs:35` | doc corrected |
+| D-7 | `docs/text.md` claimed `max_lines(0)` reaches Skia; `Text::build` rejects it | `components/text.rs:298-305` | doc corrected |
+| D-8 | `docs/text.md` claimed the leaf declares only the content and cited a test that does not exist | `components/text.rs:348-368`; `render_snapshot.rs:908` | doc corrected |
+| D-9 | `docs/text-review.md` described D-3 / M-1 / M-2 / M-8 / M-9 / M-10 by their PRE-FIX state while ticking them, contradicting itself on T-9, and pointed at five stale `file:line` refs | the ticked rows are rewritten to the current mechanism | doc corrected |
+
+Checked and found correct this pass: the facade re-exports, `FontWeight` clamping, `TextStyle`
+merging, the `min_lines` padding rule against `HeightInLinesModifier`, the colour priority chain,
+`on_text_layout` firing after the constraint clamp, the transform and line-height geometry chains,
+the `SelectionRegistrar::reindex` contract, and the span resolver's split arithmetic (including the
+placeholder skip at `rich_text.rs:609`).
 ## Third pass (2026-10-29): reviewing the review's own fixes
 
 Every row below was found by reading the commits this file produced and then measuring; each now
@@ -130,7 +151,7 @@ clamping).
   with cluster 0 for *any* index. Measured on `"abc"`: with `len=0` every index reported `x=0.0`,
   while the correct positions are `0.0 / 8.14 / 17.55 / 24.94`.
   Four call sites disagreed about the unit: `render/pass.rs` passed `content.len()` (bytes),
-  `app/per_window/pointer.rs:331` and `:744` and `app/overlay_host/input.rs:289` passed `0`, and the
+  `app/per_window/pointer.rs:330` and `:744` and `app/overlay_host/input.rs:288` passed `0`, and the
   IME path in `app/app_state/handlers.rs` passed `paragraph_byte_to_real_indices.len()` — a map
   ENTRY COUNT. So the three hit-test/IME sites all took the collapse branch.
   Fix: the field is gone — the paragraph is the only authority on its own length
@@ -167,7 +188,7 @@ clamping).
   Commit `92fc7a6`. Full `--lib` suite: 2027 passed.
 
 - [x] **T-7 — `on_text_layout` reported a size that was not constraint-clamped.**
-  The callback fired inside `measure_and_cache_text`, before `measure/engine.rs:1000-1003` applied
+  The callback fired inside `measure_and_cache_text`, before `measure/engine.rs:1028-1031` applied
   `constraints.constrain_*`. Measured before the fix: `.fill_max_width()` in a 300 dp box —
   callback `width=12`, node `300`.
   Correction to the original report: the padding half of this row was WRONG. Compose's
@@ -231,7 +252,7 @@ clamping).
   Root cause: `materialize` assigned `n.dirty = dirty || children_changed`, which OVERWRITES a flag an
   earlier pass in the same frame had set. A node's dirty is cleared by its measure at the end of
   layout, so it must never be cleared by a later materialisation of the same frame.
-  Fix: `n.dirty = n.dirty || dirty || children_changed` (`runtime/materialize.rs:441`).
+  Fix: `n.dirty = n.dirty || dirty || children_changed` (`runtime/materialize.rs:448`).
   Test: `ui_text_test::a_weight_pick_repaints_the_sample_leaf` — counts glyph pixels in the sample
   box, picks Bold, requires at least +25% (red without the fix: `regular=656 bold=656`; green with
   it). Commit 7f399b2.
@@ -267,15 +288,16 @@ clamping).
   Test: `text::paragraph::paragraph_tests::a_line_height_centres_the_leading` (fails without
   `set_half_leading`). Commit `2030ae8`.
 
-- [x] **D-3 — `TextAlign` is four values, and only `Justify` reaches the paragraph.**
-  `text/style.rs:49` has `Left/Center/Right/Justify`; `measure/paragraph.rs:49-52` sets
-  `para_style.set_text_align` for `Justify` only, and the other three are applied by shifting the
-  paint origin (`render/pass.rs:847-856`). Measured: with `fill_max_width` the placement is
-  correct (300 dp box — Center ink at 155..156, Right at 297..298); without it the paragraph is
-  still laid out at the full width and shifted, so the model is "one full-width paragraph, moved",
-  which cannot express Compose's per-line alignment for a narrow box.
-  Reason not fixed: writing `set_text_align` for all four would double-apply the shift (Skia would
-  centre inside the full-width paragraph *and* the paint origin would move).
+- [x] **D-3 — alignment used to be a single block shift, and `TextAlign` had four values.**
+  WAS: `text/style.rs` had `Left/Center/Right/Justify`; the paragraph only ever received `Justify`
+  and every other value moved the paint origin, so a wrapped paragraph was shifted as one block and
+  its short lines stayed left-aligned (measured: two lines in a 300 dp box, Center moved line 1 to
+  95..204 and left line 2 at 94..121 where it belonged at ~134..165).
+  NOW (commit `2030ae8`): six variants (`Start`/`End` added, resolved in `Text::build` against the
+  layout direction). When the width is KNOWN — wrapped, or any ellipsis — `set_text_align` goes on
+  the paragraph and each line aligns itself (`measure/paragraph.rs:57-67`); the paint shifts the
+  origin only for a nowrap, non-ellipsizing paragraph laid out at an infinite width
+  (`render/pass.rs:892-909`). Test: `render_snapshot::a_wrapped_center_aligns_the_short_line_too`.
 
 - [x] **D-4 — `TextOverflow` had no `StartEllipsis` / `MiddleEllipsis`, and `TextAlign` had no
   `Start` / `End`.** Compose's `isEllipsis` already covers the three ellipsis kinds
@@ -310,19 +332,18 @@ clamping).
 
 ## Missing API surface
 
-- [x] **M-1 — no public measurer.** `build_plain_paragraph` is `pub(crate)`
-  (`layout/node/measure/paragraph.rs:8`); the only drawing entry is `DrawScope::draw_text`
-  (`components/draw_scope.rs:190-195`). Compose's `TextMeasurer.measure()` has no equivalent, so a
-  caller that wants a size before painting has to compose a leaf. Reason open: needs a decision on
-  whether the measurer takes a `TextStyle` (which is a component-layer type) or the flattened
-  parameters the leaf already carries.
+- [x] **M-1 — there was no public measurer.** Fixed: `text::measure_text(&TextMeasureSpec)`
+  (`text/measure_text.rs:60`, re-exported at `text.rs:25`) takes the FLATTENED parameters the leaf
+  already carries — a `TextStyle` would need a density — and answers the same `TextLayoutResult`
+  `on_text_layout` sees. Five tests in that module; it now honours `transform` and
+  `line_height_style` too (`text/measure_text.rs::tests`).
 
-- [x] **M-2 — `TextLayoutResult` is four fields.** `text/layout_result.rs` carries `size`,
-  `text_size`, `line_count`, `did_exceed_max_lines`. Compose also exposes `layoutInput`, the
-  `MultiParagraph`, `getLineForOffset`, `getBoundingBox`, `getWordBoundary`,
-  `getOffsetForPosition`, `firstBaseline` / `lastBaseline`.
-  Reason open: the paragraph itself is borrowed mutably at measure time, so handing it out from the
-  callback needs an ownership decision (clone the handle? hand out an immutable view?).
+- [x] **M-2 — `TextLayoutResult` used to be four fields.** Now eight: `size`, `text_size`,
+  `line_count`, `did_exceed_max_lines`, `first_baseline`, `last_baseline`, `did_overflow_width`,
+  `did_overflow_height` (`text/layout_result.rs:15-34`), with `has_visual_overflow()` as the or of
+  the last three. Still missing on purpose: the paragraph handle itself and the per-line queries
+  (`getLineForOffset`, `getBoundingBox`, `getOffsetForPosition`) — those need an ownership decision
+  at measure time, and nobody has asked for them yet.
 
 - [x] **M-3 — no `autoSize` / `TextAutoSize`.** Compose 1.13 has it on both `BasicText` and
   `Text` (`BasicText.kt:100`, `material3/Text.kt:82`).
@@ -399,30 +420,24 @@ clamping).
   into the payload as `2..4` bold). Demo: the rich-text demo's `AnnotatedString` card. Commit c9cb356.
   Not done: `Text` has no `annotated` overload of its own (use `RichText::annotated`, which is the
   same node), and there is no `ParagraphStyle` half — paragraph-level fields stay on `RichText`.
-- [x] **M-8 — rich-text spans do not participate in `param_eq`.** `modifier/param_eq.rs:166-170`
-  compares content, drawable count and ranges only; its comment says the style ranges are treated as
-  identical because every build rebuilds them. So a rebuild that changes only a span style is an
-  equal payload and the leaf does not re-measure.
-  Measured: toggling `.bold(..)` between frames leaves both the payload's `font_weight` check and
-  the cached paragraph unchanged (`width` and `fonts` identical across frames).
-  Reason open: comparing spans properly means `RichSpanStyle` grows a `PartialEq` over 30 fields
-  including `Vec<String>` families — a per-frame comparison cost in exchange for correctness on a
-  rare edit. Needs a measured decision, not a guess.
+- [x] **M-8 — rich-text spans did not participate in `param_eq`.** WAS: `param_eq.rs` compared
+  content, drawable count and ranges only, so a rebuild that changed only a span style was an equal
+  payload and the leaf did not re-measure (measured: toggling `.bold(..)` left the cached paragraph's
+  `width` and `fonts` identical across frames). NOW: `param_eq.rs:189-191` compares `aspans ==
+  bspans` alongside every paragraph field, and `decor::RichSpanStyle` derives `PartialEq`. The cost
+  is one `Vec` comparison per rich-text leaf per frame, paid only by `RichText`.
 
-- [x] **M-9 — `IndexBiMap::insert` does not enforce its documented precondition.**
-  `text/index_bimap.rs:25-29` documents "left and right must each be monotonically increasing" and
-  then pushes. `get_by_left` / `get_by_right` are binary searches, so an out-of-order insert
-  silently corrupts every later lookup. Reason not fixed: a debug assertion would catch builder
-  bugs, but the builder's per-character loop is the hot path at measure time; it should be a
-  `debug_assert!` plus a property test rather than a release-path check.
+- [x] **M-9 — `IndexBiMap::insert` did not enforce its documented precondition.** WAS: it
+  documented "left and right must each be monotonically increasing" and then pushed, while
+  `get_by_left` / `get_by_right` binary-search — an out-of-order insert silently corrupted every
+  later lookup. NOW: two `debug_assert!`s (`text/index_bimap.rs:32-41`) plus three tests, two of
+  them `#[should_panic]` (`:119-133`). Release builds pay nothing, and the builder's per-character
+  loop stays a plain push.
 
-- [x] **M-10 — `SvgDrawable` claims thread safety it does not have.**
-  `text/inline_drawable.rs:84-85` is `unsafe impl Send + Sync` over a `RefCell<svg::Dom>`. The
-  comment argues `draw` only calls `render(&self)`, but `borrow()` itself panics if two threads
-  draw at once — and `InlineDrawable` is `Send + Sync` by trait bound, so the promise is
-  structural. Reason open: the honest fix is
-  `Mutex<svg::Dom>` (or `RefCell` + `!Sync` and a container-side lock); choosing between them
-  depends on whether a drawable is ever shared across windows.
+- [x] **M-10 — `SvgDrawable` claimed thread safety it did not have.** WAS: `unsafe impl Send + Sync`
+  over a `RefCell<svg::Dom>`, whose borrow flag is not atomic — two threads drawing at once was UB.
+  NOW: `text/inline_drawable.rs:75` is `parking_lot::Mutex<svg::Dom>`, so the `unsafe impl` markers
+  (`:85-86`) are backed by a real lock; a four-thread-by-fifty-draw test at `:153` exercises it.
 
 ## Investigated and ruled out
 
@@ -445,7 +460,7 @@ Recorded so the next round does not redo them.
 
 ## Second pass (2026-10-28 and 2026-10-29): what closed, what remains
 
-Eight rows were closed in this pass, each with a test that was first seen to fail on the old
+Eleven rows were closed in this pass, each with a test that was first seen to fail on the old
 behaviour (or, where the API did not exist at all, with a spot check that removing the wiring puts
 the test back to failing). The rows themselves carry the details; this is the index.
 
@@ -453,7 +468,7 @@ the test back to failing). The rows themselves carry the details; this is the in
 | --- | --- | --- |
 | D-2 | `set_half_leading(true)` wherever a line height is set — baseline 19.47 → 18.625 in a 24 dp box | `paragraph_tests::a_line_height_centres_the_leading` |
 | D-3 | the paragraph aligns its own lines when the width is known; the origin shift is only for nowrap | `render_snapshot::a_wrapped_center_aligns_the_short_line_too` |
-| D-4 (align half) | `TextAlign::Start` / `End`, resolved against the direction in `Text::build` | `text::tests::start_and_end_align_resolve_against_the_direction` |
+| D-4 (align half) | `TextAlign::Start` / `End`, resolved against the direction in `Text::build` | `components::text::tests::start_and_end_align_resolve_against_the_direction` |
 | D-4 (ellipsis half) | `StartEllipsis` / `MiddleEllipsis`, truncated before layout | `render_snapshot::start_and_middle_ellipsis_move_the_marker_off_the_end` |
 | M-1 | `text::measure_text(&TextMeasureSpec) -> TextLayoutResult` | `text::measure_text::tests` (5) |
 | M-2 | `first_baseline`, `last_baseline`, `did_overflow_width`, `did_overflow_height`; `has_visual_overflow` covers both axes | `text::measure_text::tests::a_nowrap_line_reports_a_width_overflow` |
@@ -474,24 +489,37 @@ ellipsis as blocked. That was assembled from a partial read of the binding: `Tex
 truncating the string. All three are implemented now; what follows is the list that survived
 contact with the headers.
 
-- **Available and used**: `set_color`, `set_foreground_paint` (drives `drawStyle` and `brush`),
-  `add_shadow` (drives `TextStyle.shadow`), `add_font_feature` (drives `fontFeatureSettings`),
-  `set_decoration*`, `set_font_style`, `set_font_arguments`, `set_font_size`, `set_font_families`,
-  `set_baseline_shift`, `set_height`, `set_height_override`, `set_half_leading`,
-  `set_letter_spacing`, `set_word_spacing`, `set_typeface`, `set_locale`, `set_text_baseline`,
-  `set_font_edging`, `set_subpixel`, `set_font_hinting`, and `ParagraphStyle::set_ellipsis` (end
-  of line only — start/middle are emulated, see D-4).
+- **Used by winia** (grep-checked): `set_color`, `set_foreground_paint` (drives `drawStyle` and
+  `brush`), `add_shadow`, `add_font_feature`, `set_decoration_type`, `set_font_style`,
+  `set_font_size`, `set_font_families`, `set_baseline_shift`, `set_word_spacing`, `set_height`,
+  `set_height_override`, `set_half_leading`, `set_letter_spacing`, `set_locale`,
+  `set_font_edging`, `set_font_hinting`, `set_subpixel`, and `ParagraphStyle::set_ellipsis` (end of
+  line only — start/middle are emulated, see D-4).
+- **Available in `skia-safe` 0.99 but unused** (no winia field asks for them): `set_typeface`,
+  `set_font_arguments`, `set_text_baseline`, `set_shadow` (the single-shadow setter — winia uses
+  `add_shadow`, which appends), and `ParagraphStyle::set_text_style`.
 - **`fontSynthesis`** — no knob, and none needed: Skia synthesises a missing face itself. Measured
   with `SimSun` (no bold face): regular 108.0 px / 277 ink px → bold 111.8 px / 442 ink px, a faux
   bold; `Segoe UI` (real bold) 97.7/430 → 105.0/732. That is Compose's default `FontSynthesis.All`;
   winia simply cannot turn it off.
-- **`textGeometricTransform`** (scaleX / skewX) — no hook on `TextStyle` or `ParagraphStyle`. A
-  canvas matrix at paint time would draw the glyphs elsewhere while the caret, hit testing, selection
-  rectangles and the overflow clip keep reading the untransformed box.
-- **`lineHeightStyle`** — only the boolean `set_half_leading` (spent on D-2's centring); no
-  `alignment`/`trim` pair, so the `Trim` half cannot be expressed. Same geometry concern as above:
-  trimming changes the box height the caret and clip use.
-- **`textIndent`** — absent from both types.
+- **`textGeometricTransform`** (scaleX / skewX) — no hook on `TextStyle` or `ParagraphStyle`, so
+  it is emulated: the measure path lays the paragraph out at `max_width / scale_x` and scales the
+  reported width, the paint applies a canvas matrix, and every geometry reader (caret, both pointer
+  hit tests, the IME window, the selection rectangles, the Skia underline pass) applies the same
+  mapping — `render/pass.rs:919-922,991,1018`, `app/per_window/pointer.rs:338`,
+  `app/overlay_host/input.rs:292`, `app/app_state/handlers.rs:991`. Done in `97bfc59`, reviewed in
+  `92fe29f` (R-1 fixed a double-application in the centred case). Limitation: `skew_x` is paint-only
+  and does not widen the measured box.
+- **`lineHeightStyle`** — no `alignment`/`trim` pair on `TextStyle` (only the boolean
+  `set_half_leading`, spent on D-2's centring), so both halves are computed in winia: `LineHeightStyle
+  { alignment, trim }` resolves to `paint_dy` / `trim_top` / `trim_bottom` in
+  `line_geometry_from` (`layout/node/measure/paragraph.rs:238-270`), the trims come off the box
+  height (`:541-544`), and `paint_dy` moves every geometry reader. Done in `a0b6602`, reviewed in
+  `4e2a4ea`. Deviations: `Proportional` behaves as `Center`, `RichText` does not expose it, and the
+  extra leading is measured against the SHAPED first run (a CJK line reads 20.32 against a Latin
+  line's 21.28 at 16 sp).
+- **`textIndent`** — absent from both types (no `text_indent` symbol anywhere in `winia/src`; the
+  skia-safe 0.99 surface was not re-checked for it).
 ### Deferred, not blocked
 
 `M-7` (`AnnotatedString`) was the one of this pair that needed no missing Skia API, and it is done
@@ -499,17 +527,23 @@ contact with the headers.
 colour into the paragraph, so a producer could only be evaluated at measure time, which moves the
 recomposition into a re-measure without buying anything.
 
-`T-9` is the one defect still open and it is now reachable (see its row): `RichText` can mix font
-sizes and has `min_lines`, so the average-line-height reservation can disagree with Compose.
+All defect rows are closed. `T-9` (the average-line-height reservation) was re-checked against
+`HeightInLinesModifier.kt:414-443` and is recorded as a documented deviation instead of a defect:
+Compose probes with a throwaway paragraph, and for a single style the two formulas agree exactly;
+the only divergence is a `RichText` that mixes font sizes, which has no paragraph-level line height
+to reserve against.
 ## How to re-check
 
-The probes compiled inside `winia/src/text/` as a `#[cfg(test)]` module and were removed after
-the review. To re-run any measurement, add the module back next to the facade declaration in
-`winia/src/text.rs` and run:
+The measurements in this file came from throwaway `#[cfg(test)]` modules that were removed after each
+round; the numbers are HISTORICAL figures from those runs unless a live test pins them. To re-measure,
+add such a module next to the facade in `winia/src/text.rs` and run
+`cargo test -p winia --lib text::probe_tmp -- --nocapture --test-threads=1`.
 
-```bash
-cargo test -p winia --lib text::probe_tmp -- --nocapture --test-threads=1
-```
+The rows that DO pin a number live in `winia/tests/render_snapshot.rs` (`every_line_height_style_keeps_the_run_inside_its_box`,
+`a_line_height_alignment_moves_the_ink_inside_the_line_box`) and `winia/tests/ui_text_test.rs`
+(`the_line_height_styles_move_the_ink_and_trim_the_box`); a row that only asserts an ORDER (`top <
+centre < bottom`) does not pin the numbers quoted beside it.
 
-Nothing in this document is a substitute for that: the numbers above came from those runs, and the
-Compose side of a comparison is a source read of `reference/compose`, not a running Compose build.
+Every `cargo test -p winia --lib <n> passed` line above is a historical count at the commit named
+beside it, not a claim about the current tree. The Compose side of a comparison is a source read of
+`reference/compose`, not a running Compose build.

@@ -46,7 +46,7 @@ effective_lines = if !soft_wrap && overflow.is_ellipsis() { 1 } else { max_lines
 
 A nowrap ELLIPSIS therefore still lays out at the box width and as ONE line (native text layout cannot
 produce several ellipses), which is what makes the `…` appear. A nowrap CLIP or `Visible` keeps laying
-out at an infinite width: nothing is truncated by the paragraph itself, and an ancestor clips it.
+out at an infinite width: nothing is truncated by the paragraph itself, and the node clips it at its own content box (only `Visible` leaves clipping to an ancestor).
 
 RTL: with no `align`, the alignment follows the layout direction (right under RTL); an explicit
 `align` wins. The paragraph's own bidi resolution is Skia's.
@@ -58,17 +58,18 @@ so `with_content_color(..)` scopes colour the text) — the same chain as Compos
 `color.takeOrElse { style.color.takeOrElse { LocalContentColor.current } }`.
 
 Defaults: `overflow = Clip`, `soft_wrap = true`, `max_lines` unset (unlimited), `min_lines(1)`,
-alignment from the layout direction. `max_lines(0)` is passed to Skia, which draws one line and reports
-`did_exceed_max_lines` — the same delegation Compose performs.
+alignment from the layout direction. `max_lines(0)` is REJECTED (`Text::build` asserts both caps are
+positive and that `min_lines <= max_lines`, matching Compose's `requirePrecondition`); only the
+unvalidated `text::measure_text` path can hand a zero to Skia.
 
 **`min_lines`** — the box reserves that many line boxes even when the text is shorter. skia-safe 0.99
 does not expose `set_min_lines`, so the RESULT is padded instead of the paragraph: the height is
 `max(text height, min_lines * line height)` and the glyphs stay at the top, which is what Compose's
 `minLines` does anyway. The pair is VALIDATED the way Compose validates it
 (`HeightInLinesModifier.kt:454-461`, from `BasicText.kt:102`): both caps must be positive and
-`min_lines <= max_lines`, otherwise `build` panics with Compose's own wording. Without that,
+`min_lines <= max_lines`, otherwise `build` panics with Compose's own wording. Before that check,
 `max_lines(0)` measured 44 x 27 (one line, `did_exceed_max_lines` set) and `min_lines(5)` with
-`max_lines(2)` reserved three lines the cap can never fill.
+`max_lines(2)` reserved three lines the cap can never fill — hence the assert.
 
 **`on_text_layout`** — called after every MEASURE (never from an intrinsic probe, which is a question
 about a hypothetical width) with a `TextLayoutResult`: `size` (the box, `min_lines` included),
@@ -88,8 +89,9 @@ the plain leaf draws it now (the `TextStyle` flags used to reach only `RichText`
 **`font_family`** — a family NAME handed to Skia's font collection. `RichText` takes a list of names;
 `Text` takes one.
 
-Currency: the leaf declares nothing but its DATA SIGNATURE (the content) with `ctx.changed`; every other
-parameter rides the `TextContent` modifier element, whose `param_eq` compares all eleven fields, so a
+Currency: the leaf declares its visual inputs with `ctx.changed` (21 of them, one per resolved field),
+AND every parameter rides the payload: `TextContent` carries 17 fields and `TextPaint` the six
+paint-only ones, so a
 changed size / colour / cap re-enters the leaf (measured: a state-driven font size 20 -> 40 re-measures
 27 -> 53 dp without touching the content).
 
@@ -136,6 +138,6 @@ measurements behind each and the reason a row is still open — in
 | `on_text_layout` reports the layout | `components::text::tests::on_text_layout_reports_what_was_laid_out` |
 | a zero line cap, and `min_lines` above `max_lines`, are rejected | `components::text::tests::a_zero_line_cap_is_rejected`, `::min_lines_above_max_lines_is_rejected` |
 | a shared `on_text_layout` sink compares equal, a fresh closure does not | `components::text::tests::a_shared_callback_lets_the_leaf_skip` |
-| a decoration reaches the payload, and draws under the glyphs | `components::text::tests::the_payload_carries_decoration_and_family`, `render_snapshot.rs::a_text_decoration_draws_under_the_glyphs` |
+| a decoration reaches the payload, and draws under the glyphs | `components::text::tests::a_child_style_can_clear_an_inherited_decoration`, `render_snapshot.rs::a_text_decoration_draws_under_the_glyphs` |
 
 Demo: `cargo run -p winia --example text_demo`. Fixture scenario: `text`.

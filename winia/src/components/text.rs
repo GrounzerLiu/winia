@@ -910,6 +910,36 @@ mod tests {
         assert_eq!(plain.content_offset(2), 2);
     }
 
+
+    /// Compose's `TextAlign.Start` / `End` are direction-relative: the resolution happens in
+    /// `Text::build`, where the layout direction is known, because the measure and paint layers only
+    /// speak physical edges.
+    #[test]
+    fn start_and_end_align_resolve_against_the_direction() {
+        use crate::layout::LayoutDirection;
+        fn align_of(align: TextAlign, direction: LayoutDirection) -> TextAlign {
+            crate::layout::direction::provides(direction, || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                composer.compose(move |ctx| { Text::new("x").align(align).build(ctx); });
+                composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+                let root = composer.layout_root_idx().unwrap();
+                let node = &composer.arena_nodes()[root];
+                node.modifier
+                    .elements()
+                    .iter()
+                    .find_map(|el| match el {
+                        ModifierElement::TextContent { align, .. } => Some(*align),
+                        _ => None,
+                    })
+                    .expect("the leaf carries its alignment")
+            })
+        }
+        assert_eq!(align_of(TextAlign::Start, LayoutDirection::Ltr), TextAlign::Left);
+        assert_eq!(align_of(TextAlign::Start, LayoutDirection::Rtl), TextAlign::Right);
+        assert_eq!(align_of(TextAlign::End, LayoutDirection::Ltr), TextAlign::Right);
+        assert_eq!(align_of(TextAlign::End, LayoutDirection::Rtl), TextAlign::Left);
+        assert_eq!(align_of(TextAlign::Center, LayoutDirection::Rtl), TextAlign::Center, "an explicit physical value survives");
+    }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///
     /// The payload carries the window and the search runs at measure time, where the constraints

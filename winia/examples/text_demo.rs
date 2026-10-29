@@ -309,6 +309,9 @@ fn text_demo(ctx: &mut ComposeCtx) {
                         line_height: if k.line_height.get() > 0.0 { Some(k.line_height.get()) } else { None },
                         min_lines: min,
                         font_family: FAMILIES[k.family.get().min(FAMILIES.len() - 1)].1,
+                        // The two box-changing extras follow the demo's own line-height choice.
+                        transform: None,
+                        line_height_style: None,
                     };
                     // A plain-text summary of the active knobs. The controls are visual, so this is
                     // what a reader (and a UI test) can quote back: if a pick stops taking effect,
