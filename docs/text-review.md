@@ -362,6 +362,28 @@ clamping).
   one style, so the proportional share is the same on every line), and `RichText` does not expose the
   style yet — its inline runs would each need their own leading, which the span resolver does not
   carry.
+
+  Review of this change (fourth pass, same day):
+
+  - The arithmetic now lives in ONE function, `line_geometry_from(line_height_px, style, natural)`,
+    shared by the measured path and the uncached fallback (`draw_text_with_selection`), so the two
+    cannot drift; the fallback used to ignore the style entirely.
+  - `line_geometry` reads the paint element directly instead of through `text_paint`, which clones
+    the brush and the feature string on every measure, paint and pointer event.
+  - `natural_line_height` takes its metrics from the shaped first run, and so does Compose's
+    per-line metric — EXCEPT that Compose uses the style's primary typeface. Skia answers with the
+    resolved FALLBACK for a CJK string (measured at 16 sp: `Ag` 21.28 against two CJK glyphs 20.32),
+    so the same style shifts a CJK line about 0.5 px differently from a Latin one. `get_style_metrics`
+    answers identically (measured), so this cannot be tightened without re-resolving the typeface
+    from the payload's family; recorded in `docs/text.md`.
+  - Tests added by the review: `every_line_height_style_keeps_the_run_inside_its_box` (all 3x4
+    combinations; measured, e.g. `Bottom/FirstLineTop` -> ink 6..22 in a 24 px box),
+    `a_line_height_offset_is_taken_back_out_of_the_pointer` (the hit test at a line boundary:
+    cluster 0 with the offset removed, 4 without it),
+    `the_line_height_arithmetic_is_one_function` (guards: no style, no line height, a line height
+    under the font), `an_empty_text_survives_a_line_height_style`, and the fixture-level
+    `ui_text_test::the_line_height_styles_move_the_ink_and_trim_the_box` (`Trim::Both` shortens the
+    box through the real demo, `Bottom` inks lower than `Top`).
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
   Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with

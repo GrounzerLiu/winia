@@ -17,7 +17,7 @@ static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
 
 
-pub(crate) use measure::{line_geometry, text_transform};
+pub(crate) use measure::{line_geometry, line_geometry_from, line_height_style_of, text_transform};
 
 /// Whether the modifier carries a TextContent.
 pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {

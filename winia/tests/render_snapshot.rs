@@ -1186,3 +1186,62 @@ fn a_line_height_alignment_moves_the_ink_inside_the_line_box() {
         "trimming both ends lifts the run: none=({none_top},{none_bottom}) both=({both_top},{both_bottom})"
     );
 }
+
+/// Every alignment/trim combination must keep the run inside the node's own box.
+///
+/// The paint offset and the trimmed height come from the same `line_geometry`, so a combination
+/// that disagreed would draw the text outside — which is exactly what a wrong `paint_dy` sign does.
+/// Each case uses an 18 px font in a 34 px line (the font's own line is about 24 px, so the extra
+/// is about 10 px) in a box that hugs the text: the box height is what the trim produced.
+#[test]
+fn every_line_height_style_keeps_the_run_inside_its_box() {
+    use winia::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+    fn ink(style: LineHeightStyle) -> (i32, i32, i32) {
+        let (mut surface, _) = render_ui(120.0, 60.0, winia::app_root!(move |ctx| {
+            Text::new("Ag")
+                .font_size(18.0)
+                .color(Color::BLACK)
+                .line_height(34.0)
+                .line_height_style(style)
+                .build(ctx);
+        }));
+        let (mut top, mut bottom) = (-1, -1);
+        for y in 0..60 {
+            for x in 0..120 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if top < 0 { top = y; }
+                    bottom = y;
+                }
+            }
+        }
+        (top, bottom, 0)
+    }
+    // The box is the node's own height, which is what the trim produced; the ink must be inside.
+    fn box_height(style: LineHeightStyle) -> i32 {
+        let mut composer = winia::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            Text::new("Ag")
+                .font_size(18.0)
+                .line_height(34.0)
+                .line_height_style(style)
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        composer.arena_nodes()[root].measured_size.height.ceil() as i32
+    }
+    for align in [A::Top, A::Center, A::Bottom] {
+        for trim in [T::None, T::FirstLineTop, T::LastLineBottom, T::Both] {
+            let style = LineHeightStyle::new(align, trim);
+            let (top, bottom, _) = ink(style);
+            let h = box_height(style);
+            assert!(top >= 0, "the run paints ({align:?}/{trim:?})");
+            if std::env::var("LH_DEBUG").is_ok() { println!("MATRIX {align:?}/{trim:?}: ink {top}..{bottom} box {h}"); }
+            assert!(
+                top >= -1 && bottom <= h,
+                "{align:?}/{trim:?}: ink {top}..{bottom} must sit inside the {h} px box"
+            );
+        }
+    }
+}

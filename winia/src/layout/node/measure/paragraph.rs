@@ -232,17 +232,22 @@ pub(crate) struct LineGeometry {
     pub trim_bottom: f32,
 }
 
-pub(crate) fn line_geometry(node: &LayoutNode, para: &crate::text::Paragraph) -> LineGeometry {
-    let Some(style) = text_paint(node).and_then(|p| p.line_height_style) else {
-        return LineGeometry::default();
-    };
+/// The same arithmetic [`line_geometry`] does, for callers that have the numbers but no node.
+///
+/// Kept in one place so the cached paint path and the uncached fallback cannot drift apart.
+pub(crate) fn line_geometry_from(
+    line_height_px: Option<f32>,
+    style: Option<crate::text::LineHeightStyle>,
+    natural_line_height: f32,
+) -> LineGeometry {
+    let Some(style) = style else { return LineGeometry::default() };
     if style.is_noop() {
         return LineGeometry::default();
     }
-    let Some(line_height_px) = text_line_height_px(node) else {
+    let Some(line_height_px) = line_height_px else {
         return LineGeometry::default();
     };
-    let extra = (line_height_px - para.natural_line_height()).max(0.0);
+    let extra = (line_height_px - natural_line_height).max(0.0);
     if extra <= 0.5 {
         return LineGeometry::default();
     }
@@ -258,12 +263,30 @@ pub(crate) fn line_geometry(node: &LayoutNode, para: &crate::text::Paragraph) ->
         _ => 0.0,
     };
     LineGeometry {
-        // The paragraph is built with the leading centred (see D-2), so only the rest of the way
-        // to the requested alignment is applied, minus whatever the trim takes off the top.
         paint_dy: (ratio - 0.5) * extra - trim_top,
         trim_top,
         trim_bottom,
     }
+}
+
+pub(crate) fn line_geometry(node: &LayoutNode, para: &crate::text::Paragraph) -> LineGeometry {
+    // Read the element directly: `text_paint` CLONES the brush and the feature string, and this runs
+    // per measure, per paint and per pointer event.
+    let Some(style) = line_height_style_of(node) else {
+        return LineGeometry::default();
+    };
+    if style.is_noop() {
+        return LineGeometry::default();
+    }
+    line_geometry_from(text_line_height_px(node), Some(style), para.natural_line_height())
+}
+
+/// The `LineHeightStyle` this node carries, copied out without touching the rest of the element.
+pub(crate) fn line_height_style_of(node: &LayoutNode) -> Option<crate::text::LineHeightStyle> {
+    node.modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::TextPaint { line_height_style, .. } => *line_height_style,
+        _ => None,
+    })
 }
 
 /// The `line_height` the payload carries, in logical pixels (the same number the paragraph used).

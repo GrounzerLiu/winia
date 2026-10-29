@@ -330,6 +330,7 @@ pub(super) fn draw_text_with_selection(
     registrar: Option<crate::text::selection::SelectionRegistrar>,
     slot_key: u64,
     transform: Option<crate::text::TextGeometricTransform>,
+    line_style: Option<crate::text::LineHeightStyle>,
 ) {
     // The fallback must agree with the cached path about a geometric transform: the paragraph is
     // built in its own space and painted through the same matrix (see `render::pass`).
@@ -345,6 +346,15 @@ pub(super) fn draw_text_with_selection(
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
         false, false, None, None, w / scale_x,
     );
+    // The line-height offset has to be applied here too, or an uncached text would paint at a
+    // different height than the same text once it has been measured. Shared arithmetic, so the two
+    // paths cannot drift.
+    let paint_dy = crate::layout::node::line_geometry_from(
+        line_height,
+        line_style,
+        para.natural_line_height(),
+    )
+    .paint_dy;
     // Same rule as the cached path (see the text branch in `render::pass`): an overflowing layout
     // is clipped to the text node's own box unless the caller asked for `Visible`. Without this the
     // fallback — used when no measured paragraph is cached — would still spill and the two paths
@@ -360,7 +370,7 @@ pub(super) fn draw_text_with_selection(
     match transform {
         Some(t) => {
             canvas.save();
-            canvas.translate((x, y));
+            canvas.translate((x, y + paint_dy));
             canvas.scale((t.scale_x, 1.0));
             if t.skew_x.abs() > f32::EPSILON {
                 canvas.skew((t.skew_x, 0.0));
@@ -368,7 +378,7 @@ pub(super) fn draw_text_with_selection(
             draw_text(canvas, &para, 0.0, 0.0, w / scale_x, align, soft_wrap);
             canvas.restore();
         }
-        None => draw_text(canvas, &para, x, y, w, align, soft_wrap),
+        None => draw_text(canvas, &para, x, y + paint_dy, w, align, soft_wrap),
     }
     if clipped {
         canvas.restore();

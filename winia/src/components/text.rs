@@ -803,6 +803,78 @@ mod tests {
         let (_, last_top, last_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::LastLineBottom));
         assert!(last_top == 0.0 && last_bottom > 0.0, "only the bottom end: {last_top} {last_bottom}");
     }
+
+    /// The hit test and the paint must agree about where the glyphs are: a click lands in the
+    /// paragraph's own space, so the line-height offset has to come back out before asking Skia.
+    ///
+    /// A three-line paragraph in a `Bottom`-aligned 34 px line discriminates at the paragraph's own
+    /// line boundary (y = 34): with the offset removed the click is still inside the FIRST line
+    /// (cluster 0), and without it the click jumps to the second line (cluster 4).
+    #[test]
+    fn a_line_height_offset_is_taken_back_out_of_the_pointer() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("one\ntwo\nthree")
+                .font_size(18.0)
+                .line_height(34.0)
+                .line_height_style(LineHeightStyle::new(A::Bottom, T::None))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let node = &composer.arena_nodes()[root];
+        let para = node.cached_paragraph.borrow();
+        let para = para.as_ref().unwrap();
+        let dy = crate::layout::node::line_geometry(node, para).paint_dy;
+        assert!(dy > 1.0, "Bottom alignment drops the run inside the box: dy={dy}");
+        let layout = crate::text::TextLayout::new(para);
+        let click_y = 34.0;
+        let mapped = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, click_y - dy));
+        let unmapped = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, click_y));
+        assert!(mapped < 4, "with the offset removed the click stays on the first line: {mapped}");
+        assert!(unmapped >= 4, "without it the same click jumps a line: {unmapped}");
+    }
+
+    /// The fallback path (no cached paragraph) must agree with the measured one about the
+    /// line-height offset; both call `line_geometry_from`, and this pins the arithmetic itself.
+    #[test]
+    fn the_line_height_arithmetic_is_one_function() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        let natural = 21.0;
+        let centre = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Center, T::None)), natural);
+        assert_eq!(centre.paint_dy, 0.0, "centred is the build's own position");
+        let top = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Top, T::None)), natural);
+        assert!((top.paint_dy + 1.5).abs() < 0.01, "Top lifts by half the extra: {}", top.paint_dy);
+        let both = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Center, T::Both)), natural);
+        assert!((both.trim_top - 1.5).abs() < 0.01 && (both.trim_bottom - 1.5).abs() < 0.01, "Both trims half each end");
+        assert!((both.paint_dy + 1.5).abs() < 0.01, "and the paint follows the top trim: {}", both.paint_dy);
+        // The guards: no style, a no-op style, no line height, or a line height under the font.
+        assert_eq!(crate::layout::node::line_geometry_from(Some(24.0), None, natural).paint_dy, 0.0);
+        assert_eq!(crate::layout::node::line_geometry_from(None, Some(LineHeightStyle::new(A::Top, T::None)), natural).paint_dy, 0.0);
+        assert_eq!(crate::layout::node::line_geometry_from(Some(20.0), Some(LineHeightStyle::new(A::Top, T::None)), natural).paint_dy, 0.0, "a line height below the font has no extra leading");
+    }
+
+    /// An EMPTY paragraph has no glyphs, so `get_font_at(0)` is the only thing that can answer —
+    /// and it must not panic, because every empty text field carries the style too.
+    #[test]
+    fn an_empty_text_survives_a_line_height_style() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("")
+                .line_height(30.0)
+                .line_height_style(LineHeightStyle::new(A::Bottom, T::Both))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let node = &composer.arena_nodes()[root];
+        let para = node.cached_paragraph.borrow();
+        let geo = para.as_ref().map(|p| crate::layout::node::line_geometry(node, p));
+        assert!(geo.is_some(), "an empty text still measures");
+        assert!(node.measured_size.height >= 0.0);
+    }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///
     /// The payload carries the window and the search runs at measure time, where the constraints

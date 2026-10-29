@@ -224,8 +224,16 @@ impl Paragraph {
         self.paragraph.max_intrinsic_width()
     }
 
-    /// The FONT's own line height (ascent + descent) of the first run, without any line-height
+    /// The font's own line height (ascent + descent) of the first run, without any line-height
     /// multiplier — what Compose subtracts from `lineHeight` to get the extra leading.
+    ///
+    /// Known difference from Compose: Compose takes this from the style's PRIMARY typeface, while
+    /// this takes it from the font that actually shaped the first glyph, which can be a fallback —
+    /// measured at 16 sp, `Ag` reports 21.28 and two CJK glyphs report 20.32, so the same
+    /// `LineHeightStyle` shifts a CJK line about 0.5 px differently from a Latin one. skia-safe
+    /// exposes no per-paragraph "style font before fallback", and `LineMetrics::get_style_metrics`
+    /// answers with the resolved fallback too (measured: identical numbers). Recorded in
+    /// `docs/text.md` rather than papered over.
     pub fn natural_line_height(&self) -> scalar {
         let font = self.inner_paragraph().get_font_at(0);
         let (_, metrics) = font.metrics();
@@ -621,3 +629,4 @@ mod paragraph_tests {
         assert!(!rects.is_empty());
     }
 }
+

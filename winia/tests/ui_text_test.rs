@@ -193,3 +193,63 @@ fn a_weight_pick_repaints_the_sample_leaf() {
         app.all_texts()
     );
 }
+
+/// The demo's `tx-lh-*` boxes: the same 18 sp text in a 34 px line, four line-height styles. Two
+/// things must show up through the real fixture: `Trim::Both` makes its box SHORTER, and `Bottom`
+/// paints its ink LOWER inside the same box than `Top` does.
+#[test]
+fn the_line_height_styles_move_the_ink_and_trim_the_box() {
+    let mut app = UiTest::launch("text");
+    // The line-height card sits low in the demo; the frame pixels only exist inside the window.
+    app.resize(900.0, 3200.0);
+    let top = app.expect_tag("tx-lh-top");
+    let centre = app.expect_tag("tx-lh-centre");
+    let bottom = app.expect_tag("tx-lh-bottom");
+    let trimmed = app.expect_tag("tx-lh-trimmed");
+    assert!(
+        (top.3 - centre.3).abs() < 1.0 && (centre.3 - bottom.3).abs() < 1.0,
+        "alignment does not change the box height: {top:?} {centre:?} {bottom:?}"
+    );
+    assert!(
+        trimmed.3 < centre.3 - 2.0,
+        "Trim::Both makes the box shorter: {} -> {}",
+        centre.3,
+        trimmed.3
+    );
+    // The ink of `Top` starts higher inside its own box than `Bottom`'s: sample the first lit row
+    // of each column of the box.
+    // The demo paints a translucent white plate behind each box (sum ≈ 120), so the glyphs need a
+    // much brighter threshold than the module-wide `LIT`; and "Ag" does not fill its box, so every
+    // row is scanned across the whole width rather than down one column.
+    fn bright(app: &mut UiTest, x: f32, y: f32) -> bool {
+        match app.pixel_at_logical(x, y) {
+            Some((r, g, b, _)) => r as u32 + g as u32 + b as u32 > 450,
+            None => false,
+        }
+    }
+    fn first_lit_row(app: &mut UiTest, rect: (f32, f32, f32, f32)) -> i32 {
+        // Every sample is a websocket round-trip, so step: half a row of slack is enough to tell
+        // the three styles apart, and the text starts at the box's left edge.
+        let mut offset = 0;
+        while offset < rect.3 as i32 {
+            let y = rect.1 + offset as f32 + 0.5;
+            let mut x = rect.0 + 1.0;
+            let right = (rect.0 + rect.2 - 1.0).min(rect.0 + 90.0);
+            while x < right {
+                if bright(app, x, y) {
+                    return offset;
+                }
+                x += 2.0;
+            }
+            offset += 2;
+        }
+        -1
+    }
+    let top_offset = first_lit_row(&mut app, top);
+    let bottom_offset = first_lit_row(&mut app, bottom);
+    assert!(top_offset >= 0 && bottom_offset >= 0, "both boxes paint ink");
+    assert!(
+        bottom_offset > top_offset,
+        "Bottom paints lower inside its box than Top: {top_offset} vs {bottom_offset}"
+    );
+}
