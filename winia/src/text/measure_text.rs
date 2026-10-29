@@ -184,7 +184,8 @@ pub fn measure_cache_stats() -> (usize, usize) {
 ///
 /// The result is a snapshot: `size` is the box (grown to `min_lines`), `text_size` is the
 /// paragraph's own size, and the baselines and overflow flags come from the same pass. Nothing is
-/// cached, so this is safe to call from a layout callback or from code that has no node at all.
+/// cached (see the LRU above), so this is safe to call from a layout callback or from code that has no
+/// node at all; `clear_measure_cache` is there for a density or theme switch that invalidates it.
 pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
     let key = MeasureKey::of(spec);
     if let Some(hit) = CACHE.with(|c| c.borrow_mut().get(&key)) {
