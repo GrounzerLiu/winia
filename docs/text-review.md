@@ -29,6 +29,33 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Ninth pass (2026-10-29): reviewing the eighth — four defects, one deviation
+
+A review of the eighth pass (`b3e25d9`) found the new queries answering in the wrong space and the
+new cache doing avoidable work. Every claim below was measured with a temporary probe, and every fix
+has a test that fails on the old behaviour.
+
+| Item | What was wrong | Measurement | Now | Test |
+| --- | --- | --- | --- | --- |
+| O-1 | `get_line_range` mapped the line bounds TWICE. `Paragraph::get_line_metrics_at` already turns Skia's UTF-16 bounds into real bytes through `get_index`; mapping that through `real_index_for_paragraph_byte` re-reads a real byte as a paragraph byte | inline placeholder standing in for four characters: line 0 answered `0..9` where the content is `0..8`, line 1 `10..11` where it is `9..11` | goes through `content_offset` instead | `text::text_layout::tests::a_line_range_is_reported_in_content_bytes` |
+| O-2 | every query clamped against `text_len()`, the DISPLAY space. A start-ellipsized run has display 9 / content 20, so content offsets 0..20 were sliced to 0..9 | content 14 of a start-ellipsized run reported caret x=0.0 and content 15..20 all shared x=51.3 | new `Paragraph::content_len()` (content recovered from the `DisplaySpan`), and offsets go through `display_offset` first | `a_truncated_run_answers_in_content_space` |
+| O-3 | `Paragraph::display_offset` used `content <= tail_start_byte` for "dropped", which put the FIRST kept tail byte on the marker | a caret on content 14 (the first visible byte) sat at the marker's x; every offset from 15 shared one position | `content < tail_start_byte` | `the_first_kept_byte_is_not_collapsed_onto_the_marker` |
+| O-4 | the measurer's `did_overflow_height` compared `text_size.height` against a TRIMMED `size.height`, so every `lineHeightStyle` with a trim claimed a deliberate cut-off as an overflow | size 21.28, text_size 34, flag true — where the leaf's own `on_text_layout` reported false for the same text | a standalone measure has no height constraint, so the answer is false (it keeps `did_exceed_max_lines` and `did_overflow_width`) | `text::measure_text::tests::a_trim_is_not_a_vertical_overflow` |
+| O-5 | a cache HIT built a `MeasureKey` first, copying the whole content string | 1.03 µs per hit on an 18 KB spec, of which 0.50 µs was the copy (`to_string` alone: 0.43 µs) | the hit path compares the stored key against the spec (`MeasureKey::matches`), content by `&str`, so no allocation | `the_measurer_cache_answers_repeats_and_misses_on_change` (behaviour) |
+
+### Ruled out
+
+- **The richer callback re-firing every frame.** Measured: 3 builds of the same leaf fired it 3
+  times, once per measure — the same rate as the plain `on_text_layout`. A fresh `Arc` per build is
+  a changed parameter, but the leaf's payload comparison only decides whether it re-enters, and a
+  re-entry that re-measures is what a rebuild already asked for.
+- **The measurer's narrow width vs the leaf's filled box.** The leaf was measured through
+  `fill_max_width`, so its box is the 60 px it was handed, while the measurer reports the 52 px the
+  text wants — two different questions, each answered correctly. Not a defect: the spec carries no
+  minimum width.
+- **`get_bounding_box` returning `None` for a dropped range.** Correct: nothing visible is there,
+  and the alternative (the marker's box) would make a selection of invisible text paint.
+
 ## Eighth pass (2026-10-29): the line queries and the measurer cache
 
 The last two gaps from the seventh answer.

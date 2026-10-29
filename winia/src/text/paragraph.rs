@@ -138,7 +138,12 @@ impl Paragraph {
             Some(span) => {
                 if content < span.head_bytes {
                     content
-                } else if content <= span.tail_start_byte {
+                } else if content < span.tail_start_byte {
+                    // STRICTLY before the kept tail: those bytes were dropped, so their offset
+                    // collapses onto the marker. `<=` put `tail_start_byte` here too, and that byte
+                    // is the FIRST VISIBLE one — it answered "the marker" instead of "three bytes
+                    // past the head", so a caret on it sat on the ellipsis (measured: the caret for
+                    // content 14 of a start-ellipsized run was at x=0.0, the marker's own x).
                     span.head_bytes
                 } else {
                     span.head_bytes + span.marker_bytes + (content - span.tail_start_byte)
@@ -147,6 +152,26 @@ impl Paragraph {
         }
     }
 
+    /// Total length of the CONTENT the caller handed in, in bytes.
+    ///
+    /// `text_len` is the DISPLAY space (what the paragraph actually holds); when start/middle
+    /// ellipsis truncated the string the two differ, and every public query takes content offsets.
+    /// The tail is everything after `tail_start_byte`, so the content length comes back out of the
+    /// display length:
+    ///
+    ///     content = tail_start + (display - head - marker)
+    ///
+    /// For `StartEllipsis` (head 0) that is `14 + (9 - 3) = 20` on a 20-byte content truncated to
+    /// nine bytes, which is exactly where the missing head went.
+    pub fn content_len(&self) -> usize {
+        match self.display_span {
+            None => self.text_len(),
+            Some(span) => {
+                let tail = self.text_len().saturating_sub(span.head_bytes + span.marker_bytes);
+                span.tail_start_byte + tail
+            }
+        }
+    }
     pub fn text_len(&self) -> usize {
         self.paragraph_byte_to_real_indices.right_keys().last().copied().unwrap_or(0)
     }

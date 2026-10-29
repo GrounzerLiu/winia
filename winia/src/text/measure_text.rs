@@ -88,6 +88,27 @@ struct MeasureKey {
 }
 
 impl MeasureKey {
+    /// Whether this stored key describes the same measure as `spec` — every field, content by
+    /// `&str` so the hit path does not allocate.
+    fn matches(&self, spec: &TextMeasureSpec<'_>) -> bool {
+        self.content == spec.content
+            && self.font_size == spec.font_size
+            && self.color == spec.color
+            && self.max_width_bits == spec.max_width.to_bits()
+            && self.font_weight == spec.font_weight
+            && self.font_style == spec.font_style
+            && self.max_lines == spec.max_lines
+            && self.align == spec.align
+            && self.overflow == spec.overflow
+            && self.soft_wrap == spec.soft_wrap
+            && self.letter_spacing_bits == spec.letter_spacing.to_bits()
+            && self.line_height_bits == spec.line_height.map(|v| v.to_bits())
+            && self.min_lines == spec.min_lines
+            && self.font_family.as_deref() == spec.font_family
+            && self.transform_bits == spec.transform.map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits()))
+            && self.line_height_style == spec.line_height_style
+    }
+
     fn of(spec: &TextMeasureSpec<'_>) -> Self {
         MeasureKey {
             content: spec.content.to_string(),
@@ -125,8 +146,11 @@ struct MeasureCache {
 impl MeasureCache {
     const fn new() -> Self { MeasureCache { entries: Vec::new(), capacity: DEFAULT_CAPACITY, stats: (0, 0) } }
 
-    fn get(&mut self, key: &MeasureKey) -> Option<TextLayoutResult> {
-        let at = self.entries.iter().position(|(k, _)| k == key)?;
+    /// A hit compares the stored key against the SPEC, so the content is compared as a `&str` and
+    /// no allocation happens on the hit path. Building a `MeasureKey` first copied the whole content
+    /// on every call — measured at 1.03 µs per hit on an 18 KB string, half of it that copy.
+    fn get(&mut self, spec: &TextMeasureSpec<'_>) -> Option<TextLayoutResult> {
+        let at = self.entries.iter().position(|(k, _)| k.matches(spec))?;
         // Touch: the entry moves to the back (most recently used).
         let (k, v) = self.entries.remove(at);
         self.entries.push((k, v));
@@ -134,8 +158,9 @@ impl MeasureCache {
         Some(v)
     }
 
-    fn put(&mut self, key: MeasureKey, value: TextLayoutResult) {
+    fn put(&mut self, spec: &TextMeasureSpec<'_>, value: TextLayoutResult) {
         self.stats.1 += 1;
+        let key = MeasureKey::of(spec);
         if let Some(at) = self.entries.iter().position(|(k, _)| *k == key) {
             self.entries.remove(at);
         } else if self.entries.len() == self.capacity {
@@ -187,12 +212,11 @@ pub fn measure_cache_stats() -> (usize, usize) {
 /// cached (see the LRU above), so this is safe to call from a layout callback or from code that has no
 /// node at all; `clear_measure_cache` is there for a density or theme switch that invalidates it.
 pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
-    let key = MeasureKey::of(spec);
-    if let Some(hit) = CACHE.with(|c| c.borrow_mut().get(&key)) {
+    if let Some(hit) = CACHE.with(|c| c.borrow_mut().get(spec)) {
         return hit;
     }
     let result = measure_text_uncached(spec);
-    CACHE.with(|c| c.borrow_mut().put(key, result));
+    CACHE.with(|c| c.borrow_mut().put(spec, result));
     result
 }
 
@@ -264,13 +288,41 @@ fn measure_text_uncached(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
         first_baseline,
         last_baseline,
         did_overflow_width: longest_line > spec.max_width + 0.5,
-        did_overflow_height: text_size.height > size.height + 0.5,
+        // A standalone measure has NO vertical constraint to overflow: the spec describes a width
+        // (`max_width`), a line cap (`max_lines`, which reports through `did_exceed_max_lines`) and
+        // a floor (`min_lines`, which only GROWS the box). So the honest answer is false — and it
+        // is what the leaf's own `on_text_layout` reports for the same text without a height
+        // constraint.
+        //
+        // The flag used to compare `text_size` against a TRIMMED `size`, so every `lineHeightStyle`
+        // with a trim claimed an overflow that the trim had deliberately removed (measured: size
+        // 21.28, text_size 34, flag true). A trim is not a cut-off.
+        did_overflow_height: false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+/// TEMPORARY PROBE — removed before the fix lands.
+    #[test]
+    fn tmp_probe_measure_text_start_ellipsis() {
+        let text = "0123456789abcdefghij";
+        let mut spec = TextMeasureSpec::new(text, 16.0, 60.0);
+        spec.soft_wrap = false;
+        spec.overflow = crate::text::TextOverflow::StartEllipsis;
+        let m = measure_text(&spec);
+        println!("StartEllipsis measured width={:.2} text_size={:?}", m.size.width, m.text_size);
+        let mut clip = spec.clone();
+        clip.overflow = crate::text::TextOverflow::Clip;
+        let c = measure_text(&clip);
+        println!("Clip          measured width={:.2} text_size={:?}", c.size.width, c.text_size);
+        let mut ell = spec;
+        ell.overflow = crate::text::TextOverflow::Ellipsis;
+        let e = measure_text(&ell);
+        println!("Ellipsis      measured width={:.2} text_size={:?}", e.size.width, e.text_size);
+    }
 
     #[test]
     fn a_short_line_measures_one_line() {
@@ -396,6 +448,21 @@ mod tests {
         );
     }
 
+/// A standalone measure has no vertical constraint, so it never reports a height overflow —
+    /// and a `lineHeightStyle` trim is not a cut-off. Measured before: the trim shortened the box to
+    /// 21.28 while `text_size` stayed 34, and the flag read true, where the leaf's own
+    /// `on_text_layout` reported false for the same text.
+    #[test]
+    fn a_trim_is_not_a_vertical_overflow() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        let mut spec = TextMeasureSpec::new("Ag", 16.0, 200.0);
+        spec.line_height = Some(34.0);
+        spec.line_height_style = Some(LineHeightStyle::new(A::Center, T::Both));
+        let trimmed = measure_text(&spec);
+        assert!(trimmed.size.height < trimmed.text_size.height, "the box was trimmed: {trimmed:?}");
+        assert!(!trimmed.did_overflow_height, "a trim is not an overflow: {trimmed:?}");
+        assert!(!trimmed.has_visual_overflow(), "nothing was cut off: {trimmed:?}");
+    }
     #[test]
     fn min_lines_grows_the_box_not_the_paragraph() {
         let one = measure_text(&TextMeasureSpec::new("Hi", 16.0, 300.0));

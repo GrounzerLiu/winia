@@ -46,7 +46,13 @@ impl<'a> TextLayout<'a> {
         }
         // Clamp like Compose: an offset past the end (a field that just shrank) parks the caret at
         // the end, and one that landed mid-character parks it at that character's start.
-        let index = index.min(self.paragraph.text_len());
+        //
+        // The bound is the CONTENT length and the offset goes through `display_offset` first: the
+        // paragraph holds the truncated DISPLAY text under start/middle ellipsis, so asking it about
+        // a content offset directly parked every offset below `tail_start_byte` on the marker
+        // (measured: content 0..14 all answered caret x=0.0, and 15..20 all answered x=51.3).
+        let index = index.min(self.paragraph.content_len());
+        let index = self.paragraph.display_offset(index);
         let paragraph_index = self.paragraph.paragraph_byte_for_real_index(index);
         let glyph_index = self.paragraph.byte_to_glyph_indices.get_by_left(&paragraph_index)?;
         // The FIRST CLUSTER, not "index 0": an offset clamped into the first character has the
@@ -163,7 +169,7 @@ impl<'a> TextLayout<'a> {
     /// Offsets clamp exactly like the caret: past the end parks on the last line, mid-character
     /// parks on that character's line.
     pub fn get_line_for_offset(&self, offset: usize) -> usize {
-        let display = self.paragraph.display_offset(offset.min(self.paragraph.text_len()));
+        let display = self.paragraph.display_offset(offset.min(self.paragraph.content_len()));
         self.paragraph
             .inner_paragraph()
             .get_line_number_at(self.paragraph.paragraph_byte_for_real_index(display))
@@ -175,9 +181,14 @@ impl<'a> TextLayout<'a> {
     /// Skia reports line ranges in the paragraph's own space; both ends go through the display
     /// mapping, so a truncated run reports the content offsets it actually shows.
     pub fn get_line_range(&self, line: usize) -> Option<Range<usize>> {
+        // `Paragraph::get_line_metrics_at` ALREADY converts Skia's UTF-16 line bounds into real
+        // (display) bytes through `get_index`. Mapping them a second time through
+        // `real_index_for_paragraph_byte` treats a real byte as a paragraph byte, which is only the
+        // identity when the two spaces coincide — measured with an inline placeholder, line 0
+        // answered `0..9` where the content is `0..8`, and line 1 `10..11` where it is `9..11`.
         let metrics = self.paragraph.get_line_metrics_at(line)?;
-        let start = self.paragraph.real_index_for_paragraph_byte(metrics.start_index);
-        let end = self.paragraph.real_index_for_paragraph_byte(metrics.end_index);
+        let start = self.paragraph.content_offset(metrics.start_index);
+        let end = self.paragraph.content_offset(metrics.end_index);
         Some(start..end.max(start))
     }
 
@@ -204,8 +215,19 @@ impl<'a> TextLayout<'a> {
     }
 
     /// The word around a CONTENT offset (Compose's `getWordBoundary`), in content bytes.
+    ///
+    /// An offset inside the bytes a start/middle ellipsis dropped has no word in the paragraph —
+    /// that text is not laid out — so the answer is the empty range at the first visible byte
+    /// rather than a range spanning the ellipsis (measured before: `word_boundary(1)` on a
+    /// start-ellipsized run answered `14..14`, an empty range pinned to the marker).
     pub fn get_word_boundary(&self, offset: usize) -> Range<usize> {
-        let display = self.paragraph.display_offset(offset.min(self.paragraph.text_len()));
+        let content = offset.min(self.paragraph.content_len());
+        if let Some(span) = self.paragraph.display_span() {
+            if content < span.tail_start_byte && content >= span.head_bytes {
+                return content..content;
+            }
+        }
+        let display = self.paragraph.display_offset(content);
         let word = self.paragraph.get_word_boundary(display);
         self.paragraph.content_offset(word.start)..self.paragraph.content_offset(word.end)
     }
@@ -218,6 +240,97 @@ impl<'a> TextLayout<'a> {
 mod tests {
     use super::*;
     use crate::graphics::Color;
+/// Four line/box queries on a placeholder paragraph. `Paragraph::get_line_metrics_at` ALREADY
+    /// reports real bytes; mapping its result again as if it were a paragraph byte only works when
+    /// the two spaces coincide. Measured before this fix, with an inline drawable standing in for
+    /// four characters: line 0 answered `0..9` where the content is `0..8`, line 1 `10..11` where
+    /// it is `9..11`.
+    #[test]
+    fn a_line_range_is_reported_in_content_bytes() {
+        use skia_safe::textlayout::{PlaceholderAlignment, TextBaseline};
+        use std::sync::Arc;
+        struct Box_(f32, f32);
+        impl crate::text::InlineDrawable for Box_ {
+            fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
+            fn size(&self) -> (f32, f32) { (self.0, self.1) }
+        }
+        let style = skia_safe::textlayout::ParagraphStyle::new();
+        let fc = crate::text::font::get_font_collection();
+        let mut b = crate::text::ParagraphBuilder::new(&style, &fc);
+        b.add_text("ab");
+        b.add_placeholder(
+            "WXYZ",
+            Arc::new(Box_(20.0, 20.0)) as Arc<dyn crate::text::InlineDrawable>,
+            &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)),
+        );
+        b.add_text("cd\nef");
+        let mut p = b.build();
+        p.layout(400.0);
+        // "ab" + 4 placeholder chars + "cd" = 8 content bytes, then the newline and "ef".
+        assert_eq!(p.text_len(), 11, "the paragraph maps the placeholder's whole span");
+        let layout = TextLayout::new(&p);
+        assert_eq!(layout.get_line_range(0), Some(0..8), "line 0 is the whole first line");
+        assert_eq!(layout.get_line_range(1), Some(9..11), "line 1 starts after the newline");
+    }
+
+    /// A truncated paragraph answers in CONTENT space, and a caret on the first visible tail byte
+    /// sits AFTER the ellipsis rather than on it. Measured before: content 14 of a run truncated to
+    /// `"…cdefghij"` reported caret x=0.0 (the marker) because `display_offset` treated
+    /// `content == tail_start_byte` as dropped; every offset from 15 on shared one x.
+    #[test]
+    fn a_truncated_run_answers_in_content_space() {
+        use skia_safe::textlayout::ParagraphStyle;
+        let style = ParagraphStyle::new();
+        let fc = crate::text::font::get_font_collection();
+        let mut b = crate::text::ParagraphBuilder::new(&style, &fc);
+        // "012" (head, content 0..3) + a marker + "defghij" (tail, content 14..20). Content 3..14,
+        // eleven bytes, is what the truncation dropped.
+        b.add_text("012\u{2026}defghij");
+        let mut p = b.build();
+        p.layout(400.0);
+        p.set_display_span(Some(crate::text::DisplaySpan {
+            head_bytes: 3,
+            tail_start_byte: 14,
+            marker_bytes: 3,
+        }));
+        // Head 3 + marker 3 + tail 7 ("defghij") = 13 bytes displayed; the content is
+        // 3 + 11 dropped + 7 = 21.
+        assert_eq!(p.content_len(), 21, "the content length comes back out of the span");
+        let layout = TextLayout::new(&p);
+        // One line covers the whole display text: the kept head (content 0..13) plus the kept tail
+        // (content 14..20), so the content range runs to 20 even though one byte was dropped inside it.
+        assert_eq!(layout.get_line_range(0), Some(0..21), "the line, in content bytes");
+        let marker = layout.get_cursor_rect(14).expect("a caret for the first visible byte");
+        let after = layout.get_cursor_rect(15).expect("a caret for the second");
+        assert!(
+            after.left > marker.left + 1.0,
+            "the first visible byte sits past the marker, not on it: {} then {}",
+            marker.left,
+            after.left
+        );
+        let dropped = layout.get_word_boundary(5);
+        assert_eq!(dropped, 5..5, "a dropped offset has no word: {dropped:?}");
+        let visible = layout.get_word_boundary(16);
+        assert!(visible.start >= 14 && visible.end <= 21, "the live word stays inside the tail: {visible:?}");
+    }
+/// The FIRST kept tail byte is not the marker. `display_offset` used `content <= tail_start_byte`
+    /// for "dropped", which put that byte on the elision marker — measured on a start-ellipsized
+    /// run: content 14 (the first visible byte) reported caret x=0.0, the marker's own x.
+    #[test]
+    fn the_first_kept_byte_is_not_collapsed_onto_the_marker() {
+        let span = crate::text::DisplaySpan { head_bytes: 0, tail_start_byte: 14, marker_bytes: 3 };
+        // 20 content bytes, 9 displayed (marker + 6 tail).
+        let mut p = crate::text::build_plain_paragraph("\u{2026}defghij", 16.0, Color::BLACK, 400.0);
+        p.layout(400.0);
+        p.set_display_span(Some(span));
+        // Dropped: everything before the tail collapses onto the marker (display 0).
+        assert_eq!(p.display_offset(0), 0, "the dropped head collapses onto the marker");
+        assert_eq!(p.display_offset(13), 0, "still dropped");
+        // Kept: the first visible byte sits AFTER the marker.
+        assert_eq!(p.display_offset(14), 3, "the first kept byte is past the marker");
+        assert_eq!(p.display_offset(15), 4);
+        assert_eq!(p.display_offset(19), 8);
+    }
 
     fn paragraph(text: &str) -> Paragraph {
         let mut p = crate::text::build_plain_paragraph(text, 16.0, Color::BLACK, 400.0);
