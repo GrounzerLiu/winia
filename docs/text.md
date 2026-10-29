@@ -23,21 +23,25 @@ One constructor; everything else is an option that returns `Self`.
 | `ProvideTextStyle(style, ctx, content)` | the style merged into the subtree's local | a component giving its labels one token (button, chip, snackbar) |
 
 Options, in Compose's order: `color`, `font_size`, `font_weight` / `bold`, `italic` / `oblique`,
-`font_family`, `letter_spacing`, `text_decoration`, `align`, `line_height`, `overflow`, `soft_wrap`,
-`max_lines`, `min_lines`, `on_text_layout`, `style`, `background`.
+`font_family`, `letter_spacing`, `text_decoration`, `align`, `line_height`, `line_height_style`,
+`overflow`, `soft_wrap`, `max_lines`, `min_lines`, `auto_size`, `on_text_layout`, `style`,
+`background`, plus the paint-only `shadow`, `font_feature_settings`, `draw_style`, `brush` and
+`text_geometry` (they ride a `TextPaint` modifier element, so they never re-measure).
 
 ## Layout
 
 The paragraph is built once at measure and cached for the render pass; the measured size is
 `min(max intrinsic width, constraints.maxWidth)` by `paragraph height` (the engine then clamps it into
 the incoming range, which is the same as Compose's `maxIntrinsicWidth.coerceIn(minWidth, maxWidth)`).
+A `textGeometricTransform` multiplies the width by `scale_x` before the clamp (the height is
+untouched); a `lineHeightStyle` trim comes off the height afterwards.
 
 The layout WIDTH follows Compose's `TextDelegate.layoutText`:
 
 ```text
-width_matters   = soft_wrap || overflow == Ellipsis
+width_matters   = soft_wrap || overflow.is_ellipsis()   // Clip and Visible do not count
 layout_width    = if width_matters { max_width } else { infinite }   // nothing wraps at infinity
-effective_lines = if !soft_wrap && overflow == Ellipsis { 1 } else { max_lines }
+effective_lines = if !soft_wrap && overflow.is_ellipsis() { 1 } else { max_lines }
 ```
 
 A nowrap ELLIPSIS therefore still lays out at the box width and as ONE line (native text layout cannot
@@ -107,7 +111,7 @@ measurements behind each and the reason a row is still open — in
 | Compose | winia |
 | --- | --- |
 | `autoSize: TextAutoSize?` | `Text::auto_size(min, max)` — the same fit search, run at measure time |
-| `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph then holds the truncated text |
+| `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph holds the truncated text and carries a `DisplaySpan`, so a hit test is mapped back to content offsets (`Paragraph::content_offset` / `display_offset`) before the caret or the selection sees it |
 | `TextStyle.lineHeightStyle` | `Text::line_height_style(LineHeightStyle { alignment, trim })`: the extra leading is split by the alignment and trimmed from the box ends; `Proportional` behaves like `Center` while every line shares one style, `RichText` does not expose it yet, and the extra is measured against the SHAPED first run (a CJK line reads 20.32 against a Latin line's 21.28 at 16 sp, so the same style shifts it ~0.5 px differently) |
 | `TextStyle.textGeometricTransform` | `Text::text_geometry(TextGeometricTransform { scale_x, skew_x })`: a paint matrix plus the same mapping in the caret, hit test, IME window and selection rectangles |
 | `TextStyle.shadow` | `Text::shadow(TextShadow { color, offset, blur })`; paint-only, so the measured box does not change |
