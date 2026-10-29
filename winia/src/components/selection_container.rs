@@ -116,12 +116,14 @@ impl Default for SelectionContainer {
 /// The selection range after one pointer move.
 ///
 /// `Some((registrar, global start, global end))`, or `None` when the selection does not move.
-/// Four cases:
-/// - Same container, pointer over text: `anchor_global .. current_global` in that container's
-/// - Same container, pointer in the empty area: snap to the container edge (0 above, total below).
-/// - Across containers (the pointer is over another container's text): snap within the ANCHOR's
-///   container. Switching to the other container's offset space would mix an anchor global offset
-///   with a different container's origin and select the wrong text.
+/// Two cases:
+/// - Same container: `anchor_global .. current_global`, both in that container's offset space.
+/// - Across containers (the pointer is over another container's text): snap to one end of the
+///   ANCHOR's container. Switching to the other container's offset space would mix an anchor global
+///   offset with a different container's origin and select the wrong text.
+///   The end is picked from the DOMINANT axis of the drag: a Row of containers is dragged purely
+///   horizontally, and a y-only rule then always answered "the end" even when the pointer moved
+///   left.
 /// - No anchor container (the press landed on something unselectable) -> `None`.
 pub(crate) fn compute_selection(
     anchor_reg: Option<&SelectionRegistrar>,
@@ -129,30 +131,24 @@ pub(crate) fn compute_selection(
     cur_reg: &SelectionRegistrar,
     cur_global_off: Option<usize>,
     cur_index: usize,
+    scene_x: f32,
     scene_y: f32,
+    down_x: f32,
     down_y: f32,
-    node_abs_y: f32,
 ) -> Option<(SelectionRegistrar, usize, usize)> {
     let same_reg = anchor_reg.map(|ar| ar.is_same(cur_reg)).unwrap_or(false);
     if same_reg {
-        if let Some(off) = cur_global_off {
-            let current_global = off + cur_index;
-            let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
-            let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
-            Some((cur_reg.clone(), s, e))
-        } else if let Some(a) = anchor_global {
-            // Same container, past its end: snap to the edge.
-            let edge = if scene_y < node_abs_y { 0 } else { cur_reg.total_text_len() };
-            let s = a.min(edge);
-            let e = a.max(edge);
-            Some((cur_reg.clone(), s, e))
-        } else {
-            None
-        }
+        let off = cur_global_off?;
+        let current_global = off + cur_index;
+        let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+        let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+        Some((cur_reg.clone(), s, e))
     } else if let (Some(anchor_reg), Some(a)) = (anchor_reg, anchor_global) {
         // Across containers: snap inside the anchor's container, clamping to its bounds.
         let total = anchor_reg.total_text_len();
-        let edge = if scene_y < down_y { 0 } else { total };
+        let (dx, dy) = (scene_x - down_x, scene_y - down_y);
+        let towards_end = if dx.abs() >= dy.abs() { dx > 0.0 } else { dy > 0.0 };
+        let edge = if towards_end { total } else { 0 };
         let s = a.min(edge);
         let e = a.max(edge);
         Some((anchor_reg.clone(), s, e))
@@ -474,30 +470,12 @@ mod compute_selection_tests {
     fn test_same_container_text_inner() {
         let (a, _) = regs();
         // Same container, over text: anchor 10 and current 20 give (10, 20).
-        let r = compute_selection(Some(&a), Some(10), &a, Some(0), 20, 100.0, 50.0, 50.0);
+        let r = compute_selection(Some(&a), Some(10), &a, Some(0), 20, 0.0, 100.0, 0.0, 50.0);
         let (reg, s, e) = r.unwrap();
         assert!(reg.is_same(&a));
         assert_eq!((s, e), (10, 20));
     }
 
-    #[test]
-    fn test_same_container_edge_snap_down() {
-        let (a, _) = regs();
-        a.register(1, &"x".repeat(100)); // total=100
-        // Same container, dragged below the node: the edge is the total, 100.
-        let r = compute_selection(Some(&a), Some(5), &a, None, 0, 300.0, 50.0, 100.0);
-        let (_, s, e) = r.unwrap();
-        assert_eq!((s, e), (5, 100));
-    }
-
-    #[test]
-    fn test_same_container_edge_snap_up() {
-        let (a, _) = regs();
-        // Same container, dragged above the node: the edge is 0.
-        let r = compute_selection(Some(&a), Some(5), &a, None, 0, 10.0, 50.0, 100.0);
-        let (_, s, e) = r.unwrap();
-        assert_eq!((s, e), (0, 5));
-    }
 
     #[test]
     fn test_cross_container_uses_anchor_reg() {
@@ -505,10 +483,32 @@ mod compute_selection_tests {
         a.register(1, &"x".repeat(100)); // anchor 容器 total=100
         // Across containers: the anchor is in A while the pointer is over B, so the snap stays in
         // A's offset space.
-        let r = compute_selection(Some(&a), Some(10), &b, Some(0), 5, 200.0, 50.0, 50.0);
+        let r = compute_selection(Some(&a), Some(10), &b, Some(0), 5, 0.0, 200.0, 0.0, 50.0);
         let (reg, s, e) = r.unwrap();
         assert!(reg.is_same(&a), "应设 anchor 容器 a 的选择");
         assert_eq!((s, e), (10, 100)); // 向下拖出 a → clamp 到 a 末尾
+    }
+
+    /// A purely horizontal drag (a Row of containers): dy is 0, so the y-only rule used to answer
+    /// "the end" for both directions. Left must reach the anchor's START.
+    #[test]
+    fn test_cross_container_leftward_drag_reaches_the_start() {
+        let (a, b) = regs();
+        a.register(1, &"x".repeat(100));
+        let r = compute_selection(Some(&a), Some(40), &b, Some(0), 5, 100.0, 10.0, 208.0, 10.0);
+        let (reg, s, e) = r.unwrap();
+        assert!(reg.is_same(&a));
+        assert_eq!((s, e), (0, 40), "dragging left selects back to the start, not to the end");
+    }
+
+    /// The same drag to the right reaches the END.
+    #[test]
+    fn test_cross_container_rightward_drag_reaches_the_end() {
+        let (a, b) = regs();
+        a.register(1, &"x".repeat(100));
+        let r = compute_selection(Some(&a), Some(40), &b, Some(0), 5, 300.0, 10.0, 208.0, 10.0);
+        let (_, s, e) = r.unwrap();
+        assert_eq!((s, e), (40, 100));
     }
 
     #[test]
@@ -516,7 +516,7 @@ mod compute_selection_tests {
         let (_, b) = regs();
         // The press landed on something unselectable (`anchor_reg` is None), so a drag selects
         // nothing.
-        let r = compute_selection(None, None, &b, Some(0), 5, 200.0, 50.0, 50.0);
+        let r = compute_selection(None, None, &b, Some(0), 5, 0.0, 200.0, 0.0, 50.0);
         assert!(r.is_none());
     }
 
@@ -524,7 +524,7 @@ mod compute_selection_tests {
     fn test_cross_container_no_anchor_global_none() {
         let (a, b) = regs();
         // Across containers with no `anchor_global` — a guard against a stale `anchor_reg`.
-        let r = compute_selection(Some(&a), None, &b, Some(0), 5, 200.0, 50.0, 50.0);
+        let r = compute_selection(Some(&a), None, &b, Some(0), 5, 0.0, 200.0, 0.0, 50.0);
         assert!(r.is_none());
     }
 }

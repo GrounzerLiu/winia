@@ -378,6 +378,7 @@ pub(crate) fn handle_pointer_down(
         time: std::time::Instant::now(),
         selection_anchor: anchor_global,
         anchor_registrar: own_reg, // None (a non-selectable node) → no anchor container.
+        anchor_text_node: anchor_node.map(|ai| nodes[ai].id),
     });
     pw.input.down_slot = Some(nodes[innermost].slot_key);
 
@@ -714,15 +715,30 @@ pub(crate) fn handle_pointer_move(
             // impossible to select one letter or a small range; Compose enters drag-selection on
             // press). Every other case keeps the slop rule (clickable / drag gesture).
             let text_selection = down.selection_anchor.is_some();
+            // The node whose text space this move works in.
+            //
+            // The pointer is over selectable text → that text (so dragging across texts works).
+            // Otherwise the text the PRESS anchored on: its paragraph clamps a pointer outside it,
+            // which extends the selection to the end of the text. Without the fallback the whole
+            // block was skipped whenever the pointer left a text, so the ordinary "drag past the end
+            // of the line to select it" froze instead (measured: the range stayed at 1..8 while the
+            // pointer moved on into the container's padding).
+            let under_ok = nodes[innermost].cached_paragraph.borrow().is_some()
+                && nodes[innermost].registrar.borrow().is_some();
+            let anchor_text = if under_ok { None } else {
+                pw.input.down.as_ref().and_then(|d| d.anchor_text_node)
+                    .and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id))
+            };
+            let sel_node = match anchor_text { Some(idx) => idx, None => innermost };
             if text_selection || (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
-                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
-                if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
+                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[sel_node].id);
+                if let Ok(borrow) = nodes[sel_node].cached_paragraph.try_borrow() {
                     if let Some(para) = borrow.as_ref() {
                         // Alignment shift (matching the renderer's `x_off`) — drawing uses the content
                         // box, and the selection highlight has to agree (mid-flight `measured_size` is
                         // the size the parent was told, review R3-F6).
-                        let node_w = nodes[innermost].content_box().width;
-                        let align = nodes[innermost].modifier.align().unwrap_or(crate::text::TextAlign::Left);
+                        let node_w = nodes[sel_node].content_box().width;
+                        let align = nodes[sel_node].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                         // The slack rule has to be the PAINT paths' rule, not a copy of the old
                         // one: a WRAPPED paragraph was laid out inside its box, so a negative
                         // slack would push it out of it — but an UNWRAPPED one
@@ -731,7 +747,7 @@ pub(crate) fn handle_pointer_move(
                         // way. With the clamped form here, a selection on an overflowing label
                         // was skewed by half the overflow (`render.rs` uses the conditional one
                         // at both of its sites).
-                        let soft_wrap = nodes[innermost]
+                        let soft_wrap = nodes[sel_node]
                             .modifier
                             .elements()
                             .iter()
@@ -753,34 +769,34 @@ pub(crate) fn handle_pointer_move(
                         // Paragraph-local coordinate: subtract the node's padding (consistent with the
                         // renderer's content area — otherwise the dragged selection is off by the
                         // padding).
-                        let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
-                        let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+                        let (pad_s, pad_t, pad_e, _) = nodes[sel_node].modifier.get_padding_sides();
+                        let pad_x = if nodes[sel_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                         let tl = crate::text::TextLayout::new(para);
                         {
                             let down = pw.input.down.as_ref().unwrap();
                             // A non-selectable node (not registered with any SelectionContainer) → do not
                             // update the selection (wrapped in `if let` rather than `else return`, because a
                             // return would skip `dispatch_ptr_event`/`request_redraw`).
-                            if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
+                            if let Some(reg) = nodes[sel_node].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 // A truncated paragraph answers in display bytes (see `DisplaySpan`).
                                 let current_index = para.content_offset(current_index);
                                 // Display offset → editing offset (password masking / formatted input;
                                 // `TextFieldVisual` is on the container, so look upward).
-                                let current_index = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
+                                let current_index = crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
                                     .map(|m| m.transformed_to_original(current_index))
                                     .unwrap_or(current_index);
-                                let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
+                                let cur_off = reg.segment_info(nodes[sel_node].slot_key).map(|(off, _)| off);
                                 if let Some((target, s, e)) = crate::components::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,
                                     &reg, cur_off, current_index,
-                                    scene_pos.1, down.position.1, abs_y,
+                                    scene_pos.0, scene_pos.1, down.position.0, down.position.1,
                                 ) {
                                     // The range is in editing offsets (anchor/current were converted back);
                                     // the registrar's space is display offsets, so convert before writing the
                                     // selection.
-                                    let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
+                                    let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
                                         .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
                                         .unwrap_or((s, e));
                                     target.set_selection(ts, te);

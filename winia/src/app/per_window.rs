@@ -8,6 +8,8 @@ mod pointer;
 mod clipboard_copy_tests;
 #[cfg(test)]
 mod selection_clear_tests;
+#[cfg(test)]
+mod selection_drag_tests;
 
 pub(crate) use core::*;
 pub(crate) use geometry::*;

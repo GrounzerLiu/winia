@@ -95,6 +95,10 @@ pub(crate) struct PtrDownState {
     pub(crate) selection_anchor: Option<usize>,
     /// SelectionContainer registrar at Down time (so a drag across containers does not switch offset spaces).
     pub(crate) anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
+    /// Node id of the text the anchor was measured in. A move that is no longer over a text maps the
+    /// pointer into THIS node's paragraph, which clamps it — that is what extends a selection past the
+    /// end of the text instead of freezing it (see `handle_pointer_move`).
+    pub(crate) anchor_text_node: Option<u64>,
 }
 
 pub(crate) fn fire_gesture_action(

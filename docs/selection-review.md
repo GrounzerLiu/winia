@@ -16,14 +16,14 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour) | 6 | 0 |
+| Defects (wrong behaviour) | 3 | 3 |
 | Deviations from Compose (deliberate or accepted) | 1 | 2 |
 | Missing API surface | 6 | 1 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
 
-- [ ] **S-1 — a drag stops the moment the pointer leaves the text.** `handle_pointer_move` only
+- [x] **S-1 — a drag no longer stops when the pointer leaves the text.** `handle_pointer_move` only
   runs the selection update when `nodes[innermost].cached_paragraph` is `Some`
   (`winia/src/app/per_window/pointer.rs:719`), and `innermost` is whatever the pointer is over. Over
   the container's own padding (or anywhere without text) that borrow is `None`, so the whole block
@@ -35,17 +35,24 @@
   paragraph, with edge snapping when outside), not a local patch.
   Consequence worth stating plainly: the tail of the last line cannot be selected by dragging past
   it, which is the ordinary way a user selects a whole line.
-  Test to add when fixed: `a_drag_past_the_text_extends_to_its_end` (assert `1..=len` after dragging
-  below the node).
-- [ ] **S-2 — the "pointer in the container's empty area" branch of `compute_selection` is dead**
+  **Closed 2026-10-29.** `PtrDownState` now remembers the node the press anchored on
+  (`anchor_text_node`), and `handle_pointer_move` works in that node's text space whenever the
+  pointer is not over selectable text. The paragraph then CLAMPS a pointer outside it, which is
+  exactly "extend to the nearest end". Red check: forcing the old `sel_node = innermost` makes
+  `dragging_below_the_text_selects_through_its_end` fail at "a move into the padding still
+  selects". Tests:
+  `app::per_window::selection_drag_tests::dragging_below_the_text_selects_through_its_end`.
+- [x] **S-2 — the dead "pointer in the container's empty area" branch is gone.**
   (`winia/src/components/selection_container.rs:114-119`). It requires `cur_global_off == None`
   while the pointer is over a node carrying the SAME registrar; the only nodes that carry a
   registrar are text leaves, and every text leaf that registers is in the table, so `cur_global_off`
   is always `Some`. Its unit tests pass because they call `compute_selection` directly with
   `cur_global_off = None`. This is the same behaviour gap as S-1, seen from the other end: once S-1
   is fixed by capturing the anchor, this branch becomes the real edge-snap path and should be
-  rewritten against it rather than kept as dead code with tests that cannot fail.
-- [ ] **S-3 — a horizontal cross-container drag snaps to the wrong end**
+  **Closed 2026-10-29** by deletion: with S-1's anchor capture the pointer always maps into a real
+  paragraph, so the branch could not run at all. Its two unit tests (`test_same_container_edge_snap_*`)
+  went with it — they passed arguments no caller could produce, which is why they could not fail.
+- [x] **S-3 — a horizontal cross-container drag reaches the right end.**
   (`winia/src/components/selection_container.rs:126`). The edge is chosen by `scene_y < down_y`
   only, so a purely horizontal drag (a Row of selectable columns) always answers "the end".
   Measured: two containers in a Row, press inside B's text at `(208, 10)`, drag LEFT into A's text
@@ -53,7 +60,11 @@
   START. The same call with the pointer to the right gives the identical `(40, 100)`. Compose picks
   the edge from the direction of travel in both axes. Fix: compare against the anchor's own box
   (`down_x`/`down_y` and the anchor node's rect), not y alone.
-  Test to add: `dragging_left_across_containers_reaches_the_anchor_start`.
+  **Closed 2026-10-29.** The edge now comes from the DOMINANT axis of the drag
+  (`|dx| >= |dy|` picks x, else y), so a Row of containers behaves. Tests:
+  `selection_drag_tests::dragging_left_into_another_container_reaches_the_anchor_start`,
+  `..::dragging_right_reaches_the_anchor_end`, and the unit cases
+  `test_cross_container_leftward_drag_reaches_the_start` / `.._rightward_..`.
 - [ ] **S-4 — `selected_range` reports a collapsed caret as a selection; `build_selection` does
   not** (`winia/src/text/selection.rs:170-179` vs `:189-199`). The guard is
   `local_start >= seg.text_len || local_end == 0`, so a caret at offset 0 answers `None` while a
