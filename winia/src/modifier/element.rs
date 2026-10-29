@@ -3,24 +3,24 @@ use super::*;
 // ── ModifierElement ──
 
 // ═══════════════════════════════════════════════════════════
-// Modifier Node（实验性开放扩展点，分支 exp/modifier-node）
+// Modifier nodes: an experimental open extension point (branch exp/modifier-node).
 // ───────────────────────────────────────────────────────────
-// 目标：把 Modifier 从"封闭枚举"变成"开放节点"。枚举每加一种行为
-// 就要改 measure/render/hit/app 四处 match；node 化之后，第三方可以
-// 不改核心实现自定义行为。
+// The goal is to turn `Modifier` from a closed enum into open nodes. Every new behaviour added to
+// the enum has to touch four `match` sites (measure, render, hit testing, the app); with nodes a
+// third party can add behaviour without editing the core.
 //
-// 设计（双轨，零破坏）：
-// - `Modifier` 内部新增 `nodes: Vec<ModifierNode>`，与 `elements` 并存。
-//   旧 builder（background/clickable/…）照旧 push 枚举；新扩展走 node。
-// - 每种行为是一个 `Arc<dyn XxxNode>`，核心管线（measure/render/input/
-//   debug）在走完枚举 match 后，再走一遍 node 链（同语义合并）。
-// - Node 要求 Debug + Send + Sync（与现有元素约束一致）；Click 参数相等
-//   走 `node_key()`（默认按 TypeId + 可选 id，保证 param_eq 可判定）。
-// - 试点：BackgroundNode（绘制）+ ClickableNode（输入）——验证"枚举
-//   不动、node 链并行生效"后，再逐个迁移。
+// The design, two tracks, nothing broken:
+// - `Modifier` gains `nodes: Vec<ModifierNode>` beside `elements`. The old builders
+//   (background/clickable/...) keep pushing enum elements; extensions go through nodes.
+// - Each behaviour is an `Arc<dyn XxxNode>`. Once the enum match is done, the core pipeline
+//   (measure, render, input, debug) walks the node chain with the same semantics.
+// - A node is `Debug + Send + Sync`, matching the existing element bounds. Click equality goes
+//   through `node_key()` (TypeId plus an optional id) so `param_eq` can decide.
+// - The pilot pair is BackgroundNode (draw) and ClickableNode (input); migrate one at a time once
+//   "the enum untouched, the node chain working beside it" is proven.
 //
-// 有状态节点（StatefulNode 约定）：node 本身不持有组合期 State（remember
-// 必须在 `#[composable] build` 内调用——宏语句 key 上下文要求）。约定：
+// Stateful nodes: a node does not hold composition State itself, because `remember` has to be
+// called inside a `#[composable] build` (the macro's statement-key context requires it). Instead:
 // A component builds a State with `ctx.remember(...)`, clones it into the node (a State is an Arc
 // wrapper, so the clone is cheap), reads it with `get()` at build time to register the
 // compose/layout dependency, and evaluates it with `peek()` at paint time.
@@ -30,10 +30,11 @@ use super::*;
 // recomposes -> new node -> repaint) or from an animation writing through `Animating` and requesting
 // a redraw. The node has no private channel; it follows the elements (see
 // `node_track_stateful_draw_follows_state`).
-// 例：`let src = ctx.remember(|| MutableInteractionSource::new()).get();`
+// e.g. `let src = ctx.remember(|| MutableInteractionSource::new()).get();`
 //     `Modifier::new().click_node(MyClick { source: src.clone() })`。
-// 状态生命周期跟组合槽走（remember 语义），node 只是"行为 + 状态引用"
-// 的载体——节点移除时 State 随槽回收，无需 onAttach/onDetach。
+// The state lives and dies with its composition slot (that is what `remember` means); a node is
+// only behaviour plus a reference to that state. Removing the node lets the slot reclaim it, so
+// there is no `onAttach`/`onDetach`.
 // ═══════════════════════════════════════════════════════════
 
 /// Draw node: invoked with the node rect at render time (cf. Compose DrawModifierNode).
@@ -132,81 +133,94 @@ pub trait DrawWrapNode: std::fmt::Debug + Send + Sync {
     }
 }
 
-/// 点击节点：输入期沿命中路径查询（对标 Compose 点击语义）。
-/// 与 `Clickable` 枚举同优先级——核心 `on_click()` 先查枚举、再查 node。
+/// A click node, queried along the hit path during input (Compose's click semantics).
 ///
-/// 单首语义（P1-2 结论）：每 Modifier 仅首个 ClickNode 生效（与枚举 `on_click()`
-/// 取首个 Clickable 一致）。多 push 两个 click_node 时第二个静默不触发——
-/// 如需多回调请合并进一个 node 的 `on_click`。`node_clicks()` 迭代器保留供
-/// 未来多播语义（暂未启用）。
+/// Same precedence as the `Clickable` element: the core `on_click()` asks the enum first, then the
+/// node chain.
+///
+/// First-only semantics: one Modifier activates only its first ClickNode, matching the enum's
+/// `on_click()`, which takes the first Clickable. A second click node stays silent, so several
+/// callbacks have to be merged into one node's `on_click`. `node_clicks()` exists for a future
+/// multicast rule and is not wired up yet.
 pub trait ClickNode: std::fmt::Debug + Send + Sync {
     fn on_click(&self);
-    /// 绑定的交互源（press 波纹用；无则 None）。
+    /// The bound interaction source, which is what drives the press ripple (`None` without one).
     fn interaction(&self) -> Option<crate::input::interaction::MutableInteractionSource> {
         None
     }
-    /// Skip 指纹 MUST 规范（同 DrawNode）：静态参数进 key；回写/瞬态动画值
-    /// 不进；回调视为相同。默认 = TypeId 名。
+    /// The Skip-fingerprint rule, as for DrawNode: static parameters go into the key, transient or
+    /// write-back animation values do not, and callbacks compare equal. The default is the TypeId
+    /// name.
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
 }
 
-/// 指针节点：原始指针事件（对标 Compose PointerInputModifierNode）。
-/// 与 `PointerEvent` 枚举同语义（pre = 外→内隧道，on = 内→外冒泡），返回 true
-/// 即消费（停止冒泡）。第三方自定义手势/悬停/拖拽识别挂这里，无需改 app.rs。
+/// A pointer node: raw pointer events (Compose's `PointerInputModifierNode`).
 ///
-/// ⚠ 手势路由隔离（P0-1 教训）：PointerNode **不参与** `has_gesture()` 手势目标
-/// 选择——手势竞技场（tap/drag 识别）只认 TapOn/DragOn 枚举。PointerNode 只收
-/// `dispatch_ptr_event` 的原始 down/move/up（hover 日志、自定义坐标换算等装饰性
-/// 用途）。需要手势回调的 node 应同时挂对应枚举（如 on_tap），或等手势竞技场
-/// 落地后的 GestureNode。把 PointerNode 纳入 has_gesture 会静默偷走外层 tap
-/// （内层装饰性 node 锁定 gesture 目标，fire_gesture_action 只查枚举 → 外层
-/// TapOnTap 永不触发）。
+/// Same semantics as the `PointerEvent` element: `pre` is the outside-in tunnel, `on` the
+/// inside-out bubble, and returning true consumes the event. Custom gestures, hover handling and
+/// drag detection hang here without touching the app.
+///
+/// Gesture routing stays separate, and that separation is load-bearing: a PointerNode does NOT
+/// take part in `has_gesture()`'s target selection, because the gesture arena (tap and drag
+/// recognition) answers only to the TapOn/DragOn elements. A pointer node sees the raw
+/// down/move/up that `dispatch_ptr_event` delivers, which is what a hover log or a custom
+/// coordinate transform needs.
+///
+/// A node that wants a gesture callback has to carry the matching element too (say `on_tap`), or
+/// wait for the GestureNode the arena will bring. Counting a PointerNode as a gesture target would
+/// silently steal the outer tap: the inner decorative node claims the target, `fire_gesture_action`
+/// looks only at elements, and the outer TapOnTap never fires.
 pub trait PointerNode: std::fmt::Debug + Send + Sync {
-    /// 隧道阶段（外→内）：对应 `on_pre_ptr`。
+    /// The tunnel phase (outside in), `on_pre_ptr`.
     fn on_pre(&self, _ev: &PointerEvent) -> bool {
         false
     }
-    /// 冒泡阶段（内→外）：对应 `on_ptr`。
+    /// The bubble phase (inside out), `on_ptr`.
     fn on_event(&self, _ev: &PointerEvent) -> bool {
         false
     }
-    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
+    /// The Skip-fingerprint rule, as for DrawNode. The default is the TypeId name.
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
 }
 
-/// 键盘节点：按键事件（对标 Compose KeyInputModifierNode）。
-/// 与 `KbEvent` 枚举同语义（pre = root→focused 隧道，on = focused→root 冒泡），
-/// 返回 true 即消费。第三方自定义快捷键/输入拦截挂这里，无需改 app.rs。
+/// A keyboard node: key events (Compose's `KeyInputModifierNode`).
+///
+/// Same semantics as the `KbEvent` element: `pre` tunnels from root to focus, `on` bubbles from
+/// focus to root, and returning true consumes the event. Custom shortcuts and input interception
+/// hang here without touching the app.
 pub trait KeyNode: std::fmt::Debug + Send + Sync {
-    /// 隧道阶段（root→focused）：对应 `on_pre_key`。
+    /// The tunnel phase (root to focus), `on_pre_key`.
     fn on_pre(&self, _ev: &KbEvent) -> bool {
         false
     }
-    /// 冒泡阶段（focused→root）：对应 `on_key`。
+    /// The bubble phase (focus to root), `on_key`.
     fn on_event(&self, _ev: &KbEvent) -> bool {
         false
     }
-    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
+    /// The Skip-fingerprint rule, as for DrawNode. The default is the TypeId name.
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
 }
 
-/// 布局节点 A 型：约束变换（对标 Compose LayoutModifier）。
-/// 输入 incoming 约束，输出给下一环节的约束。多个 A 型 node 按挂载序串行。
-/// 插入点 = resolved_size 之后、padding 之前（与现有链序同，见 measure_node）。
-/// 动态值在此求值（measure 期读 State 注册布局依赖——与 Dimension::Dynamic 同）。
+/// A layout node, type A: a constraint transform (Compose's `LayoutModifier`).
 ///
-/// 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”的纯函数——
-/// 禁止读外部可变（Atomic/时钟/RefCell/全局）。常量折叠按 incoming 缓存，
-/// 同 key 同约束直接返回旧尺寸；非纯读取即 stale（枚举侧无此口子，node 独有）。
+/// It takes the incoming constraints and hands the next link its own. Several type-A nodes run in
+/// mounting order. The insertion point is after `resolved_size` and before padding, which is where
+/// the existing chain puts it (see `measure_node`). Dynamic values are evaluated here, and reading
+/// a State during measure registers the layout dependency, exactly as `Dimension::Dynamic` does.
+///
+/// Purity is required: `transform` must be a pure function of its key parameters and `State::get`.
+/// Reading anything else mutable (an Atomic, the clock, a RefCell, a global) breaks the constant
+/// folding, which caches per key and per incoming constraint and returns the old size on a match; a
+/// non-pure read goes stale. The enum side has no such folding, so this is a node-only hazard.
 pub trait LayoutModifierNode: std::fmt::Debug + Send + Sync {
     fn transform(&self, inner: crate::layout::Constraints) -> crate::layout::Constraints;
-    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
+    /// The Skip-fingerprint rule, as for DrawNode. The default is the TypeId name.
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -225,10 +239,10 @@ pub enum ModifierNode {
     Layout(std::sync::Arc<dyn LayoutModifierNode>),
 }
 
-/// Modifier 链中的单个元素。
+/// One element in a `Modifier` chain.
 ///
-/// 按类别分为 Layout / Draw / Input 三类。
-/// 用 enum 而非 trait object，便于后续 Layout 系统分类提取。
+/// Category: layout, draw, input, or content.
+/// An enum rather than trait objects, so the layout system can classify an element up front.
 /// Which side of the window an inset-sized node takes its measurement from — Compose's
 /// `WindowInsetsWidthCalculator` / `WindowInsetsHeightCalculator` pairs (`WindowInsetsSize.kt`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,14 +317,15 @@ pub(crate) enum SizeStep {
 
 #[derive(Clone)]
 pub(crate) enum ModifierElement {
-    // ── Layout 类 ──
-    /// 固定尺寸
-    /// 尺寸（静态 Dimension 或动态求值 SizeValue——布局属性动画用 State/闭包）
+    // ── Layout ──
+    /// A size.
+    /// A size: a static `Dimension`, or a `SizeValue` evaluated at layout time (a State or closure,
+    /// which is how a layout property animates).
     Size { width: SizeValue, height: SizeValue },
-    /// 最小宽度（对标 Compose `Modifier.widthIn(min=...)`——仅提升 incoming
-    /// min 约束；宽度超限时被 max 夹住；支持动态值——动画可作用于 min）
+    /// A minimum width (Compose's `Modifier.widthIn(min=...)`): it only raises an incoming min
+    /// constraint, the max still clamps, and a dynamic value lets an animation drive the min.
     MinWidth { value: Dimension },
-    /// 最小高度（对标 Compose `Modifier.heightIn(min=...)`）
+    /// A minimum height (Compose's `Modifier.heightIn(min=...)`).
     MinHeight { value: Dimension },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
     /// constraint, so content that would be wider is constrained to it, and is then held at or
@@ -322,7 +337,7 @@ pub(crate) enum ModifierElement {
     MaxWidth { value: Dimension },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
     MaxHeight { value: Dimension },
-    /// 四边 padding（每边独立，支持动态 SizeValue——动画可作用于 padding）
+    /// Padding on each of the four edges, each one a dynamic `SizeValue` so it can animate.
     PaddingSides {
         start: Dimension,
         top: Dimension,
@@ -378,12 +393,12 @@ pub(crate) enum ModifierElement {
         align: crate::layout::ContentAlignment,
         unbounded: bool,
     },
-    /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
-    /// 对标 Compose `Modifier.offset`；值支持动态——动画可作用于 offset）
+    /// A positional offset that does not change the layout size, only where the node paints; x
+    /// mirrors under RTL. Compose's `Modifier.offset`, with a dynamic value so it can animate.
     Offset { x: Dimension, y: Dimension },
-    /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）
+    /// An absolute offset, which does NOT mirror under RTL — Compose's `Modifier.absoluteOffset`.
     AbsoluteOffset { x: Dimension, y: Dimension },
-    /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
+    /// How the child aligns on the parent's cross axis, overriding the parent's default.
     AlignSelf { alignment: crate::layout::Alignment },
     /// A child's own alignment inside a `Box`/`Stack`, on BOTH axes — Compose's
     /// `BoxScope.Modifier.align(Alignment.TopEnd)`, which a one-axis `Alignment` cannot express.
@@ -437,7 +452,7 @@ pub(crate) enum ModifierElement {
         before: Option<f32>,
         after: Option<f32>,
     },
-    /// 布局权重（Row 中分配宽度，Column 中分配高度）
+    /// Layout weight: width in a Row, height in a Column.
     ///
     /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
     /// tight to its share and the parent keeps that share (`ColumnScope.weight`'s documented
@@ -456,13 +471,13 @@ pub(crate) enum ModifierElement {
     /// same rule `Modifier::size` documents) before anything flex computes. `Modifier::required_size`
     /// is the escape hatch for a child that must leave the share on purpose.
     LayoutWeight { weight: f32, fill: bool },
-    /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
+    /// An aspect ratio — Compose's `Modifier.aspectRatio`, where the ratio is width over height.
     AspectRatio { ratio: f32, match_height_first: bool },
-    /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
-    /// constraints 的收缩，允许溢出父约束）
+    /// A required size (Compose's `Modifier.requiredSize`): the incoming constraints are ignored
+    /// rather than shrunk to, so the node may overflow its parent.
     RequiredSize { width: Option<SizeValue>, height: Option<SizeValue> },
-    /// 尺寸上报（对标 Compose `Modifier.onSizeChanged`）——节点测量完成后
-    /// 以逻辑像素回调 (width, height)；元素内部去重，尺寸未变化不重复回调
+    /// A size report (Compose's `Modifier.onSizeChanged`): once the node is measured, the size in
+    /// logical pixels. The element dedupes, so an unchanged size does not call back again.
     OnSizeChanged { callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync> },
     /// Fires with the placed box, in window coordinates, when it changes — Compose's
     /// `onGloballyPositioned`. Delivered after `OnPlaced` for the same pass.
@@ -473,8 +488,8 @@ pub(crate) enum ModifierElement {
     LayoutId { id: std::sync::Arc<str> },
     /// Compose's `bringIntoViewRequester`: this node's requests are served after the layout pass.
     BringIntoViewRequester { requester: crate::layout::BringIntoViewRequester },
-    /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
-    /// 调试树 JSON 暴露 tag 字段）
+    /// A test tag — Compose's `Modifier.testTag`, which UI tests target and the debug tree exposes
+    /// in its JSON.
     TestTag { tag: String },
     /// Accessibility declaration (role / name / state) — resolved into the semantics tree by
     /// `crate::semantics`. A node with this element still does layout as usual; the element exists
@@ -490,30 +505,30 @@ pub(crate) enum ModifierElement {
     /// Compose's `onFocusChanged`: the callback receives `true` when the node gains focus, `false`
     /// when it loses it. Dispatched when the flag changes, including a loss caused by removal.
     OnFocusChanged { callback: std::sync::Arc<dyn Fn(bool) + Send + Sync> },
-    /// 布局方向——本节点 padding start/end 的解析方向；Row/Column 组件
-    /// 优先读自身此元素（其次 CompositionLocal 全局方向）。
-    /// ⚠ 当前**不**向子树继承（对标 Compose 的子树级方向用
-    /// `WiniaTheme::with_theme_and_direction`——CompositionLocal 作用域；
-    /// 全 demo 切换也走它）。此元素是节点级便捷覆盖。
+    /// The layout direction that resolves this node's start/end padding. A Row/Column reads this
+    /// element on itself first, then the CompositionLocal. It does NOT inherit into a subtree: the
+    /// subtree-level direction Compose offers is `WiniaTheme::with_theme_and_direction` (a
+    /// CompositionLocal scope), and that is also how a whole demo flips. This element is the
+    /// per-node override.
     LayoutDirection(crate::layout::LayoutDirection),
     /// Sibling paint order within this node (`Modifier::z_index`) — Compose's `Modifier.zIndex`.
     /// A higher value paints later, i.e. on top, and the hit test walks the same order in reverse so
     /// the topmost sibling receives a press first; equal values keep tree order.
     ZIndex(f32),
-    /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
-    /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
-    /// input/suffix/trailing；仅标记，不参与测量/绘制）
+    /// A text-field child's role marker. The container's own measure policy places each role
+    /// (leading, label, placeholder, prefix, input, suffix, trailing); it is a marker only and takes
+    /// no part in measure or paint.
     TextFieldSlot { role: crate::text::field::TextFieldSlotRole },
-    /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
-    /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
-    /// 展开为 ambient+spot 两层元素）
+    /// A shadow — Compose's `Modifier.shadow`: a blurred elevation plus clipping the content.
+    /// A shadow with single-layer parameters. The elevation shortcut expands into two elements,
+    /// ambient and spot.
     Shadow {
         params: crate::graphics::Dyn<ShadowParams>,
         shape: crate::graphics::Dyn<Shape>,
         clip: bool,
     },
 
-    // ── Draw 类 ──
+    // ── Draw ──
     /// Background colour + shape. The colour is a [`Dyn`](crate::graphics::Dyn): a literal is stored
     /// inline, a closure is evaluated per paint.
     Background { color: crate::graphics::Dyn<Color>, shape: crate::graphics::Dyn<Shape> },
@@ -530,15 +545,18 @@ pub(crate) enum ModifierElement {
         color: crate::graphics::Dyn<Color>,
         shape: crate::graphics::Dyn<Shape>,
     },
-    /// 裁剪
+    /// A clip.
     Clip { shape: crate::graphics::Dyn<Shape> },
-    /// 内容模糊（GPU 原生，零回读）。The radius is a carrier: a state or closure is read per paint.
+    /// A content blur (native GPU, nothing read back). The radius is a carrier: a state or closure
+    /// is read per paint.
     Blur { radius: crate::graphics::Dyn<f32> },
-    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）。Carrier radius, same as `Blur`.
+    /// A background blur (frosted glass, one snapshot shared across nodes). Same carrier radius as
+    /// `Blur`.
     BackdropBlur { radius: crate::graphics::Dyn<f32> },
-    /// 文本输入框容器视觉（TextField 组件——M3 Filled/Outlined 容器：    /// 背景/指示线/边框/label/支持文本）。组合期解析全部视觉状态
-    /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
-    /// 状态过渡动画由后续迭代接入。
+    /// The text-field container's visuals (internal to `TextField`): the M3 Filled/Outlined
+    /// background, indicator, outline, label and supporting text. Every visual state (enabled,
+    /// focused, in-error, label floated) is resolved at compose time and painted statically at
+    /// render time; the transition animations are a later step.
     TextFieldVisual {
         variant: crate::text::field::TextFieldVariant,
         shape: crate::graphics::Dyn<Shape>,
@@ -548,30 +566,33 @@ pub(crate) enum ModifierElement {
         /// `showCursor = enabled && !readOnly && …` (`foundation/text/CoreTextField.kt`), so a read-only
         /// field shows no caret. winia drew one whenever the field had focus.
         read_only: bool,
-        /// 光标色（组合期解析：error → error_cursor，否则 primary）
+        /// The caret colour, resolved at compose time: error_cursor in the error state, primary
+        /// otherwise.
         cursor_color: Color,
         /// The indicator/border colour: an animation `State` driven by `animate_color_as_state`,
         /// interpolated in Oklab, peeked during rendering.
         indicator_color: crate::runtime::state::State<crate::graphics::Color>,
-        /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
+        /// The focus transition, 0 unfocused to 1 focused, which animates the 1 to 2 px width.
         focus_progress: crate::runtime::state::State<f32>,
-        /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
-        /// None = 恒等）
+        /// The visual transformation's offset mapping (password masking, formatted input), which
+        /// every render and hit-test crossing needs. `None` means identity.
         offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
-        /// 支持文本（画在容器底部外侧 4dp）
+        /// Supporting text, drawn 4 dp below the container.
         supporting: Option<SupportingVisual>,
     },
-    /// 文本输入框偏移映射（TextField 组件内部使用——**无 M3 容器视觉**的
-    /// 裸 TextField 挂载点）。TextFieldVisual 只在有 variant（Filled/Outlined）
-    /// 时挂载；裸 TextField + visual_transformation 时 offset_mapping 无处
-    /// 可达（点击定位/渲染光标查找 None → 显示偏移直写 selection 越界）。
-    /// 仅存映射、无渲染/绘制副作用（render 各 match 走 `_ =>` 兜底）。
+    /// A text field's offset mapping, and the mount point for a bare `TextField` with NO M3
+    /// container visuals. `TextFieldVisual` exists only when a variant (Filled/Outlined) is set, so
+    /// without this element a bare field with a visual transformation would have no reachable
+    /// mapping: click targeting and the caret lookup would see `None` and write a display offset
+    /// into the selection, out of range.
+    ///
+    /// It stores the mapping only and has no render effect; every render match arm falls through.
     TextFieldOffsetMapping {
         offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
     },
 
-    // ── Content 类 ──
-    /// 文本内容（由 Text 组件设置，渲染阶段消费）
+    // ── Content ──
+    /// Text content, set by the `Text` component and consumed at render time.
     TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32>, min_lines: usize, underline: bool, line_through: bool, font_family: Option<String>, on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>, auto_size: Option<(f32, f32)> },
     /// Compose's richer `onTextLayout` sink: the snapshot plus the paragraph, so the per-line queries
     /// (`getLineForOffset`, `getBoundingBox`, …) can answer. Its own element, because the callback
@@ -591,13 +612,14 @@ pub(crate) enum ModifierElement {
         transform: Option<crate::text::TextGeometricTransform>,
         line_height_style: Option<crate::text::LineHeightStyle>,
     },
-    /// 富文本内容（含内联 drawable，由 RichText 组件设置）
+    /// Rich-text content, inline drawables included, set by `RichText`.
     RichTextContent {
         content: String,
         drawables: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
-        /// 内联元素在 content 中的字符范围（长度 > 1 表示多字符占位符）
+        /// An inline element's CHARACTER range in the content; a length above 1 is a multi-character
+        /// placeholder.
         drawable_ranges: Vec<Range<usize>>,
-        /// 已解析的样式范围列表
+        /// The resolved style runs.
         spans: Vec<RichSpanStyle>,
         /// Paragraph parameters. `RichText` used to build a bare `ParagraphStyle`, so a rich
         /// block could not cap its lines, ellipsize, align or space its lines at all — it just
@@ -614,31 +636,31 @@ pub(crate) enum ModifierElement {
         line_height_style: Option<crate::text::LineHeightStyle>,
     },
 
-    // ── Input 类 ──
-    /// 可点击
-    /// 可点击——`interaction` 为 Some 时自动发射 press/focus/hover 交互
-    /// （对标 Compose clickable(interactionSource)）
+    // ── Input ──
+    /// Clickable. With a `Some(interaction)` it emits press/focus/hover itself, like Compose's
+    /// `clickable(interactionSource)`.
     Clickable { on_click: Arc<dyn Fn() + Send + Sync>, interaction: Option<MutableInteractionSource> },
-    /// 点按手势回调（对标 Compose `detectTapGestures` 的 onTap）——
-    /// 位置参数为组件本地坐标
+    /// The tap callback (Compose's `onTap` in `detectTapGestures`); the position is in the
+    /// component's local coordinates.
     TapOnTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
-    /// 双击回调
+    /// The double-tap callback.
     TapOnDoubleTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
-    /// 长按回调（当前在 up 时判定——与 Compose 即时触发有差异）
+    /// The long-press callback. It fires on pointer up here, where Compose fires immediately — a
+    /// known difference.
     TapOnLongPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
-    /// 按下回调（down 立即触发）
+    /// The press callback, fired on down.
     TapOnPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
-    /// 拖拽开始（首次超过 touch slop）
+    /// Drag start, once the touch slop is first exceeded.
     DragOnStart { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
-    /// 拖拽移动（当前位置, 增量）
+    /// Drag move: the current position and the delta.
     DragOnMove { cb: Arc<dyn Fn((f32, f32), (f32, f32)) + Send + Sync> },
-    /// 拖拽结束
+    /// Drag end.
     DragOnEnd { cb: Arc<dyn Fn() + Send + Sync> },
-    /// 拖拽取消（系统打断）
+    /// Drag cancel (the gesture was interrupted).
     DragOnCancel { cb: Arc<dyn Fn() + Send + Sync> },
-    /// 可获得焦点——`interaction` 为 Some 时焦点变化自动发射 Focus/Unfocus
+    /// Focusable. With a `Some(interaction)` it emits Focus/Unfocus as focus changes.
     Focusable { interaction: Option<MutableInteractionSource> },
-    /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
+    /// Hover: pointer enter and exit emit Hover Enter/Exit (Compose's `hoverable`).
     Hoverable { interaction: MutableInteractionSource },
     /// The cursor this node asks for while hovered — Compose Desktop's `pointerHoverIcon`.
     /// `override_descendants` makes this node's icon win over any icon on a descendant.
@@ -646,10 +668,12 @@ pub(crate) enum ModifierElement {
         icon: crate::input::PointerIcon,
         override_descendants: bool,
     },
-    /// 水波纹指示（对标 Compose indication/ripple）——按下时从按压点扩散的
-    /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
-    /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
-    /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
+    /// A ripple (Compose's indication): a radial gradient that spreads from the press point and fades
+    /// after release, computed from elapsed time at render time so it needs no animation state.
+    ///
+    /// A `Some(shape)` clips the ripple to it — a Button passes its container shape, so an Outlined
+    /// or Text button without a background element still clips correctly. `None` infers the shape
+    /// from a Background/Border element.
     Ripple {
         source: MutableInteractionSource,
         /// The ripple colour — a literal, a state or a closure read per paint.
@@ -661,13 +685,15 @@ pub(crate) enum ModifierElement {
         /// node's diagonal, which is this framework's original behaviour.
         state_layer_diameter: Option<crate::graphics::Dyn<f32>>,
     },
-    /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
+    /// Icon drawing (internal to `Icon`): source, tint, auto-mirror and the variable axes.
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
-    /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
+    /// Suppress the framework's focus ring, for a component that draws its own (a Slider rings the
+    /// thumb rather than the whole component).
     NoFocusRing,
     DrawIcon { spec: crate::graphics::IconSpec },
-    /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
-    /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
+    /// Picture content (`Image`): a bitmap or SVG with a `ContentScale`, an alignment and an alpha.
+    /// Unlike DrawIcon it does not tint, it scales by `ContentScale`, and the alignment is the
+    /// caller's.
     ImageContent {
         source: crate::graphics::IconSource,
         content_scale: crate::graphics::ContentScale,
@@ -678,28 +704,29 @@ pub(crate) enum ModifierElement {
         color_filter: Option<crate::graphics::Dyn<ColorFilter>>,
         filter_quality: FilterQuality,
     },
-    /// 焦点请求器 ID（与 FocusRequester 关联）
+    /// The focus requester's id, tying the node to a `FocusRequester`.
     FocusRequesterId { id: u64 },
-    /// 键盘事件
+    /// Key events.
     KbEvent {
         on_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
         on_pre_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
     },
-    /// 指针事件
+    /// Pointer events.
     PointerEvent {
         on_ptr: Option<Arc<dyn Fn(&PointerEvent) -> bool + Send + Sync>>,
         on_pre_ptr: Option<Arc<dyn Fn(&PointerEvent) -> bool + Send + Sync>>,
     },
-    /// 垂直滚动（绑定偏移 State）
-    /// 完整 ScrollState（offset + is_scroll_in_progress + fling_limit）——
-    /// 输入路径（app.rs 拖拽/wheel）经节点取整状态做 fling/极限
+    /// Vertical scrolling, bound to an offset State.
+    /// The whole `ScrollState` (offset, is_scroll_in_progress, fling_limit). The input path (drag
+    /// and wheel in the app) reads it through the node to run a fling and to clamp at the limit.
     VerticalScroll { state: ScrollState },
     /// The scroll container at this node keeps its clip and its viewport, but the GESTURE paths skip
     /// it: what a lazy list with `user_scroll(false)` needs. Dropping the container instead (the old
     /// behaviour) also dropped the clip, so the list painted its items outside its own box.
     ScrollInputDisabled,
-    /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
-    /// 节点自身高度是视口，内容总高由测量回写到此 State）
+    /// The lazy list's content-height marker (used by LazyColumn to compute `max_offset` in
+    /// `apply_scroll_delta`). The node's own height is the viewport; the content's total height is
+    /// written back into this State by the measure pass.
     LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
     /// The item's placement/fade contract. Lazy lists and flow layouts read it; the renderer applies
     /// the host's paint channels. Inert outside an item-aware layout.
@@ -707,7 +734,7 @@ pub(crate) enum ModifierElement {
     /// The container's item-animation host. The renderer draws its exit pictures inside this
     /// container's scroll clip/translate, so a ghost cannot land outside the viewport.
     ItemAnimationHost(crate::layout::item_animation::ItemAnimationHost),
-    /// 水平滚动
+    /// Horizontal scrolling.
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// Compose's inner shadow: a rim drawn inside the shape, above the content.
     InnerShadow {
@@ -723,13 +750,15 @@ pub(crate) enum ModifierElement {
     /// Compose's `overscroll(effect)`: the container absorbs the delta it cannot scroll into the
     /// effect instead of letting it fall through.
     Overscroll { effect: crate::overscroll::OverscrollEffect },
-    /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
+    /// A nested-scroll connection: an ancestor may consume part of the delta/velocity before or
+    /// after the child does.
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
-    /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
+    /// A graphic-layer transform (scale, alpha, rotation, translation): it repaints without
+    /// relayouting.
     GraphicsLayer { params: crate::graphics::Dyn<GraphicsLayerParams> },
-    /// 共享元素转场标记（components::shared_transition——纯数据标记：配对身份 + 变形规格；
-    /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
-    /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
+    /// A shared-element transition marker (pure data: the pairing identity plus the morph spec). The
+    /// endpoint registers at compose time; render ignores it. Bounds never enter the modifier — the
+    /// flight is a render-phase behaviour, so a bounds change never forces a re-entry.
     SharedTransition {
         scope_id: u64,
         key: String,

@@ -230,11 +230,12 @@ impl Paragraph {
     }
 
     fn get_utf16_index(&self, index: usize) -> Option<usize> {
-        // 精确命中
+        // An exact key.
         if let Some(paragraph_index) = self.paragraph_byte_to_real_indices.get_by_right(&index) {
             return self.byte_to_utf16_indices.get_by_left(paragraph_index).copied();
         }
-        // 回溯到最近的有效起始字节（多字节字符中间）
+        // Otherwise walk back to the nearest mapped start byte, which is what an offset inside a
+        // multi-byte character asks for.
         for left_byte in self.paragraph_byte_to_real_indices.left_keys().iter().rev() {
             if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(left_byte) {
                 if *mapped <= index {

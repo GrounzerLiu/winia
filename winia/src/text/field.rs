@@ -6,27 +6,28 @@
 //! `WiniaTheme` into a `TextFieldColors` — the design-system half.
 
 
-/// 容器变体（对齐 material3 TextField（Filled）/ OutlinedTextField）
+/// Container shape — material3's `TextField` (filled) or `OutlinedTextField`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextFieldVariant {
-    /// 填充容器 + 底部指示线（M3 FilledTextField——top 4dp 圆角）
+    /// A filled container with a bottom indicator (M3 `FilledTextField`, top corners 4 dp).
     Filled,
-    /// 无填充 + 边框（M3 OutlinedTextField——四角 4dp 圆角）
+    /// No fill, an outline instead (M3 `OutlinedTextField`, all corners 4 dp).
     Outlined,
 }
 
-/// M3 TextField 状态色集合（对齐 `TextFieldDefaults.colors` 的默认值；
-/// 状态优先级 disabled > error > focused > unfocused）
+/// The M3 text-field state colours, matching `TextFieldDefaults.colors`.
+///
+/// Precedence: disabled > error > focused > unfocused.
 #[derive(Debug, Clone)]
 pub struct TextFieldColors {
     pub text: crate::graphics::Color,
     pub disabled_text: crate::graphics::Color,
-    /// 容器背景（Filled 用；Outlined 为透明）
+    /// Container fill (used by `Filled`; `Outlined` stays transparent).
     pub container: crate::graphics::Color,
-    /// 光标（正常；error 时用 error_cursor）
+    /// The caret, when the field is not in error (see `error_cursor`).
     pub cursor: crate::graphics::Color,
     pub error_cursor: crate::graphics::Color,
-    /// 指示线/边框
+    /// The bottom indicator or the outline.
     pub indicator_focused: crate::graphics::Color,
     pub indicator_unfocused: crate::graphics::Color,
     pub indicator_disabled: crate::graphics::Color,
@@ -39,51 +40,51 @@ pub struct TextFieldColors {
     /// placeholder
     pub placeholder: crate::graphics::Color,
     pub disabled_placeholder: crate::graphics::Color,
-    /// 支持文本
+    /// Supporting text.
     pub supporting: crate::graphics::Color,
     pub disabled_supporting: crate::graphics::Color,
     pub error_supporting: crate::graphics::Color,
-    /// 前置图标（focused/unfocused onSurfaceVariant、disabled 38%、error 不变）
+    /// The leading icon (onSurfaceVariant when idle, 38% when disabled, unchanged in error).
     pub leading_icon_focused: crate::graphics::Color,
     pub leading_icon_disabled: crate::graphics::Color,
-    /// 后置图标（trailing——error 态 error 色）
+    /// The trailing icon, which turns error-coloured in the error state.
     pub trailing_icon_focused: crate::graphics::Color,
     pub trailing_icon_disabled: crate::graphics::Color,
     pub trailing_icon_error: crate::graphics::Color,
-    /// 前后缀文本（onSurfaceVariant、disabled 38%）
+    /// Prefix and suffix text (onSurfaceVariant, 38% when disabled).
     pub affix: crate::graphics::Color,
     pub disabled_affix: crate::graphics::Color,
 }
 
-/// TextField 容器子节点角色（text-field-v2 容器化——TextFieldLayout
-/// policy 按角色布局；构建顺序固定：leading → label → placeholder →
-/// prefix → input → suffix → trailing，缺省跳过）
+/// What a child of the text-field container is for. `TextFieldLayout`'s policy places each role,
+/// and the build order is fixed: leading -> label -> placeholder -> prefix -> input -> suffix ->
+/// trailing, skipping whatever a given field does not carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextFieldSlotRole {
-    /// 前置图标（M3 leadingIcon——12dp 边距垂直居中，与文本 16dp）
+    /// The leading icon (M3's `leadingIcon`: 12 dp in, vertically centred, 16 dp from the text).
     Leading,
-    /// 悬浮/展开 label（位置动画由 policy 插值）
+    /// The floating/expanded label; the policy interpolates its position.
     Label,
-    /// 占位文本（输入位；仅空内容时构建）
+    /// Placeholder text, built only while the value is empty.
     Placeholder,
-    /// 前缀（文本起点前）
+    /// The prefix, drawn before the text starts.
     Prefix,
-    /// 输入区（文本/光标/选区/IME——唯一可交互节点）
+    /// The input area — text, caret, selection and IME. The only interactive child.
     Input,
-    /// 后缀（右对齐）
+    /// The suffix, right aligned.
     Suffix,
-    /// 后置图标（右 12dp 垂直居中）
+    /// The trailing icon (12 dp from the right, vertically centred).
     Trailing,
 }
 
-/// 从节点（TextField 输入 leaf）向上找 OffsetMapping。
+/// Walk up from a text-field input leaf to its `OffsetMapping`.
 ///
-/// ⚠ TextFieldVisual（含 offset_mapping）挂在**容器** modifier 上
-/// （text_field_visual），输入 leaf 无此元素——点击定位/拖拽/IME 区域/
-/// 渲染光标从 leaf 查找 TextFieldVisual 会得到 None → 显示偏移直接当
-/// 编辑偏移写 selection（掩码字符 '•' 3 字节 → replace_range 越界 panic）
-/// 或光标画错位置。沿 parent_id 链向上找第一个 TextFieldVisual
-/// （裸 TextField 无 variant → TextFieldOffsetMapping 元素）。
+/// The `TextFieldVisual` element (which carries `offset_mapping`) sits on the CONTAINER's
+/// modifier, not on the input leaf. Asking the leaf alone answers `None`, and the caller then
+/// treats a DISPLAY offset as an EDITING offset: it writes it into the selection (where a 3-byte
+/// mask character makes `replace_range` panic past the end) or draws the caret in the wrong
+/// place. So this follows the `parent_id` chain up to the first `TextFieldVisual`; a bare
+/// `TextField` with no variant carries a `TextFieldOffsetMapping` element instead.
 pub(crate) fn offset_mapping_for_node(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
@@ -109,11 +110,11 @@ pub(crate) fn offset_mapping_for_node(
     None
 }
 
-/// 从节点（TextField 输入 leaf）向上找容器 TextFieldVisual 的光标色。
+/// Walk up from a text-field input leaf to the container's caret colour.
 ///
-/// ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/error），
-/// 输入 leaf 无此元素——渲染光标从 leaf 查找会回退文本色（非 M3 光标色）。
-/// 与 offset_mapping_for_node 同路径沿 parent 链向上找。
+/// `cursor_color` lives on the container's `TextFieldVisual`, where the theme resolves primary vs
+/// error at compose time. The input leaf carries nothing, so looking there alone falls back to the
+/// text colour — not the M3 caret. Same walk as [`offset_mapping_for_node`].
 pub(crate) fn text_field_visual_color(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,

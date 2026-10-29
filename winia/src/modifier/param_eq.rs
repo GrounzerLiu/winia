@@ -1,22 +1,25 @@
 use super::*;
 
-// ── 参数相等性（Skip 判定） ──
+// ── Parameter equality, which decides Skip ──
 
 impl Modifier {
-    /// 参数相等性（start_restartable_group 的 Skip 判定用）——可比较元素
-    /// （数值/枚举/字符串/颜色）精确比较；**闭包类元素**（背景色/点击回调/
-    /// 图形层动态参数/滚动状态/富文本样式）**视为相同**——每次 build 重建的
-    /// 闭包无法比较，精确比会破坏 Skip（列表每行永不 Skip）。
+    /// Parameter equality, as `start_restartable_group` uses it to decide Skip.
     ///
-    /// 近似语义：modifier 的**数值参数**变化（width/padding/颜色等）→ 不等 →
-    /// Enter（content 重跑）；闭包参数变化（回调重设）→ 相同 → Skip（保持）。
-    /// 注意：动画驱动的动态尺寸（Dimension::Dynamic）视为相同——布局期
-    /// layout_dep 每帧重测已覆盖，无需 Enter。
+    /// Elements that CAN be compared (numbers, enums, strings, colours) are compared exactly.
+    /// Elements built around a CLOSURE (background colours, click callbacks, graphic-layer dynamics,
+    /// scroll state, rich-text styles) are treated as equal: a closure is rebuilt every time and
+    /// cannot be compared, and comparing it would break Skip outright — a list row would never skip.
+    ///
+    /// The effect: a changed NUMERIC parameter (width, padding, colour, …) is unequal, so the group
+    /// re-enters and its content reruns; a rebuilt closure is equal, so the group skips. A
+    /// `Dimension::Dynamic` is equal too — layout depends on it and re-measures every frame anyway,
+    /// so there is nothing to re-enter for.
     pub(crate) fn param_eq(&self, other: &Modifier) -> bool {
         if self.elements.len() != other.elements.len() {
             return false;
         }
-        // Node 轨道：按 node_key 序列比较（参数变化 → key 变 → Enter）。
+        // The node track compares `node_key` sequences: a parameter change makes a new key, which
+        // re-enters the group.
         if self.nodes.len() != other.nodes.len() {
             return false;
         }
@@ -173,7 +176,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
          TextPaint { shadow: bsh, font_feature_settings: bfs, draw_style: bds, brush: bbr, transform: btr, line_height_style: blh }) => {
             ash == bsh && afs == bfs && ads == bds && abr == bbr && atr == btr && alh == blh
         }
-        // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
+        // Rich text: compare the content and the drawable count; the style ranges are rebuilt on
+        // every build, so they are not compared here (the resolved spans are, further down).
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar,
                             align: aal, max_lines: aml, overflow: aov, soft_wrap: asw,
                             line_height: alh, min_lines: amin, spans: aspans,
@@ -194,7 +198,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                 && aal == bal && aml == bml && aov == bov && asw == bsw && alh == blh
                 && amin == bmin && alhs == blhs
         }
-        // 点击：交互源身份参与判定（换源需重入 content 捕获新源）；回调视为相同
+        // A click: the interaction source's identity takes part, because a new source has to be
+        // captured by re-entering the content. The callback itself is treated as equal.
         (Clickable { interaction: ai, .. }, Clickable { interaction: bi, .. }) => ai == bi,
         (TapOnTap { .. }, TapOnTap { .. }) => true,
         (TapOnDoubleTap { .. }, TapOnDoubleTap { .. }) => true,
@@ -271,7 +276,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // wrapper's identity (the nav keys each layer by scene key + role + whether a transition is
         // running): a Skip reuses the previous frame's closures, and the tag alone cannot see them.
         (SceneTag { id: a }, SceneTag { id: b }) => a == b,
-        // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
+        // Graphic-layer dynamics are equal: they are evaluated at render time, so an animation does
+        // not re-enter the group.
         // Same rule as the background: static parameters compare by value, dynamic ones are the same
         // request, and a static set that changes re-enters.
         (GraphicsLayer { params: ap }, GraphicsLayer { params: bp }) => ap.same_parameter(bp),

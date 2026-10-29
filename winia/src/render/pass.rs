@@ -4,7 +4,7 @@ use super::helpers::*;
 use super::paint::*;
 use super::text_field::*;
 
-// ── 渲染遍历（含 BackdropBlur 即时处理）──
+// ── The render walk, with BackdropBlur handled inline ──
 
 thread_local! {
     static CAPTURING_ITEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -470,10 +470,11 @@ pub(super) fn render_pass1(
         _ => None,
     };
 
-    // 背景模糊：在节点**自身任何内容（背景/文本/子节点）绘制之前**处理——
-    // snapshot 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose
-    // backdropBlur 语义。参考 v1 item.rs 实现：物理像素 snapshot + CropRect
-    // blur + clip 到节点 + 像素网格对齐画回（draw_image 无采样缩放）。
+    // Background blur runs BEFORE any of the node's own content (background, text, children) is
+    // drawn, so the snapshot holds only what lies beneath it — ancestors and earlier siblings —
+    // which is Compose's backdropBlur semantics. The v1 recipe: snapshot in physical pixels, blur a
+    // crop rect, clip to the node, then draw back snapped to the pixel grid (draw_image does not
+    // resample).
     if let Some(radius) = node.modifier.backdrop_blur_radius() {
         // The blurred region is the container, not the node: the node may have been grown to the 48 dp
         // touch target, and blurring that samples outside the control that owns it.
@@ -487,7 +488,8 @@ pub(super) fn render_pass1(
         );
     }
 
-    // 图形层：包住整个节点（background + text + children），应用 alpha/变换/颜色滤镜
+    // The graphic layer wraps the whole node (background, text, children) and applies alpha, a
+    // transform and a colour filter.
     let gl_params = node.modifier.graphics_layer_params();
     // Render-time trace (node level): the alpha a `graphics_layer` contributed exists only here — it is read
     // from the modifier chain at paint time and never stored. A `Modifier::alpha` or an animated layer alpha
@@ -538,8 +540,9 @@ pub(super) fn render_pass1(
         } else {
             canvas.save();
         }
-        // graphicsLayer shadowElevation：独立“变换 → 绘制 → 恢复”——阴影
-        // 随 3D 形变，且不参与内容 clip（对标 Compose：层阴影在边界外）
+        // graphicsLayer shadowElevation: transform, draw, restore, so the shadow follows a 3D
+        // distortion and takes no part in clipping the content (Compose puts a layer shadow outside
+        // the bounds).
         if gl.shadow_elevation > 0.0 {
             canvas.save();
             // Transform around the container's centre, for the same reason.
@@ -583,9 +586,9 @@ pub(super) fn render_pass1(
     } else { false };
     let mut blur_radius: Option<f32> = None;
     let mut clip_shape: Option<crate::graphics::Shape> = None;
-    // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
-    // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
-    // 阴影层（预扫描直接绘制——见下方 pre-scan 注释）
+    // A shadow (elevation, shape, colour) paints on the same layer as a background in chain order.
+    // With clip=true it joins `clip_shape`, which clips the CONTENT — never the shadow, matching
+    // Compose. The shadow layer is drawn straight from the pre-scan; see the note below.
     let mut text: Option<(&str, f32, &crate::graphics::Color, usize, crate::text::TextAlign, crate::text::TextOverflow, crate::text::FontWeight, crate::text::FontSlant, bool, f32, Option<f32>)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
@@ -614,9 +617,10 @@ pub(super) fn render_pass1(
 
     // `paint_rect` (computed beside `rect` above) is the box the backgrounds and borders use.
 
-    // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
-    // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
-    // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
+    // The shadow must go UNDERNEATH: before the main loop paints any background, whatever the chain
+    // order says, because Compose's shadow is its own graphicsLayer beneath the content. The
+    // pre-scan used to run after the main loop, which painted the shadow over the background and
+    // darkened the card (a green card measured at about 0.6 of its colour).
     for el in node.modifier.elements() {
         if let ModifierElement::Shadow { params, shape, .. } = el {
             let shape = shape.eval();
@@ -625,8 +629,9 @@ pub(super) fn render_pass1(
         }
     }
 
-    // 同节点链序中最后绘制的背景（颜色+形状）——边框色与形状都等于它时
-    // 跳过描边（合并为纯填充），避免半透明同色双重混合
+    // The background painted last in this node's chain (colour and shape). When a border's colour
+    // and shape both match it, the stroke is skipped and the two merge into one fill, so a
+    // translucent colour is not blended twice.
     let mut last_background: Option<(crate::graphics::Color, crate::graphics::Shape)> = None;
     for el in node.modifier.elements() {
         match el {
@@ -643,8 +648,8 @@ pub(super) fn render_pass1(
             }
             ModifierElement::VerticalScroll { state } => {
                 let mut off = state.offset.get();
-                // reverseLayout（LazyColumn 反向）：滚动平移镜像为
-                // scroll_origin = content - vh - offset（内容坐标从底向上排布）
+                // reverseLayout (a reversed LazyColumn) mirrors the scroll translation:
+                // scroll_origin = content - vh - offset, so content coordinates run bottom-up.
                 if node.scroll_reverse {
                     off = (node.scroll_content_height - node.scroll_viewport_height - off).max(0.0);
                 }
@@ -657,16 +662,18 @@ pub(super) fn render_pass1(
                 }
                 scroll_offset_h = Some(off);
             }
-            // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
+            // The text-field container (M3 Filled/Outlined: background, indicator, outline, label,
+            // supporting text).
             ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, read_only: _, cursor_color: _, indicator_color, focus_progress, offset_mapping: _, supporting } => {
-                // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
-                // 4dp，节点总高 = 容器 + 4 + 16）
+                // The container rect: supporting text is carved out of it (supporting text draws
+                // 4 dp below the container, so the node's height is container + 4 + 16).
                 let supporting_h = supporting.as_ref().map_or(0.0, |sv| sv.height());
                 let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
-                // ⚠ label/placeholder/图标/前后缀均为子节点（text-field-v2
-                // 容器化——TextFieldLayout 定位）；Outlined label 缺口由子节点
-                // Label 的 placement 构造（跨边框悬浮时——label 顶越出容器顶，
-                // 缺口 = label 水平范围 ± 4dp（M3 populated label padding））
+                // The label, placeholder, icons and prefix/suffix are all CHILDREN (the container
+                // is laid out by the text field's own policy). For an Outlined field the label gap
+                // comes from where the Label child was placed: a floated label rises past the
+                // container's top, and the gap spans the label's horizontal range plus 4 dp of M3's
+                // populated-label padding.
                 let cutout = if *variant == crate::text::field::TextFieldVariant::Outlined {
                     node.children.iter().find_map(|&ci| {
                         let cn = &nodes[ci];
@@ -675,8 +682,9 @@ pub(super) fn render_pass1(
                                 if *role == crate::text::field::TextFieldSlotRole::Label)
                         });
                         if !is_label { return None; }
-                        // ⚠ 子节点 position 相对**容器**（本节点）——用本节点
-                        // 绝对坐标 x/y（parent_x 是父层坐标——用错缺口画偏）
+                        // A child's position is relative to the CONTAINER, which is this node, so the
+                        // gap is built from this node's absolute x/y. Using the parent's coordinates
+                        // puts the gap in the wrong place.
                         let (lx, ly) = (x + cn.position.x, y + cn.position.y);
                         if ly >= container_rect.top { return None; } // 展开态：无缺口
                         Some(Rect::new(
@@ -688,7 +696,7 @@ pub(super) fn render_pass1(
                 let focus_p = focus_progress.peek();
                 let shape = shape.eval();
                 draw_text_field_container(canvas, container_rect, variant, &shape, colors, &indicator_color.peek(), focus_p, cutout);
-                // 支持文本：容器底部外侧 4dp
+                // Supporting text, 4 dp below the container.
                 if let Some(sv) = supporting {
                     draw_text_field_aux_text(
                         canvas,
@@ -704,15 +712,15 @@ pub(super) fn render_pass1(
                     );
                 }
             }
-            // 自定义绘制（Slider 轨道/thumb 等动态图形——闭包以节点 rect 调用）
+            // A custom draw (a Slider's track or thumb), called with the node's rect.
             ModifierElement::CustomDraw { f } => {
                 f(canvas, rect);
             }
-            // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
+            // An icon draws inside the content box, inset by the leaf's padding.
             ModifierElement::DrawIcon { spec } => {
                 draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
             }
-            // 图片（Image 组件）：ContentScale + 对齐 + alpha + colorFilter + filterQuality
+            // A picture (`Image`): ContentScale, alignment, alpha, colour filter and filter quality.
             ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality } => {
                 let alpha = alpha.eval();
                 let color_filter = color_filter.as_ref().map(|filter| filter.eval());
@@ -757,7 +765,7 @@ pub(super) fn render_pass1(
         wrap_node.draw_before(canvas, rect, &node.modifier);
     }
 
-    // 内容模糊：saveLayer
+    // A content blur is a saveLayer.
     if let Some(r) = blur_radius {
         let mut paint = Paint::default();
         paint.set_image_filter(image_filters::blur((r, r), skia_safe::TileMode::Clamp, None, None));
@@ -765,9 +773,10 @@ pub(super) fn render_pass1(
         canvas.save_layer(&rec);
     }
 
-    // Clip：在绘制内容前设置裁剪区域
-    // （转场 morph 优先：布局空间圆角在变换下精确落到插值矩形上——与
-    // transiton-block 的屏幕空间 clip 等价，由线性保证；仅取其一时行为一致）
+    // A clip is set before the content draws. A transition morph takes precedence: a layout-space
+    // rounded rect lands exactly on the interpolated rect under the transform, which is equivalent
+    // to the screen-space clip of a transition block as long as the transform is linear; picking
+    // only one of the two keeps the behaviour identical.
     let mut clipped = false;
     if let Some(rr) = tf_clip_rr {
         canvas.save();
@@ -832,7 +841,7 @@ pub(super) fn render_pass1(
         // below divides or multiplies by `scale_x` so the two spaces stay in step.
         let transform = crate::layout::node::text_transform(node);
         let scale_x = transform.map(|t| t.scale_x).unwrap_or(1.0);
-        // 优先用测量阶段缓存的 Paragraph（避免重建）
+        // Prefer the paragraph the measure pass cached, so nothing is rebuilt.
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             // Only re-lay it out when the text WRAPS. A `soft_wrap(false)` paragraph was built at
             // its intrinsic width (`build_plain_paragraph`), and laying it out again at the node's
@@ -910,7 +919,7 @@ pub(super) fn render_pass1(
             // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
             // trimmed at measure time, so the origin moves by the same amount.
             let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
-            // 选中高亮
+            // The selection highlight.
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
@@ -943,15 +952,15 @@ pub(super) fn render_pass1(
                 }
                 None => para.paint(canvas, x_off, text_y),
             }
-            // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））。
-            // ⚠ 有选区（非零宽）时不显示——对齐 Compose：光标仅 collapsed
-            // selection 时绘制
+            // The caret, on a focused text-field node, in the M3 caret colour (primary, or error).
+            // It is NOT drawn while a non-zero-width selection exists: Compose draws a caret only on
+            // a collapsed selection.
             let has_selection = node.registrar.borrow().as_ref()
                 .and_then(|reg| reg.selected_range(node.slot_key))
                 .map(|r| r.start < r.end)
                 .unwrap_or(false);
-            // 聚焦判定：优先组合期标记（text-field-v2 容器化——焦点在容器，
-            // 输入子节点用 display_focused），回退节点自身 focused
+            // Focus comes from the compose-time marker first (the container owns focus 
+            // and the input child reads `display_focused`), falling back to the node's own flag.
             let focused = node.display_focused.get() || node.focused;
             // material3 draws its caret as `showCursor = enabled && !readOnly && …`;
             // `text_field_show_cursor` reads those two off the container's visual element along the parent
@@ -959,17 +968,18 @@ pub(super) fn render_pass1(
             // which has neither.
             if focused && !has_selection && crate::text::field::text_field_show_cursor(nodes, root_idx, idx) {
                 if node.cursor_visible.get() {
-                    // ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/
-                    // error）——输入 leaf 无此元素，从 leaf 找会回退文本色。
-                    // 沿 parent 链向上找容器（offset_mapping_for_node 同路径）
+                    // `cursor_color` lives on the container's TextFieldVisual, resolved at compose
+                    // time; the input leaf carries nothing, so looking there falls back to the text
+                    // colour. Walk the parent chain to the container, as `offset_mapping_for_node`
+                    // does.
                     let cursor = crate::text::field::text_field_visual_color(nodes, root_idx, idx)
                         .unwrap_or(*color);
                     let mut cp = skia_safe::Paint::default();
                     cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
                     cp.set_stroke_width(1.5);
-                    // 空文本：无 glyph 可定位——光标画在内容起点（M3 光标高度
-                    // 用行高近似；TextLayout 空特判内部 get_glyph_cluster_at(0)
-                    // 同样失败）
+                    // Empty text has no glyph to locate, so the caret sits at the content's origin.
+                    // M3's caret height is approximated by the line height; the empty special case
+                    // inside TextLayout exists because get_glyph_cluster_at(0) fails too.
                     if content.is_empty() {
                         let ch = font_size * 1.4;
                         canvas.draw_line(
@@ -978,13 +988,14 @@ pub(super) fn render_pass1(
                             &cp,
                         );
                     } else {
-                        // ⚠ length = 文本真实字节数（空文本为 0 → 空特判）——
-                        // 映射表长度恒 ≥1（含 end-of-text 映射），传它空文本
-                        // 时走主路径 get_by_right(0) 失败 → 光标不显示
+                        // The length is the text's real byte count, and empty text is 0, which is
+                        // what the empty case keys on. The mapping table always holds at least the
+                        // end-of-text pair, so passing its length for empty text would take the main
+                        // path, fail get_by_right(0) and leave the caret invisible.
                         let tl = crate::text::TextLayout::new(para);
-                        // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
-                        // （密码掩码/格式化输入显示文本 ≠ 编辑文本；
-                        // TextFieldVisual 在容器——向上找）
+                        // The caret index is an editing offset, so it crosses through the
+                        // OffsetMapping to a display offset (masked or formatted input shows
+                        // different text than it edits). The TextFieldVisual sits on the container.
                         let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
                         let idx = offset_mapping.as_ref()
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
@@ -1001,7 +1012,7 @@ pub(super) fn render_pass1(
                     }
                 } else { debug_log!("[render] cursor_visible is false"); }
             }
-            // IME 组合文本下划线（编辑偏移 → 显示偏移）
+            // The IME composition underline: editing offset to display offset.
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
                     let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
@@ -1010,8 +1021,8 @@ pub(super) fn render_pass1(
                     }).unwrap_or((comp_range.start, comp_range.end));
                     let rects = para.get_rects_for_range(cs..ce, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
                     let mut und_paint = skia_safe::Paint::default();
-                    // Phase 4.2：组合期捕获的主题 primary（render 阶段 CompositionLocal
-                    // 已退出，读 WiniaTheme::colors() 会得到默认主题）
+                    // The primary captured at compose time. Reading `WiniaTheme::colors()` here would
+                    // answer the DEFAULT theme, because the CompositionLocal is gone by render time.
                     let c = node.composing_color.get();
                     und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
                     und_paint.set_stroke_width(1.0);
@@ -1034,7 +1045,7 @@ pub(super) fn render_pass1(
         }
     }
 
-    // ═══ 富文本（RichText）渲染 ═══
+    // ═══ Rich text ═══
     if node.has_richtext_content {
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             // The paragraph parameters travel with the payload now, so the paint side has to make
@@ -1076,7 +1087,7 @@ pub(super) fn render_pass1(
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };
-            // 选中高亮
+            // The selection highlight.
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
@@ -1107,12 +1118,14 @@ pub(super) fn render_pass1(
         }
     }
 
-    // 焦点环：聚焦淡入、失焦淡出——透明度来自交互源 focus_indicator_alpha
-    // （失焦后动画期间 alpha>0 继续绘制，实现平滑淡出）。
-    // ⚠ TextField 容器（M3）不用焦点环——用指示线/边框色变化提示焦点
+    // The focus ring: fades in on focus and out on blur, its alpha coming from the interaction
+    // source's `focus_indicator_alpha`.
+    // It keeps drawing while the blur's fade-out still has alpha above 0, which is what makes the
+    // fade smooth. An M3 text-field container has no focus ring; it signals focus through the
+    // indicator or outline colour instead.
     let has_tf_container = node.modifier.elements().iter()
         .any(|el| matches!(el, ModifierElement::TextFieldVisual { .. }));
-    // NoFocusRing：组件自绘焦点环（Slider 焦点环包围 thumb 而非整组件）
+    // NoFocusRing: the component draws its own ring (a Slider rings the thumb, not the component).
     let no_focus_ring = node.modifier.elements().iter()
         .any(|el| matches!(el, ModifierElement::NoFocusRing));
     let focus_alpha = node.modifier.focusable_interaction()
@@ -1124,8 +1137,9 @@ pub(super) fn render_pass1(
     // both do, and their focus ring was invisible.
     let mut pending_focus_ring = None;
     if !has_tf_container && !no_focus_ring && (node.focused || focus_alpha > 0.001) {
-        // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
-        // 颜色由组件组合期从主题捕获（node.focus_color）
+        // The ring follows the component's shape: the nearest Background/Border/Clip shape, falling
+        // back to a rectangle. Its colour was captured from the theme at compose time
+        // (`node.focus_color`).
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
             ModifierElement::Background { shape, .. }
             | ModifierElement::BackgroundBrush { shape, .. }
@@ -1145,7 +1159,7 @@ pub(super) fn render_pass1(
     // viewport clip.
     let mut scroll_replay: Option<(Rect, (f32, f32))> = None;
     if scroll_offset_v.is_some() || scroll_offset_h.is_some() {
-        // clip 用 visible 尺寸，优先从 modifier 中提取 Size 或 FillMax 信息
+        // Clipping uses the visible size, taken from a Size or FillMax element where one exists.
         let mut cw = w;
         let mut ch = h;
         for el in node.modifier.elements() {
@@ -1167,10 +1181,10 @@ pub(super) fn render_pass1(
                 _ => {}
             }
         }
-        // scroll 容器的可视尺寸以测量期回写的 viewport 为准——measured_size
-        // 是内容全高（apply_scroll_delta 的 max_offset 依赖它），直接用会把
-        // 裁剪矩形拉到内容末端，滚动内容会越界绘制到后续兄弟（如 Scaffold
-        // bottom bar）之上
+        // A scroll container's visible size is the viewport the measure pass wrote back, NOT
+        // `measured_size`: that is the content's full height (which `apply_scroll_delta` needs for
+        // `max_offset`), and using it stretches the clip rect to the end of the content, so scrolled
+        // content draws over later siblings such as a Scaffold's bottom bar.
         if node.scroll_viewport_height > 0.0 {
             ch = node.scroll_viewport_height;
         }
@@ -1210,10 +1224,12 @@ pub(super) fn render_pass1(
         scroll_replay = Some((clip_rect, (dx, dy)));
     }
 
-    // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）。
-    // PAINT 顺序 = 树顺序，除非有子节点设了 `Modifier::z_index`——那时按 z 稳定排序
-    // （z 高的后画、盖住兄弟；命中按同一顺序倒序，见 `paint_order`）。未使用 z 的
-    // 节点走原路径，不做任何额外工作。
+    // Walk the children; a backdrop node still paints its own content above the blur.
+    //
+    // Paint order is tree order unless a child sets `Modifier::z_index`, in which case the children
+    // are stably sorted by z (higher z paints later and covers its siblings, and hit testing walks
+    // the same order backwards; see `paint_order`). A node that uses no z takes the ordinary path
+    // with no extra work.
     if node.children_have_z {
         for child in crate::layout::node::paint_order(nodes, &node.children) {
             render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
@@ -1303,12 +1319,15 @@ pub(super) fn render_pass1(
     }
 }
 
-/// 水波纹（按旧版 D:\winia ripple.rs 的绘制方式）：
-/// - 两层模型：背景层（hover/focus 状态层）= 节点中心圆（半径=对角线/2，
-///   直径=对角线）；前景层 = 按压点实心圆（半径=对角线×progress）
-/// - 前景层裁剪到背景的范围和形状：bounded → 节点形状；unbounded →
-///   背景圆（直径=对角线）——波纹不会超出背景层
-/// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
+/// A ripple, drawn the way v1's `ripple.rs` did:
+///
+/// - Two layers. The background layer (also the hover/focus state layer) is a circle at the node's
+///   centre with radius half the diagonal, so its diameter is the diagonal. The foreground layer is
+///   a solid circle at the press point with radius `diagonal * progress`.
+/// - The foreground layer is clipped to the background's extent and shape: bounded means the node's
+///   shape, unbounded means the background circle, so a ripple never escapes the background layer.
+/// - The state layer's alpha is animated, and the animation system drives each layer's spread and
+///   fade.
 /// `x, y, w, h` describe the CONTAINER — the node's box minus its own minimum-interactive inset — which is
 /// what the halo and the clip use. `node_x, node_y` are the node's own origin: the recorded press point is
 /// node-local, so the spreading foreground must be drawn from there or it lands inset by that same amount.
@@ -1340,9 +1359,10 @@ pub(super) fn draw_ripple(
             .unwrap_or(diagonal / 2.0);
         let rect = Rect::new(x, y, x + w, y + h);
 
-        // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
-        // Outlined/Text 无背景元素时仍按胶囊裁剪）优先；否则从链上最近的
-        // Background/Border 推断（通用 clickable + ripple 保持可用）
+        // Bounded ripples clip to the ripple's shape. An explicit shape wins (a Button passes its
+        // container shape, so an Outlined or Text button still clips to the pill even with no
+        // background element); otherwise the shape comes from the nearest Background/Border in the
+        // chain, which keeps a plain clickable plus ripple usable.
         let mut clipped = false;
         if *bounded {
             let clip_shape = shape.clone().map(|shape| shape.eval()).or_else(|| {
@@ -1455,12 +1475,15 @@ pub(super) fn draw_ripple(
             );
         }
 
-        // ── 前景波纹层：按压点实心圆（半径=对角线×progress——旧版 draw_circle；
-        //    直径=2×对角线——按压点靠角落时圆足以覆盖整个组件）──
-        // 中心存的是节点本地坐标（press_interaction_down 已从场景坐标换算）；
-        // 画布坐标 = 布局原点 + 本地坐标——祖先 scroll translate 与自身
-        // graphics_layer 变换都已作用在画布上，波纹视觉位置自动跟随节点
-        // （按下后滚动/变换动画中不脱离按钮）。
+        // ── The foreground layer: a solid circle at the press point, radius
+        //    `diagonal * progress` (v1's draw_circle). Its diameter is twice the diagonal, so a
+        //    press near a corner still covers the whole component. ──
+        //
+        // The centre is stored in the node's local coordinates (`press_interaction_down` already
+        // converted from scene coordinates), and the canvas coordinate is the layout origin plus
+        // that. An ancestor's scroll translation and the node's own graphics-layer transform are
+        // both already on the canvas, so the ripple follows the node through a scroll or a transform
+        // animation without ever leaving the button.
         for layer in source.ripple_layers() {
             let progress = layer.progress.peek();
             let opacity = layer.opacity.peek();

@@ -1,4 +1,4 @@
-//! SelectionContainer — 文本选中容器（对齐 Jetpack Compose）
+//! `SelectionContainer` — Compose's text-selection container.
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
@@ -28,12 +28,12 @@ impl SelectionContainer {
         self
     }
 
-    /// 注册选区变化回调。参数为 `Selection`——含选中文本（框架按注册段自动
-    /// 拼接，用户无需自维护平行字符串）。
+    /// Install the selection-changed callback. It receives a [`Selection`] whose text is already
+    /// stitched from the registered runs, so the caller keeps no parallel copy.
     ///
-    /// 语义：仅在实际产生**非零宽**选择（拖动）时触发——单击（零宽）不触发，
-    /// 因此"清空选择"没有通知路径（如需在单击后刷新 UI，可在 content 外层
-    /// 自行处理）。
+    /// It fires only when a NON-ZERO-WIDTH selection appears (a drag). A plain click is zero width
+    /// and fires nothing, so clearing a selection has no notification path — a caller that wants to
+    /// refresh on click has to do it around `content`.
     pub fn on_selection_change(mut self, f: impl Fn(&Selection) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Box::new(f));
         self
@@ -42,7 +42,8 @@ impl SelectionContainer {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
-        // 持久化同一个 Registrar（重组时不新建，segments 跨重组保留）
+        // One persistent registrar: a rebuild must not create a new one, because the segments have
+        // to survive recomposition.
         let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
         if let Some(cb) = self.on_change {
             registrar.set_on_change(cb);
@@ -51,7 +52,7 @@ impl SelectionContainer {
             let reg = registrar.clone();
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 ctx.set_selection_registrar(registrar.clone());
-                // content 闭包自动成为组合 scope（与 Column/Row/Stack/Button 一致）
+                // The `content` closure becomes a composition scope of its own, like Column/Row/Stack.
                 // No table reset on Enter: a text whose parameters did not change Skips, so it never
                 // re-registers, and wiping here dropped it (measured before this fix: a State read in
                 // the body took `total` from 10 to 0 and the selection from Some to None). Offsets are
@@ -66,8 +67,9 @@ impl SelectionContainer {
                 }
                 ctx.end_restartable_group();
             });
-            // provides 退出后恢复 composer 的 selection_registrar（防残留——
-            // build 之后的 Text 会误注册到本 SelectionContainer，如"显示选中文本"的输出 Text）
+            // Restore the composer's own registrar once `provides` exits. Without this, a Text built
+            // after this container (say, the output that displays the selected text) would register
+            // into it.
             ctx.clear_selection_registrar();
         }
     }
@@ -78,18 +80,20 @@ impl Default for SelectionContainer {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 拖动选择核心（真实 PointerMoved 与 debug 模拟共用——消除平行代码 + 可测）
+// The drag-selection core, shared by real PointerMoved handling and the debug probe, so there is
+// one implementation and it is testable.
 // ═══════════════════════════════════════════════════════════
 
-/// 计算一次 PointerMove 后的选择范围。
+/// The selection range after one pointer move.
 ///
-/// 返回 `Some((要设选的 registrar, 全局 start, 全局 end))`；`None` = 不更新选择。
-/// 三种情况：
-/// - 同容器 + 当前文本内：`anchor_global ↔ current_global`（当前文本的全局偏移）
-/// - 同容器 + 容器空白：edge snap 到当前容器边界（上拖 0 / 下拖 total）
-/// - 跨容器（当前在别的 SelectionContainer 文本上）：用 anchor 容器 edge snap——
-///   绝不切到当前容器的偏移空间（否则 anchor 全局偏移与当前容器 global_off 混合 → 错选）
-/// - 无 anchor 容器（Down 在不可选节点上，如 SelectionContainer 外的输出 Text）→ None
+/// `Some((registrar, global start, global end))`, or `None` when the selection does not move.
+/// Four cases:
+/// - Same container, pointer over text: `anchor_global .. current_global` in that container's
+/// - Same container, pointer in the empty area: snap to the container edge (0 above, total below).
+/// - Across containers (the pointer is over another container's text): snap within the ANCHOR's
+///   container. Switching to the other container's offset space would mix an anchor global offset
+///   with a different container's origin and select the wrong text.
+/// - No anchor container (the press landed on something unselectable) -> `None`.
 pub(crate) fn compute_selection(
     anchor_reg: Option<&SelectionRegistrar>,
     anchor_global: Option<usize>,
@@ -108,7 +112,7 @@ pub(crate) fn compute_selection(
             let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
             Some((cur_reg.clone(), s, e))
         } else if let Some(a) = anchor_global {
-            // 同容器超出：edge snap 到容器边界
+            // Same container, past its end: snap to the edge.
             let edge = if scene_y < node_abs_y { 0 } else { cur_reg.total_text_len() };
             let s = a.min(edge);
             let e = a.max(edge);
@@ -117,7 +121,7 @@ pub(crate) fn compute_selection(
             None
         }
     } else if let (Some(anchor_reg), Some(a)) = (anchor_reg, anchor_global) {
-        // 跨容器：用 anchor 容器做 edge snap（拖出 anchor 容器 → clamp 到其边界）
+        // Across containers: snap inside the anchor's container, clamping to its bounds.
         let total = anchor_reg.total_text_len();
         let edge = if scene_y < down_y { 0 } else { total };
         let s = a.min(edge);
@@ -129,7 +133,7 @@ pub(crate) fn compute_selection(
 }
 
 // ═══════════════════════════════════════════════════════════
-// 测试
+// Tests
 // ═══════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -205,7 +209,7 @@ mod tests {
         let reg = SelectionRegistrar::new();
         reg.register(42, "hello world");
         reg.set_selection(5, 15);
-        // "hello world" 仅 11 字节——clamp 到 11
+        // "hello world" is 11 bytes, so the end clamps to 11.
         assert_eq!(reg.selected_range(42), Some(5..11));
     }
 
@@ -393,11 +397,11 @@ mod tests {
         reg.register(1, "Hello! ");        // offset=0
         reg.register(2, "Drag me ");       // offset=7
         reg.register(3, "finish.");        // offset=15
-        // 跨三段：第 1 段尾部 + 第 2 段全部 + 第 3 段头部
+        // Across three runs: the tail of the first, all of the second, the head of the third.
         reg.set_selection(4, 19);
         let sel = reg.build_selection().unwrap();
         assert_eq!(sel.text(), "o! Drag me fini");
-        // 反向选择归一化
+        // A reversed drag normalises its ends.
         reg.set_selection(19, 4);
         let sel = reg.build_selection().unwrap();
         assert_eq!(sel.text(), "o! Drag me fini");
@@ -406,13 +410,14 @@ mod tests {
     #[test]
     fn test_build_selection_emoji_boundary() {
         let reg = SelectionRegistrar::new();
-        // emoji 👋（4 字节）在段中间——偏移必须落在字符边界才切片成功
+        // The emoji 👋 (4 bytes) sits mid-run: an offset has to land on a character boundary for the
+        // slice to succeed.
         reg.register(1, "Hi 👋 world");
-        // 选择 "👋 wor"（字节 3..11：H=0 i=1 sp=2 👋=3..7 sp=7 w=8 o=9 r=10 l=11）
+        // Selecting "👋 wor" (bytes 3..11: H=0 i=1 sp=2, 👋=3..7, sp=7, w=8 o=9 r=10).
         reg.set_selection(3, 11);
         let sel = reg.build_selection().unwrap();
         assert_eq!(sel.text(), "👋 wor");
-        // 空选择（零宽）→ None
+        // A zero-width selection is `None`.
         reg.set_selection(5, 5);
         assert!(reg.build_selection().is_none());
     }
@@ -439,7 +444,7 @@ mod compute_selection_tests {
     #[test]
     fn test_same_container_text_inner() {
         let (a, _) = regs();
-        // 同容器文本内：anchor 10 → current 20 → (10, 20)
+        // Same container, over text: anchor 10 and current 20 give (10, 20).
         let r = compute_selection(Some(&a), Some(10), &a, Some(0), 20, 100.0, 50.0, 50.0);
         let (reg, s, e) = r.unwrap();
         assert!(reg.is_same(&a));
@@ -450,7 +455,7 @@ mod compute_selection_tests {
     fn test_same_container_edge_snap_down() {
         let (a, _) = regs();
         a.register(1, &"x".repeat(100)); // total=100
-        // 同容器超出（向下拖出节点）：edge = total = 100
+        // Same container, dragged below the node: the edge is the total, 100.
         let r = compute_selection(Some(&a), Some(5), &a, None, 0, 300.0, 50.0, 100.0);
         let (_, s, e) = r.unwrap();
         assert_eq!((s, e), (5, 100));
@@ -459,7 +464,7 @@ mod compute_selection_tests {
     #[test]
     fn test_same_container_edge_snap_up() {
         let (a, _) = regs();
-        // 同容器超出（向上拖出节点）：edge = 0
+        // Same container, dragged above the node: the edge is 0.
         let r = compute_selection(Some(&a), Some(5), &a, None, 0, 10.0, 50.0, 100.0);
         let (_, s, e) = r.unwrap();
         assert_eq!((s, e), (0, 5));
@@ -469,7 +474,8 @@ mod compute_selection_tests {
     fn test_cross_container_uses_anchor_reg() {
         let (a, b) = regs();
         a.register(1, &"x".repeat(100)); // anchor 容器 total=100
-        // 跨容器：anchor 在 a，当前在 b 的文本上 → 用 a 做 edge snap（不切 b 的偏移空间）
+        // Across containers: the anchor is in A while the pointer is over B, so the snap stays in
+        // A's offset space.
         let r = compute_selection(Some(&a), Some(10), &b, Some(0), 5, 200.0, 50.0, 50.0);
         let (reg, s, e) = r.unwrap();
         assert!(reg.is_same(&a), "应设 anchor 容器 a 的选择");
@@ -479,7 +485,8 @@ mod compute_selection_tests {
     #[test]
     fn test_no_anchor_container_returns_none() {
         let (_, b) = regs();
-        // Down 在不可选节点（anchor_reg None）→ 拖动不选
+        // The press landed on something unselectable (`anchor_reg` is None), so a drag selects
+        // nothing.
         let r = compute_selection(None, None, &b, Some(0), 5, 200.0, 50.0, 50.0);
         assert!(r.is_none());
     }
@@ -487,7 +494,7 @@ mod compute_selection_tests {
     #[test]
     fn test_cross_container_no_anchor_global_none() {
         let (a, b) = regs();
-        // 跨容器但无 anchor_global（不可选节点按下但 anchor_reg 残留？——守卫）→ None
+        // Across containers with no `anchor_global` — a guard against a stale `anchor_reg`.
         let r = compute_selection(Some(&a), None, &b, Some(0), 5, 200.0, 50.0, 50.0);
         assert!(r.is_none());
     }

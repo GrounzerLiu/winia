@@ -1,8 +1,7 @@
-//! 字体基础设施 — thread-local FontCollection 缓存
+//! Font infrastructure — a thread-local `FontCollection` cache.
 //!
-//! 字体管理器加载是文本渲染中最昂贵的操作之一。
-//! 本模块提供 thread-local 级别的 FontCollection 单例，
-//! 供渲染层和测量层共用。
+//! Loading a font manager is one of the most expensive things text rendering does. This module
+//! keeps one `FontCollection` per thread so the render layer and the measure layer share it.
 
 use skia_safe::textlayout::FontCollection;
 use std::cell::RefCell;
@@ -11,7 +10,7 @@ thread_local! {
     static FONT_COLLECTION: RefCell<Option<FontCollection>> = const { RefCell::new(None) };
 }
 
-/// 获取一个 <b>clone</b> 后的 FontCollection（Skia 要求每次使用时 clone）
+/// A CLONE of the collection: Skia wants its own handle at every use site.
 pub fn get_font_collection() -> FontCollection {
     FONT_COLLECTION.with(|fc| {
         let mut opt = fc.borrow_mut();

@@ -1,6 +1,6 @@
 use super::super::*;
 
-// ── Draw Modifier 方法 ──
+// ── Draw modifier methods ──
 
 /// The text parameters that are not part of the original payload — Compose's `minLines`,
 /// `textDecoration`, `fontFamily` and the `onTextLayout` callback. Grouped so the builder keeps a
@@ -36,25 +36,25 @@ pub(crate) struct TextExtras {
 }
 
 impl Modifier {
-    /// 设置背景色和形状
-    /// 设置背景色和形状。
+    /// Set the background colour and shape.
     ///
-    /// 统一入口：静态颜色与动画闭包自动适配（`impl Into<BackgroundColor>`）。
+    /// One entry point that takes a static colour or an animated closure (`impl Into<BackgroundColor>`).
     ///
-    /// **静态用法**（构建时固定颜色）：
+    /// Static: a colour fixed at build time.
     /// ```
     /// # use winia::prelude::*;
     /// let _m = Modifier::new().background(Color::RED, Shape::Circle);
     /// ```
     ///
-    /// **动画用法**（渲染时每帧求值，不触发重组）：
+    /// Animated: evaluated per frame at render time, without recomposing.
     /// ```ignore
     /// .background(|| pulse.peek(), Shape::Circle)
     /// ```
     ///
-    /// **原则**：静态绘制属性传 `Color`；需要动画（颜色随帧变化）时传闭包，
-    /// 闭包内用 `State::peek()` 读取动画值（不要用 `get()`——会注册依赖触发重组）。
-    /// 动画值由 `Visual::set` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
+    /// The rule: a static paint property takes a `Color`; anything that animates takes a closure,
+    /// and inside it read the animated value with `State::peek()` — `get()` would register a
+    /// dependency and trigger a recomposition. The animation engine writes through `Visual::set`
+    /// (no notification) and requests a redraw per frame, so the whole path recomposes nothing.
     pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
         self.push(ModifierElement::Background {
             color: color.into(),
@@ -86,7 +86,8 @@ impl Modifier {
         })
     }
 
-    /// 统一构造 TextContent 元素（Text/TextField 共用——字段单一来源，P3-6）
+    /// Build the `TextContent` element, shared by `Text` and `TextField` so its field list lives in
+    /// one place.
     #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn text_content(
         self,
@@ -108,7 +109,8 @@ impl Modifier {
         )
     }
 
-    /// 全参版（含 letter_spacing/line_height——Text 组件用，对标 Compose
+    /// The full-parameter form (letter spacing, line height, …) that the `Text` component uses —
+    /// Compose's
     /// TextStyle.letterSpacing/lineHeight）
     pub(crate) fn text_content_full(
         self,
@@ -174,9 +176,9 @@ impl Modifier {
             None => m,
         }
     }
-    /// 设置边框。颜色可以是一个 `Color`，也可以是渲染期求值的闭包/状态
-    /// （`impl Into<BorderColor>`）——同一个元素存载体：静态值内联，闭包在绘制期求值
-    /// （配合 `peek()` 做颜色过渡）。
+    /// Set a border. The colour is a `Color` or a closure/state evaluated at render time
+    /// (`impl Into<BorderColor>`): one element carries either, a static value inline and a closure
+    /// evaluated while painting (which is how a colour transition works with `peek()`).
     ///
     /// One element for both: a changed STATIC colour is a changed parameter (the node re-enters),
     /// while a dynamic one is a parameter read at paint time.
@@ -193,24 +195,26 @@ impl Modifier {
         })
     }
 
-    /// 设置裁剪形状
+    /// Clip to a shape.
     pub fn clip(self, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
         self.push(ModifierElement::Clip {
             shape: shape.into(),
         })
     }
 
-    /// 内容模糊（GPU saveLayer，零回读）
+    /// Blur the content (a GPU `saveLayer`; nothing is read back).
     pub fn blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
         self.push(ModifierElement::Blur { radius: radius.into() })
     }
 
-    /// 背景模糊（毛玻璃）——渲染期在节点内容绘制前即时 snapshot+blur
+    /// Blur what is behind the node (frosted glass): a snapshot and blur taken at render time,
+    /// before the node's own content is drawn.
     pub fn backdrop_blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
         self.push(ModifierElement::BackdropBlur { radius: radius.into() })
     }
 
-    /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
+    /// The text-field container's visuals (internal to `TextField`: the M3 container paint
+    /// parameters).
     pub fn text_field_visual(
         self,
         variant: crate::text::field::TextFieldVariant,
@@ -238,9 +242,9 @@ impl Modifier {
         })
     }
 
-    /// 文本输入框偏移映射（TextField 组件内部使用——裸 TextField 无
-    /// TextFieldVisual 时挂载；`offset_mapping_for_node` 沿 parent 链向上
-    /// 查找 TextFieldVisual.offset_mapping 或本元素）
+    /// A text field's offset mapping (internal to `TextField`): what a bare field carries when it has
+    /// no `TextFieldVisual`. `offset_mapping_for_node` walks the parent chain for either this element
+    /// or `TextFieldVisual::offset_mapping`.
     pub fn text_field_offset_mapping(
         self,
         offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
@@ -249,4 +253,4 @@ impl Modifier {
     }
 }
 
-// ── Input Modifier 方法 ──
+// ── Input modifier methods ──

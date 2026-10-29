@@ -1,13 +1,13 @@
-//! 双向索引映射 — 实现 UTF-8 字节 ↔ UTF-16 索引的双向查找
+//! A two-way index map, used to translate between UTF-8 bytes and UTF-16 code units.
 //!
-//! Skia Paragraph 内部使用 UTF-16 索引，而 Rust String 是 UTF-8 编码。
-//! 对于中文、Emoji 等多字节字符，两种索引体系的值不同，
-//! 此映射表负责在两者之间进行转换。
+//! Skia's `Paragraph` indexes in UTF-16 while a Rust `String` is UTF-8, and the two disagree for
+//! every multi-byte character (CJK, emoji). This map is the translation between them.
 
-/// 双向索引映射表
+/// A two-way index map.
 ///
-/// 内部维护两个有序的 `Vec<usize>`，分别存储 left→right 和 right→left 的映射。
-/// 通过二分查找实现 O(log n) 的查询效率。
+/// Two ordered `Vec<usize>`s hold the left->right and right->left pairs, so a lookup is a binary
+/// search: O(log n). Both sides must be inserted in increasing order (the `insert` path asserts it
+/// in debug builds); a duplicate key would make the search answer an arbitrary match.
 #[derive(Debug, Clone)]
 pub struct IndexBiMap {
     left: Vec<usize>,
@@ -43,7 +43,7 @@ impl IndexBiMap {
         self.right.push(right);
     }
 
-    /// 通过 left 查找对应的 right
+    /// The right value for a left key.
     pub fn get_by_left(&self, left: &usize) -> Option<&usize> {
         if let Ok(idx) = self.left.binary_search(left) {
             self.right.get(idx)
@@ -52,7 +52,7 @@ impl IndexBiMap {
         }
     }
 
-    /// 通过 right 查找对应的 left
+    /// The left value for a right key.
     pub fn get_by_right(&self, right: &usize) -> Option<&usize> {
         if let Ok(idx) = self.right.binary_search(right) {
             self.left.get(idx)
@@ -82,12 +82,12 @@ impl IndexBiMap {
         self.right.clear();
     }
 
-    /// 获取 left 方向所有键的引用
+    /// Every left key, in insertion order.
     pub fn left_keys(&self) -> &[usize] {
         &self.left
     }
 
-    /// 获取 right 方向所有键的引用
+    /// Every right key, in insertion order.
     pub fn right_keys(&self) -> &[usize] {
         &self.right
     }

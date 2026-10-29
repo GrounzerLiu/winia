@@ -1,4 +1,4 @@
-//! RichText — Compose 风格嵌套作用域富文本 API
+//! `RichText` — Compose-style rich text with nested scopes.
 //!
 //! ```ignore
 //! RichText::new().build(ctx, |x| {
@@ -24,7 +24,7 @@ use crate::theme::WiniaTheme;
 use std::sync::Arc;
 use std::ops::Range;
 
-// ── Style（累积样式，按作用域嵌套叠加）──
+// ── Style: accumulates across nested scopes ──
 
 #[derive(Clone, Debug)]
 pub(crate) struct Style {
@@ -86,7 +86,7 @@ impl Default for Style {
     }
 }
 
-/// 从 TextStyle + ProvideTextStyle + Theme 解析默认值
+/// Resolve the base from `TextStyle`, `ProvideTextStyle` and the theme.
 fn resolve_base() -> Style {
     let theme = WiniaTheme::colors();
     let base = LOCAL_TEXT_STYLE.current();
@@ -112,14 +112,14 @@ fn resolve_base() -> Style {
     }
 }
 
-// ── 纯文本 + drawable 位置 → U+FFFC content ──
+// ── Plain text plus drawable ranges -> content with U+FFFC placeholders ──
 
-// ── RichTextScope（给闭包用的可变上下文）──
+// ── RichTextScope: the mutable context a build closure receives ──
 
 pub struct RichTextScope<'a> {
     content: &'a mut String,
     drawables: &'a mut Vec<Arc<dyn InlineDrawable>>,
-    /// 占位范围列表（每个元素 = [start, end)）
+    /// Drawable ranges, one `[start, end)` per inline element.
     drawable_ranges: &'a mut Vec<Range<usize>>,
     annotations: &'a mut Vec<(Style, Range<usize>)>,
     style: Style,
@@ -127,7 +127,7 @@ pub struct RichTextScope<'a> {
 }
 
 impl<'a> RichTextScope<'a> {
-    /// 添加纯文本（使用当前累积样式）。
+    /// Append plain text under the style accumulated so far.
     pub fn text(&mut self, s: &str) {
         if s.is_empty() { return; }
         let start = self.cursor;
@@ -138,7 +138,7 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 添加带样式的文本（等价于 push_style().text(s).pop_style()）。
+    /// Append styled text; equivalent to `push_style(..).text(s).pop_style()`.
     pub fn text_styled(&mut self, s: &str, style: &TextStyle) {
         let saved = self.style.clone();
         self.apply_textstyle(style);
@@ -159,7 +159,7 @@ impl<'a> RichTextScope<'a> {
         s.background.map(|v| self.style.bg = Some(v));
     }
 
-    /// 内联图片（向 content 插入 U+FFFC 占位符）。
+    /// An inline picture: a U+FFFC placeholder goes into the content.
     pub fn image(&mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         self.drawables.push(drawable.into());
@@ -171,7 +171,8 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 占位符：文本写入 content（不渲染），图片作视觉替换（参考旧版 winia v1）。
+    /// A placeholder: the text lands in the content but is NOT drawn — the drawable replaces it
+    /// visually (the same contract as winia v1).
     pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         let t = text.into();
@@ -186,7 +187,7 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    // ── 嵌套作用域方法 ──
+    // ── Nested-scope methods ──
 
     pub fn bold(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
@@ -318,7 +319,7 @@ impl<'a> RichTextScope<'a> {
         self.style = saved;
     }
 
-    /// 任意样式闭包（用于同时设置多个属性）。
+    /// A scope over an arbitrary style, to set several properties at once.
     pub fn style(&mut self, modifier: impl FnOnce(StyleModifier) -> StyleModifier, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
         let sm = modifier(StyleModifier(self.style.clone()));
@@ -359,7 +360,7 @@ impl StyleModifier {
     pub fn locale(mut self, v: impl Into<String>) -> Self { self.0.locale = Some(v.into()); self }
 }
 
-// ── RichText 组件 ──
+// ── The RichText component ──
 
 pub struct RichText {
     modifier: Modifier,
@@ -447,7 +448,7 @@ impl RichText {
         self
     }
 
-    /// 构建富文本。`f` 接收一个 `RichTextScope`，在其上调用 `.text()` / `.bold()` 等。
+    /// Build the rich text. `f` receives a [`RichTextScope`] to call `.text()` / `.bold()` on.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, f: impl FnOnce(&mut RichTextScope)) {
         let mut content = String::new();
@@ -479,12 +480,12 @@ impl RichText {
             f(&mut scope);
         }
 
-        // 用旧版 winia 的分裂算法解析 span
+        // Resolve the span runs with winia v1's split algorithm.
         let spans = resolve_spans(&content, &drawable_ranges, &annotations);
 
-        // 注册到选区容器（支持文本选中）——仅在 SelectionContainer 的 provides
-        // 作用域内注册；register 须在 move content 之前（借用），
-        // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
+        // Register with the selection container (drag-to-select), only inside a SelectionContainer's
+        // provides scope. Registering borrows the content, so it happens before the move;
+        // `set_current_node_registrar` has to come after `start_leaf`, when the desc exists.
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         let key = ctx.next_key();
         let reg_for_node = {
@@ -521,14 +522,15 @@ impl RichText {
 
 impl Default for RichText { fn default() -> Self { Self::new() } }
 
-// ── 旧版 winia 风格 span 解析 ──
+// ── Span resolution, winia v1 style ──
 
 #[derive(Clone)]
 struct Seg {
     range: Range<usize>,
     placeholder: bool,
-    /// 已解析样式（Option 语义——未指定字段用默认；注解 apply 覆盖）。
-    /// 内嵌 Style 而非镜像字段——新增样式字段只需改 Style 一处（P3-4 镜像合并）
+    /// A resolved style: `None` means "use the default", and a later `apply` overrides.
+    /// It EMBEDS a `Style` instead of mirroring its fields, so a new style field is added in one
+    /// place only.
     style: Style,
 }
 
@@ -594,15 +596,15 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
     let d_fw = base.fw.unwrap_or(FontWeight::NORMAL);
     let d_sl = base.slant.unwrap_or(FontSlant::Upright);
 
-    // 1) 建 PubSeg
+    // 1) Build the public segments.
     let mut segs: Vec<Seg> = Vec::new();
     let mut di = 0usize;
     let total = content.chars().count();
     let mut ci = 0usize;
     while ci < total {
-        // 检查 ci 是否在当前 drawable 范围内
+        // Is `ci` inside the current drawable range?
         if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
-            // 整个 drawable 范围作为一个 placeholder segment
+            // The whole drawable range becomes one placeholder segment.
             let range = &drawable_ranges[di];
             let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
             s.range = range.start..range.end;
@@ -627,7 +629,7 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         }
     }
 
-    // 2) 旧版分裂
+    // 2) v1's split pass.
     let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
         .filter(|(s, r)| s.is_not_default() && r.end > r.start)
         .map(|(s, r)| (s.clone(), r.clone()))
@@ -669,7 +671,7 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         }
     }
 
-    // 3) 转 RichSpanStyle
+    // 3) Turn them into `RichSpanStyle`.
     segs.into_iter().filter(|s| !s.placeholder).map(|s| RichSpanStyle {
         start: s.range.start, end: s.range.end,
         font_size: s.style.fs.unwrap_or(d_fs),
@@ -697,8 +699,9 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
 }
 
 impl Style {
-    /// 将另一 Style 的已指定字段覆盖到 self（注解继承语义——嵌套 bold/italic 等）。
-    /// 原 apply_seg 手抄 22 字段——Style 内嵌 Seg 后此方法为唯一合并点（P3-4）
+    /// Overlay another style's SET fields onto this one — how nested `bold`/`italic` scopes compose.
+    /// The old `apply_seg` copied 22 fields by hand; with `Style` embedded this is the only merge
+    /// point left.
     fn apply(&mut self, other: &Style) {
         if let Some(v) = other.fs { self.fs = Some(v); }
         if let Some(v) = other.color { self.color = Some(v); }

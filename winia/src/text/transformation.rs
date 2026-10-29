@@ -1,23 +1,25 @@
-//! 文本视觉变换（对标 Compose `VisualTransformation` + `OffsetMapping`）
+//! Visual text transformations — Compose's `VisualTransformation` plus `OffsetMapping`.
 //!
-//! 密码掩码 / 格式化输入：显示文本 ≠ 编辑文本时，**视觉坐标**（光标/选区/
-//! 点击定位/IME 区域）用显示文本偏移，**编辑坐标**（value/text）用编辑缓冲
-//! 偏移——一切跨界转换必须走 `OffsetMapping`。
+//! Password masking and formatted input make the DISPLAYED text differ from the EDITED text.
+//! Visual coordinates (caret, selection, click targeting, the IME area) are measured in display
+//! offsets; editing coordinates (`value`/`text`) are measured in the editing buffer's offsets.
+//! Every crossing between the two has to go through an `OffsetMapping`.
 //!
-//! 原则（对齐 Compose）：
-//! - 原始文本 → `filter()` → 显示文本 + 双向映射（每次 build 重建——纯函数）
-//! - `original_to_transformed`：编辑偏移 → 显示偏移（光标/选区绘制）
-//! - `transformed_to_original`：显示偏移 → 编辑偏移（点击/拖动定位）
+//! The rules, matching Compose:
+//! - original text -> `filter()` -> display text plus a two-way mapping (rebuilt on every build;
+//!   `filter` is a pure function)
+//! - `original_to_transformed`: editing offset -> display offset (drawing the caret/selection)
+//! - `transformed_to_original`: display offset -> editing offset (click and drag targeting)
 
 use std::sync::Arc;
 
-/// 变换结果：显示文本 + 双向偏移映射
+/// A transformation's result: the display text plus the mapping back and forth.
 pub struct TransformedText {
     pub text: String,
     pub offset_mapping: Arc<dyn OffsetMapping>,
 }
 
-/// 视觉变换（对标 Compose `VisualTransformation`）
+/// Compose's `VisualTransformation`.
 pub trait VisualTransformation: Send + Sync + std::fmt::Debug {
     fn filter(&self, text: &str) -> TransformedText;
 }
@@ -34,15 +36,15 @@ impl From<IdentityTransformation> for Arc<dyn VisualTransformation> {
     }
 }
 
-/// 双向偏移映射（对标 Compose `OffsetMapping`）
+/// Compose's `OffsetMapping`: the two directions between editing and display offsets.
 pub trait OffsetMapping: Send + Sync + std::fmt::Debug {
-    /// 编辑偏移 → 显示偏移
+    /// Editing offset -> display offset.
     fn original_to_transformed(&self, offset: usize) -> usize;
-    /// 显示偏移 → 编辑偏移
+    /// Display offset -> editing offset.
     fn transformed_to_original(&self, offset: usize) -> usize;
 }
 
-// ── 恒等（默认——无变换）──
+// ── Identity (the default: no transformation) ──
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityTransformation;
@@ -76,8 +78,8 @@ impl OffsetMapping for IdentityMapping {
     }
 }
 
-// ── 密码掩码（1:1 codepoint 替换为掩码字符——字节数可能不同，
-//    需要 char 级映射）──
+// ── Password masking: one codepoint becomes one mask character. The BYTE counts differ, so the
+//    mapping is per character ──
 
 #[derive(Debug)]
 pub struct PasswordTransformation {
@@ -85,7 +87,7 @@ pub struct PasswordTransformation {
 }
 
 impl PasswordTransformation {
-    /// `mask` 为掩码字符（默认 '•' U+2022——Compose 默认）
+    /// `mask` is the mask character (default `'•'` U+2022, as in Compose).
     pub fn new(mask: char) -> Self {
         Self { mask }
     }
@@ -115,22 +117,23 @@ impl VisualTransformation for PasswordTransformation {
 
 #[derive(Debug)]
 struct PasswordMapping {
-    /// 原始文本每个 char 的起始字节
+    /// The start byte of every character in the original text.
     orig_chars: Vec<usize>,
     orig_len: usize,
-    /// 掩码字符的 UTF-8 字节数
+    /// How many UTF-8 bytes one mask character occupies.
     mask_len: usize,
 }
 
 impl OffsetMapping for PasswordMapping {
     fn original_to_transformed(&self, offset: usize) -> usize {
-        // 原始 byte → 之前 char 数 → 显示 byte（每 char = mask 字节）
+        // Original byte -> characters before it -> display byte (each character takes `mask_len`).
         let chars = self.orig_chars.partition_point(|&s| s < offset.min(self.orig_len));
         chars * self.mask_len
     }
 
     fn transformed_to_original(&self, offset: usize) -> usize {
-        // 显示 byte → char 数 → 原始 byte（char 起点；越界钳制到末尾）
+        // Display byte -> character count -> original byte (the character's start; past the end
+        // clamps to the end).
         let chars = offset / self.mask_len;
         if chars == 0 {
             0
@@ -156,16 +159,16 @@ mod tests {
 
     #[test]
     fn password_mapping_roundtrip() {
-        // 原始 "abc"（3 字节）→ 显示 "•••"（9 字节）——映射 char 级
+        // Original "abc" (3 bytes) -> display "•••" (9 bytes): the mapping is per character.
         let t = PasswordTransformation::new('•').filter("abc");
         assert_eq!(t.text, "•••");
         let m = &*t.offset_mapping;
-        // 原始 byte 0/1/2/3 → 显示 0/3/6/9
+        // Original bytes 0/1/2/3 map to display 0/3/6/9.
         assert_eq!(m.original_to_transformed(0), 0);
         assert_eq!(m.original_to_transformed(1), 3);
         assert_eq!(m.original_to_transformed(2), 6);
         assert_eq!(m.original_to_transformed(3), 9);
-        // 反向
+        // And back.
         assert_eq!(m.transformed_to_original(0), 0);
         assert_eq!(m.transformed_to_original(3), 1);
         assert_eq!(m.transformed_to_original(9), 3);
@@ -174,7 +177,7 @@ mod tests {
 
     #[test]
     fn password_mapping_multibyte_original() {
-        // 中文原文（每字 3 字节）→ 掩码
+        // A CJK original (three bytes per character) through the mask.
         let t = PasswordTransformation::new('*').filter("你好");
         assert_eq!(t.text, "**");
         let m = &*t.offset_mapping;

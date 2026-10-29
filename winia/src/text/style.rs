@@ -11,10 +11,10 @@ use crate::graphics::Color;
 use crate::unit::TextUnit;
 
 // ═══════════════════════════════════════════════════════════
-// 字体属性类型
+// Typeface attributes.
 // ═══════════════════════════════════════════════════════════
 
-/// 字重 — 对标 Skia FontStyle::Weight
+/// A font weight, clamped to Skia's `FontStyle::Weight` range (1..=1000).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FontWeight(i32);
 
@@ -35,16 +35,16 @@ impl FontWeight {
 
 impl Default for FontWeight { fn default() -> Self { FontWeight::NORMAL } }
 
-/// 字体倾斜
+/// How a face leans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontSlant { Upright, Italic, Oblique }
 impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
 
 // ═══════════════════════════════════════════════════════════
-// 文本样式
+// Text style.
 // ═══════════════════════════════════════════════════════════
 
-/// 文本对齐方式
+/// Horizontal alignment of each line (Compose's `TextAlign`).
 ///
 /// Compose's `TextAlign`. `Start`/`End` are resolved against the layout direction when a leaf is
 /// built (`Text::build`), so the payload and the paint path only ever see the physical four — which
@@ -78,7 +78,7 @@ impl std::ops::BitOr for TextDecoration {
     }
 }
 
-/// 文本溢出处理
+/// What happens when the text does not fit (Compose's `TextOverflow`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextOverflow {
     /// Cut off at the node's own box.
@@ -254,7 +254,7 @@ impl TextShadow {
     }
 }
 
-/// 文本样式——对标 Compose TextStyle
+/// A text style — Compose's `TextStyle`, as far as winia carries it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
     pub color: Option<Color>,
@@ -281,7 +281,7 @@ pub struct TextStyle {
     /// underline it inherited from `ProvideTextStyle`. Two `bool`s could not express that — "the
     /// child said nothing" and "the child said none" were the same value, so the merge ORed them.
     pub decoration: Option<TextDecoration>,
-    /// 背景色（仅 RichText 生效）
+    /// Background colour. Only `RichText` paints it.
     pub background: Option<Color>,
     /// Compose's `TextStyle.shadow`: one optional glyph shadow.
     pub shadow: Option<TextShadow>,

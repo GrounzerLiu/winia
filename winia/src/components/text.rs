@@ -1,8 +1,8 @@
-//! Text 组件 — 对齐 Compose Material3 Text
+//! `Text` — Compose Material3's `Text`.
 //!
-//! - 颜色优先级: .color() > style.color > LocalTextStyle > WiniaTheme on_surface
-//! - ProvideTextStyle 为子树设置默认文字样式
-//! - 单独参数（font_size 等）优先级高于 style 参数
+//! - Colour precedence: `.color()` > `style.color` > `LocalTextStyle` > the theme's on_surface.
+//! - `ProvideTextStyle` sets the default style for a subtree.
+//! - A dedicated parameter (`font_size` and friends) beats the same field on `style`.
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
@@ -18,15 +18,15 @@ use std::sync::{Arc, LazyLock};
 
 
 // ═══════════════════════════════════════════════════════════
-// LocalTextStyle —— 子树默认文字样式
+// LocalTextStyle — the subtree's default text style.
 // ═══════════════════════════════════════════════════════════
 
 pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|| {
     CompositionLocal::new(|| TextStyle::default())
 });
 
-/// 在子树中提供默认文字样式（和现有样式合并，不是替换）。
-/// 类似 Compose 的 ProvideTextStyle。
+/// Provide a default text style to a subtree, MERGED with the inherited one rather than replacing
+/// it — Compose's `ProvideTextStyle`.
 #[allow(non_snake_case)]
 pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
@@ -35,7 +35,7 @@ pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl Fn
     });
 }
 
-/// 合并两个 TextStyle——right 中的 Some 覆盖 left（即 right 优先级更高）
+/// Merge two styles: a `Some` on the right wins over the left, so the right is the override.
 fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
     TextStyle {
         color: override_.color.or(base.color),
@@ -66,7 +66,7 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Text 组件
+// The `Text` component.
 // ═══════════════════════════════════════════════════════════
 
 #[derive(Clone)]
@@ -186,7 +186,8 @@ impl Text {
         self
     }
 
-    /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
+    /// Letter spacing, a `TextUnit` (`sp`, or an `em` of the leaf's own size) — Compose's
+    /// `TextStyle.letterSpacing`.
     /// Compose's `TextStyle.letterSpacing`: a `TextUnit`, so `0.1.em` and an `sp` both work.
     pub fn letter_spacing(mut self, spacing: impl Into<TextUnit>) -> Self {
         self.letter_spacing = Some(spacing.into());
@@ -210,7 +211,7 @@ impl Text {
         self
     }
 
-    /// 行高（`TextUnit`；裸 `f32` 按 Sp 解释，对标 Compose `TextStyle.lineHeight`）
+    /// Line height, a `TextUnit` (a bare `f32` means `sp`) — Compose's `TextStyle.lineHeight`.
     pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
 
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
@@ -261,10 +262,10 @@ impl Text {
         self
     }
 
-    /// 设置文字样式（单独参数优先级高于此样式）
+    /// A base style; a dedicated parameter still wins over the same field here.
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
 
-    /// 设置背景色和形状（委托到 Modifier::background）
+    /// Background colour and shape, delegated to `Modifier::background`.
     pub fn background(
         mut self,
         color: Color,
@@ -354,20 +355,19 @@ impl Text {
         let final_line_height_style = self.line_height_style.or(style.line_height_style);
         let final_brush = self.brush.clone().or_else(|| style.brush.clone());
 
-        // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
-        // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
-        // 就是 LocalContentColor，with_content_color 作用域内自动跟随）> 主题
-        // on_surface。此前缺 content_color 一步——Tooltip 用
-        // with_content_color(inverse_on_surface) 提供文字色，Text 却落到 on_surface
-        // （配色错误）；Button/Chip 的 with_content_color 传内容色对 Text 同样无效
+        // Colour precedence: an explicit `color` > `LOCAL_TEXT_STYLE` > the CONTENT colour
+        // (`WiniaTheme::content_color`, Compose's `LocalContentColor`: a `Text` defaults to it, so
+        // `with_content_color` carries into a subtree) > the theme's on_surface. The content-colour
+        // step was missing: a Tooltip supplies `with_content_color(inverse_on_surface)` and the
+        // Text still fell through to on_surface, and the same was true of Button/Chip.
         let final_color = self.color
             .or(style.color)
             .unwrap_or_else(|| crate::theme::WiniaTheme::content_color());
 
         let content_len = self.content.len();
-        // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的
-        // provides 作用域内注册；须在 move self.content 之前调用（借用）。
-        // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
+        // Register with the selection container (drag-to-select), only inside a SelectionContainer's
+        // provides scope. The call happens before `self.content` is moved and borrows it;
+        // `set_current_node_registrar` has to come after `start_leaf`, when the desc exists.
         let (reg_for_node, registered_off) = {
             if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
                 let off = reg.register(key, &self.content);
@@ -589,8 +589,9 @@ mod tests {
         assert_eq!(lh, Some(30.0), "line_height 传入 TextContent 元素");
     }
 
-    /// 测量高随字号线性变化（验证 label 字号动画后测量正确——12sp 高
-    /// 约为 16sp 的 3/4，若测量不随字号变则字号动画视觉无效）
+    /// The measured height follows the font size linearly, which is what makes a label size
+    /// animation visible at all: a 12 sp label is about three quarters the height of a 16 sp one,
+    /// and a measure that ignored the size would animate nothing.
     #[test]
     fn test_measured_height_scales_with_font_size() {
         use crate::modifier::ModifierElement;

@@ -1,28 +1,28 @@
-//! UI 值类型（对标 Jetpack Compose androidx.compose.ui.unit）
+//! UI value types — Compose's `androidx.compose.ui.unit`.
 //!
-//! 提供 Dp / Sp / Offset / Size 等类型，
-//! 以及 Density 密度抽象用于 Dp/Sp ↔ px 转换。
+//! `Dp`, `Sp`, `Offset`, `Size`, and the `Density` abstraction that converts `Dp`/`Sp` to pixels.
 //!
-//! ## 设计
-//! - `Dp` / `Sp` 是 f32 的强类型包装，避免混用 px/dp/sp
-//! - `Offset` / `Size` 是 2D 向量类型，支持算术运算
-//! - `Density` 提供 Dp/Sp ↔ px 转换（由窗口 scale_factor 提供）
-//! - 均实现 `AnimatableValue`，可直接用于动画系统
+//! ## Design
+//! - `Dp` and `Sp` are typed wrappers around `f32`, so px/dp/sp cannot be mixed by accident.
+//! - `Offset` and `Size` are 2D vector types with arithmetic.
+//! - `Density` converts `Dp`/`Sp` to pixels; the window's `scale_factor` supplies the density and
+//!   the accessibility setting supplies the font scale.
+//! - All of them implement `AnimatableValue`, so they animate directly.
 
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 // ═══════════════════════════════════════════════════════════
-// Dp — 密度无关像素（1dp ≈ 1/160 inch）
+// Dp — density-independent pixels (1 dp is about 1/160 inch).
 // ═══════════════════════════════════════════════════════════
 
-/// 密度无关像素
+/// A density-independent pixel.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Dp(pub f32);
 
 impl Dp {
     pub fn value(&self) -> f32 { self.0 }
 
-    /// 通过 Density 转换为物理像素
+    /// Convert to physical pixels through a [`Density`].
     pub fn to_px(&self, density: Density) -> f32 { self.0 * density.density }
 
     /// This dp as a **layout coordinate**.
@@ -41,7 +41,7 @@ impl Dp {
     pub fn to_logical(&self) -> f32 { self.0 }
 }
 
-// ── Dp 算术 ──
+// ── Dp arithmetic ──
 
 impl Add for Dp {
     type Output = Dp;
@@ -77,7 +77,7 @@ impl From<Dp> for f32 {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Sp — 缩放像素（字体大小，随用户字体缩放设置变化）
+// Sp — scale-independent pixels: font sizes, which follow the user's text-size setting.
 // ═══════════════════════════════════════════════════════════
 
 /// Scaled pixels — a font size, which follows the user's text-scale setting.
@@ -92,13 +92,13 @@ pub struct Sp(pub f32);
 impl Sp {
     pub fn value(&self) -> f32 { self.0 }
 
-    /// 通过 Density 转换为物理像素（density + font_scale）
+    /// Convert to physical pixels, applying both the density and the font scale.
     pub fn to_px(&self, density: Density) -> f32 {
         self.0 * density.density * density.font_scale
     }
 }
 
-// ── Sp 算术 ──
+// ── Sp arithmetic ──
 
 impl Add for Sp {
     type Output = Sp;
@@ -124,7 +124,7 @@ impl From<Sp> for f32 {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Density — 密度抽象（Dp/Sp ↔ px 转换）
+// Density — the Dp/Sp <-> px conversion.
 // ═══════════════════════════════════════════════════════════
 
 /// Screen density plus the user's text-scale factor.
@@ -133,9 +133,9 @@ impl From<Sp> for f32 {
 /// platform (`from_density_and_font_scale`). `from_density` leaves it at 1.0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Density {
-    /// 逻辑像素与物理像素比（1.0 = mdpi）
+    /// Logical pixels per physical pixel (1.0 is mdpi).
     pub density: f32,
-    /// 用户字体缩放（无障碍大字体 >1.0）
+    /// The user's text scale (the accessibility setting; above 1.0 for larger text).
     pub font_scale: f32,
 }
 
@@ -156,10 +156,10 @@ impl Density {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Offset — 2D 偏移（对标 Compose Offset）
+// Offset — Compose's `Offset`.
 // ═══════════════════════════════════════════════════════════
 
-/// 2D 偏移（f32 精度）
+/// A 2D offset in `f32`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Offset {
     pub x: f32,
@@ -186,10 +186,10 @@ impl Neg for Offset {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Size — 2D 尺寸（对标 Compose Size）
+// Size — Compose's `Size`.
 // ═══════════════════════════════════════════════════════════
 
-/// 2D 尺寸
+/// A 2D size.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Size {
     pub width: f32,
@@ -201,7 +201,7 @@ impl Size {
 
     pub fn new(width: f32, height: f32) -> Self { Size { width, height } }
 
-    /// 包含判断
+    /// Whether a point falls inside this size's rectangle.
     pub fn contains(&self, offset: Offset) -> bool {
         offset.x >= 0.0 && offset.x < self.width && offset.y >= 0.0 && offset.y < self.height
     }
@@ -217,7 +217,7 @@ impl Sub for Size {
 }
 
 // ═══════════════════════════════════════════════════════════
-// AnimatableValue 实现（对接动画系统）
+// `AnimatableValue` impls — the animation system's entry point.
 // ═══════════════════════════════════════════════════════════
 
 impl crate::animation::AnimatableValue for Dp {
@@ -250,8 +250,8 @@ impl crate::animation::AnimatableValue for Offset {
     }
     fn to_f32(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
     fn from_f32(v: f32) -> Offset { Offset::new(v, v) }
-    // 两个轴各有一条弹簧（Compose 的 `Offset.VectorConverter` 同样按分量展开），
-    // 所以 Spring 不必降级成 Tween。
+    // One spring per axis, exactly as Compose's `Offset.VectorConverter` expands it, so a Spring
+    // never has to fall back to a Tween.
     fn supports_spring() -> bool { true }
     fn write_components(
         &self,
@@ -272,8 +272,8 @@ impl crate::animation::AnimatableValue for Size {
     }
     fn to_f32(&self) -> f32 { (self.width * self.width + self.height * self.height).sqrt() }
     fn from_f32(v: f32) -> Size { Size::new(v, v) }
-    // 宽高各有一条弹簧——Compose 的 `IntSize.VectorConverter` 也是这样，尺寸弹簧因此
-    // 两个轴都能落到目标，而不是沿对角线共用一条位移。
+    // One spring per dimension, matching Compose's `IntSize.VectorConverter`: both axes reach
+    // their targets instead of sharing one displacement along the diagonal.
     fn supports_spring() -> bool { true }
     fn write_components(
         &self,
@@ -289,10 +289,10 @@ impl crate::animation::AnimatableValue for Size {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Dp/Sp 扩展 trait（对标 Compose：100.dp / 14.sp）
+// The Dp/Sp extension traits (Compose's `100.dp` / `14.sp`).
 // ═══════════════════════════════════════════════════════════
 
-/// 数字 → Dp 扩展（`100.dp()`，对标 Compose 的 `100.dp`）
+/// A number as `Dp` (`100.dp()`, Compose's `100.dp`).
 pub trait DpExt {
     fn dp(self) -> Dp;
 }
@@ -307,7 +307,7 @@ impl DpExt for u32 {
     fn dp(self) -> Dp { Dp(self as f32) }
 }
 
-/// 数字 → Sp 扩展（`14.sp()`，对标 Compose 的 `14.sp`）
+/// A number as `Sp` (`14.sp()`, Compose's `14.sp`).
 pub trait SpExt {
     fn sp(self) -> Sp;
 }
@@ -323,21 +323,21 @@ impl SpExt for u32 {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Px — 物理像素
+// Px — physical pixels.
 // ═══════════════════════════════════════════════════════════
 
-/// 物理像素（需 Density 转换为逻辑像素用于布局）
+/// A physical pixel. Layout works in logical pixels, so a `Px` needs a [`Density`] to get there.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Px(pub f32);
 
 impl Px {
-    /// 通过 Density 转换为逻辑像素
+    /// Convert to logical pixels through a [`Density`].
     pub fn to_logical(&self, density: Density) -> f32 {
         self.0 / density.density.max(f32::EPSILON)
     }
 }
 
-/// 数字 → Px 扩展（`20.px()`）
+/// A number as `Px` (`20.px()`).
 pub trait PxExt {
     fn px(self) -> Px;
 }
@@ -353,10 +353,10 @@ impl PxExt for u32 {
 }
 
 // ═══════════════════════════════════════════════════════════
-// TextUnit — 文本尺寸单位（Sp/Px 统一，对标 Compose TextUnit）
+// TextUnit — Compose's `TextUnit`: one type for `Sp` and `Px` text sizes.
 // ═══════════════════════════════════════════════════════════
 
-/// 文本尺寸单位：Sp（字体缩放像素）或 Px（物理像素）
+/// A text size unit: `Sp` (scaled pixels) or `Px` (physical pixels).
 ///
 /// A bare `f32` is an `Sp` (font scale 1 makes it a logical pixel, which keeps older call sites
 /// unchanged).
@@ -364,7 +364,7 @@ impl PxExt for u32 {
 pub enum TextUnit {
     /// Scaled pixels — multiplied by `Density.font_scale` on the way to logical pixels.
     Sp(Sp),
-    /// 物理像素（需 Density 转逻辑像素）
+    /// Physical pixels; a [`Density`] turns them into logical ones.
     Px(Px),
     /// A multiple of the ENCLOSING font size (Compose's `TextUnitType.Em`).
     ///
@@ -411,7 +411,7 @@ impl From<Px> for TextUnit {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 单元测试
+// Unit tests.
 // ═══════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -489,22 +489,22 @@ mod tests {
     #[test]
     fn animatable_value_impls() {
         use crate::animation::AnimatableValue;
-        // Dp 动画
+        // Dp animation.
         let a = Dp(0.0);
         let b = Dp(100.0);
         let mid = a.lerp(&b, 0.5);
         assert_eq!(mid, Dp(50.0));
-        // Offset 动画
+        // Offset animation.
         let o = Offset::new(0.0, 0.0).lerp(&Offset::new(10.0, 20.0), 0.5);
         assert_eq!(o, Offset::new(5.0, 10.0));
-        // Size 动画
+        // Size animation.
         let s = Size::new(0.0, 0.0).lerp(&Size::new(8.0, 6.0), 0.25);
         assert_eq!(s, Size::new(2.0, 1.5));
     }
 
     #[test]
     fn dp_sp_extensions() {
-        // 对标 Compose 100.dp / 14.sp
+        // Compose's `100.dp` / `14.sp`.
         let w: Dp = 100.dp();
         assert_eq!(w, Dp(100.0));
         let f: Dp = 2.5f32.dp();
@@ -526,7 +526,7 @@ mod tests {
         let pxf: Px = 3.5f32.px();
         assert_eq!(pxf, Px(3.5));
 
-        // Dp/Px → Dimension（供 .size() 消费）
+        // Dp/Px -> Dimension, which `.size()` consumes.
         use crate::layout::Dimension;
         let d: Dimension = 10.dp().into();
         assert!(d.same_parameter(&Dimension::Dp(Dp(10.0))));

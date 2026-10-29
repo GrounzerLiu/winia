@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════
-// 辅助类型
+// Supporting types.
 // ═══════════════════════════════════════════════════════════
 
-/// 注册的文本段信息
+/// One registered run of text.
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredSegment {
     /// The slot that registered this segment. Kept because it is the record's identity — the
@@ -23,7 +23,8 @@ pub(crate) struct RegisteredSegment {
     pub slot_key: u64,
     pub global_offset: usize,
     pub text_len: usize,
-    /// 段实际文本（注册时保存——selected_text 拼接用，用户无需自维护平行字符串）
+    /// The run's own text, captured at registration so the framework can stitch a selection
+    /// together without the caller keeping a parallel copy.
     pub text: Arc<str>,
 }
 
@@ -33,7 +34,7 @@ pub(crate) struct RegisteredSegment {
 
 type OnChangeFn = Arc<dyn Fn(&Selection) + Send + Sync>;
 
-/// 选择结果——回调参数（对标 Compose `Selection`：自带选中文本）
+/// A selection — the callback's argument. Like Compose's `Selection`, it carries the selected text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
     start: usize,
@@ -42,11 +43,12 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// 容器全局起始偏移（含容器内所有已注册段）
+    /// The start offset across the whole container, over every registered run.
     pub fn start(&self) -> usize { self.start }
-    /// 容器全局结束偏移（含容器内所有已注册段）
+    /// The end offset across the whole container.
     pub fn end(&self) -> usize { self.end }
-    /// 选中的文本（框架按注册段自动拼接——含跨段/emoji 边界安全）
+    /// The selected text, stitched from the registered runs (safe across run boundaries and
+    /// emoji graphemes).
     pub fn text(&self) -> &str { &self.text }
 }
 
@@ -93,8 +95,9 @@ impl SelectionRegistrar {
             inner.next_global_offset += text_len;
             off
         };
-        // 保持拼接不变量：段区间互不重叠——dedup 覆盖更长文本时推进全局偏移，
-        // 否则后续段起点落在本段内部（build_selection 拼接重复/丢段）
+        // Keep the stitching invariant: the registered ranges must not overlap. When a re-register
+        // covers longer text, the global offset advances; otherwise later runs would start inside
+        // this one and `build_selection` would duplicate or drop characters.
         inner.next_global_offset = inner.next_global_offset.max(offset + text_len);
         inner.segments.insert(slot_key, RegisteredSegment {
             slot_key, global_offset: offset, text_len,
@@ -115,8 +118,8 @@ impl SelectionRegistrar {
         inner.selection_end = None;
     }
 
-    /// 是否同一实例（Arc 身份——跨容器拖动的 anchor 归属判断：拖到别的
-    /// SelectionContainer 的文本上时，用 anchor 容器做 edge snap，不切偏移空间）
+    /// Whether this is the same instance (by `Arc` identity). A cross-container drag uses it to
+    /// decide which container owns the anchor, so the edge snap stays in one offset space.
     pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -175,20 +178,23 @@ impl SelectionRegistrar {
         Some(local_start.min(len)..local_end.min(len))
     }
 
-    /// 设置选区变化回调（参数为 Selection——含选中文本，用户无需自维护平行字符串）
+    /// Install the selection-changed callback. It receives a [`Selection`] with the text already
+    /// stitched, so the caller keeps no parallel copy.
     pub fn set_on_change(&self, f: impl Fn(&Selection) + Send + Sync + 'static) {
         self.inner.lock().on_change = Some(Arc::new(f));
     }
 
-    /// 构造当前选择的 Selection（按注册段自动拼接文本——跨段/emoji 边界安全）
+    /// Build the current [`Selection`], stitching the registered runs (safe across run boundaries
+    /// and emoji graphemes).
     pub(crate) fn build_selection(&self) -> Option<Selection> {
         let inner = self.inner.lock();
         let total = inner.next_global_offset;
         let (s, e) = (inner.selection_start?, inner.selection_end?);
         let (s, e) = (s.min(e), s.max(e));
-        // 零宽（点击未拖动）→ 无选择（与 selected_range 一致）
+        // Zero width (a click with no drag) is no selection, matching `selected_range`.
         if s == e { return None; }
-        // 越界 clamp 到容器总长度（防御：异常偏移不暴露空文本+越界值）
+        // Clamp to the container's total length: a bad offset must not surface as empty text with
+        // an out-of-range value beside it.
         let (s, e) = (s.min(total), e.min(total));
         if s == e { return None; }
         let mut segs: Vec<&RegisteredSegment> = inner.segments.values().collect();
@@ -200,14 +206,15 @@ impl SelectionRegistrar {
             if seg_e <= s || seg_s >= e { continue; }
             let start = s.max(seg_s) - seg_s;
             let end = e.min(seg_e) - seg_s;
-            // 防御：偏移理论上是字符边界（get_closest 保证），但跨段拼接时
-            // 用 get 避免任何越界/非边界 panic（异常时跳过该段）
+            // The offsets are meant to be character boundaries (`get_closest_*` guarantees it), but
+            // a cross-run stitch uses `get` so a bad one skips its run instead of panicking on an
+            // out-of-range or non-boundary slice.
             if let Some(part) = seg.text.get(start..end) {
                 text.push_str(part);
             }
         }
-        // RichText 内联元素（image/placeholder）以 U+FFFC 占位——选中文本对
-        // 用户无意义（不可复制），剔除
+        // A rich-text inline element (image or placeholder) is a U+FFFC here. Copying one would give
+        // the user a replacement character, so it is dropped from the selected text.
         if text.contains('\u{FFFC}') {
             text = text.replace('\u{FFFC}', "");
         }

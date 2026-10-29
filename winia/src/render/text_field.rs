@@ -1,16 +1,15 @@
 use super::*;
 use super::paint::*;
 
-// ── TextField 容器视觉（M3 Filled/Outlined）──
+// ── The text-field container's visuals (M3 Filled/Outlined) ──
 
-/// M3 文本输入框容器：Filled = 容器色背景 + 底部指示线
-/// （focused 2px / unfocused 1px，色 indicator_color）；
-/// Outlined = 边框（focused 2px / unfocused 1px）。
-/// 状态优先级 disabled > error > focused > unfocused（组合期已解析）。
-/// M3 文本输入框容器：Filled = 容器色背景 + 底部指示线
-/// （focused 2px / unfocused 1px）；Outlined = 边框（圆角 4dp，
-/// `cutout` 为悬浮 label 缺口区域）。颜色来自动画 State
-/// （`animate_color_as_state`——状态切换过渡）；`focus_p` 0..1 插值宽度。
+/// The M3 text-field container. `Filled` is a container-coloured background plus a bottom
+/// indicator (2 px focused, 1 px not, in `indicator_color`); `Outlined` is an outline instead
+/// (4 dp corners, with `cutout` the gap the floating label sits in).
+///
+/// State precedence - disabled > error > focused > unfocused - was already resolved at compose
+/// time. The colours come from an animated `State` (`animate_color_as_state`, which is what makes
+/// a state change a transition), and `focus_p` interpolates the 0..1 indicator width.
 pub(super) fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
@@ -24,14 +23,14 @@ pub(super) fn draw_text_field_container(
     let stroke_w = 1.0 + focus_p.clamp(0.0, 1.0);
     match variant {
         crate::text::field::TextFieldVariant::Filled => {
-            // 容器背景（surfaceContainerHighest；M3 top 4dp 圆角）
+            // The container fill (surfaceContainerHighest, with M3's 4 dp top corners).
             if colors.container.a > 0 {
                 let mut bg = Paint::default();
                 bg.set_color4f(Color4f::from(&colors.container), None);
                 bg.set_anti_alias(true);
                 canvas.draw_rrect(RRect::new_rect_xy(rect, 4.0, 4.0), &bg);
             }
-            // 底部指示线（贴底 1/2px 高，focused 加粗）
+            // The bottom indicator: 1 or 2 px against the bottom edge, thicker when focused.
             let w = stroke_w;
             let mut lp = Paint::default();
             lp.set_color4f(Color4f::from(indicator), None);
@@ -42,7 +41,7 @@ pub(super) fn draw_text_field_container(
             ), &lp);
         }
         crate::text::field::TextFieldVariant::Outlined => {
-            // 边框（stroke 居中——1/2px，四角 4dp 圆角；label 缺口处断开）
+            // The outline: a centred 1 or 2 px stroke with 4 dp corners, broken at the label gap.
             let w = stroke_w;
             let mut bp = Paint::default();
             bp.set_color4f(Color4f::from(indicator), None);
@@ -55,7 +54,7 @@ pub(super) fn draw_text_field_container(
                 rect.right - inset, rect.bottom - inset,
             );
             if let Some(cut) = cutout {
-                // 缺口：clip Difference 挖掉 label 区域再画边框
+                // The gap: clip out the label's area (Difference) before stroking the outline.
                 canvas.save();
                 canvas.clip_rect(cut, Some(skia_safe::ClipOp::Difference), None);
                 canvas.draw_rrect(RRect::new_rect_xy(border_rect, 4.0, 4.0), &bp);
@@ -68,8 +67,8 @@ pub(super) fn draw_text_field_container(
 }
 
 
-/// TextField label/支持文本绘制（无布局缓存的独立小段文本——
-/// build_plain_paragraph 每次构建；辅助文本量小，开销可接受）
+/// Draw a label or supporting text: a small run with no layout cache, built through
+/// `build_plain_paragraph` every time. The volume is tiny, so the cost is acceptable.
 pub(super) fn draw_text_field_aux_text(
     canvas: &Canvas,
     content: &str,
@@ -103,7 +102,8 @@ pub(super) fn draw_text_field_aux_text(
         None,
         max_width,
     );
-    // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
+    // The paragraph has to be laid out before it paints: an un-laid-out Skia paragraph draws
+    // nothing.
     para.layout(max_width);
     para.paint(canvas, pos.0, pos.1);
 }
@@ -183,8 +183,9 @@ pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width
             );
         }
         crate::graphics::Shape::Pill => {
-            // 路径圆角 = 节点 pill 半径 - inset（不要对 sr 再减一次——
-            // 否则外缘在圆角处比背景内缩 1px，边框不像内边框）
+            // The path's corner radius is the node's pill radius minus the inset. Do not subtract
+            // the inset from the rounded rect again: that pulls the outer edge 1 px inside the
+            // background at the corners, and the outline stops looking like an inner border.
             let r = (w.min(h) / 2.0 - inset).max(0.0);
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
@@ -195,8 +196,9 @@ pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width
     }
 }
 
-/// 焦点环（M3 focus indicator）——宽 3、完全位于组件**外部**（环内侧距
-/// 组件边缘 2）、形状跟随组件、颜色来自组件组合期捕获的主题色。
+/// The focus ring (M3's focus indicator): 3 wide, entirely OUTSIDE the component (its inner edge
+/// 2 from the component's edge), following the component's shape, in the theme colour the component
+/// captured at compose time.
 pub(crate) fn draw_focus(
     canvas: &Canvas,
     rect: Rect,
@@ -213,7 +215,8 @@ pub(crate) fn draw_focus(
 ) {
     const FOCUS_WIDTH: f32 = 3.0;
     const FOCUS_SCALE_AMOUNT: f32 = 0.15; // 淡入起点放大倍数（大环收缩到贴合）
-    // 环中心线在组件外 gap + 半宽处——stroke 居中绘制时环完全在外侧
+    // The ring's centre line sits a half-width outside the gap, so a centred stroke lands entirely
+    // outside the component.
     let inset = gap + FOCUS_WIDTH / 2.0;
     let mut sr = Rect::new(
         rect.left - inset,
@@ -221,7 +224,8 @@ pub(crate) fn draw_focus(
         rect.right + inset,
         rect.bottom + inset,
     );
-    // 淡入：alpha 0→1 时环从放大（1.15×）收缩到最终位置——以组件中心为锚
+    // The fade-in: as alpha goes 0 to 1 the ring shrinks from 1.15x into place, anchored on the
+    // component's centre.
     let scale = 1.0 + (1.0 - alpha.clamp(0.0, 1.0)) * FOCUS_SCALE_AMOUNT;
     let (cx, cy) = (sr.center_x(), sr.center_y());
     sr = Rect::from_xywh(
@@ -234,7 +238,7 @@ pub(crate) fn draw_focus(
         return;
     }
     let mut paint = Paint::default();
-    // 透明度随 focus_indicator_alpha 动画（聚焦淡入/失焦淡出）
+    // Alpha follows `focus_indicator_alpha`: in on focus, out on blur.
     paint.set_color4f(Color4f::new(
         color.r as f32 / 255.0,
         color.g as f32 / 255.0,
@@ -265,7 +269,7 @@ pub(crate) fn draw_focus(
     match shape {
         crate::graphics::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
         crate::graphics::Shape::RoundedRect { corner_radius } => {
-            // 外扩后圆角同步放大（保持与组件同心）
+            // The radius grows with the expansion, so the ring stays concentric with the component.
             let r = (*corner_radius + inset).max(0.0) * scale;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
@@ -316,7 +320,7 @@ pub(crate) fn draw_focus(
     }
 }
 
-/// draw_text + 选中高亮
+/// `draw_text` plus the selection highlight.
 pub(super) fn draw_text_with_selection(
     canvas: &Canvas,
     content: &str,
@@ -340,7 +344,8 @@ pub(super) fn draw_text_with_selection(
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
     }
-    // 兜底路径：缓存缺失时用共享构建函数重建（与测量期同一套逻辑——SSOT）
+    // The fallback path rebuilds through the shared constructor when the cache is missing: the same
+    // logic the measure pass runs, from one source of truth.
     let para = crate::layout::node::build_plain_paragraph(
         content, font_size, color, font_weight, font_style,
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
@@ -394,8 +399,9 @@ pub(super) fn draw_text(
     align: crate::text::TextAlign,
     soft_wrap: bool,
 ) {
-    // 计算 x 偏移以支持 Center/Right/Justify 对齐——`soft_wrap(false)` 的段落按固有宽度排版，
-    // 可能比盒子宽，此时居中/右对齐要往反方向位移（与上面缓存路径同一规则）
+    // The x offset that makes Center/Right/Justify work: a `soft_wrap(false)` paragraph is laid
+    // out at its intrinsic width, which can exceed the box, and centring or right-aligning it then
+    // shifts it the other way. Same rule as the cached path above.
     let slack = if soft_wrap {
         (max_width - para.max_intrinsic_width()).max(0.0)
     } else {

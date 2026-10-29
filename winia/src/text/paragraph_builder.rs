@@ -190,7 +190,7 @@ mod paragraph_builder_test {
     use skia_safe::textlayout::{FontCollection, ParagraphStyle};
     use crate::text::index_bimap::IndexBiMap;
 
-    // ── IndexBiMap 基础 ──
+    // ── IndexBiMap basics ──
 
     #[test]
     fn test_index_bimap_basic() {
@@ -228,7 +228,7 @@ mod paragraph_builder_test {
         assert_eq!(m.len(), 0);
     }
 
-    // ── ParagraphBuilder::add_text 纯 ASCII ──
+    // ── ParagraphBuilder::add_text, pure ASCII ──
 
     #[test]
     fn test_builder_ascii() {
@@ -236,7 +236,7 @@ mod paragraph_builder_test {
         let style = ParagraphStyle::default();
         let mut b = ParagraphBuilder::new(&style, fc);
         b.add_text("Hello");
-        // 每个 ASCII 字符: byte=1, utf16=1, real=1
+        // One ASCII character is 1 byte, 1 UTF-16 unit and 1 real byte.
         assert_eq!(b.last_byte_index, 5);
         assert_eq!(b.last_real_index, 5);
         assert_eq!(b.last_utf16_index, 5);
@@ -246,7 +246,7 @@ mod paragraph_builder_test {
         assert_eq!(b.byte_to_utf16_indices.get_by_left(&4), Some(&4));
     }
 
-    // ── ParagraphBuilder::add_text 含 emoji ──
+    // ── ParagraphBuilder::add_text with an emoji ──
 
     #[test]
     fn test_builder_emoji() {
@@ -262,7 +262,7 @@ mod paragraph_builder_test {
         assert!(b.byte_to_utf16_indices.get_by_left(&4).is_none());
     }
 
-    // ── ParagraphBuilder::add_text 混合 CJK ──
+    // ── ParagraphBuilder::add_text with CJK ──
 
     #[test]
     fn test_builder_cjk() {
@@ -270,13 +270,13 @@ mod paragraph_builder_test {
         let style = ParagraphStyle::default();
         let mut b = ParagraphBuilder::new(&style, fc);
         b.add_text("A中文B");
-        // A(0),中(1-3),文(4-6),B(7) -> 8 bytes, 4 chars
-        // utf16: A=0, 中=1, 文=2, B=3
+        // A(0), then two three-byte CJK glyphs (1-3, 4-6), then B(7): 8 bytes, 4 characters.
+        // UTF-16: A is unit 0, the first CJK glyph 1, the second 2, B 3.
         assert_eq!(b.byte_to_utf16_indices.get_by_left(&1).copied(), Some(1)); // 中 byte 1 -> utf16 1
         assert_eq!(b.byte_to_utf16_indices.get_by_left(&4).copied(), Some(2)); // 文 byte 4 -> utf16 2
     }
 
-    // ── 多段 add_text 拼接 ──
+    // ── Several add_text calls joined ──
 
     #[test]
     fn test_builder_multiple_calls() {
