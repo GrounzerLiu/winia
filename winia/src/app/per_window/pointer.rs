@@ -344,6 +344,11 @@ pub(crate) fn handle_pointer_down(
             let line_dy = crate::layout::node::line_geometry(&nodes[ai], para).paint_dy;
             let local = (local.0, local.1 - line_dy);
             let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(local.0, local.1));
+            // Start/middle ellipsis put a TRUNCATED string in the paragraph, so the display offset is
+            // not a content offset: clicking the marker means the first visible tail byte, and the
+            // dropped head has to be added back (measured: a 20-byte content truncated to 16 answered
+            // 0 at the left edge and 16 at the right, where the content offsets are 4 and 20).
+            let hit = para.content_offset(hit);
             // The result is a display-text offset (the paragraph holds the displayed text), so it
             // goes back through the OffsetMapping to an editing offset (password masking / formatted
             // input).
@@ -758,6 +763,8 @@ pub(crate) fn handle_pointer_move(
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
+                                // A truncated paragraph answers in display bytes (see `DisplaySpan`).
+                                let current_index = para.content_offset(current_index);
                                 // Display offset → editing offset (password masking / formatted input;
                                 // `TextFieldVisual` is on the container, so look upward).
                                 let current_index = crate::text::field::offset_mapping_for_node(nodes, r, innermost)

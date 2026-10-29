@@ -24,7 +24,7 @@ pub use style::{
 pub use layout_result::TextLayoutResult;
 pub use measure_text::{measure_text, TextMeasureSpec};
 pub use index_bimap::IndexBiMap;
-pub use paragraph::{build_plain_paragraph, Paragraph};
+pub use paragraph::{build_plain_paragraph, DisplaySpan, Paragraph};
 pub use paragraph_builder::ParagraphBuilder;
 pub use text_layout::TextLayout;
 pub use inline_drawable::{InlineDrawable, ImageDrawable, SvgDrawable};

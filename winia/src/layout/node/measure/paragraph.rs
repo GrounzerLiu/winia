@@ -190,12 +190,13 @@ pub(crate) fn build_plain_paragraph(
     let fc = crate::text::font::get_font_collection();
     // Start/middle ellipsis: truncate the STRING, because `set_ellipsis` only marks the end.
     let truncated;
+    let mut display_span = None;
     let content = if matches!(
         overflow,
         crate::text::TextOverflow::StartEllipsis | crate::text::TextOverflow::MiddleEllipsis
     ) {
         match truncate_for_ellipsis(content, max_width, &text_style, &fc, overflow) {
-            Some(text) => { truncated = text; truncated.as_str() }
+            Some((text, span)) => { truncated = (text, span); display_span = Some(truncated.1); truncated.0.as_str() }
             None => content,
         }
     } else {
@@ -206,6 +207,7 @@ pub(crate) fn build_plain_paragraph(
     builder.add_text(content);
     let mut para = builder.build();
     para.layout(layout_width);
+    para.set_display_span(display_span);
     para
 }
 
@@ -329,7 +331,7 @@ pub(crate) fn truncate_for_ellipsis_probe(
     content: &str,
     max_width: f32,
     overflow: crate::text::TextOverflow,
-) -> Option<String> {
+) -> Option<(String, crate::text::DisplaySpan)> {
     let mut style = skia_safe::textlayout::TextStyle::new();
     style.set_font_size(15.0);
     let fc = crate::text::font::get_font_collection();
@@ -348,7 +350,7 @@ fn truncate_for_ellipsis(
     text_style: &skia_safe::textlayout::TextStyle,
     fc: &skia_safe::textlayout::FontCollection,
     overflow: crate::text::TextOverflow,
-) -> Option<String> {
+) -> Option<(String, crate::text::DisplaySpan)> {
     let probe = |candidate: &str| -> f32 {
         let mut style = skia_safe::textlayout::ParagraphStyle::new();
         style.set_text_align(skia_safe::textlayout::TextAlign::Left);
@@ -370,19 +372,34 @@ fn truncate_for_ellipsis(
     };
     bounds.push(content.len());
     let clusters = bounds.len() - 1;
-    let build = |kept: usize| -> String {
+    let build = |kept: usize| -> (String, crate::text::DisplaySpan) {
         match overflow {
             crate::text::TextOverflow::StartEllipsis => {
-                format!("\u{2026}{}", &content[bounds[clusters - kept]..])
+                let tail_start = bounds[clusters - kept];
+                let span = crate::text::DisplaySpan {
+                    head_bytes: 0,
+                    tail_start_byte: tail_start,
+                    marker_bytes: "\u{2026}".len(),
+                };
+                (format!("\u{2026}{}", &content[tail_start..]), span)
             }
             _ => {
                 // Middle: keep the head and the tail in equal share, head first.
                 let head = kept / 2;
                 let tail = kept - head;
-                format!(
-                    "{}\u{2026}{}",
-                    &content[..bounds[head]],
-                    &content[bounds[clusters - tail]..]
+                let tail_start = bounds[clusters - tail];
+                let span = crate::text::DisplaySpan {
+                    head_bytes: bounds[head],
+                    tail_start_byte: tail_start,
+                    marker_bytes: "\u{2026}".len(),
+                };
+                (
+                    format!(
+                        "{}\u{2026}{}",
+                        &content[..bounds[head]],
+                        &content[tail_start..]
+                    ),
+                    span,
                 )
             }
         }
@@ -391,7 +408,7 @@ fn truncate_for_ellipsis(
     let (mut lo, mut hi) = (0usize, clusters);
     while lo < hi {
         let mid = (lo + hi + 1) / 2;
-        if probe(&build(mid)) <= max_width {
+        if probe(&build(mid).0) <= max_width {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -937,7 +954,12 @@ mod truncate_tests {
             crate::text::TextOverflow::StartEllipsis,
             crate::text::TextOverflow::MiddleEllipsis,
         ] {
-            let out = truncate_for_ellipsis_probe(&text, 40.0, overflow).expect("it must truncate");
+            let (out, span) = truncate_for_ellipsis_probe(&text, 40.0, overflow).expect("it must truncate");
+            // The span must describe the string that was actually returned.
+            assert!(
+                out == format!("{}{}{}", &text[..span.head_bytes], "\u{2026}", &text[span.tail_start_byte..]),
+                "the span rebuilds the display text: {out:?} {span:?}"
+            );
             let marker = out.find('\u{2026}').expect("the marker is in the result");
             let before = out[..marker].chars().next_back();
             let after = out[marker..].chars().nth(1);

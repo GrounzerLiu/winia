@@ -911,7 +911,8 @@ pub(super) fn render_pass1(
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
-                para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                // The range is in CONTENT offsets; a truncated paragraph draws in display offsets.
+                para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
@@ -1072,7 +1073,7 @@ pub(super) fn render_pass1(
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 let rects: Vec<_> = if range.start < range.end {
-                para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {

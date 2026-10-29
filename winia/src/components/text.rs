@@ -875,6 +875,41 @@ mod tests {
         assert!(geo.is_some(), "an empty text still measures");
         assert!(node.measured_size.height >= 0.0);
     }
+/// A truncated paragraph answers hit tests in DISPLAY bytes; the consumers that store content
+    /// offsets (caret, drag selection) have to translate. Measured before the fix on a 20-byte
+    /// content truncated to 16: the left edge answered 0 where the content offset is 4, and the right
+    /// edge answered 16 where the content offset is 20.
+    #[test]
+    fn a_hit_test_on_a_truncated_run_maps_back_to_the_content() {
+        let content = "0123456789abcdefghij";
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            Text::new(content)
+                .font_size(16.0)
+                .overflow(crate::text::TextOverflow::StartEllipsis)
+                .soft_wrap(false)
+                .modifier(Modifier::new().size(120.0, 30.0))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let node = &composer.arena_nodes()[root];
+        let para = node.cached_paragraph.borrow();
+        let para = para.as_ref().unwrap();
+        let span = para.display_span().expect("the run was truncated");
+        assert!(span.head_bytes == 0, "start ellipsis keeps no head: {span:?}");
+        assert!(para.text_len() < content.len(), "the paragraph holds the truncated text");
+        let layout = crate::text::TextLayout::new(para);
+        let left = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, 10.0));
+        let right = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(110.0, 10.0));
+        assert_eq!(left, 0, "the display offset at the left edge");
+        assert_eq!(para.content_offset(left), span.tail_start_byte, "the marker means the tail start");
+        assert_eq!(para.content_offset(right), content.len(), "the right edge is the content end");
+        // Identity when nothing was truncated.
+        let plain = crate::text::build_plain_paragraph("abc", 16.0, crate::graphics::Color::BLACK, 400.0);
+        assert_eq!(plain.content_offset(2), 2);
+    }
+
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///
     /// The payload carries the window and the search runs at measure time, where the constraints

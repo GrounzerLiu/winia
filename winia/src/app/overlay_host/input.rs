@@ -295,6 +295,8 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                     // A line-height style moves the glyphs inside their box; undo that too.
                     point.1 -= crate::layout::node::line_geometry(&nodes[anchor_node], para).paint_dy;
                     let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(point.0, point.1));
+                    // A truncated paragraph answers in DISPLAY bytes (see `DisplaySpan`).
+                    let hit = para.content_offset(hit);
                     let edit = crate::text::field::offset_mapping_for_node(nodes, r, anchor_node)
                         .map(|m| m.transformed_to_original(hit))
                         .unwrap_or(hit);

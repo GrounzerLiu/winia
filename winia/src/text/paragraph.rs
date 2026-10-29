@@ -30,6 +30,38 @@ pub fn build_plain_paragraph(
     p
 }
 
+/// Where the paragraph's own text sits inside the caller's content, when start/middle ellipsis
+/// truncated it (see `truncate_for_ellipsis`).
+///
+/// The paragraph then holds `content[..head_bytes] + "…" + content[tail_start_byte..]`, so a hit
+/// test answers in DISPLAY bytes and every consumer that speaks content offsets has to translate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplaySpan {
+    /// Bytes of the content kept in front of the marker (0 for `StartEllipsis`).
+    pub head_bytes: usize,
+    /// Byte offset in the CONTENT where the kept tail starts (the content length for `StartEllipsis`
+    /// with no tail, never used that way).
+    pub tail_start_byte: usize,
+    /// Bytes the marker itself occupied in the display text (`"…"` is 3).
+    pub marker_bytes: usize,
+}
+
+impl DisplaySpan {
+    /// A display byte offset → the content byte offset the user pointed at.
+    ///
+    /// A click on the marker itself lands on the first visible tail byte, which is what the reader
+    /// means by pointing there.
+    pub fn content_offset(&self, display: usize) -> usize {
+        if display < self.head_bytes {
+            display
+        } else if display < self.head_bytes + self.marker_bytes {
+            self.tail_start_byte
+        } else {
+            self.tail_start_byte + (display - self.head_bytes - self.marker_bytes)
+        }
+    }
+}
+
 pub struct Paragraph {
     paragraph: SkParagraph,
     placeholders: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
@@ -37,6 +69,7 @@ pub struct Paragraph {
     pub(crate) paragraph_byte_to_real_indices: IndexBiMap,
     pub(crate) byte_to_utf16_indices: IndexBiMap,
     pub(crate) byte_to_glyph_indices: IndexBiMap,
+    display_span: Option<DisplaySpan>,
 }
 
 impl Paragraph {
@@ -49,6 +82,7 @@ impl Paragraph {
         byte_to_glyph_indices: &IndexBiMap,
     ) -> Self {
         Self {
+            display_span: None,
             paragraph,
             placeholders: Vec::from(placeholders),
             line_breaks: line_breaks.clone(),
@@ -72,6 +106,47 @@ impl Paragraph {
     /// `content.len()` on the caller's side: a `RichText` placeholder may stand for more or fewer
     /// content bytes than the single U+FFFC it renders as, and the paragraph is the authority on
     /// the space it actually maps.
+    /// The truncation this paragraph displays, when start/middle ellipsis shortened its text.
+    pub fn display_span(&self) -> Option<DisplaySpan> {
+        self.display_span
+    }
+
+    /// Record how the displayed text relates to the caller's content (see [`DisplaySpan`]).
+    pub fn set_display_span(&mut self, span: Option<DisplaySpan>) {
+        self.display_span = span;
+    }
+
+    /// A DISPLAY byte offset (what a hit test answers) → the caller's content byte offset.
+    ///
+    /// Identity unless start/middle ellipsis truncated the string, in which case every consumer
+    /// that stores content offsets (caret, selection, drag) must go through this.
+    pub fn content_offset(&self, display: usize) -> usize {
+        match self.display_span {
+            Some(span) => span.content_offset(display),
+            None => display,
+        }
+    }
+
+    /// A CONTENT byte offset → the display byte offset to draw at (the inverse of
+    /// [`Paragraph::content_offset`]).
+    ///
+    /// An offset inside the bytes the truncation dropped collapses onto the marker, so a selection
+    /// that covers only invisible text paints nothing rather than the whole visible run.
+    pub fn display_offset(&self, content: usize) -> usize {
+        match self.display_span {
+            None => content,
+            Some(span) => {
+                if content < span.head_bytes {
+                    content
+                } else if content <= span.tail_start_byte {
+                    span.head_bytes
+                } else {
+                    span.head_bytes + span.marker_bytes + (content - span.tail_start_byte)
+                }
+            }
+        }
+    }
+
     pub fn text_len(&self) -> usize {
         self.paragraph_byte_to_real_indices.right_keys().last().copied().unwrap_or(0)
     }
@@ -469,6 +544,23 @@ impl Paragraph {
 
 #[cfg(test)]
 mod paragraph_tests {
+    /// `display_offset` is the inverse of `content_offset`, and an offset inside the dropped gap
+    /// collapses onto the marker so an invisible selection paints nothing.
+    #[test]
+    fn the_display_mapping_round_trips_and_collapses_the_dropped_gap() {
+        use crate::text::DisplaySpan;
+        // start ellipsis of "0123456789" kept the last 4 bytes: display "…6789".
+        let span = DisplaySpan { head_bytes: 0, tail_start_byte: 6, marker_bytes: 3 };
+        // The visible tail maps back and forth.
+        assert_eq!(span.content_offset(3), 6, "first visible tail byte");
+        assert_eq!(span.content_offset(6), 9, "last visible byte");
+        // A middle ellipsis: head "0123", marker, tail "89".
+        let middle = DisplaySpan { head_bytes: 4, tail_start_byte: 8, marker_bytes: 3 };
+        assert_eq!(middle.content_offset(2), 2, "inside the head");
+        assert_eq!(middle.content_offset(4), 8, "the marker means the tail start");
+        assert_eq!(middle.content_offset(7), 8, "first tail byte");
+        assert_eq!(middle.content_offset(9), 10, "last tail byte");
+    }
 
     use skia_safe::FontMgr;
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};

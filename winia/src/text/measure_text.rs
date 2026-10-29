@@ -29,6 +29,10 @@ pub struct TextMeasureSpec<'a> {
     pub line_height: Option<f32>,
     pub min_lines: usize,
     pub font_family: Option<&'a str>,
+    /// Compose's `textGeometricTransform`: widens the drawn run, and the box with it.
+    pub transform: Option<crate::text::TextGeometricTransform>,
+    /// Compose's `lineHeightStyle`: trims the extra leading off the box ends.
+    pub line_height_style: Option<crate::text::LineHeightStyle>,
 }
 
 impl<'a> TextMeasureSpec<'a> {
@@ -48,6 +52,8 @@ impl<'a> TextMeasureSpec<'a> {
             line_height: None,
             min_lines: 1,
             font_family: None,
+            transform: None,
+            line_height_style: None,
         }
     }
 }
@@ -77,8 +83,9 @@ pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
         spec.max_width,
     );
 
+    let scale_x = spec.transform.map(|t| t.scale_x).unwrap_or(1.0).max(0.0001);
     let text_size = Size::new(
-        para.max_intrinsic_width().ceil().min(spec.max_width),
+        (para.max_intrinsic_width() * scale_x).ceil().min(spec.max_width),
         para.height().ceil(),
     );
     let line_count = para.inner_paragraph().line_number();
@@ -93,6 +100,17 @@ pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
         size.height = size.height.max(line_height * spec.min_lines as f32);
     }
 
+    // Same `lineHeightStyle` rule as the leaf: the extra leading trimmed at the first line's top /
+    // the last line's bottom comes off the box.
+    let geometry = crate::layout::node::line_geometry_from(
+        spec.line_height,
+        spec.line_height_style,
+        para.natural_line_height(),
+    );
+    if geometry.trim_top > 0.0 || geometry.trim_bottom > 0.0 {
+        size.height = (size.height - geometry.trim_top - geometry.trim_bottom).max(0.0);
+    }
+
     // `alphabetic_baseline` is what the layout engine aligns a first line against, so it is the
     // number a consumer should see. Skia's per-line baselines are absolute too but disagree with it
     // by a fraction (measured: 16.984 vs 17.266 on one line), so a single line reports the same
@@ -103,7 +121,7 @@ pub fn measure_text(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
     } else {
         para.get_line_metrics().last().map(|m| m.baseline as f32).unwrap_or(first_baseline)
     };
-    let longest_line = para.longest_line();
+    let longest_line = para.longest_line() * scale_x;
     TextLayoutResult {
         size,
         text_size,
@@ -158,11 +176,42 @@ mod tests {
         spec.soft_wrap = false;
         let result = measure_text(&spec);
         assert_eq!(result.line_count, 1);
-        assert!("the laid-out line is wider than the 40 dp box: {result:?}".len() > 0);
-        assert!(result.did_overflow_width, "{result:?}");
+        assert_eq!(result.text_size.width, 40.0, "the box clamps the reported width: {result:?}");
+        assert!(result.did_overflow_width, "the line itself is wider than the box: {result:?}");
         assert!(result.has_visual_overflow());
     }
 
+/// `measure_text` must answer what the leaf measures, for the two options that change the BOX:
+    /// a geometric transform widens it, a line-height trim shortens it. Both were ignored, so the
+    /// public measurer disagreed with `on_text_layout` for the same text.
+    #[test]
+    fn the_measurer_honours_the_transform_and_the_line_height_trim() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T, TextGeometricTransform};
+        let plain = measure_text(&TextMeasureSpec::new("Ag", 16.0, 200.0));
+        let mut scaled_spec = TextMeasureSpec::new("Ag", 16.0, 200.0);
+        scaled_spec.transform = Some(TextGeometricTransform::new(2.0, 0.0));
+        let scaled = measure_text(&scaled_spec);
+        assert!(
+            (scaled.text_size.width - plain.text_size.width * 2.0).abs() < 1.0,
+            "twice the width: {} vs {}",
+            plain.text_size.width,
+            scaled.text_size.width
+        );
+        assert!((scaled.text_size.height - plain.text_size.height).abs() < 0.5, "the height is untouched");
+
+        let mut tall_spec = TextMeasureSpec::new("Ag", 16.0, 200.0);
+        tall_spec.line_height = Some(34.0);
+        let tall = measure_text(&tall_spec);
+        let mut trimmed_spec = tall_spec.clone();
+        trimmed_spec.line_height_style = Some(LineHeightStyle::new(A::Center, T::Both));
+        let trimmed = measure_text(&trimmed_spec);
+        assert!(
+            trimmed.size.height < tall.size.height - 2.0,
+            "the trim shortens the box: {} vs {}",
+            tall.size.height,
+            trimmed.size.height
+        );
+    }
     #[test]
     fn min_lines_grows_the_box_not_the_paragraph() {
         let one = measure_text(&TextMeasureSpec::new("Hi", 16.0, 300.0));
