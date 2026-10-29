@@ -59,7 +59,12 @@ impl SelectionContainer {
                 // rebuilt from the layout tree at the end of every layout pass instead —
                 // `Composer::reindex_selection_registrars`, which keeps a skipped text's segment and
                 // drops one whose node actually left the tree.
-                match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
+                // The selection lives here, so the COPY has to be handled here too: keys reach the
+        // container whenever focus is inside it (it sits on the focus path), and no text node below
+        // can answer for the whole container's selection.
+        let copy_registrar = registrar.clone();
+        let modifier = self.modifier.key_node(CopySelectionKey { registrar: copy_registrar });
+        match ctx.start_restartable_group(key, modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         content(ctx);
@@ -73,6 +78,30 @@ impl SelectionContainer {
             ctx.clear_selection_registrar();
         }
     }
+}
+
+/// Ctrl+C (and Cmd+C, which arrives as `meta`) copies the container's selection.
+///
+/// A `KeyNode` rather than a `ModifierElement::KbEvent`, so no `TextContent`-style field list has to
+/// grow and the node rides the existing key path (bubble, focus to root).
+#[derive(Debug)]
+struct CopySelectionKey {
+    registrar: SelectionRegistrar,
+}
+
+impl crate::modifier::KeyNode for CopySelectionKey {
+    fn on_event(&self, ev: &crate::input::KbEvent) -> bool {
+        use crate::input::KbEventType;
+        if ev.event_type != KbEventType::KeyDown { return false; }
+        let is_c = matches!(&ev.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
+        if !is_c || !(ev.is_ctrl_pressed || ev.is_meta_pressed) { return false; }
+        // No selection: leave the key to whatever else wanted it.
+        let Some(selection) = self.registrar.build_selection() else { return false; };
+        crate::clipboard::request_text(selection.text());
+        true
+    }
+
+    fn node_key(&self) -> String { "SelectionContainer.copy".to_string() }
 }
 
 impl Default for SelectionContainer {

@@ -17,8 +17,8 @@
 | Bucket | Open | Fixed |
 |---|---|---|
 | Defects (wrong behaviour) | 6 | 0 |
-| Deviations from Compose (deliberate or accepted) | 3 | 0 |
-| Missing API surface | 7 | 0 |
+| Deviations from Compose (deliberate or accepted) | 1 | 2 |
+| Missing API surface | 6 | 1 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
@@ -94,15 +94,18 @@
   `SelectionState.selection` becomes observable `null`, so its consumers can reset. Reason it is not
   filed as a defect: the doc comment states the intent, so this is a designed limitation that has
   turned out to be the wrong design for any consumer that displays the selection.
-- [ ] **D-2 — tapping elsewhere does not clear the selection.** `handle_pointer_down` clears the
+- [x] **D-2 — a press elsewhere clears the selection.** `handle_pointer_down` clears the
   registrar of the node it hit (`pointer.rs:311`), which is the wrong node whenever the tap does not
   land on a selectable text: measured, after selecting in A, pressing a plain (unselectable) Text
   below and pressing A's own padding both left A at `Some((1, 9))`. Compose clears on any pointer-up
   that is not a drag end (`SelectionManager.modifier` → `onClearSelectionRequested { onRelease() }`)
   and on focus loss. Measuring also showed two containers holding a selection at the same time
   (`A = Some((1, 9))`, `B = Some((1, 9))`), which Compose's single-focus rule prevents.
-  Fix: dispatch the clear through the registrar that owns the OPEN selection (or through the
-  container's own hit area), not through the registrar found at the press point.
+  **Closed 2026-10-29.** `handle_pointer_down` now sweeps every live registrar instead of the one
+  found on the hit node: `text::selection::clear_open_selections()` walks a thread-local list of
+  weak registrar handles (`LIVE_REGISTRARS`, pruned on use) and ends whatever selection is open.
+  Tests: `app::per_window::selection_clear_tests::pressing_outside_the_container_clears_its_selection`
+  and `..::pressing_another_container_clears_the_first`.
 - [x] **D-3 — the multiset of texts a container reports is correct.** Ruled out as a deviation: a
   text that leaves the tree loses its segment (`reindex` drops slots the walk did not report, and
   `total` went `6 -> 3` when the first text was removed), and a text that Skips keeps it (`6 -> 6`).
@@ -113,7 +116,7 @@
 
 ## Missing API surface
 
-- [ ] **M-1 — no way to copy a CONTAINER selection.** The write path now exists
+- [x] **M-1 — a container selection can be copied.** The write path now exists
   (`winia/src/clipboard.rs`: a component requests a copy, `AppState::window_event` hands it to
   winit's `set_clipboard` as the event finishes), and `TextField`'s Ctrl+C / Ctrl+X use it. What is
   still missing is the container side: `SelectionContainer` does not listen for Ctrl+C, so a
@@ -127,6 +130,13 @@
   Ctrl+X copies and clears). What remains for M-1 itself: bind Ctrl+C in `SelectionContainer`: the
   selection is global across the container, so the handler needs the container's own registrar, not
   a text node's — and that is the same missing piece as D-2's clear dispatch.
+  **Closed 2026-10-29** by `CopySelectionKey`, a `KeyNode` on the container's own modifier: keys
+  reach it whenever focus is inside the container (it sits on the focus path), so Ctrl+C (and
+  Cmd+C) copies `registrar.build_selection()`; with nothing selected the key is left to whoever else
+  wanted it. Tests: `app::per_window::clipboard_copy_tests::a_container_copies_its_selection_on_ctrl_c`
+  and `..::a_container_leaves_ctrl_c_alone_with_no_selection`. Still missing here: a context menu,
+  select-all, and copying a selection that spans two containers (impossible by construction — each
+  container owns its own range).
   The repo now pins winit **0.31.0-beta.4**, which adds
   `ActiveEventLoop::clipboard()` / `set_clipboard()` over the data-transfer API, implemented on
   Windows as well (changelog `winit/src/changelog/v0.31.md`; the beta.4 sources are in the local

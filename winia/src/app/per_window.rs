@@ -6,6 +6,8 @@ mod keyboard;
 mod pointer;
 #[cfg(test)]
 mod clipboard_copy_tests;
+#[cfg(test)]
+mod selection_clear_tests;
 
 pub(crate) use core::*;
 pub(crate) use geometry::*;

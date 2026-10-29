@@ -306,11 +306,12 @@ pub(crate) fn handle_pointer_down(
     let Some(&innermost) = path.last() else { return false; };
 
     // Clear the old selection (a new click begins).
-    {
-        if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
-            reg.clear_selection();
-        }
-    }
+    //
+    // This sweeps EVERY live registrar rather than the one on the node that was hit: the press may
+    // land on a node that carries none (a plain Text, a container's padding, a Button), and reading
+    // the hit node's registrar then cleared nothing, so the highlight survived a click elsewhere
+    // (measured: two containers each held a selection at once).
+    crate::text::selection::clear_open_selections();
     // Grapheme anchor placement.
     // ⚠ With a containerized TextField the paragraph is cached only on the **input leaf**, so a
     // container node has no `cached_paragraph` — clicking the container's blank area hits the

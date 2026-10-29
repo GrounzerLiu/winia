@@ -6,9 +6,10 @@
 
 use crate::runtime::composition_local::CompositionLocal;
 use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::ops::Range;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 // ═══════════════════════════════════════════════════════════
 // Supporting types.
@@ -72,17 +73,49 @@ pub struct SelectionRegistrar {
     inner: Arc<Mutex<RegistrarInner>>,
 }
 
+thread_local! {
+    /// Every registrar alive on this thread, so a press outside any of them can clear the one that
+    /// owns the open selection. Weak: a container that leaves composition drops out on its own, and
+    /// the list is pruned on every use (`clear_open_selections`).
+    static LIVE_REGISTRARS: RefCell<Vec<Weak<Mutex<RegistrarInner>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clear the selection of every registrar that currently has one.
+///
+/// A press that is not continuing a selection ends it (Compose: `onClearSelectionRequested` / the tap
+/// handler call `onRelease`). The press does not know which container owns the selection — it lands
+/// on a node, and only registered text leaves carry a registrar — so this sweeps the live ones
+/// instead of trusting a hit.
+pub(crate) fn clear_open_selections() {
+    LIVE_REGISTRARS.with(|live| {
+        let mut live = live.borrow_mut();
+        live.retain(|weak| {
+            let Some(inner) = weak.upgrade() else { return false };
+            let mut inner = inner.lock();
+            if inner.selection_start.is_some() || inner.selection_end.is_some() {
+                inner.selection_start = None;
+                inner.selection_end = None;
+            }
+            true
+        });
+    });
+}
+
 impl SelectionRegistrar {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(RegistrarInner {
+        let inner = Arc::new(Mutex::new(RegistrarInner {
                 selection_start: None,
                 selection_end: None,
                 next_global_offset: 0,
                 segments: HashMap::new(),
                 on_change: None,
-            })),
-        }
+            }));
+        LIVE_REGISTRARS.with(|live| {
+            let mut live = live.borrow_mut();
+            live.retain(|weak| weak.strong_count() > 0);
+            live.push(Arc::downgrade(&inner));
+        });
+        Self { inner }
     }
 
     pub fn register(&self, slot_key: u64, text: &str) -> usize {
