@@ -10,7 +10,8 @@
 use letclone::clone;
 use winia::prelude::*;
 use winia::text::{
-    measure_text, TextBrush, TextDrawStyle, TextGeometricTransform, TextMeasureSpec, TextShadow,
+    measure_text, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextBrush, TextDrawStyle,
+    TextGeometricTransform, TextMeasureSpec, TextShadow,
 };
 
 #[path = "common/settings.rs"]
@@ -528,6 +529,35 @@ fn text_demo(ctx: &mut ComposeCtx) {
                             .font_feature_settings("tnum")
                             .modifier(Modifier::new().test_tag("tx-feature-tnum"))
                             .build(ctx);
+                    });
+                // Compose's lineHeightStyle: where the run sits in a taller line, and whether the
+                // leading at the ends is trimmed (the trimmed box is visibly shorter).
+                Row::new()
+                    .spacing(16.0)
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        for (label, align, trim) in [
+                            ("top", LineHeightAlignment::Top, LineHeightTrim::None),
+                            ("centre", LineHeightAlignment::Center, LineHeightTrim::None),
+                            ("bottom", LineHeightAlignment::Bottom, LineHeightTrim::None),
+                            ("trimmed", LineHeightAlignment::Center, LineHeightTrim::Both),
+                        ] {
+                            Column::new().spacing(4.0).build(ctx, |ctx| {
+                                Text::new("Ag")
+                                    .font_size(18.0)
+                                    .line_height(34.0)
+                                    .line_height_style(LineHeightStyle::new(align, trim))
+                                    .modifier(
+                                        Modifier::new()
+                                            .background(
+                                                Color::from_argb(40, 255, 255, 255),
+                                                Shape::Rectangle,
+                                            )
+                                            .test_tag(format!("tx-lh-{label}")),
+                                    )
+                                    .build(ctx);
+                            });
+                        }
                     });
                 // Paint styles: an outline and a gradient, both through the glyph foreground paint.
                 Row::new()

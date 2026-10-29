@@ -216,6 +216,62 @@ pub(crate) struct TextPaintSpec {
     pub draw_style: Option<crate::text::TextDrawStyle>,
     pub brush: Option<crate::text::TextBrush>,
     pub transform: Option<crate::text::TextGeometricTransform>,
+    pub line_height_style: Option<crate::text::LineHeightStyle>,
+}
+
+/// Compose's `LineHeightStyle`, resolved into the two numbers the layout needs.
+///
+/// `paint_dy` is how far the paragraph is drawn below its box origin (negative = up), and
+/// `trim_top` / `trim_bottom` are the slices of extra leading removed from the box height at the
+/// first line's top and the last line's bottom. Compose models the extra leading as
+/// `lineHeight - fontLineHeight`, split by the alignment's `topRatio`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct LineGeometry {
+    pub paint_dy: f32,
+    pub trim_top: f32,
+    pub trim_bottom: f32,
+}
+
+pub(crate) fn line_geometry(node: &LayoutNode, para: &crate::text::Paragraph) -> LineGeometry {
+    let Some(style) = text_paint(node).and_then(|p| p.line_height_style) else {
+        return LineGeometry::default();
+    };
+    if style.is_noop() {
+        return LineGeometry::default();
+    }
+    let Some(line_height_px) = text_line_height_px(node) else {
+        return LineGeometry::default();
+    };
+    let extra = (line_height_px - para.natural_line_height()).max(0.0);
+    if extra <= 0.5 {
+        return LineGeometry::default();
+    }
+    let ratio = style.alignment.top_ratio();
+    let trim_top = match style.trim {
+        crate::text::LineHeightTrim::FirstLineTop | crate::text::LineHeightTrim::Both => ratio * extra,
+        _ => 0.0,
+    };
+    let trim_bottom = match style.trim {
+        crate::text::LineHeightTrim::LastLineBottom | crate::text::LineHeightTrim::Both => {
+            (1.0 - ratio) * extra
+        }
+        _ => 0.0,
+    };
+    LineGeometry {
+        // The paragraph is built with the leading centred (see D-2), so only the rest of the way
+        // to the requested alignment is applied, minus whatever the trim takes off the top.
+        paint_dy: (ratio - 0.5) * extra - trim_top,
+        trim_top,
+        trim_bottom,
+    }
+}
+
+/// The `line_height` the payload carries, in logical pixels (the same number the paragraph used).
+pub(crate) fn text_line_height_px(node: &LayoutNode) -> Option<f32> {
+    node.modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::TextContent { line_height, .. } => *line_height,
+        _ => None,
+    })
 }
 
 /// The horizontal glyph transform this node carries, if any (Compose's `textGeometricTransform`).
@@ -230,13 +286,14 @@ pub(crate) fn text_transform(node: &LayoutNode) -> Option<crate::text::TextGeome
 
 pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
     node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush, transform } => {
+        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush, transform, line_height_style } => {
             Some(TextPaintSpec {
                 shadow: *shadow,
                 font_feature_settings: font_feature_settings.clone(),
                 draw_style: *draw_style,
                 brush: brush.clone(),
                 transform: *transform,
+                line_height_style: *line_height_style,
             })
         }
         _ => None,
@@ -454,6 +511,13 @@ pub(crate) fn measure_and_cache_text_at(
             text_size.height
         };
         size.height = size.height.max(line_height * min_lines as f32);
+    }
+
+    // Compose's `LineHeightStyle.Trim`: the leading at the first line's top / last line's bottom is
+    // removed from the box, which is what makes a trimmed line sit flush with its neighbours.
+    let geometry = line_geometry(node, &para);
+    if geometry.trim_top > 0.0 || geometry.trim_bottom > 0.0 {
+        size.height = (size.height - geometry.trim_top - geometry.trim_bottom).max(0.0);
     }
 
     let longest_line = para.longest_line() * scale_x;
@@ -872,3 +936,4 @@ mod truncate_tests {
         assert!(truncate_for_ellipsis_probe("ok", 400.0, crate::text::TextOverflow::StartEllipsis).is_none());
     }
 }
+

@@ -29,6 +29,8 @@ pub(crate) struct TextExtras {
     pub brush: Option<crate::text::TextBrush>,
     /// Compose's `TextStyle.textGeometricTransform`.
     pub transform: Option<crate::text::TextGeometricTransform>,
+    /// Compose's `TextStyle.lineHeightStyle`.
+    pub line_height_style: Option<crate::text::LineHeightStyle>,
 }
 
 impl Modifier {
@@ -149,6 +151,7 @@ impl Modifier {
             draw_style: extras.draw_style,
             brush: extras.brush,
             transform: extras.transform,
+            line_height_style: extras.line_height_style,
         };
         let says_something = !matches!(
             &paint,
@@ -158,6 +161,7 @@ impl Modifier {
                 draw_style: None,
                 brush: None,
                 transform: None,
+                line_height_style: None,
             }
         );
         if says_something { m.push(paint) } else { m }

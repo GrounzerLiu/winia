@@ -11,7 +11,7 @@ use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
 use crate::text::{
-    FontSlant, FontWeight, TextAlign, TextBrush, TextDecoration, TextDrawStyle,
+    FontSlant, FontWeight, LineHeightStyle, TextAlign, TextBrush, TextDecoration, TextDrawStyle,
     TextGeometricTransform, TextLayoutResult, TextOverflow, TextShadow, TextStyle,
 };
 use std::sync::{Arc, LazyLock};
@@ -61,6 +61,7 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         text_geometric_transform: override_
             .text_geometric_transform
             .or(base.text_geometric_transform),
+        line_height_style: override_.line_height_style.or(base.line_height_style),
     }
 }
 
@@ -100,6 +101,8 @@ pub struct Text {
     brush: Option<TextBrush>,
     /// Compose's `TextStyle.textGeometricTransform`.
     text_geometry: Option<TextGeometricTransform>,
+    /// Compose's `TextStyle.lineHeightStyle`.
+    line_height_style: Option<LineHeightStyle>,
 }
 
 impl std::fmt::Debug for Text {
@@ -141,6 +144,7 @@ impl Text {
             draw_style: None,
             brush: None,
             text_geometry: None,
+            line_height_style: None,
         }
     }
 
@@ -170,6 +174,12 @@ impl Text {
     /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew of the glyph run.
     pub fn text_geometry(mut self, transform: TextGeometricTransform) -> Self {
         self.text_geometry = Some(transform);
+        self
+    }
+    /// Compose's `TextStyle.lineHeightStyle` — where the text sits in a taller line box, and whether
+    /// the leading at the ends is trimmed. Needs `.line_height(..)` to have something to distribute.
+    pub fn line_height_style(mut self, style: LineHeightStyle) -> Self {
+        self.line_height_style = Some(style);
         self
     }
 
@@ -307,6 +317,7 @@ impl Text {
         let final_transform = self
             .text_geometry
             .or(style.text_geometric_transform);
+        let final_line_height_style = self.line_height_style.or(style.line_height_style);
         let final_brush = self.brush.clone().or_else(|| style.brush.clone());
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
@@ -354,6 +365,7 @@ impl Text {
         ctx.changed(&final_draw_style);
         ctx.changed(&final_brush);
         ctx.changed(&final_transform);
+        ctx.changed(&final_line_height_style);
 
         let modifier = self.modifier.text_content_full(
             self.content,
@@ -373,6 +385,7 @@ impl Text {
                 draw_style: final_draw_style,
                 brush: final_brush.clone(),
                 transform: final_transform,
+                line_height_style: final_line_height_style,
                 min_lines: final_min_lines,
                 underline: final_decoration.underline,
                 line_through: final_decoration.line_through,
@@ -742,6 +755,53 @@ mod tests {
         }
         assert!(t.is_identity() == false);
         assert!(TextGeometricTransform::new(1.0, 0.0).is_identity());
+    }
+
+    /// `LineHeightStyle.Trim` removes the extra leading from the box HEIGHT; the alignment decides
+    /// how the extra is split. Both come out of the same helper, so this pins all four combinations.
+    #[test]
+    fn a_line_height_style_trims_the_box_and_places_the_run() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        fn geometry(style: LineHeightStyle) -> (f32, f32, f32, f32) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx| {
+                Text::new("Ag")
+                    .font_size(16.0)
+                    .line_height(24.0)
+                    .line_height_style(style)
+                    .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let node = &composer.arena_nodes()[root];
+            let para = node.cached_paragraph.borrow();
+            let geo = crate::layout::node::line_geometry(node, para.as_ref().unwrap());
+            (geo.paint_dy, geo.trim_top, geo.trim_bottom, node.measured_size.height)
+        }
+        let (centre_dy, centre_top, centre_bottom, centre_h) =
+            geometry(LineHeightStyle::new(A::Center, T::None));
+        assert_eq!((centre_dy, centre_top, centre_bottom), (0.0, 0.0, 0.0), "the default is the centred build");
+        assert!((centre_h - 24.0).abs() < 1.0, "an untrimmed line keeps its line height: {centre_h}");
+        let (_, _, _, trimmed_h) = geometry(LineHeightStyle::new(A::Center, T::Both));
+        assert!(
+            trimmed_h < centre_h - 2.0,
+            "trimming both ends shrinks the box by the extra leading: none={centre_h} both={trimmed_h}"
+        );
+
+        let (top_dy, _, _, _) = geometry(LineHeightStyle::new(A::Top, T::None));
+        let (bottom_dy, _, _, _) = geometry(LineHeightStyle::new(A::Bottom, T::None));
+        assert!(top_dy < 0.0 && bottom_dy > 0.0, "Top lifts, Bottom drops: {top_dy} {bottom_dy}");
+        assert!((top_dy + bottom_dy).abs() < 0.01, "the two are symmetric about centre: {top_dy} {bottom_dy}");
+
+        let (both_dy, both_top, both_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::Both));
+        assert!(both_top > 0.0 && both_bottom > 0.0, "Both trims each end: {both_top} {both_bottom}");
+        assert!((both_dy + both_top).abs() < 0.01, "the paint follows the top trim: {both_dy} {both_top}");
+        assert!((both_top + both_bottom - (centre_top + centre_bottom + both_top + both_bottom)).abs() < 0.01);
+
+        let (_, first_top, first_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::FirstLineTop));
+        assert!(first_top > 0.0 && first_bottom == 0.0, "only the top end: {first_top} {first_bottom}");
+        let (_, last_top, last_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::LastLineBottom));
+        assert!(last_top == 0.0 && last_bottom > 0.0, "only the bottom end: {last_top} {last_bottom}");
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///

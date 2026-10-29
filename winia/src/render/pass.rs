@@ -844,6 +844,11 @@ pub(super) fn render_pass1(
             if soft_wrap {
                 para.layout(content_w / scale_x.max(0.0001));
             }
+            // Compose's `LineHeightStyle`: where the text sits inside a taller line box. The box was
+            // trimmed at measure time, so the paint origin moves by the same amount (`paint_dy`
+            // already includes the trim), and the caret, selection and hit test follow it below.
+            let line_geo = crate::layout::node::line_geometry(node, para);
+            let text_y = content_y + line_geo.paint_dy;
             // Compose's `TextOverflow`: the node clips its own drawing whenever the layout
             // overflows, and `Visible` is the one value that asks for no clipping at all
             // (`TextStringSimpleNode.kt:443-448` — `willClip = layoutCache.didOverflow`).
@@ -913,18 +918,18 @@ pub(super) fn render_pass1(
                     // The highlight follows the same horizontal mapping as the glyphs.
                     let (left, right) = match transform {
                         Some(t) => (
-                            x_off + t.map_x(tb.rect.left, content_y + tb.rect.top - content_y),
-                            x_off + t.map_x(tb.rect.right, content_y + tb.rect.top - content_y),
+                            x_off + t.map_x(tb.rect.left, tb.rect.top),
+                            x_off + t.map_x(tb.rect.right, tb.rect.top),
                         ),
                         None => (x_off + tb.rect.left, x_off + tb.rect.right),
                     };
-                    canvas.draw_rect(skia_safe::Rect::new(left, content_y + tb.rect.top, right, content_y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(skia_safe::Rect::new(left, text_y + tb.rect.top, right, text_y + tb.rect.bottom), &paint);
                 }
             }
             match transform {
                 Some(t) => {
                     canvas.save();
-                    canvas.translate((x_off, content_y));
+                    canvas.translate((x_off, text_y));
                     canvas.scale((t.scale_x, 1.0));
                     if t.skew_x.abs() > f32::EPSILON {
                         canvas.skew((t.skew_x, 0.0));
@@ -932,7 +937,7 @@ pub(super) fn render_pass1(
                     para.paint(canvas, 0.0, 0.0);
                     canvas.restore();
                 }
-                None => para.paint(canvas, x_off, content_y),
+                None => para.paint(canvas, x_off, text_y),
             }
             // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））。
             // ⚠ 有选区（非零宽）时不显示——对齐 Compose：光标仅 collapsed
@@ -987,7 +992,7 @@ pub(super) fn render_pass1(
                                 None => cx,
                             };
                             debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
-                            canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
+                            canvas.draw_line(skia_safe::Point::new(x_off + cx, text_y + cy), skia_safe::Point::new(x_off + cx, text_y + cy + ch), &cp);
                         } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
                     }
                 } else { debug_log!("[render] cursor_visible is false"); }
@@ -1013,7 +1018,7 @@ pub(super) fn render_pass1(
                             Some(t) => (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0)),
                             None => (x_off + r.left, x_off + r.right),
                         };
-                        canvas.draw_line(skia_safe::Point::new(left, content_y + r.bottom), skia_safe::Point::new(right, content_y + r.bottom), &und_paint);
+                        canvas.draw_line(skia_safe::Point::new(left, text_y + r.bottom), skia_safe::Point::new(right, text_y + r.bottom), &und_paint);
                     }
                 }
             }

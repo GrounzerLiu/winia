@@ -1139,3 +1139,50 @@ fn a_scaled_run_still_aligns_to_its_box() {
         "a right-aligned scaled run ends at the box edge: ink=({a},{b})"
     );
 }
+
+/// Compose's `LineHeightStyle`: the extra leading is distributed by the alignment, and the trim
+/// pulls the ends of the layout in. `paint_dy` already carries the trim, so the ink moves by the
+/// same amount the box shrinks.
+///
+/// Measured on 16 sp text in a 24 px line (the font's own line is 21.29 px, so the extra is 2.71):
+/// `Top` puts all of it below (ink 7..21), `Center` splits it (8..22), `Bottom` puts all of it above
+/// (9..23).
+#[test]
+fn a_line_height_alignment_moves_the_ink_inside_the_line_box() {
+    fn ink_rows(align: winia::text::LineHeightAlignment, trim: winia::text::LineHeightTrim) -> (i32, i32) {
+        let (mut surface, _) = render_ui(200.0, 40.0, winia::app_root!(move |ctx| {
+            Text::new("Ag")
+                .font_size(16.0)
+                .color(Color::BLACK)
+                .line_height(24.0)
+                .line_height_style(winia::text::LineHeightStyle::new(align, trim))
+                .modifier(Modifier::new().size(200.0, 40.0))
+                .build(ctx);
+        }));
+        let (mut top, mut bottom) = (-1, -1);
+        for y in 0..40 {
+            for x in 0..200 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if top < 0 { top = y; }
+                    bottom = y;
+                }
+            }
+        }
+        (top, bottom)
+    }
+    use winia::text::{LineHeightAlignment as A, LineHeightTrim as T};
+    let (top_top, _) = ink_rows(A::Top, T::None);
+    let (centre_top, _) = ink_rows(A::Center, T::None);
+    let (bottom_top, _) = ink_rows(A::Bottom, T::None);
+    assert!(
+        top_top < centre_top && centre_top < bottom_top,
+        "the alignment slides the run: top={top_top} centre={centre_top} bottom={bottom_top}"
+    );
+    let (none_top, none_bottom) = ink_rows(A::Center, T::None);
+    let (both_top, both_bottom) = ink_rows(A::Center, T::Both);
+    assert!(
+        both_top < none_top && both_bottom < none_bottom,
+        "trimming both ends lifts the run: none=({none_top},{none_bottom}) both=({both_top},{both_bottom})"
+    );
+}

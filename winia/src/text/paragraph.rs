@@ -224,6 +224,14 @@ impl Paragraph {
         self.paragraph.max_intrinsic_width()
     }
 
+    /// The FONT's own line height (ascent + descent) of the first run, without any line-height
+    /// multiplier — what Compose subtracts from `lineHeight` to get the extra leading.
+    pub fn natural_line_height(&self) -> scalar {
+        let font = self.inner_paragraph().get_font_at(0);
+        let (_, metrics) = font.metrics();
+        (metrics.descent - metrics.ascent) as scalar
+    }
+
     pub fn alphabetic_baseline(&self) -> scalar {
         self.paragraph.alphabetic_baseline()
     }

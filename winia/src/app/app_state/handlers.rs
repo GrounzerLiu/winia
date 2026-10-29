@@ -991,6 +991,8 @@ impl ApplicationHandler for AppState {
                                         if let Some(t) = crate::layout::node::text_transform(&nodes[pidx]) {
                                             cx = t.map_x(cx, cy);
                                         }
+                                        // A line-height style moves the glyphs inside their box.
+                                        let line_dy = crate::layout::node::line_geometry(&nodes[pidx], p).paint_dy;
                                         let align = nodes[pidx].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                                         // CONTENT box: the painter uses it, so the IME
                                         // candidate window must too — under a flight layout
@@ -1015,7 +1017,7 @@ impl ApplicationHandler for AppState {
                                             };
                                             (x_off + pad_x + cx) as f64
                                         };
-                                        let y = (abs.1 + pad_t + cy) as f64;
+                                        let y = (abs.1 + pad_t + cy + line_dy) as f64;
                                         let _ = sw.request_ime_update(
                                             winit::window::ImeRequest::Update(
                                                 winit::window::ImeRequestData::default()

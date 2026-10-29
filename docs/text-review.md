@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Defects (wrong behaviour) | 0 | 10 | 0 |
 | Deviations from Compose (deliberate or accepted) | 0 | 5 | 0 |
-| Missing API surface | 1 | 9 | 0 |
+| Missing API surface | 0 | 10 | 0 |
 | Investigated and ruled out | — | 5 | — |
 
 Fixed on 2026-10-28: T-1..T-8 and T-10 (defects), D-2, D-3 and the align half of D-4, and M-1, M-2,
@@ -343,40 +343,25 @@ clamping).
   Test: `components::text::tests::an_em_font_size_resolves_against_the_inherited_size`
   (`2.em` under a 16 sp `ProvideTextStyle` is 32 logical px).
 
-- [ ] **M-6 — `TextStyle.lineHeightStyle` is still missing.**
-  Fixed: **`shadow`**, **`fontFeatureSettings`**, **`drawStyle`**, **`brush`** and now
-  **`textGeometricTransform`** (`TextGeometricTransform { scale_x, skew_x }`, Compose's
-  `TextStyle.textGeometricTransform`). **`fontSynthesis` needs no code**: Skia synthesises the
-  missing face itself (measured on `SimSun`, which has no bold face: regular 108.0 px / 277 ink
-  pixels against bold 111.8 px / 442, a faux bold — Compose's default `FontSynthesis.All`; there is
-  no way to switch it off, which is the only difference).
-  The geometric transform goes through ALL the geometry readers rather than the paint alone, which
-  is what the earlier note in this file said would be the expensive part: `build_text_paragraph`
-  lays the paragraph out in its own space, `measure_and_cache_text_at` multiplies the measured width
-  (and `longest_line`) by `scale_x`, the paint applies `canvas.scale`/`canvas.skew` around the text
-  origin, and `map_x`/`unmap_x` carry the same mapping into the caret, the composing underline, the
-  selection rectangles, the IME candidate window and the two pointer hit tests
-  (`per_window/pointer.rs`, `overlay_host/input.rs`).
-  Measured: scale 2 doubles the measured box (42.0 px → 84.0 px with the same 27.0 height) and the
-  painted run (ink right edge 60 → 120); both fail with their half disabled.
-  Tests: `components::text::tests::a_geometric_transform_scales_the_measured_width_and_maps_back`
-  (measurement + `map_x`/`unmap_x` inverse),
-  `render_snapshot::a_geometric_transform_scales_the_painted_run` (paint). Demo: the paint card
-  shows a scaled and a skewed run.
-  Limitation, recorded: `skew_x` leans the glyphs at paint and is carried by `map_x`/`unmap_x`, but
-  it is NOT added to the measured width — a skewed run can therefore ink a little past its box, and
-  a box that must contain the lean needs padding. `scale_x` is exact.
-  Still missing: `lineHeightStyle` (`alignment` + `trim`). Only the boolean `set_half_leading` exists
-  (spent on D-2's centring) and there is no `alignment`/`trim` pair; the trim half also changes the
-  box height that the caret and the overflow clip read, so it needs the same geometry pass the
-  transform just got — the hook to hang it on is now there (`text_transform`'s pattern) but the
-  leading arithmetic is not written.
-  Tests for the fixed half: `render_snapshot::a_text_shadow_paints_offset_ink_beyond_the_glyphs`,
-  `render_snapshot::a_text_brush_paints_a_gradient_across_the_glyphs`,
-  `components::text::tests::a_text_shadow_does_not_change_the_measured_box`,
-  `components::text::tests::a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison`,
-  `text::style::style_tests::font_feature_settings_parse_the_compose_syntax`. Commits eff2d7d and
-  87a7e01.
+- [x] **M-6 — `TextStyle.lineHeightStyle` was missing** (the last open row of this file).
+  Fixed: `LineHeightStyle { alignment, trim }` with Compose's four alignments (`Top`/`Center`/
+  `Bottom`/`Proportional`) and four trims (`None`/`FirstLineTop`/`LastLineBottom`/`Both`), set through
+  `Text::line_height_style(..)` or `TextStyle::line_height_style(..)`.
+  How it works: Skia has no alignment/trim pair, only `set_half_leading`, so the extra leading
+  (`lineHeight - fontLineHeight`) is resolved in winia and travels as three numbers — `paint_dy`,
+  `trim_top`, `trim_bottom` — from `line_geometry(node, para)` (`layout/node/measure/paragraph.rs`).
+  Measure subtracts the trims from the box height; the paint, the caret, the composing underline,
+  the selection rectangles, the IME window and both hit tests shift by `paint_dy`.
+  Measured on 16 sp text in a 24 px line (the font's own line is 21.29 px, so the extra is 2.71):
+  `Top` inks 7..21, `Center` 8..22, `Bottom` 9..23, and `Trim::Both` shrinks a 24 px box to 22.
+  Tests: `components::text::tests::a_line_height_style_trims_the_box_and_places_the_run` (all four
+  trims, symmetry, trimmed height — reports `none=24 both=24` with the geometry disabled) and
+  `render_snapshot::a_line_height_alignment_moves_the_ink_inside_the_line_box` (reports
+  `top=8 centre=8 bottom=8` with it disabled). Demo: the `tx-lh-*` boxes.
+  Deviations, recorded rather than hidden: `Proportional` is treated as `Center` (every line shares
+  one style, so the proportional share is the same on every line), and `RichText` does not expose the
+  style yet — its inline runs would each need their own leading, which the span resolver does not
+  carry.
 - [x] **M-7 — `RichText` had no `AnnotatedString` equivalent.** `RichSpanStyle` is a resolved
   product, so styled text could not be stored, sliced or queried.
   Fixed: `text/annotated.rs` carries the value — `AnnotatedString { text, spans }` with

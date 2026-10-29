@@ -339,6 +339,10 @@ pub(crate) fn handle_pointer_down(
                 Some(t) => (t.unmap_x(local.0, local.1), local.1),
                 None => local,
             };
+            // A `LineHeightStyle` also moves the glyphs inside their box: take the paint offset back
+            // out before asking the paragraph which cluster is under the pointer.
+            let line_dy = crate::layout::node::line_geometry(&nodes[ai], para).paint_dy;
+            let local = (local.0, local.1 - line_dy);
             let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(local.0, local.1));
             // The result is a display-text offset (the paragraph holds the displayed text), so it
             // goes back through the OffsetMapping to an editing offset (password masking / formatted

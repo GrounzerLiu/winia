@@ -174,6 +174,62 @@ impl TextGeometricTransform {
     }
 }
 
+/// Where the text sits inside a line box that is taller than the font — Compose's
+/// `LineHeightStyle.Alignment`.
+///
+/// The extra leading (`lineHeight - font line height`) is distributed around the glyphs: `Top` puts
+/// all of it BELOW the text, `Bottom` all of it above, `Center` splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineHeightAlignment {
+    Top,
+    #[default]
+    Center,
+    Bottom,
+    /// Compose's `Proportional`: each line takes the same share of the extra as its own height bears
+    /// to the tallest line. winia treats it as `Center` while every line shares one style — recorded
+    /// in `docs/text.md`.
+    Proportional,
+}
+
+impl LineHeightAlignment {
+    /// The fraction of the extra leading that sits ABOVE the glyphs (Compose's `topRatio`).
+    pub fn top_ratio(self) -> f32 {
+        match self {
+            LineHeightAlignment::Top => 0.0,
+            LineHeightAlignment::Center | LineHeightAlignment::Proportional => 0.5,
+            LineHeightAlignment::Bottom => 1.0,
+        }
+    }
+}
+
+/// Which end of the layout the extra leading is trimmed from — Compose's `LineHeightStyle.Trim`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineHeightTrim {
+    #[default]
+    None,
+    FirstLineTop,
+    LastLineBottom,
+    Both,
+}
+
+/// Compose's `LineHeightStyle`: how a taller-than-the-font line box is filled, and whether the
+/// leading at the first line's top / the last line's bottom is trimmed from the layout height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LineHeightStyle {
+    pub alignment: LineHeightAlignment,
+    pub trim: LineHeightTrim,
+}
+
+impl LineHeightStyle {
+    pub fn new(alignment: LineHeightAlignment, trim: LineHeightTrim) -> Self {
+        Self { alignment, trim }
+    }
+    /// Whether this style asks for the default (centred, untrimmed) layout.
+    pub fn is_noop(&self) -> bool {
+        self.alignment == LineHeightAlignment::Center && self.trim == LineHeightTrim::None
+    }
+}
+
 /// A text shadow — Compose's `Shadow`: a colour, an offset and a blur radius.
 ///
 /// Compose carries one optional shadow per `TextStyle` (`shadow: Shadow?`) and appends it to the
@@ -237,11 +293,13 @@ pub struct TextStyle {
     pub brush: Option<TextBrush>,
     /// Compose's `TextStyle.textGeometricTransform`.
     pub text_geometric_transform: Option<TextGeometricTransform>,
+    /// Compose's `TextStyle.lineHeightStyle`.
+    pub line_height_style: Option<LineHeightStyle>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None, text_geometric_transform: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None, text_geometric_transform: None, line_height_style: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -271,6 +329,8 @@ impl TextStyle {
     pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
     /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew.
     pub fn text_geometric_transform(mut self, t: TextGeometricTransform) -> Self { self.text_geometric_transform = Some(t); self }
+    /// Compose's `TextStyle.lineHeightStyle` — alignment and trim of the extra leading.
+    pub fn line_height_style(mut self, s: LineHeightStyle) -> Self { self.line_height_style = Some(s); self }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
         self.decoration = Some(decoration);
