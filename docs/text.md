@@ -23,10 +23,11 @@ One constructor; everything else is an option that returns `Self`.
 | `ProvideTextStyle(style, ctx, content)` | the style merged into the subtree's local | a component giving its labels one token (button, chip, snackbar) |
 
 Options, in Compose's order: `color`, `font_size`, `font_weight` / `bold`, `italic` / `oblique`,
-`font_family`, `letter_spacing`, `text_decoration`, `align`, `line_height`, `line_height_style`,
-`overflow`, `soft_wrap`, `max_lines`, `min_lines`, `auto_size`, `on_text_layout`, `style`,
-`background`, plus the paint-only `shadow`, `font_feature_settings`, `draw_style`, `brush` and
-`text_geometry` (they ride a `TextPaint` modifier element, so they never re-measure).
+`font_family`, `letter_spacing` (a `TextUnit` — `sp`, or an `em` of the leaf's own size),
+`text_decoration`, `align`, `line_height`, `line_height_style`, `overflow`, `soft_wrap`, `max_lines`,
+`min_lines`, `auto_size`, `on_text_layout`, `style`, `background`, plus the paint-only `shadow`,
+`font_feature_settings`, `draw_style`, `brush` and `text_geometry` (they ride a `TextPaint` modifier
+ element, so they never re-measure).
 
 ## Layout
 
@@ -113,7 +114,7 @@ measurements behind each and the reason a row is still open — in
 | Compose | winia |
 | --- | --- |
 | `autoSize: TextAutoSize?` | `Text::auto_size(min, max)` — the same fit search, run at measure time |
-| `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph holds the truncated text and carries a `DisplaySpan`, so a hit test is mapped back to content offsets (`Paragraph::content_offset` / `display_offset`) before the caret or the selection sees it |
+| `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph holds the truncated text and carries a `DisplaySpan`, so a hit test is mapped back to content offsets (`Paragraph::content_offset` / `display_offset`) before the caret or the selection sees it. `RichText` supports them too: the content is truncated first and the spans and inline-drawable ranges are remapped onto the shortened string, so a tail selection still addresses the right characters |
 | `TextStyle.lineHeightStyle` | `Text::line_height_style(LineHeightStyle { alignment, trim })`: the extra leading is split by the alignment and trimmed from the box ends. Three limits: `Proportional` behaves as `Center` while every line shares one style; `RichText` does not expose it (its inline runs would each need their own leading); and the extra is measured against the SHAPED first run, so a CJK line reads 20.32 against a Latin line's 21.28 at 16 sp and the same style shifts it about 0.5 px differently |
 | `TextStyle.textGeometricTransform` | `Text::text_geometry(TextGeometricTransform { scale_x, skew_x })`: a paint matrix plus the same mapping in the caret, hit test, IME window and selection rectangles |
 | `TextStyle.shadow` | `Text::shadow(TextShadow { color, offset, blur })`; paint-only, so the measured box does not change |
