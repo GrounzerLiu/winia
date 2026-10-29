@@ -220,7 +220,12 @@ pub(crate) struct TextPaintSpec {
 
 /// The horizontal glyph transform this node carries, if any (Compose's `textGeometricTransform`).
 pub(crate) fn text_transform(node: &LayoutNode) -> Option<crate::text::TextGeometricTransform> {
-    text_paint(node).and_then(|p| p.transform).filter(|t| !t.is_identity())
+    // Read the element directly: `text_paint` CLONES the brush and the feature string, and this is
+    // called per measure, per paint and per pointer event.
+    node.modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::TextPaint { transform, .. } => *transform,
+        _ => None,
+    }).filter(|t| !t.is_identity())
 }
 
 pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
@@ -236,6 +241,19 @@ pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
         }
         _ => None,
     })
+}
+
+/// Test hook: run [`truncate_for_ellipsis`] with a plain style, without a node.
+#[cfg(test)]
+pub(crate) fn truncate_for_ellipsis_probe(
+    content: &str,
+    max_width: f32,
+    overflow: crate::text::TextOverflow,
+) -> Option<String> {
+    let mut style = skia_safe::textlayout::TextStyle::new();
+    style.set_font_size(15.0);
+    let fc = crate::text::font::get_font_collection();
+    truncate_for_ellipsis(content, max_width, &style, &fc, overflow)
 }
 
 /// Skia can only ellipsize the END of a line, so start/middle ellipsis truncate the string here.
@@ -264,47 +282,42 @@ fn truncate_for_ellipsis(
     if probe(content) <= max_width {
         return None;
     }
-    let chars: Vec<char> = content.chars().collect();
-    // `lo` keeps `0` kept characters (the bare marker), `hi` is the first count that does not fit.
-    let (mut lo, mut hi) = (0usize, chars.len());
-    while lo < hi {
-        let mid = (lo + hi + 1) / 2;
-        let candidate = match overflow {
+    // Cut on GRAPHEME CLUSTERS, not chars: a family emoji or a combining mark must not be split, or
+    // the truncated string carries a dangling zero-width joiner (measured: "👨\u{200D}…il").
+    let mut bounds: Vec<usize> = {
+        use unicode_segmentation::UnicodeSegmentation;
+        content.grapheme_indices(true).map(|(i, _)| i).collect()
+    };
+    bounds.push(content.len());
+    let clusters = bounds.len() - 1;
+    let build = |kept: usize| -> String {
+        match overflow {
             crate::text::TextOverflow::StartEllipsis => {
-                format!("\u{2026}{}", chars[chars.len() - mid..].iter().collect::<String>())
+                format!("\u{2026}{}", &content[bounds[clusters - kept]..])
             }
             _ => {
                 // Middle: keep the head and the tail in equal share, head first.
-                let head = mid / 2;
-                let tail = mid - head;
+                let head = kept / 2;
+                let tail = kept - head;
                 format!(
                     "{}\u{2026}{}",
-                    chars[..head].iter().collect::<String>(),
-                    chars[chars.len() - tail..].iter().collect::<String>()
+                    &content[..bounds[head]],
+                    &content[bounds[clusters - tail]..]
                 )
             }
-        };
-        if probe(&candidate) <= max_width {
+        }
+    };
+    // `lo` keeps `0` clusters (the bare marker), `hi` is the first count that does not fit.
+    let (mut lo, mut hi) = (0usize, clusters);
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if probe(&build(mid)) <= max_width {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    let kept = lo;
-    Some(match overflow {
-        crate::text::TextOverflow::StartEllipsis => {
-            format!("\u{2026}{}", chars[chars.len() - kept..].iter().collect::<String>())
-        }
-        _ => {
-            let head = kept / 2;
-            let tail = kept - head;
-            format!(
-                "{}\u{2026}{}",
-                chars[..head].iter().collect::<String>(),
-                chars[chars.len() - tail..].iter().collect::<String>()
-            )
-        }
-    })
+    Some(build(lo))
 }
 
 /// Text leaf: build the paragraph laid out at `max_width`, WITHOUT touching the render cache.
@@ -822,3 +835,40 @@ fn relative_spacing(
     }
 }
 
+#[cfg(test)]
+mod truncate_tests {
+    use super::*;
+
+    /// Truncation must cut on grapheme clusters: a family emoji is one cluster of seven code
+    /// points, and cutting by chars left a dangling zero-width joiner right before the marker
+    /// (measured: `"👨\u{200D}…il"`).
+    #[test]
+    fn truncation_never_splits_a_grapheme_cluster() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+        let text = format!("{family} tail");
+        for overflow in [
+            crate::text::TextOverflow::StartEllipsis,
+            crate::text::TextOverflow::MiddleEllipsis,
+        ] {
+            let out = truncate_for_ellipsis_probe(&text, 40.0, overflow).expect("it must truncate");
+            let marker = out.find('\u{2026}').expect("the marker is in the result");
+            let before = out[..marker].chars().next_back();
+            let after = out[marker..].chars().nth(1);
+            assert!(
+                before != Some('\u{200D}') && after != Some('\u{200D}'),
+                "no half cluster next to the marker ({overflow:?}): {out:?}"
+            );
+            // The kept side is whole clusters: re-segmenting it yields no lone ZWJ run either.
+            assert!(
+                !out.ends_with('\u{200D}') && !out.starts_with('\u{200D}'),
+                "the head and the tail are cluster aligned: {out:?}"
+            );
+        }
+    }
+
+    /// A string that already fits is left alone (no marker, no truncation).
+    #[test]
+    fn a_fitting_string_is_not_truncated() {
+        assert!(truncate_for_ellipsis_probe("ok", 400.0, crate::text::TextOverflow::StartEllipsis).is_none());
+    }
+}

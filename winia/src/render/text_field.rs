@@ -329,7 +329,11 @@ pub(super) fn draw_text_with_selection(
     letter_spacing: f32, line_height: Option<f32>,
     registrar: Option<crate::text::selection::SelectionRegistrar>,
     slot_key: u64,
+    transform: Option<crate::text::TextGeometricTransform>,
 ) {
+    // The fallback must agree with the cached path about a geometric transform: the paragraph is
+    // built in its own space and painted through the same matrix (see `render::pass`).
+    let scale_x = transform.map(|t| t.scale_x).unwrap_or(1.0).max(0.0001);
     if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
@@ -339,7 +343,7 @@ pub(super) fn draw_text_with_selection(
     let para = crate::layout::node::build_plain_paragraph(
         content, font_size, color, font_weight, font_style,
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
-        false, false, None, None, w,
+        false, false, None, None, w / scale_x,
     );
     // Same rule as the cached path (see the text branch in `render::pass`): an overflowing layout
     // is clipped to the text node's own box unless the caller asked for `Visible`. Without this the
@@ -347,13 +351,25 @@ pub(super) fn draw_text_with_selection(
     // would disagree.
     let clipped = overflow != crate::text::TextOverflow::Visible
         && (para.did_exceed_max_lines()
-            || para.longest_line() > w + 0.5
+            || para.longest_line() * scale_x > w + 0.5
             || para.height() > h + 0.5);
     if clipped {
         canvas.save();
         canvas.clip_rect(skia_safe::Rect::new(x, y, x + w, y + para.height()), None, Some(false));
     }
-    draw_text(canvas, &para, x, y, w, align, soft_wrap);
+    match transform {
+        Some(t) => {
+            canvas.save();
+            canvas.translate((x, y));
+            canvas.scale((t.scale_x, 1.0));
+            if t.skew_x.abs() > f32::EPSILON {
+                canvas.skew((t.skew_x, 0.0));
+            }
+            draw_text(canvas, &para, 0.0, 0.0, w / scale_x, align, soft_wrap);
+            canvas.restore();
+        }
+        None => draw_text(canvas, &para, x, y, w, align, soft_wrap),
+    }
     if clipped {
         canvas.restore();
     }

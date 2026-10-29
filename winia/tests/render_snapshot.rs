@@ -1095,3 +1095,47 @@ fn a_geometric_transform_scales_the_painted_run() {
         "scale 2 must double the painted run: plain right={plain} scaled right={scaled}"
     );
 }
+
+/// A geometric transform widens the DRAWN run, so alignment has to work in the scaled space.
+///
+/// The paragraph is laid out at `content_w / scale_x` and painted through the matrix; measuring the
+/// slack against the unscaled width put a centred run 74 px right of centre (224 for a centre at 150
+/// at scale 1.5), and re-laying the cached paragraph at the raw content width did the same.
+#[test]
+fn a_scaled_run_still_aligns_to_its_box() {
+    fn ink(scale: f32, align: winia::text::TextAlign) -> (i32, i32) {
+        let (mut surface, _) = render_ui(300.0, 40.0, winia::app_root!(move |ctx| {
+            Text::new("centred")
+                .font_size(20.0)
+                .color(Color::BLACK)
+                .align(align)
+                .text_geometry(winia::text::TextGeometricTransform::new(scale, 0.0))
+                .modifier(Modifier::new().size(300.0, 40.0))
+                .build(ctx);
+        }));
+        let (mut first, mut last) = (-1, -1);
+        for x in 0..300 {
+            for y in 0..40 {
+                let (r, g, b, _) = pixel(&mut surface, x, y);
+                if r < 200 && g < 200 && b < 200 {
+                    if first < 0 { first = x; }
+                    last = x;
+                }
+            }
+        }
+        (first, last)
+    }
+    for scale in [1.0f32, 1.5, 2.0] {
+        let (a, b) = ink(scale, winia::text::TextAlign::Center);
+        let centre = (a + b) as f32 / 2.0;
+        assert!(
+            (centre - 150.0).abs() <= 4.0,
+            "a centred run stays centred at any scale: scale={scale} ink=({a},{b}) centre={centre}"
+        );
+    }
+    let (a, b) = ink(2.0, winia::text::TextAlign::Right);
+    assert!(
+        (b as f32 - 300.0).abs() <= 6.0,
+        "a right-aligned scaled run ends at the box edge: ink=({a},{b})"
+    );
+}

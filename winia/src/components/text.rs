@@ -410,6 +410,28 @@ mod tests {
     use super::*;
     use crate::modifier::ModifierElement;
 
+/// A plain `Text` must not carry the paint element: it says nothing, and an always-present
+    /// element costs a parameter comparison on every recomposition and a slot on every text node.
+    #[test]
+    fn a_plain_text_carries_no_paint_element() {
+        fn has_paint(text: Text) -> bool {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx| { text.build(ctx); });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root]
+                .modifier
+                .elements()
+                .iter()
+                .any(|el| matches!(el, ModifierElement::TextPaint { .. }))
+        }
+        assert!(!has_paint(Text::new("plain")), "a plain text carries only its content element");
+        assert!(has_paint(Text::new("shadowed").shadow(TextShadow::new(Color::BLACK, (1.0, 1.0), 2.0))), "a shadow needs the element");
+        assert!(
+            has_paint(Text::new("scaled").text_geometry(TextGeometricTransform::new(2.0, 0.0))),
+            "a transform needs the element"
+        );
+    }
     #[test]
     fn test_text_defaults() {
         let text = Text::new("hello");

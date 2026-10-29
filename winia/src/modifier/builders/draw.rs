@@ -121,7 +121,7 @@ impl Modifier {
         line_height: Option<f32>,
         extras: crate::modifier::builders::draw::TextExtras,
     ) -> Self {
-        self.push(ModifierElement::TextContent {
+        let m = self.push(ModifierElement::TextContent {
             min_lines: extras.min_lines,
             underline: extras.underline,
             line_through: extras.line_through,
@@ -139,16 +139,29 @@ impl Modifier {
             letter_spacing,
             line_height,
             auto_size: extras.auto_size,
-        })
-        .push(ModifierElement::TextPaint {
+        });
+        // Only carry the paint element when it says something: the extras are rare, and an
+        // always-present element costs a comparison on every recomposition and a slot on every
+        // text node in the tree.
+        let paint = ModifierElement::TextPaint {
             shadow: extras.shadow,
             font_feature_settings: extras.font_feature_settings,
             draw_style: extras.draw_style,
             brush: extras.brush,
             transform: extras.transform,
-        })
+        };
+        let says_something = !matches!(
+            &paint,
+            ModifierElement::TextPaint {
+                shadow: None,
+                font_feature_settings: None,
+                draw_style: None,
+                brush: None,
+                transform: None,
+            }
+        );
+        if says_something { m.push(paint) } else { m }
     }
-
     /// 设置边框。颜色可以是一个 `Color`，也可以是渲染期求值的闭包/状态
     /// （`impl Into<BorderColor>`）——同一个元素存载体：静态值内联，闭包在绘制期求值
     /// （配合 `peek()` 做颜色过渡）。

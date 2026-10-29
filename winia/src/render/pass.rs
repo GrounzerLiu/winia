@@ -828,14 +828,21 @@ pub(super) fn render_pass1(
     }
 
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap, letter_spacing, line_height)) = text {
+        // Compose's `textGeometricTransform` widens the DRAWN run, not the laid-out one: everything
+        // below divides or multiplies by `scale_x` so the two spaces stay in step.
+        let transform = crate::layout::node::text_transform(node);
+        let scale_x = transform.map(|t| t.scale_x).unwrap_or(1.0);
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             // Only re-lay it out when the text WRAPS. A `soft_wrap(false)` paragraph was built at
             // its intrinsic width (`build_plain_paragraph`), and laying it out again at the node's
             // content width truncates it — which is what cut a button-group label to `Sta` while a
             // press narrowed its item, and exactly what `TextOverflow::Visible` exists to prevent.
+            // The paragraph lives in its own space: a horizontal transform was already divided out
+            // when it was built (`build_text_paragraph_at`), so re-laying it at the raw content width
+            // undid that and shifted every centred scaled run right (measured: 224 for a centre at 150).
             if soft_wrap {
-                para.layout(content_w);
+                para.layout(content_w / scale_x.max(0.0001));
             }
             // Compose's `TextOverflow`: the node clips its own drawing whenever the layout
             // overflows, and `Visible` is the one value that asks for no clipping at all
@@ -850,7 +857,7 @@ pub(super) fn render_pass1(
             // into its own padding.
             let clips_overflow = overflow != crate::text::TextOverflow::Visible;
             let overflows = para.did_exceed_max_lines()
-                || para.longest_line() > content_w + 0.5
+                || para.longest_line() * scale_x > content_w + 0.5
                 || para.height() > content_h + 0.5;
             let text_clipped = clips_overflow && overflows;
             if text_clipped {
@@ -876,7 +883,7 @@ pub(super) fn render_pass1(
                 para.max_intrinsic_width()
             } else {
                 para.max_width().min(para.max_intrinsic_width())
-            };
+            } * scale_x;
             // The paragraph aligned itself when it knew the box (see `build_plain_paragraph`);
             // shifting the origin as well would double-apply. Only a paragraph laid out at an
             // infinite width — nowrap and not ellipsizing — needs the shift.
@@ -895,11 +902,6 @@ pub(super) fn render_pass1(
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };
-            // Compose's `textGeometricTransform`: a horizontal scale/skew of the GLYPH RUN. The
-            // paragraph was laid out in its own space and the box was measured scaled, so the paint
-            // applies the matrix around the paragraph's origin. Caret, selection and hit testing use
-            // the same mapping (`map_x` / `unmap_x`).
-            let transform = crate::layout::node::text_transform(node);
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
@@ -919,10 +921,6 @@ pub(super) fn render_pass1(
                     canvas.draw_rect(skia_safe::Rect::new(left, content_y + tb.rect.top, right, content_y + tb.rect.bottom), &paint);
                 }
             }
-            // Compose's `textGeometricTransform`: a horizontal scale/skew of the GLYPH RUN. The
-            // paragraph was laid out in its own space and the box was measured scaled, so the paint
-            // applies the matrix around the paragraph's origin. Caret, selection and hit testing use
-            // the same mapping (`map_x` / `unmap_x`).
             match transform {
                 Some(t) => {
                     canvas.save();
@@ -1023,7 +1021,7 @@ pub(super) fn render_pass1(
                 canvas.restore();
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key, transform);
         }
     }
 
