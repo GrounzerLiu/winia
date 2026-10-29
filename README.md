@@ -65,6 +65,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [ListItem 文档](docs/list-item.md) — M3 一行/二行/三行列表项、slots 与 LazyColumn 集成
 - [Typography 文档](docs/typography.md) — M3 字体 token、继承优先级与兼容策略
 - [Text 子系统 review 清单](docs/text-review.md) — 对 Compose 逐项核对的缺陷/差异/缺失 API，含实测数字与未修原因
+- [Selection 子系统 review 清单](docs/selection-review.md) — SelectionContainer 与其拖动管线对照 Compose，含实测数字与未修原因
 - [视觉回归矩阵](docs/visual-regression.md) — light/dark、LTR/RTL、自定义 Typography 与组件语义快照
 - [TopAppBar 文档](docs/top-app-bar.md) — 四种高度变体、Typography 与共享滚动 offset 折叠
 - [Scaffold 文档](docs/scaffold.md) — top/bottom/content/FAB 页面布局与 RTL 定位
