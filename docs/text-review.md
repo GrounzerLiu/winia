@@ -29,6 +29,17 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Seventh pass (2026-10-29): the three RichText gaps from the sixth pass
+
+The previous answer listed three things `RichText` still lacked. All three are closed.
+
+| Item | What was wrong | What it is now | Test |
+| --- | --- | --- | --- |
+| R-4 | `RichText`'s `letter_spacing` was a bare `f32`, so a span could not say `0.1.em` | `TextUnit` end to end: `RichTextScope::letter_spacing`, `RichTextBuilder::letter_spacing`, `SpanStyle::letter_spacing` and `RichSpanStyle` (which stores the RESOLVED pixels, resolved against THAT span's own font size). `TextUnit` also gained a `Default` (zero sp) so a style that says nothing compares cleanly | `components::rich_text::tests::a_span_letter_spacing_em_resolves_against_the_span_size` (0.1 em = 2 px at 20 px, 4 px at 40 px) |
+| R-5 | `RichText` had no `line_height_style` | `RichText::line_height_style(LineHeightStyle)` carried in `RichTextContent`, compared by `param_eq`, trimmed in the measure path through the SAME `line_geometry_from` the leaf uses, and applied at paint as `paint_dy` (the selection rectangles follow it) | `components::rich_text::tests::a_rich_line_height_style_trims_its_box` |
+| R-6 | start/middle ellipsis on rich text fell back to an end ellipsis, because truncating the string would have mis-aligned the spans and the inline drawables | the CONTENT is truncated before the spans are resolved, and both the spans and the drawable ranges are remapped by `remap_rich_range` (a head range stays, a tail range shifts by `head + 1`, one inside the dropped gap disappears). The paragraph records the same `DisplaySpan` the plain leaf does, so hit tests still map back to content offsets. A run that already FITS is left untouched — the search used to append a marker to a fitting string (measured: a 20-character run came back 23 bytes) | `rich_text::tests::a_rich_start_ellipsis_keeps_the_tail_addressable`, `layout::node::measure::paragraph::truncate_tests::the_rich_truncation_remap_moves_spans_and_drawables` |
+
+Note on R-6: the binary search in the rich path works in CHARACTERS (the span/drawable indices are character based), while the plain leaf's works in bytes — the two are deliberately separate, because one of them has offsets to keep aligned and the other does not.
 ## Sixth pass (2026-10-29): accessibility text scale, and `letterSpacing` as a `TextUnit`
 
 Both were listed as still missing in the previous answer; this pass closed them.

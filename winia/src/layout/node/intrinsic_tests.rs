@@ -619,6 +619,7 @@
             soft_wrap: true,
             line_height: None,
             min_lines: 1,
+            line_height_style: None,
         });
         let mut nodes = vec![LayoutNode::leaf(modifier)];
         let _ = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -653,6 +654,7 @@
             soft_wrap: true,
             line_height: None,
             min_lines: 1,
+            line_height_style: None,
         });
         let mut nodes = vec![LayoutNode::leaf(modifier)];
         assert!(nodes[0].has_richtext_content);

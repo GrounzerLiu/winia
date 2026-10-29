@@ -24,7 +24,8 @@ pub struct SpanStyle {
     pub font_size: Option<TextUnit>,
     pub font_weight: Option<FontWeight>,
     pub font_style: Option<FontSlant>,
-    pub letter_spacing: Option<f32>,
+    /// Compose's `SpanStyle.letterSpacing`, a `TextUnit` (`sp`, or an `em` of THIS span's size).
+    pub letter_spacing: Option<TextUnit>,
     pub background: Option<Color>,
     pub decoration: Option<TextDecoration>,
 }
@@ -37,7 +38,10 @@ impl SpanStyle {
     pub fn bold(self) -> Self { self.font_weight(FontWeight::BOLD) }
     pub fn font_style(mut self, style: FontSlant) -> Self { self.font_style = Some(style); self }
     pub fn italic(self) -> Self { self.font_style(FontSlant::Italic) }
-    pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+    pub fn letter_spacing(mut self, spacing: impl Into<TextUnit>) -> Self {
+        self.letter_spacing = Some(spacing.into());
+        self
+    }
     pub fn background(mut self, color: Color) -> Self { self.background = Some(color); self }
     pub fn decoration(mut self, decoration: TextDecoration) -> Self { self.decoration = Some(decoration); self }
     pub fn underline(self) -> Self { self.decoration(TextDecoration::UNDERLINE) }

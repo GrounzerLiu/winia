@@ -620,6 +620,7 @@
                 soft_wrap: true,
                 line_height: None,
                 min_lines: 1,
+                line_height_style: None,
             })
         };
         let normal = rich(vec![span(FontWeight::NORMAL)]);

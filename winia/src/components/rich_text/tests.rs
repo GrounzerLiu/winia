@@ -655,3 +655,107 @@
             "the styled range survives into the payload: {spans:?}"
         );
     }
+
+    /// Compose's `SpanStyle.letterSpacing` is a `TextUnit`: an `em` is a multiple of THIS span's own
+    /// font size, not of the paragraph's. Measured on the resolved span the paragraph consumes.
+    #[test]
+    fn a_span_letter_spacing_em_resolves_against_the_span_size() {
+        let mut style = Style::default();
+        style.fs = Some(20.0);
+        style.letter_spacing = crate::unit::TextUnit::Em(0.1);
+        let spans = resolve_spans("abcdef", &[], &[(style, 1..3)]);
+        let span = spans.iter().find(|s| s.start == 1 && s.end == 3).expect("the styled run");
+        assert!(
+            (span.letter_spacing - 2.0).abs() < 0.01,
+            "0.1 em of a 20 px span is 2 px: {}",
+            span.letter_spacing
+        );
+        let mut wider = Style::default();
+        wider.fs = Some(40.0);
+        wider.letter_spacing = crate::unit::TextUnit::Em(0.1);
+        let spans = resolve_spans("abcdef", &[], &[(wider, 1..3)]);
+        let wide_span = spans.iter().find(|s| s.start == 1 && s.end == 3).unwrap();
+        assert!(
+            (wide_span.letter_spacing - 4.0).abs() < 0.01,
+            "at 40 px it is 4 px, so the em follows the SPAN size: {}",
+            wide_span.letter_spacing
+        );
+    }
+
+    /// `RichText` now exposes `lineHeightStyle`: the trim comes off the box height and the paint
+    /// origin moves by `paint_dy`, the same two numbers the plain leaf uses (one helper, so the two
+    /// cannot drift).
+    #[test]
+    fn a_rich_line_height_style_trims_its_box() {
+        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
+        fn height(style: Option<LineHeightStyle>) -> f32 {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx| {
+                let mut b = RichText::new().line_height(34.0);
+                if let Some(style) = style {
+                    b = b.line_height_style(style);
+                }
+                b.build(ctx, |s| { s.text("Ag"); });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size.height
+        }
+        let plain = height(None);
+        let trimmed = height(Some(LineHeightStyle::new(A::Center, T::Both)));
+        assert!(trimmed < plain - 2.0, "Trim::Both shortens the rich box: {plain} -> {trimmed}");
+        let top = height(Some(LineHeightStyle::new(A::Top, T::None)));
+        assert!((top - plain).abs() < 1.0, "an alignment alone does not change the box: {plain} vs {top}");
+    }
+
+    /// Rich text now honours start/middle ellipsis by truncating the CONTENT before the spans are
+    /// resolved. The tail text must stay addressable and the span that survives must still describe
+    /// the characters it now covers.
+    #[test]
+    fn a_rich_start_ellipsis_keeps_the_tail_addressable() {
+        use crate::text::TextOverflow;
+        fn build(width: f32, overflow: TextOverflow) -> (usize, usize) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx| {
+                RichText::new()
+                    .overflow(overflow)
+                    .soft_wrap(false)
+                    .modifier(Modifier::new().size(width, 30.0))
+                    .build(ctx, |s| { s.text("0123456789abcdefghij"); });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let node = &composer.arena_nodes()[root];
+            let para = node.cached_paragraph.borrow();
+            let para = para.as_ref().unwrap();
+            // "the paragraph's own length" and "the display span's tail".
+            let span = para.display_span();
+            (para.text_len(), span.map(|s| s.tail_start_byte).unwrap_or(0))
+        }
+        let (plain_len, _) = build(400.0, TextOverflow::StartEllipsis);
+        assert_eq!(plain_len, 20, "a fitting run is untouched");
+        let (short_len, tail) = build(60.0, TextOverflow::StartEllipsis);
+        assert!(short_len < 20, "the run was truncated: {short_len}");
+        assert!(tail > 0, "the display span records where the kept tail starts: {tail}");
+        // The tail text is addressable in the paragraph's own (display) space.
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            RichText::new()
+                .overflow(TextOverflow::StartEllipsis)
+                .soft_wrap(false)
+                .modifier(Modifier::new().size(60.0, 30.0))
+                .build(ctx, |s| { s.text("0123456789abcdefghij"); });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let node = &composer.arena_nodes()[root];
+        let para = node.cached_paragraph.borrow();
+        let para = para.as_ref().unwrap();
+        let len = para.text_len();
+        let rects = para.get_rects_for_range(
+            len.saturating_sub(2)..len,
+            skia_safe::textlayout::RectHeightStyle::Max,
+            skia_safe::textlayout::RectWidthStyle::Tight,
+        );
+        assert!(!rects.is_empty(), "the visible tail is addressable (len {len})");
+    }

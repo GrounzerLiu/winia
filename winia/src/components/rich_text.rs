@@ -39,7 +39,7 @@ pub(crate) struct Style {
     deco_style: Option<crate::text::DecoStyle>,
     deco_mode: Option<crate::text::DecoMode>,
     baseline_shift: f32,
-    letter_spacing: f32,
+    letter_spacing: crate::unit::TextUnit,
     word_spacing: f32,
     height_multiple: f32,
     half_leading: bool,
@@ -58,7 +58,9 @@ impl Style {
         self.fs.is_some() || self.color.is_some() || self.fw.is_some()
             || self.slant.is_some() || self.ul || self.ol || self.st
             || self.deco_color.is_some() || self.deco_style.is_some() || self.deco_mode.is_some()
-            || self.baseline_shift != 0.0 || self.letter_spacing != 0.0 || self.word_spacing != 0.0
+            || self.baseline_shift != 0.0
+            || self.letter_spacing != crate::unit::TextUnit::Sp(crate::unit::Sp(0.0))
+            || self.word_spacing != 0.0
             || self.height_multiple != 0.0 || self.half_leading
             || !self.font_families.is_empty() || self.font_width != 5
             || self.font_edging.is_some() || self.font_hinting.is_some() || self.subpixel
@@ -73,7 +75,9 @@ impl Default for Style {
             fs: None, color: None, fw: None, slant: None,
             ul: false, ol: false, st: false,
             deco_color: None, deco_style: None, deco_mode: None,
-            baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
+            baseline_shift: 0.0,
+            letter_spacing: crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)),
+            word_spacing: 0.0,
             height_multiple: 0.0, half_leading: false,
             font_families: Vec::new(), font_width: 5,
             font_edging: None, font_hinting: None, subpixel: false,
@@ -98,7 +102,9 @@ fn resolve_base() -> Style {
         slant: base.font_style,
         ul: false, ol: false, st: false,
         deco_color: None, deco_style: None, deco_mode: None,
-        baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
+        baseline_shift: 0.0,
+        letter_spacing: crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)),
+        word_spacing: 0.0,
         height_multiple: 0.0, half_leading: false,
         font_families: Vec::new(), font_width: 5,
         font_edging: None, font_hinting: None, subpixel: false,
@@ -254,9 +260,11 @@ impl<'a> RichTextScope<'a> {
         self.style = saved;
     }
 
-    pub fn letter_spacing(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+    /// Compose's `SpanStyle.letterSpacing`: a `TextUnit`, so an `em` means a multiple of THIS
+    /// span's font size (resolved when the span is expanded).
+    pub fn letter_spacing(&mut self, v: impl Into<crate::unit::TextUnit>, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.letter_spacing = v;
+        self.style.letter_spacing = v.into();
         f(self);
         self.style = saved;
     }
@@ -337,7 +345,8 @@ impl StyleModifier {
     pub fn subscript(mut self) -> Self { self.0.baseline_shift = -0.5; self }
     pub fn superscript(mut self) -> Self { self.0.baseline_shift = 0.5; self }
     pub fn baseline_shift(mut self, v: f32) -> Self { self.0.baseline_shift = v; self }
-    pub fn letter_spacing(mut self, v: f32) -> Self { self.0.letter_spacing = v; self }
+    /// Compose's `SpanStyle.letterSpacing`, as a unit (`sp`, or an `em` of this span's size).
+    pub fn letter_spacing(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.letter_spacing = v.into(); self }
     pub fn word_spacing(mut self, v: f32) -> Self { self.0.word_spacing = v; self }
     pub fn height_multiple(mut self, v: f32) -> Self { self.0.height_multiple = v; self }
     pub fn half_leading(mut self) -> Self { self.0.half_leading = true; self }
@@ -360,6 +369,7 @@ pub struct RichText {
     soft_wrap: bool,
     line_height: Option<f32>,
     min_lines: usize,
+    line_height_style: Option<crate::text::LineHeightStyle>,
     /// A value built ahead of time (`Text::annotated`'s Compose counterpart); its text is laid out
     /// BEFORE anything the build closure appends.
     annotated: Option<crate::text::AnnotatedString>,
@@ -376,6 +386,7 @@ impl RichText {
             soft_wrap: true,
             line_height: None,
             min_lines: 1,
+            line_height_style: None,
             annotated: None,
         }
     }
@@ -416,6 +427,12 @@ impl RichText {
     }
 
     /// Minimum number of lines the box reserves room for.
+    /// Compose's `lineHeightStyle`: where the run sits in a taller line, and what the ends trim.
+    pub fn line_height_style(mut self, style: crate::text::LineHeightStyle) -> Self {
+        self.line_height_style = Some(style);
+        self
+    }
+
     pub fn min_lines(mut self, min_lines: usize) -> Self {
         self.min_lines = min_lines;
         self
@@ -492,6 +509,7 @@ impl RichText {
             soft_wrap: self.soft_wrap,
             line_height: self.line_height,
             min_lines: self.min_lines,
+            line_height_style: self.line_height_style,
         });
         ctx.start_leaf(key, modifier);
         if let Some(reg) = reg_for_node {
@@ -543,12 +561,29 @@ fn span_style_to_style(span: &crate::text::SpanStyle) -> Style {
     style.color = span.color;
     style.fw = span.font_weight;
     style.slant = span.font_style;
-    style.letter_spacing = span.letter_spacing.unwrap_or(0.0);
+    style.letter_spacing = span.letter_spacing.unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)));
     style.bg = span.background;
     if let Some(decoration) = span.decoration {
         style.ul = decoration.underline;
         style.st = decoration.line_through;
     }
+    style
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_spans_for_test(
+    content: &str,
+    drawable_ranges: &[std::ops::Range<usize>],
+    annotations: &[(Style, std::ops::Range<usize>)],
+) -> Vec<crate::text::RichSpanStyle> {
+    resolve_spans(content, drawable_ranges, annotations)
+}
+
+#[cfg(test)]
+pub(crate) fn style_for_test(font_size: f32, letter_spacing: crate::unit::TextUnit) -> Style {
+    let mut style = Style::default();
+    style.fs = Some(font_size);
+    style.letter_spacing = letter_spacing;
     style
 }
 
@@ -646,7 +681,12 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         decoration_style: s.style.deco_style,
         decoration_mode: s.style.deco_mode,
         baseline_shift: s.style.baseline_shift,
-        letter_spacing: s.style.letter_spacing, word_spacing: s.style.word_spacing,
+        // Resolved against THIS span's size: an `em` is a multiple of it (Compose's semantics).
+        letter_spacing: match s.style.letter_spacing {
+            crate::unit::TextUnit::Em(em) => s.style.fs.unwrap_or(d_fs) * em,
+            other => other.to_logical_px(crate::runtime::density::current_density()),
+        },
+        word_spacing: s.style.word_spacing,
         height_multiple: s.style.height_multiple, half_leading: s.style.half_leading,
         font_families: s.style.font_families, font_width: s.style.font_width,
         font_edging: s.style.font_edging, font_hinting: s.style.font_hinting,
@@ -671,7 +711,9 @@ impl Style {
         if let Some(v) = other.deco_style { self.deco_style = Some(v); }
         if let Some(v) = other.deco_mode { self.deco_mode = Some(v); }
         if other.baseline_shift != 0.0 { self.baseline_shift = other.baseline_shift; }
-        if other.letter_spacing != 0.0 { self.letter_spacing = other.letter_spacing; }
+        if other.letter_spacing != crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)) {
+            self.letter_spacing = other.letter_spacing;
+        }
         if other.word_spacing != 0.0 { self.word_spacing = other.word_spacing; }
         if other.height_multiple != 0.0 { self.height_multiple = other.height_multiple; }
         if other.half_leading { self.half_leading = true; }

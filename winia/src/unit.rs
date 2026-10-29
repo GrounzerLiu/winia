@@ -394,6 +394,12 @@ impl TextUnit {
     }
 }
 
+impl Default for TextUnit {
+    /// Zero `sp` — the neutral value a style means when it says nothing (Compose uses
+    /// `TextUnit.Unspecified`, which would need a third state in every comparison).
+    fn default() -> Self { TextUnit::Sp(Sp(0.0)) }
+}
+
 impl From<f32> for TextUnit {
     fn from(v: f32) -> Self { TextUnit::Sp(Sp(v)) }
 }

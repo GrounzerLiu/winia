@@ -41,6 +41,9 @@ pub struct RichSpanStyle {
     // ── 基线 ──
     pub baseline_shift: f32,
     // ── 间距 ──
+    /// Resolved letter spacing in logical pixels: the resolver turns the caller's `TextUnit`
+    /// (`sp`, or an `em` multiple of THIS span's own size) into pixels, because Skia wants pixels
+    /// and a span's size is what the `em` is relative to.
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub height_multiple: f32,

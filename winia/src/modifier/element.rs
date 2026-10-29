@@ -604,6 +604,8 @@ pub(crate) enum ModifierElement {
         /// Fixed line height in logical pixels (`None` = the font's own).
         line_height: Option<f32>,
         min_lines: usize,
+        /// Compose's `lineHeightStyle`: where the run sits in a taller line, and what the ends trim.
+        line_height_style: Option<crate::text::LineHeightStyle>,
     },
 
     // ── Input 类 ──

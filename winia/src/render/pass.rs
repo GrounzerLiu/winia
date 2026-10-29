@@ -907,6 +907,9 @@ pub(super) fn render_pass1(
                 crate::text::TextAlign::Center => content_x + slack / 2.0,
                 crate::text::TextAlign::Right => content_x + slack,
             };
+            // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
+            // trimmed at measure time, so the origin moves by the same amount.
+            let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
@@ -1062,6 +1065,9 @@ pub(super) fn render_pass1(
             } else {
                 content_w - drawn_width
             };
+            // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
+            // trimmed at measure time, so the origin moves by the same amount.
+            let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
             let rich_x = match rich_align {
                 crate::text::TextAlign::Left
                 | crate::text::TextAlign::Justify
@@ -1077,7 +1083,7 @@ pub(super) fn render_pass1(
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(rich_x + tb.rect.left, content_y + tb.rect.top, rich_x + tb.rect.right, content_y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(skia_safe::Rect::new(rich_x + tb.rect.left, content_y + rich_paint_dy + tb.rect.top, rich_x + tb.rect.right, content_y + rich_paint_dy + tb.rect.bottom), &paint);
                 }
             }
             // Same clip rule as the plain leaf (T-8): an overflowing rich layout is cut to its
@@ -1094,7 +1100,7 @@ pub(super) fn render_pass1(
                     Some(false),
                 );
             }
-            para.paint(canvas, rich_x, content_y);
+            para.paint(canvas, rich_x, content_y + rich_paint_dy);
             if rich_clips {
                 canvas.restore();
             }

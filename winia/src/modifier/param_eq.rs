@@ -174,10 +174,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar,
                             align: aal, max_lines: aml, overflow: aov, soft_wrap: asw,
-                            line_height: alh, min_lines: amin, spans: aspans, .. },
+                            line_height: alh, min_lines: amin, spans: aspans,
+                            line_height_style: alhs, .. },
          RichTextContent { content: bc, drawables: bd, drawable_ranges: br,
                             align: bal, max_lines: bml, overflow: bov, soft_wrap: bsw,
-                            line_height: blh, min_lines: bmin, spans: bspans, .. }) => {
+                            line_height: blh, min_lines: bmin, spans: bspans,
+                            line_height_style: blhs, .. }) => {
             // Every paragraph parameter takes part: a changed `max_lines` or `overflow` has to
             // re-measure just like a changed `content` does. Before this, only content, the
             // drawable count and the ranges were compared.
@@ -188,7 +190,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             // fonts and width unchanged.
             ac == bc && ad.len() == bd.len() && ar == br && aspans == bspans
                 && aal == bal && aml == bml && aov == bov && asw == bsw && alh == blh
-                && amin == bmin
+                && amin == bmin && alhs == blhs
         }
         // 点击：交互源身份参与判定（换源需重入 content 捕获新源）；回调视为相同
         (Clickable { interaction: ai, .. }, Clickable { interaction: bi, .. }) => ai == bi,

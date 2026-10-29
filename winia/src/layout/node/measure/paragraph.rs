@@ -602,6 +602,35 @@ fn text_layout_extras(
     (1, None)
 }
 
+/// Remap a character range from the ORIGINAL rich content into the TRUNCATED one.
+///
+/// `head` / `tail_start` are CHARACTER indices of the kept head prefix and the kept tail suffix in
+/// the original; the truncated string is `head + "…" + tail`, so a tail range moves by
+/// `head + 1 - tail_start`. A range entirely inside the dropped gap disappears; one that straddles
+/// the gap collapses onto the marker.
+fn remap_rich_range(
+    range: &std::ops::Range<usize>,
+    head: usize,
+    tail_start: usize,
+    total: usize,
+) -> Option<std::ops::Range<usize>> {
+    let in_head = |i: usize| i < head;
+    let in_tail = |i: usize| i >= tail_start && i <= total;
+    if in_head(range.start) {
+        // Starts in the head: keep it there, and let the end follow whichever side it is on.
+        let end = if range.end <= head { range.end } else { head + 1 };
+        return if end > range.start { Some(range.start..end) } else { None };
+    }
+    if in_tail(range.start) {
+        let shift = head + 1;
+        let s = shift + (range.start - tail_start);
+        let e = shift + (range.end.min(total) - tail_start);
+        return if e > s { Some(s..e) } else { None };
+    }
+    // Starts inside the dropped gap: the whole range is invisible.
+    None
+}
+
 /// The rich-text measure and cache, inline drawables included.
 ///
 /// Pulls the content text, the inline elements and the per-span styles out of the RichTextContent
@@ -617,6 +646,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
         if let ModifierElement::RichTextContent {
             content, drawables, drawable_ranges, spans,
             align, max_lines, overflow, soft_wrap, line_height, min_lines,
+            line_height_style,
         } = el {
             // Compose hands `BasicText` the same paragraph parameters whether the string is
             // annotated or not; this path used to build a bare `ParagraphStyle` and ignore every
@@ -651,9 +681,97 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                 }
             }
             let layout_width = if width_matters { max_width.min(f32::MAX) } else { f32::MAX };
+            // Start/middle ellipsis on RICH text: truncate the CONTENT first, then remap the spans
+            // and the drawable ranges onto the shortened string, so every offset the paragraph sees
+            // (spans, placeholder positions) still describes the text it actually lays out. The plain
+            // leaf's `truncate_for_ellipsis` cannot be reused verbatim: it works in bytes and knows
+            // nothing about spans.
+            let original_chars = content.chars().count();
+            let mut rich_text: String = content.clone();
+            let mut rich_display: Option<crate::text::DisplaySpan> = None;
+            let mut rich_spans: Vec<crate::text::RichSpanStyle> = spans.clone();
+            let mut rich_ranges: Vec<std::ops::Range<usize>> = drawable_ranges.clone();
+            if matches!(
+                overflow,
+                crate::text::TextOverflow::StartEllipsis | crate::text::TextOverflow::MiddleEllipsis
+            ) {
+                let build_chars = |kept: usize| -> (String, usize, usize) {
+                    let chars: Vec<char> = content.chars().collect();
+                    let n = chars.len();
+                    match overflow {
+                        crate::text::TextOverflow::StartEllipsis => {
+                            let tail_start = n - kept;
+                            (format!("\u{2026}{}", chars[tail_start..].iter().collect::<String>()), 0, tail_start)
+                        }
+                        _ => {
+                            let head = kept / 2;
+                            let tail = kept - head;
+                            let tail_start = n - tail;
+                            (
+                                format!(
+                                    "{}\u{2026}{}",
+                                    chars[..head].iter().collect::<String>(),
+                                    chars[tail_start..].iter().collect::<String>()
+                                ),
+                                head,
+                                tail_start,
+                            )
+                        }
+                    }
+                };
+                let probe_width = |candidate: &str| -> f32 {
+                    let mut style = ParagraphStyle::new();
+                    style.set_text_align(skia_safe::textlayout::TextAlign::Left);
+                    let mut pb = crate::text::ParagraphBuilder::new(&style, &fc);
+                    pb.add_text(candidate);
+                    let mut p = pb.build();
+                    p.layout(f32::MAX);
+                    p.max_intrinsic_width()
+                };
+                // A run that already fits is left ALONE: keeping every character and adding a marker
+                // still fits, and the binary search would otherwise return that (measured: a 20-char
+                // run in a 400 px box came back as "…0123456789abcdefghij", 23 bytes).
+                let fits = probe_width(content) <= max_width;
+                let (text, head, tail_start) = if fits {
+                    (content.clone(), 0usize, original_chars)
+                } else {
+                    let (mut lo, mut hi) = (0usize, original_chars);
+                    while lo < hi {
+                        let mid = (lo + hi + 1) / 2;
+                        if probe_width(&build_chars(mid).0) <= max_width { lo = mid; } else { hi = mid - 1; }
+                    }
+                    build_chars(lo)
+                };
+                if !fits {
+                    rich_text = text;
+                    rich_display = Some(crate::text::DisplaySpan {
+                        head_bytes: content.chars().take(head).map(|c| c.len_utf8()).sum(),
+                        tail_start_byte: content.chars().take(tail_start).map(|c| c.len_utf8()).sum(),
+                        marker_bytes: "\u{2026}".len(),
+                    });
+                }
+                rich_spans = spans
+                    .iter()
+                    .filter_map(|s| {
+                        remap_rich_range(&(s.start..s.end), head, tail_start, original_chars).map(|r| {
+                            let mut c = s.clone();
+                            c.start = r.start;
+                            c.end = r.end;
+                            c
+                        })
+                    })
+                    .collect();
+                rich_ranges = drawable_ranges
+                    .iter()
+                    .filter_map(|r| remap_rich_range(r, head, tail_start, original_chars))
+                    .collect();
+            }
             let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
 
             // Walk the spans, tracking the drawable ranges
+            let content = &rich_text;
+            let spans = &rich_spans;
+            let drawable_ranges = &rich_ranges;
             let chars: Vec<char> = content.chars().collect();
             let mut di = 0usize;
             let mut span_idx = 0usize;
@@ -708,6 +826,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
 
             let mut para = builder.build();
             para.layout(layout_width);
+            para.set_display_span(rich_display);
             let text_size = Size::new(
                 para.max_intrinsic_width().ceil().min(max_width),
                 para.height().ceil(),
@@ -716,6 +835,11 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             // no `set_min_lines`): pad the RESULT, leave the glyphs at the top.
             let line_count = para.inner_paragraph().line_number();
             let mut size = text_size;
+            // Compose's `lineHeightStyle.Trim`: the extra leading at the ends comes off the box.
+            let geometry = line_geometry_from(*line_height, *line_height_style, para.natural_line_height());
+            if geometry.trim_top > 0.0 || geometry.trim_bottom > 0.0 {
+                size.height = (size.height - geometry.trim_top - geometry.trim_bottom).max(0.0);
+            }
             if *min_lines > line_count.max(1) {
                 let line_height_avg = if line_count > 0 {
                     text_size.height / line_count as f32
@@ -941,6 +1065,32 @@ fn relative_spacing(
 
 #[cfg(test)]
 mod truncate_tests {
+    /// The character-range remap behind the rich truncation: head ranges stay, tail ranges shift by
+    /// the marker, a range inside the dropped gap disappears, and a straddling one collapses onto the
+    /// marker.
+    #[test]
+    fn the_rich_truncation_remap_moves_spans_and_drawables() {
+        use crate::text::TextOverflow;
+        // content "0123456789" (10 chars), start ellipsis keeping the last 4: "…6789".
+        let head = 0usize;
+        let tail_start = 6usize;
+        let total = 10usize;
+        let remap = |s: usize, e: usize| crate::layout::node::measure::paragraph::remap_rich_range(&(s..e), head, tail_start, total);
+        // Inside the kept tail: shifts by head + marker = 1.
+        assert_eq!(remap(6, 8), Some(1..3));
+        assert_eq!(remap(6, 10), Some(1..5));
+        // Entirely dropped: gone.
+        assert_eq!(remap(1, 4), None);
+        // Straddling the marker: collapses onto it.
+        assert_eq!(remap(2, 7), None, "starts in the gap, so nothing visible");
+        // A middle ellipsis: head 4 kept, tail from 8.
+        let middle = |s: usize, e: usize| crate::layout::node::measure::paragraph::remap_rich_range(&(s..e), 4, 8, total);
+        assert_eq!(middle(0, 2), Some(0..2), "inside the head");
+        assert_eq!(middle(2, 5), Some(2..5), "straddles into the marker, kept as head up to the marker");
+        assert_eq!(middle(8, 10), Some(5..7), "inside the tail, shifted by head + marker");
+        assert_eq!(middle(5, 7), None, "inside the dropped gap");
+        let _ = TextOverflow::MiddleEllipsis;
+    }
     use super::*;
 
     /// Truncation must cut on grapheme clusters: a family emoji is one cluster of seven code
