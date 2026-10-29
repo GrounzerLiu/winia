@@ -195,7 +195,13 @@ pub fn set_measure_cache_capacity(capacity: usize) {
     });
 }
 
-/// For tests and for a density/theme switch that invalidates every cached size: empty the cache.
+/// Empty the cache. Two real uses: a test that wants clean counters, and a caller who replaced the
+/// process font collection (`text::font`), which no spec field describes.
+///
+/// A density or font-scale change does NOT need this. `measure_text` never reads the ambient
+/// density: a `Text` leaf resolves its `sp` sizes against the density while it builds and hands the
+/// measurer PIXELS (measured: 14 sp reaches the spec as 14.0 at font scale 1 and 28.0 at scale 2).
+/// The spec therefore differs whenever the scale does, and the cache sees a miss on its own.
 pub fn clear_measure_cache() {
     CACHE.with(|c| c.borrow_mut().clear());
 }
@@ -305,25 +311,6 @@ fn measure_text_uncached(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
 mod tests {
     use super::*;
 
-/// TEMPORARY PROBE — removed before the fix lands.
-    #[test]
-    fn tmp_probe_measure_text_start_ellipsis() {
-        let text = "0123456789abcdefghij";
-        let mut spec = TextMeasureSpec::new(text, 16.0, 60.0);
-        spec.soft_wrap = false;
-        spec.overflow = crate::text::TextOverflow::StartEllipsis;
-        let m = measure_text(&spec);
-        println!("StartEllipsis measured width={:.2} text_size={:?}", m.size.width, m.text_size);
-        let mut clip = spec.clone();
-        clip.overflow = crate::text::TextOverflow::Clip;
-        let c = measure_text(&clip);
-        println!("Clip          measured width={:.2} text_size={:?}", c.size.width, c.text_size);
-        let mut ell = spec;
-        ell.overflow = crate::text::TextOverflow::Ellipsis;
-        let e = measure_text(&ell);
-        println!("Ellipsis      measured width={:.2} text_size={:?}", e.size.width, e.text_size);
-    }
-
     #[test]
     fn a_short_line_measures_one_line() {
         let spec = TextMeasureSpec::new("Hi", 16.0, 300.0);
@@ -385,7 +372,6 @@ mod tests {
         assert_eq!((hits(), misses()), (1, 1), "the repeat is a hit");
         assert_eq!(first, again, "a hit answers the identical result");
 
-        // Every field of the spec is part of the key: change one, get a miss.
         let mut moved = TextMeasureSpec::new("Hi", 16.0, 300.0);
         moved.max_width = 301.0;
         let _ = measure_text(&moved);
@@ -396,7 +382,6 @@ mod tests {
         let _ = measure_text(&scaled);
         assert_eq!((hits(), misses()), (1, 3), "a different transform is a miss");
 
-        // The bound: capacity 2 keeps the two most recent.
         clear_measure_cache();
         set_measure_cache_capacity(2);
         let a = TextMeasureSpec::new("a", 16.0, 300.0);
@@ -407,7 +392,6 @@ mod tests {
         let _ = measure_text(&c);
         assert_eq!(measure_cache_capacity(), 2);
         assert_eq!((hits(), misses()), (1, 6), "three new measures");
-        // "a" was evicted, so asking again is a miss; "c" is still there.
         let _ = measure_text(&a);
         assert_eq!((hits(), misses()), (1, 7), "the oldest entry was evicted");
         let _ = measure_text(&c);
@@ -416,9 +400,51 @@ mod tests {
         clear_measure_cache();
     }
 
+    /// The spec carries RESOLVED pixels, so a density change arrives as a different spec rather than
+    /// as a stale hit. Measured: a 14 sp leaf hands the measurer 14.0 px at font scale 1 and 28.0 px
+    /// at scale 2, and the same spec measured under two very different ambient densities answers the
+    /// same size — `measure_text` reads no density at all.
+    #[test]
+    fn a_density_change_reaches_the_cache_as_a_different_spec() {
+        use crate::runtime::density::with_density;
+        use crate::unit::Density;
+        fn payload_font_size(scale: f32) -> f32 {
+            let d = Density::from_density_and_font_scale(1.0, scale);
+            with_density(d, || {
+                let mut c = crate::runtime::composer::Composer::new();
+                c.compose(|ctx| { crate::components::Text::new("Ag").font_size(14.0).build(ctx); });
+                c.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+                let root = c.layout_root_idx().unwrap();
+                let mut found = None;
+                for el in c.arena_nodes()[root].modifier.elements() {
+                    if let crate::modifier::ModifierElement::TextContent { font_size, .. } = el {
+                        found = Some(*font_size);
+                    }
+                }
+                found.expect("the leaf carries its resolved size")
+            })
+        }
+        let small = payload_font_size(1.0);
+        let big = payload_font_size(2.0);
+        assert_eq!(small, 14.0, "14 sp at scale 1 is 14 px");
+        assert_eq!(big, 28.0, "and 28 px at scale 2, resolved BEFORE the measurer sees it");
+
+        // The two specs differ, so the second is a miss rather than a stale hit.
+        clear_measure_cache();
+        let base = measure_cache_stats();
+        let _ = measure_text(&TextMeasureSpec::new("Ag", small, 300.0));
+        let _ = measure_text(&TextMeasureSpec::new("Ag", big, 300.0));
+        assert_eq!(measure_cache_stats().1 - base.1, 2, "two pixel sizes are two entries");
+
+        // And the measurer itself ignores the ambient density.
+        let spec = TextMeasureSpec::new("Ag", 14.0, 300.0);
+        let one = with_density(Density::from_density_and_font_scale(1.0, 1.0), || measure_text(&spec));
+        let three = with_density(Density::from_density_and_font_scale(3.0, 2.0), || measure_text(&spec));
+        assert_eq!(one.size, three.size, "no density input, so no density output");
+    }
+
     /// `measure_text` must answer what the leaf measures, for the two options that change the BOX:
-    /// a geometric transform widens it, a line-height trim shortens it. Both were ignored, so the
-    /// public measurer disagreed with `on_text_layout` for the same text.
+    /// a geometric transform widens it, a line-height trim shortens it.
     #[test]
     fn the_measurer_honours_the_transform_and_the_line_height_trim() {
         use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T, TextGeometricTransform};
@@ -448,7 +474,7 @@ mod tests {
         );
     }
 
-/// A standalone measure has no vertical constraint, so it never reports a height overflow —
+    /// A standalone measure has no vertical constraint, so it never reports a height overflow —
     /// and a `lineHeightStyle` trim is not a cut-off. Measured before: the trim shortened the box to
     /// 21.28 while `text_size` stayed 34, and the flag read true, where the leaf's own
     /// `on_text_layout` reported false for the same text.
@@ -463,6 +489,7 @@ mod tests {
         assert!(!trimmed.did_overflow_height, "a trim is not an overflow: {trimmed:?}");
         assert!(!trimmed.has_visual_overflow(), "nothing was cut off: {trimmed:?}");
     }
+
     #[test]
     fn min_lines_grows_the_box_not_the_paragraph() {
         let one = measure_text(&TextMeasureSpec::new("Hi", 16.0, 300.0));

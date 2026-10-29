@@ -43,6 +43,23 @@ has a test that fails on the old behaviour.
 | O-4 | the measurer's `did_overflow_height` compared `text_size.height` against a TRIMMED `size.height`, so every `lineHeightStyle` with a trim claimed a deliberate cut-off as an overflow | size 21.28, text_size 34, flag true — where the leaf's own `on_text_layout` reported false for the same text | a standalone measure has no height constraint, so the answer is false (it keeps `did_exceed_max_lines` and `did_overflow_width`) | `text::measure_text::tests::a_trim_is_not_a_vertical_overflow` |
 | O-5 | a cache HIT built a `MeasureKey` first, copying the whole content string | 1.03 µs per hit on an 18 KB spec, of which 0.50 µs was the copy (`to_string` alone: 0.43 µs) | the hit path compares the stored key against the spec (`MeasureKey::matches`), content by `&str`, so no allocation | `the_measurer_cache_answers_repeats_and_misses_on_change` (behaviour) |
 
+### Follow-up: does the measurer's cache go stale on a density change?
+
+No. Measured, and the earlier note in this file that said otherwise was wrong.
+
+- A `Text` leaf resolves its `sp` sizes against the density WHILE IT BUILDS and hands the measurer
+  pixels: `Text::new("Ag").font_size(14.0)` reaches the payload as 14.0 px at font scale 1 and
+  28.0 px at scale 2 (`components::text::tests::a_density_change_reaches_the_cache_as_a_different_spec`
+  asserts both).
+- The same spec measured under two different ambient densities answers the same size (18x19 at
+  density 1/scale 1 and at density 3/scale 2), because `measure_text` reads no density at all.
+- So the spec differs whenever the scale does, the cache sees a miss, and no density belongs in the
+  key. `clear_measure_cache` is only needed for a replaced font collection (`text::font`), which no
+  spec field describes, and for tests that want clean counters.
+
+The claim was introduced with the ninth pass and corrected here; `measure_text`'s own doc comment
+now says the same thing, so the two cannot drift.
+
 ### Ruled out
 
 - **The richer callback re-firing every frame.** Measured: 3 builds of the same leaf fired it 3
