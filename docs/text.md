@@ -74,8 +74,17 @@ does not expose `set_min_lines`, so the RESULT is padded instead of the paragrap
 
 **`on_text_layout`** — called after every MEASURE (never from an intrinsic probe, which is a question
 about a hypothetical width) with a `TextLayoutResult`: `size` (the box, `min_lines` included),
-`text_size` (the paragraph's own size), `line_count`, `did_exceed_max_lines`, and
-`has_visual_overflow()`. CAVEAT: TRIGGERING A RECOMPOSITION from inside the callback (writing a
+`text_size` (the paragraph's own size), `line_count`, `did_exceed_max_lines`,
+`first_baseline`/`last_baseline`, `did_overflow_width`/`did_overflow_height` and
+`has_visual_overflow()`. A leaf measured at candidate widths (a wrapped block, the `autoSize` search)
+fires it once per pass — the LAST call is the frame's layout.
+
+`on_text_layout_with_layout(|result, layout| ..)` is the richer sink: the same snapshot plus a
+`TextLayout` borrow of the paragraph, which answers Compose's per-line queries — `get_line_for_offset`,
+`get_line_range` (`getLineStart`/`getLineEnd`), `get_bounding_box`, `get_cursor_rect`,
+`get_offset_for_position`, `get_word_boundary`. They take and return CONTENT byte offsets. Why they
+are not fields of `TextLayoutResult`: `Paragraph` holds a Skia `RefHandle`, which is not `Send`
+(measured — `assert_send::<Paragraph>()` does not compile), so a `Copy` snapshot cannot carry one. CAVEAT: TRIGGERING A RECOMPOSITION from inside the callback (writing a
 `State` it also reads) trips the materialiser in this build — the demo fixture panicked with
 `[dup-key]` until the write was removed — so treat it as an observer, or write a `Backchannel`.
 
