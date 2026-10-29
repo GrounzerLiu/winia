@@ -29,6 +29,24 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Third pass (2026-10-29): reviewing the review's own fixes
+
+Every row below was found by reading the commits this file produced and then measuring; each now
+has the fix plus a test that fails without it. Commit `92fe29f`.
+
+| Row | What was wrong | Measured before the fix | Test |
+| --- | --- | --- | --- |
+| R-1 | A `textGeometricTransform` was invisible to the alignment math: the render branch re-laid the cached paragraph at the RAW content width (undoing the `content_w / scale_x` the measure path used) and measured the slack against the unscaled paragraph | a centred run at scale 1.5 sat at x=224 in a 300 px box (centre 150), and at 267 at scale 2 | `render_snapshot::a_scaled_run_still_aligns_to_its_box` |
+| R-2 | Start/middle ellipsis truncated by CHARACTER, so it could cut a cluster | middle ellipsis over a family emoji gave `"👨\u{200D}…il"`, a dangling zero-width joiner | `layout::node::measure::paragraph::truncate_tests::truncation_never_splits_a_grapheme_cluster` |
+| R-3 | Every `Text` pushed a `TextPaint` element even when all five fields were `None` — a comparison per recomposition and a slot per text node — and `text_transform` went through `text_paint`, which CLONES the brush and the feature string on every measure, paint and pointer event | structural: one element per text node, two allocations per transform read | `components::text::tests::a_plain_text_carries_no_paint_element` |
+
+Also settled in this pass: the uncached fallback (`draw_text_with_selection`) applies the same
+transform matrix as the cached path, and its overflow test is scaled like the main one's.
+
+Re-read clean: the caret clamping in `TextLayout`, `real_index_for_paragraph_byte`, the floor-search
+loops around a placeholder boundary, `SelectionRegistrar::reindex` (including a slot that left the
+tree) and the `AnnotatedString` span arithmetic (merge order, `substring` rebasing, out-of-range
+clamping).
 ## Defects
 
 - [x] **T-1 — `SelectionContainer` wiped the whole selection registry when it re-entered, so any
