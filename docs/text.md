@@ -108,7 +108,7 @@ measurements behind each and the reason a row is still open — in
 | --- | --- |
 | `autoSize: TextAutoSize?` | `Text::auto_size(min, max)` — the same fit search, run at measure time |
 | `TextOverflow.StartEllipsis` / `MiddleEllipsis` | supported by truncating the string before layout (Skia only ellipsizes the end); the paragraph then holds the truncated text |
-| `TextStyle.lineHeightStyle` | `Text::line_height_style(LineHeightStyle { alignment, trim })`: the extra leading is split by the alignment and trimmed from the box ends; `Proportional` behaves like `Center` while every line shares one style, and `RichText` does not expose it yet |
+| `TextStyle.lineHeightStyle` | `Text::line_height_style(LineHeightStyle { alignment, trim })`: the extra leading is split by the alignment and trimmed from the box ends; `Proportional` behaves like `Center` while every line shares one style, `RichText` does not expose it yet, and the extra is measured against the SHAPED first run (a CJK line reads 20.32 against a Latin line's 21.28 at 16 sp, so the same style shifts it ~0.5 px differently) |
 | `TextStyle.textGeometricTransform` | `Text::text_geometry(TextGeometricTransform { scale_x, skew_x })`: a paint matrix plus the same mapping in the caret, hit test, IME window and selection rectangles |
 | `TextStyle.shadow` | `Text::shadow(TextShadow { color, offset, blur })`; paint-only, so the measured box does not change |
 | `TextStyle.fontSynthesis` | no knob, and none needed: Skia synthesises a missing face (measured on `SimSun`: 108.0 px regular vs 111.8 px faux bold); it cannot be turned off |
