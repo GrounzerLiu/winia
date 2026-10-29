@@ -474,7 +474,7 @@ impl TextField {
                     let val = v.get();
                     let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
                     if s != e {
-                        clipboard_set_text(&val.text[s..e]);
+                        crate::clipboard::request_text(&val.text[s..e]);
                     }
                     return true;
                 }
@@ -536,7 +536,7 @@ impl TextField {
                     undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                     let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
                     if s != e {
-                        clipboard_set_text(&val.text[s..e]);
+                        crate::clipboard::request_text(&val.text[s..e]);
                         val.text.replace_range(s..e, "");
                         val.selection = s..s;
                         commit!(val.clone());

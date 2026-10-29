@@ -67,16 +67,13 @@ pub(crate) fn line_end(text: &str, pos: usize) -> usize {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 剪贴板（arboard——系统剪贴板；每次操作临时打开，无长驻句柄）
+// Clipboard READS (arboard: it answers synchronously, which a paste needs).
+//
+// Writes go through winit's clipboard instead — see `crate::clipboard` for why the two
+// directions differ and how a component requests a copy.
 // ═══════════════════════════════════════════════════════════
 
 pub(crate) fn clipboard_get_text() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
-}
-
-pub(crate) fn clipboard_set_text(text: &str) {
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        let _ = cb.set_text(text.to_string());
-    }
 }
 

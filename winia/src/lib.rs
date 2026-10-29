@@ -46,6 +46,8 @@ macro_rules! debug_log {
 pub use material_shapes::RoundedPolygon;
 
 pub mod graphics;
+/// Clipboard access: reads through `arboard`, writes through winit. See the module header for why.
+mod clipboard;
 pub mod icon;
 pub mod modifier;
 pub mod focus;

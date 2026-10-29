@@ -206,6 +206,21 @@ impl ApplicationHandler for AppState {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.dispatch_window_event(event_loop, window_id, event);
+        // A copy decided while handling the event is applied HERE: `set_clipboard` needs the event
+        // loop, which only this layer holds. Same event, so the clipboard is current before the
+        // next one arrives (see `crate::clipboard`).
+        crate::clipboard::apply_pending(event_loop);
+    }
+}
+
+impl AppState {
+    fn dispatch_window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         let is_parent = self.parent_window_id.map(|p| p == window_id).unwrap_or(false);
         let closing_last = self.windows.len() == 1;
         // winit reports the system theme per WINDOW (winit-win32 raises it from `WM_SETTINGCHANGE`), while

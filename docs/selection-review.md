@@ -113,11 +113,21 @@
 
 ## Missing API surface
 
-- [ ] **M-1 — no way to copy.** A container selection cannot reach the clipboard: Ctrl+C is handled
-  only by `TextField` (`winia/src/components/text_field/edit.rs:73-77` is the only clipboard access
-  in the crate, through `arboard = "3"`). Compose wires `isCopyKeyEvent(it) { copy() }` into
-  `SelectionManager.modifier`.
-  Measured on 2026-10-29: winit **0.31.0-beta.4** (published; this repo pins 0.31.0-beta.3) adds
+- [ ] **M-1 — no way to copy a CONTAINER selection.** The write path now exists
+  (`winia/src/clipboard.rs`: a component requests a copy, `AppState::window_event` hands it to
+  winit's `set_clipboard` as the event finishes), and `TextField`'s Ctrl+C / Ctrl+X use it. What is
+  still missing is the container side: `SelectionContainer` does not listen for Ctrl+C, so a
+  selected paragraph cannot be copied, and there is no context menu either. Compose wires
+  `isCopyKeyEvent(it) { copy() }` into `SelectionManager.modifier`.
+  Measured 2026-10-29: a temporary example queued a known string before `run_app`, the first window
+  event drained it, and the OS clipboard went from a `Set-Clipboard` sentinel to that string; it
+  STILL held it after the process was killed, which is winit flushing through `OleFlushClipboard`
+  (`arboard` writes a snapshot and would not survive). The component half is pinned by
+  `app::per_window::clipboard_copy_tests` (Ctrl+C copies the selection, a caret copies nothing,
+  Ctrl+X copies and clears). What remains for M-1 itself: bind Ctrl+C in `SelectionContainer`: the
+  selection is global across the container, so the handler needs the container's own registrar, not
+  a text node's — and that is the same missing piece as D-2's clear dispatch.
+  The repo now pins winit **0.31.0-beta.4**, which adds
   `ActiveEventLoop::clipboard()` / `set_clipboard()` over the data-transfer API, implemented on
   Windows as well (changelog `winit/src/changelog/v0.31.md`; the beta.4 sources are in the local
   cargo registry). It type-checks against this crate today: `clipboard()` returns
@@ -125,9 +135,9 @@
   bytes, and `WindowEvent::DataTransferReceived { id, serial, value }` delivers them as
   `value.try_as_string() -> Option<String>`; writing is
   `DataTransferSendBuilder::new(text).with_type(TypeHint::Plaintext, ..).build()` into
-  `set_clipboard`. Two consequences for THIS item: the read is asynchronous (a paste becomes a
-  round trip through the event loop, where `arboard` answers synchronously inside the key handler),
-  and it only exists after the pin moves to beta.4. Neither is done here.
+  `set_clipboard`. The WRITE half is adopted; the READ half is not, because winit's read is
+  asynchronous (a paste becomes a round trip through the event loop where `arboard` answers
+  synchronously inside the key handler) — that is the next step, not this one.
 - [ ] **M-2 — no `SelectionState`.** Compose exposes `rememberSelectionState()` with
   `state.selection`, `selectedText`, `selectAll()` and `clear()`; winia has only the
   `on_selection_change` callback and no programmatic handle on the selection.

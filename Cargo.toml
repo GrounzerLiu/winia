@@ -21,7 +21,7 @@ pending-sweeps-per-compile = 4
 debug = 1
 
 [workspace.dependencies]
-winit = "0.31.0-beta.3"
+winit = "0.31.0-beta.4"
 skia-safe = "0.99.0"
 skia-bindings = "0.99.0"
 material-shapes = { path = "material-shapes", features = ["shape_util"] }
