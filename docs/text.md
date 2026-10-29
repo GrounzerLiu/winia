@@ -122,7 +122,7 @@ measurements behind each and the reason a row is still open — in
 | `color: ColorProducer` overload | deliberately absent (D-5): a colour value re-measures the leaf once, and the draw-time channel is the glyph foreground paint that `drawStyle`/`brush` use |
 | `minLines` is passed to Skia | padding the RESULT height (skia-safe exposes no `set_min_lines`) — same box, same top alignment |
 | `TextStyle.merge` takes the child's decoration when specified | matches: the decoration is `Option<TextDecoration>`, so a child can clear an inherited one |
-| density | layout is logical pixels and the app scales the canvas by the window scale factor, so `Sp` and `Dp` are both raw here — text still scales with the display |
+| density, `Density.fontScale` | `Sp` scales with the platform text size, `Dp` does not: `Density::from_density_and_font_scale(density, font_scale)` multiplies `Sp` only, and every window builds its density through `runtime::density::density_with_system_font_scale`. The factor comes from `HKCU\Software\Microsoft\Accessibility\TextScaleFactor` (`runtime::platform::font_scale`), re-read once per 250 ms on the frame path (`refresh_system_font_scale`) because winit forwards `WM_SETTINGCHANGE` only for the THEME — a text-size change never reaches the event loop. A value outside 0.5..=4.0 is rejected rather than installed. Hold `sp` and `dp` apart in components: only font sizes are `Sp` |
 
 ## Tests
 

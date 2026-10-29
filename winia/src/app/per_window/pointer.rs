@@ -599,7 +599,7 @@ pub(crate) fn handle_pointer_move(
                 let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
                 if let Some(ov) = pw.overlay.layers.get_mut(ov_idx) {
                     if let Some(root) = ov.composer.layout_root_idx() {
-                        let density = crate::unit::Density::from_density(pw.scale_factor as f32);
+                        let density = crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32);
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), root, idx, crate::nested_scroll::ScrollDelta::new(ax, ay), crate::nested_scroll::NestedScrollSource::Drag, density);
                         if consumed.x != 0.0 || consumed.y != 0.0 {
                             handled = true;
@@ -668,7 +668,7 @@ pub(crate) fn handle_pointer_move(
                     idx,
                     crate::nested_scroll::ScrollDelta::new(ax, ay),
                     crate::nested_scroll::NestedScrollSource::Drag,
-                    crate::unit::Density::from_density(pw.scale_factor as f32),
+                    crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32),
                 )).unwrap_or(crate::nested_scroll::ScrollDelta::ZERO);
                 handled = consumed.x != 0.0 || consumed.y != 0.0;
             }

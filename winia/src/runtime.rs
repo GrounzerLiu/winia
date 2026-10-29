@@ -5,6 +5,7 @@ pub mod composer;
 pub mod movable;
 pub mod composition_local;
 pub mod density;
+pub mod platform;
 pub mod saveable;
 pub(crate) mod lifecycle;
 pub(crate) mod materialize;

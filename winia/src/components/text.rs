@@ -82,7 +82,7 @@ pub struct Text {
     overflow: Option<TextOverflow>,
     style: Option<TextStyle>,
     soft_wrap: Option<bool>,
-    letter_spacing: Option<f32>,
+    letter_spacing: Option<TextUnit>,
     line_height: Option<TextUnit>,
     min_lines: Option<usize>,
     text_decoration: Option<TextDecoration>,
@@ -184,7 +184,11 @@ impl Text {
     }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
-    pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+    /// Compose's `TextStyle.letterSpacing`: a `TextUnit`, so `0.1.em` and an `sp` both work.
+    pub fn letter_spacing(mut self, spacing: impl Into<TextUnit>) -> Self {
+        self.letter_spacing = Some(spacing.into());
+        self
+    }
 
     /// Compose's `textDecoration` — the plain leaf draws it now (it used to be RichText-only).
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
@@ -287,7 +291,17 @@ impl Text {
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
         let final_soft_wrap = self.soft_wrap.or(style.soft_wrap).unwrap_or(true);
-        let final_letter_spacing = self.letter_spacing.or(style.letter_spacing).unwrap_or(0.0);
+        // `Em` has no absolute value until the size is known, so resolve in the same order the size
+        // was: the enclosing size is the leaf's own final font size.
+        let density = crate::runtime::density::current_density();
+        let final_letter_spacing = self
+            .letter_spacing
+            .or(style.letter_spacing)
+            .map(|u| match u {
+                TextUnit::Em(em) => final_font_size.to_logical_px(density) * em,
+                other => other.to_logical_px(density),
+            })
+            .unwrap_or(0.0);
         let final_line_height = self.line_height.or(style.line_height);
         let final_min_lines = self.min_lines.or(style.min_lines).unwrap_or(1);
         // Compose's `validateMinMaxLines` (`HeightInLinesModifier.kt:454-461`, called from
@@ -369,7 +383,7 @@ impl Text {
 
         let modifier = self.modifier.text_content_full(
             self.content,
-            final_font_size.to_logical_px(crate::runtime::density::current_density()),
+            final_font_size.to_logical_px(density),
             final_color,
             final_font_weight,
             final_font_style,
@@ -378,7 +392,7 @@ impl Text {
             final_overflow,
             final_soft_wrap,
             final_letter_spacing,
-            final_line_height.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
+            final_line_height.map(|u| u.to_logical_px(density)),
             crate::modifier::TextExtras {
                 shadow: final_shadow,
                 font_feature_settings: final_font_features.clone(),
@@ -526,7 +540,10 @@ mod tests {
     #[test]
     fn test_text_letter_spacing_and_line_height() {
         let text = Text::new("spacing").letter_spacing(2.0).line_height(28.0);
-        assert_eq!(text.letter_spacing, Some(2.0));
+        assert_eq!(text.letter_spacing, Some(TextUnit::Sp(crate::unit::Sp(2.0))));
+        // The same knob in `em`: a multiple of the leaf's own font size, resolved at build time.
+        let em = Text::new("x").font_size(20.0).letter_spacing(TextUnit::Em(0.1));
+        assert_eq!(em.letter_spacing, Some(TextUnit::Em(0.1)));
         assert_eq!(text.line_height, Some(TextUnit::Sp(crate::unit::Sp(28.0))));
     }
 
@@ -939,6 +956,113 @@ mod tests {
         assert_eq!(align_of(TextAlign::End, LayoutDirection::Ltr), TextAlign::Right);
         assert_eq!(align_of(TextAlign::End, LayoutDirection::Rtl), TextAlign::Left);
         assert_eq!(align_of(TextAlign::Center, LayoutDirection::Rtl), TextAlign::Center, "an explicit physical value survives");
+    }
+
+    /// The user's text-size setting (`Density.font_scale`) must grow the GLYPHS and not the boxes:
+    /// Compose resolves `sp` through it and leaves `dp` alone. This is the whole contract, measured on
+    /// the same leaf at two scales.
+    #[test]
+    fn a_system_text_scale_grows_the_type_and_not_the_layout() {
+        use crate::runtime::density::with_density;
+        use crate::unit::Density;
+        fn measure(font_scale: f32) -> (f32, f32, f32) {
+            with_density(Density::from_density_and_font_scale(1.0, font_scale), || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                composer.compose(|ctx| {
+                    Text::new("Ag")
+                        .font_size(14.0)
+                        .modifier(Modifier::new().size(40.0, 20.0))
+                        .build(ctx);
+                });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                let root = composer.layout_root_idx().unwrap();
+                let node = &composer.arena_nodes()[root];
+                let para = node.cached_paragraph.borrow();
+                let para = para.as_ref().unwrap();
+                (node.measured_size.width, node.measured_size.height, para.height())
+            })
+        }
+        let (small_w, small_h, small_para) = measure(1.0);
+        let (big_w, big_h, big_para) = measure(2.0);
+        // 14 sp at scale 2 is 28 px of type: the paragraph is taller, and the 20 dp box it was
+        // constrained to does not grow with it.
+        assert!(
+            big_para > small_para * 1.8,
+            "the paragraph grows with the scale: {small_para} -> {big_para}"
+        );
+        // The measured BOX does not, because it was pinned in dp.
+        assert!(small_h < big_para, "the unresolved box stays at its dp height: {small_h} vs {big_para}");
+        assert_eq!(small_w, 40.0, "the 40 dp width is a dp, not an sp");
+        assert_eq!(big_w, 40.0, "and it does not grow with the text scale");
+        assert_eq!(small_h, 20.0);
+        assert_eq!(big_h, 20.0);
+    }
+
+    /// The chain the frame path relies on: what the platform reports lands in every window's
+    /// `Density`, and a `Text` measured under it grows — the whole accessibility path, minus the
+    /// registry read itself (covered in `runtime::platform`).
+    #[test]
+    fn the_installed_text_scale_reaches_a_measured_text() {
+        use crate::runtime::density::{
+            density_with_system_font_scale, install_measured_text_scale, system_font_scale,
+            with_density,
+        };
+        let previous = system_font_scale();
+        // Whatever this machine reports, a REPEAT is not a change and a different factor is.
+        let _ = install_measured_text_scale(1.5);
+        assert!(!install_measured_text_scale(1.5), "installing the same factor reports nothing");
+        assert!(install_measured_text_scale(2.0), "a different factor reports a change");
+        assert_eq!(density_with_system_font_scale(1.5).font_scale, 2.0, "the window density carries it");
+        assert_eq!(density_with_system_font_scale(1.5).density, 1.5, "the pixel density is untouched");
+        let height_at = |scale: f32| {
+            with_density(crate::unit::Density::from_density_and_font_scale(1.0, scale), || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                composer.compose(|ctx| { Text::new("Ag").font_size(14.0).build(ctx); });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                let root = composer.layout_root_idx().unwrap();
+                composer.arena_nodes()[root].measured_size.height
+            })
+        };
+        let plain = height_at(1.0);
+        let doubled = height_at(2.0);
+        assert!(doubled > plain * 1.8, "14 sp at scale 2 is 28 px of type: {plain} -> {doubled}");
+        let _ = install_measured_text_scale(previous);
+    }
+
+    /// `letter_spacing` is a `TextUnit` now: an `em` resolves against the leaf's own font size, and
+    /// an `sp` resolves through the density's text scale. Both must reach the payload as pixels,
+    /// because that is what the paragraph builder consumes.
+    #[test]
+    fn a_letter_spacing_unit_resolves_against_size_and_scale() {
+        use crate::runtime::density::with_density;
+        use crate::unit::Density;
+        fn payload_spacing(font_size: f32, spacing: TextUnit, scale: f32) -> f32 {
+            with_density(Density::from_density_and_font_scale(1.0, scale), || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                composer.compose(move |ctx| {
+                    Text::new("x").font_size(font_size).letter_spacing(spacing).build(ctx);
+                });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                let root = composer.layout_root_idx().unwrap();
+                composer.arena_nodes()[root]
+                    .modifier
+                    .elements()
+                    .iter()
+                    .find_map(|el| match el {
+                        ModifierElement::TextContent { letter_spacing, .. } => Some(*letter_spacing),
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+        }
+        // 0.1 em at 20 px of type is 2 px; at 40 px it is 4 px.
+        assert!((payload_spacing(20.0, TextUnit::Em(0.1), 1.0) - 2.0).abs() < 0.01);
+        assert!((payload_spacing(40.0, TextUnit::Em(0.1), 1.0) - 4.0).abs() < 0.01);
+        // 2 sp at a 1.5 text scale is 3 px, and at 1.0 it is 2 px.
+        assert!((payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.5) - 3.0).abs() < 0.01);
+        assert!((payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.0) - 2.0).abs() < 0.01);
+        // A bare f32 is an `sp`, so the old call shape still means the same thing at scale 1.
+        assert!((payload_spacing(20.0, 2.0.into(), 1.0) - 2.0).abs() < 0.01);
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///

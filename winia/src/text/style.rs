@@ -265,7 +265,8 @@ pub struct TextStyle {
     pub overflow: Option<TextOverflow>,
     pub max_lines: Option<usize>,
     pub soft_wrap: Option<bool>,
-    pub letter_spacing: Option<f32>,
+    /// Compose's `TextStyle.letterSpacing`, a `TextUnit` (`sp` or a multiple of the font size).
+    pub letter_spacing: Option<crate::unit::TextUnit>,
     pub line_height: Option<TextUnit>,
     /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`. Callers must
     /// keep `1 <= min_lines <= max_lines`; `Text` enforces it the way Compose does.
@@ -313,7 +314,10 @@ impl TextStyle {
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
-    pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+    pub fn letter_spacing(mut self, spacing: impl Into<crate::unit::TextUnit>) -> Self {
+        self.letter_spacing = Some(spacing.into());
+        self
+    }
     /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`. Callers must
     /// keep `1 <= min_lines <= max_lines`; `Text` enforces it the way Compose does.
     pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }

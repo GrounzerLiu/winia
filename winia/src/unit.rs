@@ -80,12 +80,12 @@ impl From<Dp> for f32 {
 // Sp — 缩放像素（字体大小，随用户字体缩放设置变化）
 // ═══════════════════════════════════════════════════════════
 
-/// 缩放像素（Scaling pixel，字体专用）
+/// Scaled pixels — a font size, which follows the user's text-scale setting.
 ///
-/// ## ⚠️ 当前实现说明
-/// 系统字体缩放（无障碍大字体）的获取暂未接入——本项目目前不查询系统 font_scale，
-/// `Density.font_scale` 恒为 1.0，因此 **Sp 当前行为与 Dp 完全一致**。
-/// 未来接入系统设置后，`to_px` 将随用户字体缩放变化（dp 不变，sp 变大）。
+/// `Dp` does NOT scale with it: an accessibility text size makes the glyphs bigger, not the
+/// buttons. `Density.font_scale` carries the factor and is installed by the window (see
+/// `runtime::density::set_system_font_scale`); a `Density` built without one answers 1.0, which is
+/// the old behaviour for every test and for any embedder that never sets it.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Sp(pub f32);
 
@@ -127,9 +127,10 @@ impl From<Sp> for f32 {
 // Density — 密度抽象（Dp/Sp ↔ px 转换）
 // ═══════════════════════════════════════════════════════════
 
-/// 屏幕密度 + 字体缩放
-/// ⚠️ `font_scale` 当前恒为 1.0（未接入系统字体缩放），
-/// 因此 Sp 行为等同 Dp。
+/// Screen density plus the user's text-scale factor.
+///
+/// `density` converts physical pixels; `font_scale` multiplies `Sp` only, and comes from the
+/// platform (`from_density_and_font_scale`). `from_density` leaves it at 1.0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Density {
     /// 逻辑像素与物理像素比（1.0 = mdpi）
@@ -141,6 +142,11 @@ pub struct Density {
 impl Density {
     pub const fn from_density(density: f32) -> Self {
         Self { density, font_scale: 1.0 }
+    }
+
+    /// A density that also carries the user's text scale (Compose's `Density(density, fontScale)`).
+    pub const fn from_density_and_font_scale(density: f32, font_scale: f32) -> Self {
+        Self { density, font_scale }
     }
     pub const fn standard() -> Self {
         Self { density: 1.0, font_scale: 1.0 }
@@ -352,10 +358,11 @@ impl PxExt for u32 {
 
 /// 文本尺寸单位：Sp（字体缩放像素）或 Px（物理像素）
 ///
-/// `f32` 默认按 Sp 处理（font_scale=1 时 Sp == 逻辑像素，向后兼容旧 API）。
+/// A bare `f32` is an `Sp` (font scale 1 makes it a logical pixel, which keeps older call sites
+/// unchanged).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextUnit {
-    /// 缩放像素（当前 font_scale=1，行为等同逻辑像素）
+    /// Scaled pixels — multiplied by `Density.font_scale` on the way to logical pixels.
     Sp(Sp),
     /// 物理像素（需 Density 转逻辑像素）
     Px(Px),
@@ -369,7 +376,7 @@ pub enum TextUnit {
 }
 
 impl TextUnit {
-    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）。
+    /// Resolve to logical pixels: `Sp` scales by `Density.font_scale`, `Px` by `Density.density`.
     ///
     /// The density is a parameter and not an ambient lookup: asking for it would make this module —
     /// the lowest one — name the composition runtime. Compose does the same
@@ -377,7 +384,8 @@ impl TextUnit {
     /// knows which subtree it is resolving for.
     pub fn to_logical_px(&self, density: Density) -> f32 {
         match self {
-            TextUnit::Sp(s) => s.value(),
+            // Compose's `TextUnit.toPx(density)`: an sp value is multiplied by the font scale.
+            TextUnit::Sp(s) => s.value() * density.font_scale,
             TextUnit::Px(p) => p.to_logical(density),
             // Unresolved `Em`: see the variant's note. The style merge is supposed to have
             // replaced it with an `Sp` before a leaf sees it.
@@ -417,6 +425,31 @@ mod tests {
         assert_ne!(dp.to_logical(), dp.to_px(d));
     }
 
+    /// A `Density` with a text scale multiplies `Sp` and leaves `Dp` alone; 1.0 is the old
+    /// behaviour exactly.
+    #[test]
+    fn font_scale_multiplies_sp_only() {
+        let plain = Density::from_density(2.0);
+        let scaled = Density::from_density_and_font_scale(2.0, 1.5);
+        assert_eq!(plain.font_scale, 1.0, "from_density leaves the text scale alone");
+        assert_eq!(TextUnit::Sp(Sp(10.0)).to_logical_px(plain), 10.0);
+        assert_eq!(TextUnit::Sp(Sp(10.0)).to_logical_px(scaled), 15.0);
+        assert_eq!(Dp(10.0).to_px(scaled), 20.0, "a dp ignores the text scale");
+        assert_eq!(TextUnit::Sp(Sp(10.0)).to_logical_px(scaled), 15.0);
+    }
+
+    /// A factor is only installed when it is usable: a nonsense value (a corrupted registry entry)
+    /// must not resize every glyph in the app.
+    #[test]
+    fn a_nonsense_text_scale_is_rejected() {
+        assert!(!crate::runtime::density::set_system_font_scale(0.0));
+        assert!(!crate::runtime::density::set_system_font_scale(-1.0));
+        assert!(!crate::runtime::density::set_system_font_scale(50.0));
+        let previous = crate::runtime::density::system_font_scale();
+        assert!(crate::runtime::density::set_system_font_scale(1.25));
+        assert_eq!(crate::runtime::density::system_font_scale(), 1.25);
+        let _ = crate::runtime::density::set_system_font_scale(previous);
+    }
     #[test]
     fn sp_px_conversion_with_font_scale() {
         let d = Density::from_density(2.0);

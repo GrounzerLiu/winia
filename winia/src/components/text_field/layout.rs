@@ -19,8 +19,15 @@ pub(crate) fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress:
     let from_line_height = text_style_line_height(from, from_size);
     let to_line_height = text_style_line_height(to, to_size);
     let line_height = from_line_height + (to_line_height - from_line_height) * progress;
-    let from_spacing = from.letter_spacing.unwrap_or(0.0);
-    let to_spacing = to.letter_spacing.unwrap_or(0.0);
+    // Letter spacing interpolates in RESOLVED pixels: an `Em` value depends on the size, which is
+    // itself interpolating here, so keeping the unit would interpolate a moving base.
+    let density = crate::runtime::density::current_density();
+    let resolve = |u: crate::unit::TextUnit| match u {
+        crate::unit::TextUnit::Em(em) => font_size * em,
+        other => other.to_logical_px(density),
+    };
+    let from_spacing = from.letter_spacing.map(resolve).unwrap_or(0.0);
+    let to_spacing = to.letter_spacing.map(resolve).unwrap_or(0.0);
 
     TextStyle::new()
         .font_size(font_size)

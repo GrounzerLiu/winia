@@ -108,7 +108,7 @@ impl AppState {
         // to window 0 (which never ticks) and never be re-run.
         pw.composer.set_window_id(window_id.into_raw() as u64);
         // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
-        let density = crate::unit::Density::from_density(sf as f32);
+        let density = crate::runtime::density::density_with_system_font_scale(sf as f32);
         crate::runtime::density::with_density(density, || {
         // The first frame also gets the window size injected (adaptive components are correct immediately) and the reactive State attached.
         pw.composer.set_adaptive_window_size(pending.width, pending.height);

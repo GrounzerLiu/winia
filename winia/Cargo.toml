@@ -59,6 +59,10 @@ skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl",
 # hooked to answer it.
 # `#[implement]` generates paths through `::windows_core`, so the core crate has to be a
 # dependency in its own right, not just a transitive one.
+# Not optional: the accessibility text scale is a REG_SZ registry value and every Windows build
+# wants it (a plain build without `accessibility` still scales its text). `dark-light` already keeps
+# `winreg` in the lock file, so this adds no download.
+winreg = { version = "0.56" }
 windows-core = { version = "0.62", optional = true }
 windows = { version = "0.62", optional = true, features = [
     "Win32_Foundation",

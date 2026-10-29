@@ -336,7 +336,7 @@
         let typography = Typography::default();
         assert_eq!(typography.body_large.font_size, Some(TextUnit::Sp(Sp(16.0))));
         assert_eq!(typography.body_large.line_height, Some(TextUnit::Sp(crate::unit::Sp(24.0))));
-        assert_eq!(typography.body_large.letter_spacing, Some(0.5));
+        assert_eq!(typography.body_large.letter_spacing, Some(TextUnit::Sp(crate::unit::Sp(0.5))));
         assert_eq!(typography.body_medium.font_size, Some(TextUnit::Sp(Sp(14.0))));
         assert_eq!(typography.label_small.font_size, Some(TextUnit::Sp(Sp(11.0))));
         assert_eq!(typography.label_small.font_weight, Some(FontWeight::MEDIUM));

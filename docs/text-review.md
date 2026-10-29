@@ -29,6 +29,16 @@ items `skia-safe 0.99` cannot express at all.
 When a row is fixed, tick it, say what closed it, and leave the evidence line in place so the next
 reader can re-check.
 
+## Sixth pass (2026-10-29): accessibility text scale, and `letterSpacing` as a `TextUnit`
+
+Both were listed as still missing in the previous answer; this pass closed them.
+
+| Item | What was wrong | What it is now | Test |
+| --- | --- | --- | --- |
+| N-1 | `Density.font_scale` was hard-wired to 1.0 (`unit.rs` said so), so `sp` behaved exactly like `dp` and the Windows "text size" slider changed nothing | `Density::from_density_and_font_scale(density, font_scale)`; `TextUnit::Sp` multiplies by it; every window builds its density through `runtime::density::density_with_system_font_scale`; the factor is read from `HKCU\Software\Microsoft\Accessibility\TextScaleFactor` (`runtime::platform::font_scale`, measured: `150` → 1.5) and re-read once per 250 ms on the frame path (`refresh_system_font_scale`) because winit forwards `WM_SETTINGCHANGE` only for the THEME. Values outside 0.5..=4.0 are rejected | `unit::tests::font_scale_multiplies_sp_only`, `a_nonsense_text_scale_is_rejected`, `components::text::tests::a_system_text_scale_grows_the_type_and_not_the_layout` (14 sp at scale 2 grows the paragraph, the dp-pinned 40x20 box does not), `the_installed_text_scale_reaches_a_measured_text`, `runtime::platform::tests` |
+| N-2 | `TextStyle.letter_spacing` was a bare `f32` of logical pixels, so Compose's `0.1.em` had no way to exist | `TextUnit`: `Em` resolves against the leaf's OWN font size at build time, `Sp` through the density (so it also follows N-1); `Text`/`TextStyle`/`TextExtras` keep the unit, and the text field resolves it to pixels where a style is interpolated | `components::text::tests::a_letter_spacing_unit_resolves_against_size_and_scale` (0.1 em = 2 px at 20 px type, 4 px at 40; 2 sp = 3 px at scale 1.5) |
+
+Deliberately still open: `RichText` keeps `f32` letter spacing (its span resolver works in resolved pixels), and `line_height` stays a `TextUnit` but is not fed through `Em` from `RichText` spans.
 ## Fifth pass (2026-10-29): a fresh review of the whole stack
 
 This pass re-read the module from scratch and found ONE live defect plus fourteen documentation

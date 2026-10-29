@@ -835,7 +835,11 @@ impl TextField {
                 font_size: typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density()),
                 font_weight: typography.body_small.font_weight.unwrap_or_default(),
                 font_style: typography.body_small.font_style.unwrap_or_default(),
-                letter_spacing: typography.body_small.letter_spacing.unwrap_or(0.0),
+                letter_spacing: typography
+                    .body_small
+                    .letter_spacing
+                    .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
+                    .unwrap_or(0.0),
                 line_height: typography.body_small.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
                 color: if disabled { colors.disabled_supporting }
                     else if self.is_error { colors.error_supporting }
@@ -924,7 +928,10 @@ impl TextField {
                 crate::text::TextAlign::Left,
                 crate::text::TextOverflow::Clip,
                 input_style.soft_wrap.unwrap_or(true),
-                input_style.letter_spacing.unwrap_or(0.0),
+                input_style
+                    .letter_spacing
+                    .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
+                    .unwrap_or(0.0),
                 input_style.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
                 crate::modifier::TextExtras::default(),
             );

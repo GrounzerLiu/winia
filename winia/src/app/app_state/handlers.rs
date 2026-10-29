@@ -272,7 +272,7 @@ impl ApplicationHandler for AppState {
                         wheel_scroll_target(nodes, &path, wheel.dx, wheel.dy).map(|t| (i, t, r))
                     });
                     let now = std::time::Instant::now();
-                    let density = crate::unit::Density::from_density(pw.scale_factor as f32);
+                    let density = crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32);
                     if let Some((i, target, r)) = overlay_target {
                         let ov = &mut pw.overlay.layers[i];
                         apply_wheel_to_target(

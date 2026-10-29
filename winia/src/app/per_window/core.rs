@@ -575,6 +575,13 @@ impl PerWindow {
         // Vsync study: render frame counter (renders per second — should be ~60 under Fifo).
         self.clock.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // The user's "text size" setting (`Sp` scaling). winit only forwards `WM_SETTINGCHANGE` when
+        // the THEME changed, so a text-size change never reaches the event loop: re-read it here,
+        // throttled, and re-compose when it moved — `Sp` is resolved during composition.
+        if crate::runtime::density::refresh_system_font_scale() {
+            debug_log!("[density] system text scale is now {}", crate::runtime::density::system_font_scale());
+            self.composer.request_recomposition(0);
+        }
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
         // scene published this frame, and flushes the previous frame's records.
         //
@@ -592,7 +599,7 @@ impl PerWindow {
         // Provide this window's Density (from `scale_factor`) for the whole compose + layout + draw
         // path, so `Dimension::Px` / `TextUnit::Px` use the window's sf during layout/rendering
         // rather than `standard(1.0)`.
-        let density = crate::unit::Density::from_density(self.scale_factor as f32);
+        let density = crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
         crate::runtime::density::with_density(density, || {
         // Update the current Composer's adaptive context; the thread-local singleton is no longer
         // overwritten.
