@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 1 | 5 |
 | Deviations from Compose (deliberate or accepted) | 0 | 3 |
-| Missing API surface | 6 | 1 |
+| Missing API surface | 5 | 2 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
@@ -184,11 +184,21 @@
   tracking and there is no `SelectionAdjustment` equivalent in the crate.
 - [ ] **M-6 — no `DisableSelection`.** Compose can opt a subtree out; winia has no equivalent, so the
   only way to keep a text unselectable is to keep it out of any `SelectionContainer`.
-- [ ] **M-7 — the highlight colour is hard-coded.** `Color::from_argb(80, 100, 150, 255)` at
+- [x] **M-7 — the highlight colour is configurable.** `Color::from_argb(80, 100, 150, 255)` at
   `render/pass.rs:929`, `render/pass.rs:1095` and `render/text_field.rs:344`. Compose reads
   `LocalTextSelectionColors` (handle colour, background colour), so a themed selection is
-  impossible. Cheap to fix: one `CompositionLocal<TextSelectionColors>` read at compose time into
-  the node, like `focus_color`.
+  **Closed 2026-10-30.** `text::selection` now has `TextSelectionColors { handle, background }` and
+  `LOCAL_TEXT_SELECTION_COLORS`, defaulting to Compose's `DefaultTextSelectionColors`
+  (`Color(0xFF4286F4)`, background the same at 40% alpha — verified against
+  `DefaultTextSelectionColors.android.kt`). A text leaf captures the background at compose time into
+  `LayoutNode::selection_color` (the same channel `focus_color` uses, because a render pass has no
+  CompositionLocal left to read) and all three former constants now read it. `handle` is carried for
+  API parity and is unused until M-3 (handles) exists.
+  Measured: `render_snapshot::the_highlight_uses_the_provided_selection_colour` paints the same
+  selected text twice — under a red provider and under the default — and counts pixels: the
+  provided run has red pixels in the selection box, the default run has blue ones and no red. Red
+  check: putting the old constant back at the plain-text site gives `0/323 red pixels`. The defaults
+  are pinned by `text::selection::text_selection_colors_tests::the_defaults_are_composes`.
 
 ## Investigated and ruled out
 

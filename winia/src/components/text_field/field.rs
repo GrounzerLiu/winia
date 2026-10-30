@@ -1086,6 +1086,9 @@ impl TextField {
         ctx.key(TextFieldSlotRole::Input, |ctx| {
         let input_key = ctx.next_key();
         ctx.start_leaf(input_key, input_modifier);
+        ctx.set_current_node_selection_color(
+            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS.current().background,
+        );
 
         // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
         // 同步更新文本/长度）。

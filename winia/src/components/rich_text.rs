@@ -513,6 +513,9 @@ impl RichText {
             line_height_style: self.line_height_style,
         });
         ctx.start_leaf(key, modifier);
+        ctx.set_current_node_selection_color(
+            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS.current().background,
+        );
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
         }

@@ -287,3 +287,51 @@ impl Default for SelectionRegistrar {
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
+
+// ═══════════════════════════════════════════════════════════
+// TextSelectionColors
+// ═══════════════════════════════════════════════════════════
+
+/// The colours a selection is drawn in — Compose's `TextSelectionColors`.
+///
+/// `handle` is carried for API parity and is unused until the container has drag handles (M-3 in
+/// `docs/selection-review.md`); only `background` reaches the renderer today.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextSelectionColors {
+    pub handle: crate::graphics::Color,
+    pub background: crate::graphics::Color,
+}
+
+impl TextSelectionColors {
+    pub fn new(handle: crate::graphics::Color, background: crate::graphics::Color) -> Self {
+        Self { handle, background }
+    }
+}
+
+/// Compose's `DefaultTextSelectionColors`: the Compose-logo blue, and the same blue at 40% for the
+/// highlight (`DefaultTextSelectionColors.android.kt`, `Color(0xFF4286F4).copy(alpha = 0.4f)`).
+impl Default for TextSelectionColors {
+    fn default() -> Self {
+        let base = crate::graphics::Color::from_argb(255, 0x42, 0x86, 0xF4);
+        Self { handle: base, background: crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4) }
+    }
+}
+
+/// The selection colours for a subtree — Compose's `LocalTextSelectionColors`.
+pub static LOCAL_TEXT_SELECTION_COLORS: std::sync::LazyLock<CompositionLocal<TextSelectionColors>> =
+    std::sync::LazyLock::new(|| CompositionLocal::new(TextSelectionColors::default));
+
+#[cfg(test)]
+mod text_selection_colors_tests {
+    use super::*;
+
+    /// Compose's `DefaultTextSelectionColors` is `Color(0xFF4286F4)` and the same colour at 40%
+    /// alpha, so a caller that ports Compose code sees the same highlight.
+    #[test]
+    fn the_defaults_are_composes() {
+        let colors = TextSelectionColors::default();
+        assert_eq!((colors.handle.r, colors.handle.g, colors.handle.b, colors.handle.a), (0x42, 0x86, 0xF4, 255));
+        assert_eq!((colors.background.r, colors.background.g, colors.background.b), (0x42, 0x86, 0xF4));
+        assert_eq!(colors.background.a, 102, "0.4 * 255");
+    }
+}

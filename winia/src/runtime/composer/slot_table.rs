@@ -16,6 +16,8 @@ pub(super) struct NodeDesc {
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
     pub(super) focus_color: Option<crate::graphics::Color>,
+    /// 选区高亮色（组合期 set_current_node_selection_color 写入——同 focus_color 通道）
+    pub(super) selection_color: Option<crate::graphics::Color>,
     /// IME 组合下划线颜色（组合期 set_current_node_composing_color 写入——
     /// 物化时应用；渲染期不能读 CompositionLocal（Phase 4.2），组合期捕获主题 primary）
     pub(super) composing_color: Option<crate::graphics::Color>,
@@ -423,6 +425,7 @@ impl SlotTable {
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
                     focus_color: desc.focus_color,
+                    selection_color: desc.selection_color,
                     composing_color: desc.composing_color,
                     cursor_index: desc.cursor_index,
                     cursor_visible: desc.cursor_visible,
@@ -458,6 +461,7 @@ impl SlotTable {
                     dirty: false,
                     registrar: None,
                     focus_color: None,
+                    selection_color: None,
                     composing_color: None,
                     cursor_index: None,
                     cursor_visible: None,

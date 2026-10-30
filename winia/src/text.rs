@@ -28,7 +28,7 @@ pub use paragraph::{build_plain_paragraph, DisplaySpan, Paragraph};
 pub use paragraph_builder::ParagraphBuilder;
 pub use text_layout::TextLayout;
 pub use inline_drawable::{InlineDrawable, ImageDrawable, SvgDrawable};
-pub use selection::{Selection, SelectionRegistrar};
+pub use selection::{Selection, SelectionRegistrar, TextSelectionColors, LOCAL_TEXT_SELECTION_COLORS};
 pub use field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
 pub use transformation::{
     IdentityMapping, IdentityTransformation, OffsetMapping, PasswordTransformation,

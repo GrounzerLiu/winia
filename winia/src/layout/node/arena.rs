@@ -277,6 +277,9 @@ pub struct LayoutNode {
     /// The focus ring's colour, captured from the theme during composition (the CompositionLocal is
     /// gone by render time, so the theme cannot be read there); unset falls back to the default blue.
     pub(crate) focus_color: std::cell::Cell<crate::graphics::Color>,
+    /// Selection highlight, captured at compose time from `LOCAL_TEXT_SELECTION_COLORS` (a node
+    /// cannot read a CompositionLocal at render time — the providers have popped by then).
+    pub(crate) selection_color: std::cell::Cell<crate::graphics::Color>,
     /// The IME composing underline's colour, captured from the theme during composition (the
     /// CompositionLocal is unreadable at render time); unset falls back to the default colour.
     pub(crate) composing_color: std::cell::Cell<crate::graphics::Color>,
@@ -471,6 +474,7 @@ impl LayoutNode {
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),
             composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
@@ -569,6 +573,7 @@ impl Default for LayoutNode {
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),
             composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,

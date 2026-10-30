@@ -926,7 +926,10 @@ pub(super) fn render_pass1(
                 // The range is in CONTENT offsets; a truncated paragraph draws in display offsets.
                 para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
-                paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+                // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
+                // (a render pass has no CompositionLocal left to read).
+                let sel_bg = node.selection_color.get();
+                paint.set_color(skia_safe::Color::from_argb(sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b));
                 for tb in &rects {
                     // The highlight follows the same horizontal mapping as the glyphs.
                     let (left, right) = match transform {
@@ -1041,7 +1044,7 @@ pub(super) fn render_pass1(
                 canvas.restore();
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key, transform, crate::layout::node::line_height_style_of(node));
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key, node.selection_color.get(), transform, crate::layout::node::line_height_style_of(node));
         }
     }
 
@@ -1092,7 +1095,10 @@ pub(super) fn render_pass1(
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
-                paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+                // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
+                // (a render pass has no CompositionLocal left to read).
+                let sel_bg = node.selection_color.get();
+                paint.set_color(skia_safe::Color::from_argb(sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b));
                 for tb in &rects {
                     canvas.draw_rect(skia_safe::Rect::new(rich_x + tb.rect.left, content_y + rich_paint_dy + tb.rect.top, rich_x + tb.rect.right, content_y + rich_paint_dy + tb.rect.bottom), &paint);
                 }

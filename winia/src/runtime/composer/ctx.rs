@@ -585,6 +585,14 @@ impl<'a> ComposeCtx<'a> {
 
     /// 设置当前节点的焦点环颜色（组合期调用——主题色在此捕获；
     /// 渲染期 CompositionLocal 已退出，不能读主题）
+    /// Capture the selection highlight colour for the node being built (see
+    /// `LayoutNode::selection_color` for why it cannot be read at render time).
+    pub fn set_current_node_selection_color(&mut self, color: crate::graphics::Color) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.selection_color = Some(color);
+        }
+    }
+
     pub fn set_current_node_focus_color(&mut self, color: crate::graphics::Color) {
         // 组合/布局分离：组合期没有 arena 节点——写入当前 slot 的 desc，
         // 物化时应用到节点（与 set_current_node_registrar 同一通道）

@@ -333,6 +333,7 @@ pub(super) fn draw_text_with_selection(
     letter_spacing: f32, line_height: Option<f32>,
     registrar: Option<crate::text::selection::SelectionRegistrar>,
     slot_key: u64,
+    selection_bg: crate::graphics::Color,
     transform: Option<crate::text::TextGeometricTransform>,
     line_style: Option<crate::text::LineHeightStyle>,
 ) {
@@ -341,7 +342,12 @@ pub(super) fn draw_text_with_selection(
     let scale_x = transform.map(|t| t.scale_x).unwrap_or(1.0).max(0.0001);
     if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {
         let mut paint = skia_safe::Paint::default();
-        paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+        paint.set_color(skia_safe::Color::from_argb(
+            selection_bg.a,
+            selection_bg.r,
+            selection_bg.g,
+            selection_bg.b,
+        ));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
     }
     // The fallback path rebuilds through the shared constructor when the cache is missing: the same

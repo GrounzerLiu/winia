@@ -1245,3 +1245,108 @@ fn every_line_height_style_keeps_the_run_inside_its_box() {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// M-7: the selection highlight colour comes from `LOCAL_TEXT_SELECTION_COLORS`
+// ═══════════════════════════════════════════════════════════════
+
+/// Compose, lay out, give the test a chance to SET a selection, then paint.
+///
+/// `render_ui` cannot do this: the selection lives on the registrar, which only exists after the
+/// composition, and the highlight has to be painted after it is set.
+fn render_with_selection(
+    w: f32,
+    h: f32,
+    ui: impl FnOnce(&mut ComposeCtx),
+    set: impl FnOnce(),
+) -> skia_safe::Surface {
+    let mut composer = Composer::new();
+    composer.compose(|ctx| ui(ctx));
+    composer.layout(Constraints::new(0.0, w, 0.0, h));
+    set();
+    let mut surface = raster_surface(w as i32, h as i32);
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    if let Some(root_idx) = composer.layout_root_idx() {
+        let nodes = composer.arena_nodes();
+        render::render(nodes, root_idx, surface.canvas());
+    }
+    surface
+}
+
+/// How many pixels in a box are strongly red — the only colour the custom provider uses.
+fn red_pixels(surface: &mut skia_safe::Surface, x0: i32, x1: i32, y0: i32, y1: i32) -> usize {
+    let mut n = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (r, g, b, _) = pixel(surface, x, y);
+            if r > 200 && g < 60 && b < 60 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// How many pixels in a box are tinted blue over the white background — Compose's default
+/// `Color(0xFF4286F4)` at 40% alpha lands around (179, 207, 251).
+fn blue_pixels(surface: &mut skia_safe::Surface, x0: i32, x1: i32, y0: i32, y1: i32) -> usize {
+    let mut n = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (r, g, b, _) = pixel(surface, x, y);
+            if b > 200 && b > r + 40 && g > r {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Paints the same selected text twice — once under a red provider, once under the default — and
+/// compares the pixels. A hardcoded colour would make the two identical.
+#[test]
+fn the_highlight_uses_the_provided_selection_colour() {
+    use std::sync::{Arc, Mutex};
+    use winia::components::SelectionContainer;
+    use winia::text::{TextSelectionColors, LOCAL_TEXT_SELECTION_COLORS, SelectionRegistrar};
+
+    let render_with_colors = |colors: Option<TextSelectionColors>| {
+        let reg: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let reg_in = reg.clone();
+        let mut surface = render_with_selection(
+            200.0,
+            40.0,
+            move |ctx| {
+                let reg_body = reg_in.clone();
+                let body = move |ctx: &mut ComposeCtx| {
+                    SelectionContainer::new().build(ctx, move |ctx| {
+                        *reg_body.lock().unwrap() =
+                            Some(winia::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                        Text::new("abcdef").build(ctx);
+                    });
+                };
+                match colors {
+                    Some(c) => LOCAL_TEXT_SELECTION_COLORS.provides(c, || body(ctx)),
+                    None => body(ctx),
+                }
+            },
+            move || {
+                let r = reg.lock().unwrap().clone().expect("the container registered");
+                r.set_selection(0, 3);
+            },
+        );
+        let red = red_pixels(&mut surface, 1, 20, 1, 18);
+        let blue = blue_pixels(&mut surface, 1, 20, 1, 18);
+        let total = 19 * 17;
+        (red, blue, total)
+    };
+
+    let red = Color::from_argb(255, 255, 0, 0);
+    let (custom_red, _, total) = render_with_colors(Some(TextSelectionColors::new(red, red)));
+    let (default_red, default_blue, _) = render_with_colors(None);
+
+    // Both cases must PAINT (a highlight that never appears would satisfy "not red" trivially).
+    assert!(custom_red > 0, "the provided colour is what gets painted ({custom_red}/{total} red pixels)");
+    assert!(default_blue > 0, "the default still paints a highlight ({default_blue} blue pixels)");
+    assert_eq!(default_red, 0, "the default is Compose's blue, not red ({default_red} red pixels)");
+}

@@ -550,6 +550,7 @@ impl Composer {
             dirty, // 重测标记（slot.dirty 已消费）
             registrar: None,
             focus_color: None,
+            selection_color: None,
             composing_color: None,
             cursor_index: None,
             cursor_visible: None,
@@ -647,6 +648,7 @@ impl Composer {
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
                 focus_color: None,
+                selection_color: None,
                 composing_color: None,
             cursor_index: None,
             cursor_visible: None,
