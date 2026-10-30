@@ -61,18 +61,123 @@ impl Selection {
     pub(crate) fn empty() -> Self { Selection { start: 0, end: 0, text: String::new() } }
 }
 
+/// One end of a selection: WHICH run, and where inside it.
+///
+/// A drag produces global offsets (they span every run in the container), but storing the selection
+/// that way makes it follow the OFFSET rather than the characters: a run inserted or removed above
+/// it moves the highlight onto different text. Measured before this: selecting "BBB" and inserting
+/// "AAA" above left the range at `0..3`, which then read "AAA", and removing the earlier run
+/// dropped the selection outright. Compose stores an anchor per end —
+/// `AnchorInfo(selectableId, offset, direction)` — so this is the same idea: a slot key plus an
+/// offset inside that run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Anchor {
+    slot_key: u64,
+    offset: usize,
+}
+
 #[derive(Clone)]
 struct RegistrarInner {
-    selection_start: Option<usize>,
-    selection_end: Option<usize>,
+    /// The two ends, in no particular order; `anchors()` puts them in document order.
+    selection_start: Option<Anchor>,
+    selection_end: Option<Anchor>,
+    /// The runs in document order. `reindex` rewrites this from the layout tree every pass (tree
+    /// order is not reading order — see `Composer::reindex_selection_registrars`); `register`
+    /// appends a run it has not seen before.
+    order: Vec<u64>,
     next_global_offset: usize,
     segments: HashMap<u64, RegisteredSegment>,
     on_change: Option<OnChangeFn>,
 }
 
+impl RegistrarInner {
+    fn slot_index(&self, slot_key: u64) -> Option<usize> {
+        self.order.iter().position(|&key| key == slot_key)
+    }
+
+    /// The two ends in document order, or `None` when either end's run has left the table (the
+    /// selection then names nothing, and every query answers "nothing").
+    fn anchors(&self) -> Option<(Anchor, Anchor)> {
+        let (a, b) = (self.selection_start?, self.selection_end?);
+        let (ia, ib) = (self.slot_index(a.slot_key)?, self.slot_index(b.slot_key)?);
+        if (ia, a.offset) <= (ib, b.offset) { Some((a, b)) } else { Some((b, a)) }
+    }
+
+    /// Where an end sits in the CURRENT global space. The offsets move as runs come and go; the
+    /// anchor does not.
+    fn global_of(&self, anchor: Anchor) -> Option<usize> {
+        let seg = self.segments.get(&anchor.slot_key)?;
+        Some(seg.global_offset + anchor.offset.min(seg.text_len))
+    }
+
+    /// The anchor a global offset names. An offset past the last run's end anchors to that run's
+    /// end, which is what the drag path produces when it snaps to a container edge.
+    fn anchor_at(&self, global: usize) -> Option<Anchor> {
+        let mut last = None;
+        for &slot_key in &self.order {
+            let Some(seg) = self.segments.get(&slot_key) else { continue };
+            let end = seg.global_offset + seg.text_len;
+            if global < end {
+                return Some(Anchor { slot_key, offset: global.saturating_sub(seg.global_offset) });
+            }
+            last = Some(Anchor { slot_key, offset: seg.text_len });
+        }
+        last
+    }
+
+    /// Which part of `slot_key`'s run the selection covers, in that run's own offsets.
+    fn local_range(&self, slot_key: u64) -> Option<Range<usize>> {
+        let (a, b) = self.anchors()?;
+        let seg = self.segments.get(&slot_key)?;
+        let (ia, ib) = (self.slot_index(a.slot_key)?, self.slot_index(b.slot_key)?);
+        let ik = self.slot_index(slot_key)?;
+        let (start, end) = if ik == ia && ik == ib {
+            (a.offset.min(b.offset), a.offset.max(b.offset))
+        } else if ik == ia {
+            (a.offset, seg.text_len)
+        } else if ik == ib {
+            (0, b.offset)
+        } else if ik > ia && ik < ib {
+            (0, seg.text_len)
+        } else {
+            return None;
+        };
+        let (start, end) = (start.min(seg.text_len), end.min(seg.text_len));
+        // A collapsed caret is not a range. `build_selection` says so, and a consumer that branches
+        // on `is_some()` (the uncached text-field fallback) used to paint a band for one.
+        if start == end { None } else { Some(start..end) }
+    }
+
+    /// Whether the selection covers `slot_key` at all, edges included.
+    fn selection_touches(&self, slot_key: u64) -> bool {
+        let Some((a, b)) = self.anchors() else { return false };
+        let (Some(ia), Some(ib), Some(ik)) = (
+            self.slot_index(a.slot_key),
+            self.slot_index(b.slot_key),
+            self.slot_index(slot_key),
+        ) else {
+            return false;
+        };
+        ik >= ia && ik <= ib
+    }
+
+    fn clear(&mut self) {
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    fn has_selection(&self) -> bool {
+        self.selection_start.is_some() || self.selection_end.is_some()
+    }
+}
+
 impl std::fmt::Debug for RegistrarInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegistrarInner").field("selection_start", &self.selection_start).field("selection_end", &self.selection_end).field("has_cb", &self.on_change.is_some()).finish()
+        f.debug_struct("RegistrarInner")
+            .field("selection_start", &self.selection_start)
+            .field("selection_end", &self.selection_end)
+            .field("has_cb", &self.on_change.is_some())
+            .finish()
     }
 }
 
@@ -100,9 +205,8 @@ pub(crate) fn clear_open_selections() {
         live.retain(|weak| {
             let Some(inner) = weak.upgrade() else { return false };
             let mut inner = inner.lock();
-            if inner.selection_start.is_some() || inner.selection_end.is_some() {
-                inner.selection_start = None;
-                inner.selection_end = None;
+            if inner.has_selection() {
+                inner.clear();
             }
             true
         });
@@ -112,12 +216,13 @@ pub(crate) fn clear_open_selections() {
 impl SelectionRegistrar {
     pub fn new() -> Self {
         let inner = Arc::new(Mutex::new(RegistrarInner {
-                selection_start: None,
-                selection_end: None,
-                next_global_offset: 0,
-                segments: HashMap::new(),
-                on_change: None,
-            }));
+            selection_start: None,
+            selection_end: None,
+            order: Vec::new(),
+            next_global_offset: 0,
+            segments: HashMap::new(),
+            on_change: None,
+        }));
         LIVE_REGISTRARS.with(|live| {
             let mut live = live.borrow_mut();
             live.retain(|weak| weak.strong_count() > 0);
@@ -129,34 +234,56 @@ impl SelectionRegistrar {
     pub fn register(&self, slot_key: u64, text: &str) -> usize {
         let mut inner = self.inner.lock();
         let text_len = text.len();
-        let offset = if let Some(existing) = inner.segments.get(&slot_key) {
-            existing.global_offset
-        } else {
-            let off = inner.next_global_offset;
-            inner.next_global_offset += text_len;
-            off
+        let (offset, stored, content_changed) = match inner.segments.get(&slot_key) {
+            Some(existing) => {
+                let changed = existing.text.as_ref() != text;
+                // Reuse the string when it did not change: a re-register happens on every entry
+                // into the run, and a fresh `Arc<str>` per frame is a per-frame allocation.
+                let stored = if changed { Arc::from(text) } else { existing.text.clone() };
+                (existing.global_offset, stored, changed)
+            }
+            None => {
+                let off = inner.next_global_offset;
+                inner.next_global_offset += text_len;
+                inner.order.push(slot_key);
+                (off, Arc::from(text), false)
+            }
         };
         // Keep the stitching invariant: the registered ranges must not overlap. When a re-register
         // covers longer text, the global offset advances; otherwise later runs would start inside
-        // this one and `build_selection` would duplicate or drop characters.
+        // this one.
         inner.next_global_offset = inner.next_global_offset.max(offset + text_len);
         inner.segments.insert(slot_key, RegisteredSegment {
-            slot_key, global_offset: offset, text_len,
-            text: text.into(),
+            slot_key,
+            global_offset: offset,
+            text_len,
+            text: stored,
         });
+        // Compose ends the selection when the content of a selectable it covers changes
+        // (`onSelectableChangeCallback` -> `onRelease(); selection = null`), because the offsets it
+        // remembered no longer name the same characters. An anchor survives a sibling coming or
+        // going, but not its own run being rewritten.
+        if content_changed && inner.selection_touches(slot_key) {
+            inner.clear();
+        }
         offset
     }
 
+    /// Select a range given in GLOBAL offsets, the way a drag reports it.
     pub fn set_selection(&self, start: usize, end: usize) {
         let mut inner = self.inner.lock();
-        inner.selection_start = Some(start.min(end));
-        inner.selection_end = Some(start.max(end));
+        let (lo, hi) = (start.min(end), start.max(end));
+        let (Some(a), Some(b)) = (inner.anchor_at(lo), inner.anchor_at(hi)) else {
+            // No runs to anchor to: there is nothing to select.
+            inner.clear();
+            return;
+        };
+        inner.selection_start = Some(a);
+        inner.selection_end = Some(b);
     }
 
     pub fn clear_selection(&self) {
-        let mut inner = self.inner.lock();
-        inner.selection_start = None;
-        inner.selection_end = None;
+        self.inner.lock().clear();
     }
 
     /// Whether this is the same instance (by `Arc` identity). A cross-container drag uses it to
@@ -170,8 +297,8 @@ impl SelectionRegistrar {
         inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
     }
 
-    /// Recompute every segment's offset from the ORDER the layout tree reports, and drop the
-    /// segments whose slot is no longer in the tree.
+    /// Recompute every run's offset from the ORDER the layout tree reports, and drop the runs whose
+    /// slot is no longer in the tree.
     ///
     /// This is the one place offsets are authoritative. A container re-entering composition does NOT
     /// mean its texts re-run — a `Text` whose parameters did not change Skips, and a skipped text
@@ -183,25 +310,37 @@ impl SelectionRegistrar {
     ///
     /// Order is document order — the order Compose's `SelectionRegistrarImpl` gets from layout —
     /// not registration order: a text inserted between two existing ones must land between them.
-    /// Offsets are contiguous again afterwards, so a shrink does not leave a hole.
+    /// The ORDER is what the selection is read through, which is why it is stored rather than
+    /// derived: with anchors, a run appearing above the selection moves every offset below it while
+    /// the selection itself stays on its own characters.
     pub(crate) fn reindex(&self, ordered_slots: &[u64]) {
         let mut inner = self.inner.lock();
         let mut next_offset = 0usize;
         let mut rebuilt: HashMap<u64, RegisteredSegment> = HashMap::with_capacity(ordered_slots.len());
+        let mut order: Vec<u64> = Vec::with_capacity(ordered_slots.len());
         for &slot_key in ordered_slots {
             if let Some(mut seg) = inner.segments.remove(&slot_key) {
                 seg.global_offset = next_offset;
                 next_offset += seg.text_len;
+                order.push(slot_key);
                 rebuilt.insert(slot_key, seg);
             }
         }
         // Anything left in `segments` belongs to a slot the tree did not report: it left.
         inner.segments = rebuilt;
+        inner.order = order;
         inner.next_global_offset = next_offset;
-        // The selection space just changed under the stored range; clamp instead of leaving a range
-        // that points past the end (`build_selection` would clamp anyway, `selected_range` would not).
-        if let Some(s) = inner.selection_start { inner.selection_start = Some(s.min(next_offset)); }
-        if let Some(e) = inner.selection_end { inner.selection_end = Some(e.min(next_offset)); }
+        // An anchor whose run left the table names nothing. End the selection rather than let it
+        // slide onto whatever now occupies those offsets.
+        let alive = match (inner.selection_start, inner.selection_end) {
+            (Some(a), Some(b)) => {
+                inner.segments.contains_key(&a.slot_key) && inner.segments.contains_key(&b.slot_key)
+            }
+            _ => true,
+        };
+        if !alive {
+            inner.clear();
+        }
     }
 
     pub fn total_text_len(&self) -> usize {
@@ -209,18 +348,7 @@ impl SelectionRegistrar {
     }
 
     pub fn selected_range(&self, slot_key: u64) -> Option<Range<usize>> {
-        let inner = self.inner.lock();
-        let (global_start, global_end) = (inner.selection_start?, inner.selection_end?);
-        let seg = inner.segments.get(&slot_key)?;
-        let local_start = global_start.saturating_sub(seg.global_offset);
-        let local_end = global_end.saturating_sub(seg.global_offset);
-        if local_start >= seg.text_len || local_end == 0 { return None; }
-    // A collapsed caret (`start == end`) inside the run is not a range. `build_selection` already
-    // says so; this answered `Some(5..5)` for the same state, and a consumer that branches on
-    // `is_some()` (the uncached text field fallback) painted a highlight band for a caret.
-    if local_start == local_end { return None; }
-        let len = seg.text_len;
-        Some(local_start.min(len)..local_end.min(len))
+        self.inner.lock().local_range(slot_key)
     }
 
     /// Install the selection-changed callback. It receives a [`Selection`] with the text already
@@ -229,32 +357,26 @@ impl SelectionRegistrar {
         self.inner.lock().on_change = Some(Arc::new(f));
     }
 
-    /// Build the current [`Selection`], stitching the registered runs (safe across run boundaries
-    /// and emoji graphemes).
+    /// Build the current [`Selection`], stitching the runs the anchors cover (safe across run
+    /// boundaries and emoji graphemes).
+    ///
+    /// `start`/`end` are the anchors' offsets in the CURRENT global space, so they follow a run
+    /// that appears above the selection even though the anchor does not move.
     pub(crate) fn build_selection(&self) -> Option<Selection> {
         let inner = self.inner.lock();
-        let total = inner.next_global_offset;
-        let (s, e) = (inner.selection_start?, inner.selection_end?);
-        let (s, e) = (s.min(e), s.max(e));
+        let (a, b) = inner.anchors()?;
+        let (gs, ge) = (inner.global_of(a)?, inner.global_of(b)?);
+        let (start, end) = (gs.min(ge), gs.max(ge));
         // Zero width (a click with no drag) is no selection, matching `selected_range`.
-        if s == e { return None; }
-        // Clamp to the container's total length: a bad offset must not surface as empty text with
-        // an out-of-range value beside it.
-        let (s, e) = (s.min(total), e.min(total));
-        if s == e { return None; }
-        let mut segs: Vec<&RegisteredSegment> = inner.segments.values().collect();
-        segs.sort_by_key(|seg| seg.global_offset);
+        if start == end { return None; }
         let mut text = String::new();
-        for seg in segs {
-            let seg_s = seg.global_offset;
-            let seg_e = seg_s + seg.text_len;
-            if seg_e <= s || seg_s >= e { continue; }
-            let start = s.max(seg_s) - seg_s;
-            let end = e.min(seg_e) - seg_s;
+        for &slot_key in &inner.order {
+            let Some(range) = inner.local_range(slot_key) else { continue };
+            let Some(seg) = inner.segments.get(&slot_key) else { continue };
             // The offsets are meant to be character boundaries (`get_closest_*` guarantees it), but
             // a cross-run stitch uses `get` so a bad one skips its run instead of panicking on an
             // out-of-range or non-boundary slice.
-            if let Some(part) = seg.text.get(start..end) {
+            if let Some(part) = seg.text.get(range) {
                 text.push_str(part);
             }
         }
@@ -263,7 +385,7 @@ impl SelectionRegistrar {
         if text.contains('\u{FFFC}') {
             text = text.replace('\u{FFFC}', "");
         }
-        Some(Selection { start: s, end: e, text })
+        Some(Selection { start, end, text })
     }
 
     pub(crate) fn fire_on_change(&self) {
@@ -276,7 +398,6 @@ impl SelectionRegistrar {
         }
     }
 }
-
 impl Default for SelectionRegistrar {
     fn default() -> Self { Self::new() }
 }

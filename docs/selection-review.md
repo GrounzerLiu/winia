@@ -16,7 +16,7 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour) | 1 | 5 |
+| Defects (wrong behaviour) | 0 | 6 |
 | Deviations from Compose (deliberate or accepted) | 0 | 3 |
 | Missing API surface | 5 | 2 |
 | Investigated and ruled out | — | 4 |
@@ -79,14 +79,32 @@
   **Closed 2026-10-29.** `selected_range` returns `None` when `local_start == local_end`, so it and
   `build_selection` agree. Test:
   `selection_container::tests::a_collapsed_selection_reports_no_range`.
-- [ ] **S-5 — the selection does not follow its characters when a sibling appears**
+- [x] **S-5 — a selection is anchored to its own characters.**
   (`winia/src/text/selection.rs:146-164`). Offsets are clamped after `reindex`, never remapped, and
   the range is a single global byte span. Measured: select `BBB` (`0..3`), insert `AAA` above it →
   the range stays `0..3`, which now reads **"AAA"**. The mirror case, removing the earlier text,
   clamped `3..6` down to `total = 3` and the selection became `None`. Compose anchors on
   `(selectableId, offset)` per end, so the selection stays on its own characters. Fix needs anchors
   in `Selection`, not a clamp.
-  Test to add: `inserting_a_sibling_keeps_the_selection_on_its_own_text`.
+  **Closed 2026-10-30.** `Selection` is no longer stored as a pair of global offsets: the registrar
+  keeps an `Anchor { slot_key, offset }` per end (Compose's `AnchorInfo(selectableId, offset)`),
+  plus the document ORDER of the runs (`reindex` rewrites it every layout), and every query reads
+  the selection through the anchors. `set_selection` still takes global offsets — the drag path and
+  `TextField` are unchanged — and converts them to anchors at the moment they are set; `build_selection`
+  reports the anchors' offsets in the CURRENT global space, so `start`/`end` still follow a run that
+  appears above.
+  Three consequences, each pinned by a test in `app::per_window::selection_anchor_tests`:
+  - a KEYED run inserted above keeps the selection on its own text (`0..3` on "BBB" becomes `3..6`,
+    still "BBB"; before this it read "AAA")
+  - a keyed run removed above keeps it too (`3..6` becomes `0..3`; before this the range was clamped
+    to the new total and the selection vanished)
+  - a change to the COVERED run's own text ends the selection, Compose's
+    `onSelectableChangeCallback` rule; a neighbour changing does not
+  One caveat, measured and pinned: winia allocates slot keys by CALL POSITION, so an UNKEYED run
+  inserted above re-keys everything below it and the registrar cannot tell that from "the covered run
+  was rewritten" — the selection ends. That is the safe answer (never silently select the inserted
+  text) and the reason the tests key their runs; `ctx.key(..)` is the recipe for a container whose
+  runs come and go.
 - [x] **S-6 — stitching follows reading order.**
   (`winia/src/runtime/composer/engine.rs:1431-1454` collects slots by a pre-order walk). Measured: a
   Row of two Columns ("A1","A2") and ("B1","B2") stitches `"A1A2B1B2"`, while the reading order on
