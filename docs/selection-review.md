@@ -16,8 +16,8 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour) | 3 | 3 |
-| Deviations from Compose (deliberate or accepted) | 1 | 2 |
+| Defects (wrong behaviour) | 1 | 5 |
+| Deviations from Compose (deliberate or accepted) | 0 | 3 |
 | Missing API surface | 6 | 1 |
 | Investigated and ruled out | — | 4 |
 
@@ -65,7 +65,7 @@
   `selection_drag_tests::dragging_left_into_another_container_reaches_the_anchor_start`,
   `..::dragging_right_reaches_the_anchor_end`, and the unit cases
   `test_cross_container_leftward_drag_reaches_the_start` / `.._rightward_..`.
-- [ ] **S-4 — `selected_range` reports a collapsed caret as a selection; `build_selection` does
+- [x] **S-4 — a collapsed caret is no longer reported as a range.**
   not** (`winia/src/text/selection.rs:170-179` vs `:189-199`). The guard is
   `local_start >= seg.text_len || local_end == 0`, so a caret at offset 0 answers `None` while a
   caret at offset 5 answers `Some(5..5)`. Measured: `set_selection(5, 5)` → `selected_range(1) =
@@ -76,8 +76,9 @@
   a text node with no cached paragraph — the cached paths at `render/pass.rs:925` and `:1092` guard
   with `range.start < range.end`, which is why nothing has been seen on screen. So the reachable
   consequence today is the API disagreeing with itself, not a painted band; the band is latent.
-  Fix: return `None` from `selected_range` when `local_start == local_end`.
-  Test to add: `a_collapsed_selection_reports_no_range`.
+  **Closed 2026-10-29.** `selected_range` returns `None` when `local_start == local_end`, so it and
+  `build_selection` agree. Test:
+  `selection_container::tests::a_collapsed_selection_reports_no_range`.
 - [ ] **S-5 — the selection does not follow its characters when a sibling appears**
   (`winia/src/text/selection.rs:146-164`). Offsets are clamped after `reindex`, never remapped, and
   the range is a single global byte span. Measured: select `BBB` (`0..3`), insert `AAA` above it →
@@ -86,17 +87,22 @@
   `(selectableId, offset)` per end, so the selection stays on its own characters. Fix needs anchors
   in `Selection`, not a clamp.
   Test to add: `inserting_a_sibling_keeps_the_selection_on_its_own_text`.
-- [ ] **S-6 — stitching is in tree order, not reading order**
+- [x] **S-6 — stitching follows reading order.**
   (`winia/src/runtime/composer/engine.rs:1431-1454` collects slots by a pre-order walk). Measured: a
   Row of two Columns ("A1","A2") and ("B1","B2") stitches `"A1A2B1B2"`, while the reading order on
   screen is `A1 B1 A2 B2`. Compose sorts selectables geometrically (y first, then x, with an
   `inARow` heuristic in `SelectionRegistrarImpl.sort`). Any multi-column selectable layout therefore
   copies text in the wrong order today.
-  Test to add: `a_two_column_layout_stitches_in_reading_order`.
+  **Closed 2026-10-29.** `reindex_selection_registrars` now carries each registered text's window
+  box through the walk and sorts by Compose's rule: two boxes in a row (vertical overlap of at least
+  half of either height, horizontal overlap under half of both widths) compare by x, otherwise by y.
+  Red check: forcing the comparator to `Ordering::Equal` fails
+  `a_two_column_layout_stitches_in_reading_order` with `left: A1A2B1B2, right: A1B1A2B2`. Test:
+  `selection_container::tests::a_two_column_layout_stitches_in_reading_order`.
 
 ## Deviations from Compose
 
-- [ ] **D-1 — clearing a selection is silent.** `fire_on_change` only runs `build_selection()`, which
+- [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
   returns `None` for an empty range, so the callback is never told the selection went away
   (`winia/src/text/selection.rs:224-231`, documented at `selection_container.rs:33-36`). Measured:
   after `set_selection(0, 5)` + `fire_on_change` the callback saw `"hello"`; after
@@ -105,6 +111,12 @@
   `SelectionState.selection` becomes observable `null`, so its consumers can reset. Reason it is not
   filed as a defect: the doc comment states the intent, so this is a designed limitation that has
   turned out to be the wrong design for any consumer that displays the selection.
+  **Closed 2026-10-29.** `fire_on_change` now always answers: a real selection, or
+  `Selection::empty()` (with `Selection::is_empty()`) when there is none. The two tests that pinned
+  the old contract were rewritten — one of them asserted the callback must NOT fire with nothing
+  selected, which is precisely the behaviour this item was about. Tests:
+  `selection_container::tests::clearing_a_selection_notifies_with_an_empty_one` and
+  `..::on_change_reports_an_empty_selection_when_there_never_was_one`.
 - [x] **D-2 — a press elsewhere clears the selection.** `handle_pointer_down` clears the
   registrar of the node it hit (`pointer.rs:311`), which is the wrong node whenever the tap does not
   land on a selectable text: measured, after selecting in A, pressing a plain (unselectable) Text

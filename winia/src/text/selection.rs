@@ -51,6 +51,14 @@ impl Selection {
     /// The selected text, stitched from the registered runs (safe across run boundaries and
     /// emoji graphemes).
     pub fn text(&self) -> &str { &self.text }
+    /// No selection at all: what the callback receives when the user clears one.
+    ///
+    /// It is a `Selection` rather than an `Option` so the callback signature stays one type; a
+    /// consumer that shows "N characters selected" resets on `is_empty()`. Before this, clearing
+    /// fired NOTHING (measured: after `clear_selection()` the callback list still held only the
+    /// previous selection), so such a label stayed at the old count forever.
+    pub fn is_empty(&self) -> bool { self.start == self.end && self.text.is_empty() }
+    pub(crate) fn empty() -> Self { Selection { start: 0, end: 0, text: String::new() } }
 }
 
 #[derive(Clone)]
@@ -207,6 +215,10 @@ impl SelectionRegistrar {
         let local_start = global_start.saturating_sub(seg.global_offset);
         let local_end = global_end.saturating_sub(seg.global_offset);
         if local_start >= seg.text_len || local_end == 0 { return None; }
+    // A collapsed caret (`start == end`) inside the run is not a range. `build_selection` already
+    // says so; this answered `Some(5..5)` for the same state, and a consumer that branches on
+    // `is_some()` (the uncached text field fallback) painted a highlight band for a caret.
+    if local_start == local_end { return None; }
         let len = seg.text_len;
         Some(local_start.min(len)..local_end.min(len))
     }
@@ -256,10 +268,11 @@ impl SelectionRegistrar {
 
     pub(crate) fn fire_on_change(&self) {
         let cb = self.inner.lock().on_change.clone();
-        if let Some(cb) = cb {
-            if let Some(sel) = self.build_selection() {
-                cb(&sel);
-            }
+        let Some(cb) = cb else { return };
+        match self.build_selection() {
+            Some(sel) => cb(&sel),
+            // Nothing selected is a state change too (`Selection::is_empty`).
+            None => cb(&Selection::empty()),
         }
     }
 }

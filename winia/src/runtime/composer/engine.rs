@@ -1423,32 +1423,77 @@ impl Composer {
         self.dispatch_layout_callbacks();
     }
 
-    /// Rebuild every selection registrar's offset table from the layout tree, in document order.
+    /// Rebuild every selection registrar's offset table from the layout tree, in READING order.
     ///
     /// A text leaf carries the registrar it registered into (`LayoutNode::registrar`), so the walk
     /// sees exactly the live text nodes of each container — skipped ones included, removed ones
-    /// absent. Each registrar gets its own slot list, in the order the children are visited.
+    /// absent.
+    ///
+    /// The order is geometric, not the tree's: Compose sorts its selectables by position
+    /// (`SelectionRegistrarImpl.sort`), because tree order and reading order disagree the moment a
+    /// layout puts two rows side by side — a `Row` of two `Column`s is A1 A2 B1 B2 in the tree and
+    /// A1 B1 A2 B2 on screen, and a select-all stitched in tree order copies the wrong text
+    /// (measured: the container answered "A1A2B1B2").
+    ///
+    /// `in_row` implements Compose's heuristic: two boxes are in a row when they overlap vertically
+    /// by at least half of either height and overlap horizontally by less than half of both widths.
     fn reindex_selection_registrars(&mut self) {
         let Some(root) = self.arena.root else { return };
         // Cheap guard: most trees have no selection at all, and the walk allocates per registrar.
         if !self.arena.nodes.iter().any(|n| n.registrar.borrow().is_some()) {
             return;
         }
-        let mut groups: Vec<(crate::text::selection::SelectionRegistrar, Vec<u64>)> = Vec::new();
-        let mut stack = vec![root];
-        // Pre-order, children in document order: push them reversed so the pop order is forward.
-        while let Some(idx) = stack.pop() {
+        /// A registered text with the box it occupies in window space.
+        struct Placed {
+            slot_key: u64,
+            left: f32,
+            top: f32,
+            right: f32,
+            bottom: f32,
+        }
+        fn in_row(a: &Placed, b: &Placed) -> bool {
+            let vertical = (a.bottom.min(b.bottom) - a.top.max(b.top)).max(0.0);
+            let horizontal = (a.right.min(b.right) - a.left.max(b.left)).max(0.0);
+            let (h_a, h_b) = (a.bottom - a.top, b.bottom - b.top);
+            let (w_a, w_b) = (a.right - a.left, b.right - b.left);
+            (vertical >= h_a * 0.5 || vertical >= h_b * 0.5)
+                && horizontal < w_a * 0.5
+                && horizontal < w_b * 0.5
+        }
+
+        let mut groups: Vec<(crate::text::selection::SelectionRegistrar, Vec<Placed>)> = Vec::new();
+        // The stack carries the accumulated window origin, so a placement is known without a second
+        // walk (and the scroll offset has to come off on the way down, exactly as hit testing does).
+        let mut stack: Vec<(usize, f32, f32)> = vec![(root, 0.0, 0.0)];
+        while let Some((idx, origin_x, origin_y)) = stack.pop() {
             let node = &self.arena.nodes[idx];
+            let left = origin_x + node.position.x;
+            let top = origin_y + node.position.y;
             if let Some(reg) = node.registrar.borrow().as_ref() {
+                let placed = Placed {
+                    slot_key: node.slot_key,
+                    left,
+                    top,
+                    right: left + node.measured_size.width,
+                    bottom: top + node.measured_size.height,
+                };
                 match groups.iter_mut().find(|(r, _)| r.is_same(reg)) {
-                    Some((_, slots)) => slots.push(node.slot_key),
-                    None => groups.push((reg.clone(), vec![node.slot_key])),
+                    Some((_, placed_list)) => placed_list.push(placed),
+                    None => groups.push((reg.clone(), vec![placed])),
                 }
             }
-            if let Some(sub) = node.subcomposed_child { stack.push(sub); }
-            for &child in node.children.iter().rev() { stack.push(child); }
+            let (scroll_x, scroll_y) = crate::layout::node::scroll_offset_for_node(node);
+            let (child_x, child_y) = (left - scroll_x, top - scroll_y);
+            if let Some(sub) = node.subcomposed_child { stack.push((sub, child_x, child_y)); }
+            for &child in node.children.iter().rev() { stack.push((child, child_x, child_y)); }
         }
-        for (reg, slots) in groups {
+        for (reg, mut placed) in groups {
+            placed.sort_by(|a, b| {
+                // Reading order: side by side compares x, otherwise y (Compose's `sort`).
+                let (ka, kb) = if in_row(a, b) { (a.left, b.left) } else { (a.top, b.top) };
+                ka.total_cmp(&kb)
+            });
+            let slots: Vec<u64> = placed.into_iter().map(|p| p.slot_key).collect();
             reg.reindex(&slots);
         }
     }

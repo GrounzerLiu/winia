@@ -318,14 +318,99 @@ mod tests {
     }
 
     #[test]
-    fn test_on_change_not_called_when_no_selection() {
+    /// D-1: clearing a selection IS a state change, and the callback has to hear about it.
+    ///
+    /// Before this, `fire_on_change` returned early unless `build_selection` answered `Some`, so a
+    /// consumer showing "N characters selected" never reset (measured: after `clear_selection()` the
+    /// callback list still held only the previous selection).
+    #[test]
+    fn clearing_a_selection_notifies_with_an_empty_one() {
         use std::sync::Mutex;
         let reg = SelectionRegistrar::new();
-        let called = std::sync::Arc::new(Mutex::new(false));
-        let c = called.clone();
-        reg.set_on_change(move |_| { *c.lock().unwrap() = true; });
-        reg.fire_on_change(); // no selection set → should not fire
-        assert!(!*called.lock().unwrap());
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
+        let sink = seen.clone();
+        reg.set_on_change(move |sel| {
+            sink.lock().unwrap().push((sel.text().to_string(), sel.is_empty()));
+        });
+        reg.register(1, "hello world");
+        reg.set_selection(0, 5);
+        reg.fire_on_change();
+        reg.clear_selection();
+        reg.fire_on_change();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![("hello".to_string(), false), (String::new(), true)],
+            "the clear is reported as an empty selection"
+        );
+    }
+
+    /// With nothing ever selected the callback still learns there is nothing.
+    #[test]
+    fn on_change_reports_an_empty_selection_when_there_never_was_one() {
+        use std::sync::Mutex;
+        let reg = SelectionRegistrar::new();
+        let empty = std::sync::Arc::new(Mutex::new(None::<bool>));
+        let sink = empty.clone();
+        reg.set_on_change(move |sel| { *sink.lock().unwrap() = Some(sel.is_empty()); });
+        reg.fire_on_change();
+        assert_eq!(*empty.lock().unwrap(), Some(true));
+    }
+
+    /// S-4: a collapsed caret inside a run is not a range. `build_selection` already said so;
+    /// `selected_range` answered `Some(5..5)` for the same state.
+    #[test]
+    fn a_collapsed_selection_reports_no_range() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "hello world");
+        reg.set_selection(5, 5);
+        assert!(reg.selected_range(1).is_none(), "a caret is not a range");
+        reg.set_selection(3, 8);
+        assert_eq!(reg.selected_range(1), Some(3..8), "a real range still answers");
+    }
+
+    /// S-6: the order the container stitches in is the READING order, not the tree's.
+    ///
+    /// A `Row` of two `Column`s is laid out A1 A2 B1 B2 in the tree and A1 B1 A2 B2 on screen.
+    /// Compose sorts its selectables by position for exactly this reason; without the sort a
+    /// select-all copied "A1A2B1B2" (measured).
+    #[test]
+    fn a_two_column_layout_stitches_in_reading_order() {
+        use crate::runtime::composer::Composer;
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let mut composer = Composer::new();
+        {
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                SelectionContainer::new().build(ctx, move |ctx| {
+                    *seen.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                    crate::layout::components::Row::new().build(ctx, |ctx| {
+                        for (left, right) in [("A1", "A2"), ("B1", "B2")] {
+                            crate::layout::components::Column::new().build(ctx, move |ctx| {
+                                crate::components::Text::new(left)
+                                    .modifier(Modifier::new().width(100.0))
+                                    .build(ctx);
+                                crate::components::Text::new(right)
+                                    .modifier(Modifier::new().width(100.0))
+                                    .build(ctx);
+                            });
+                        }
+                    });
+                });
+            });
+        }
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let reg = seen.lock().unwrap().clone().expect("the container registered");
+        assert_eq!(reg.total_text_len(), 8, "two columns of two two-byte labels");
+        reg.set_selection(0, reg.total_text_len());
+        assert_eq!(
+            reg.build_selection().map(|s| s.text().to_string()),
+            Some("A1B1A2B2".to_string()),
+            "reading order, not the tree's A1A2B1B2"
+        );
     }
 
     /// `reindex` keeps the segments the tree still reports, in the order the tree reports them.
