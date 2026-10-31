@@ -549,6 +549,7 @@ impl Composer {
             on_remove,
             dirty, // 重测标记（slot.dirty 已消费）
             registrar: None,
+            clear_registrar: false,
             focus_color: None,
             selection_color: None,
             composing_color: None,
@@ -647,6 +648,7 @@ impl Composer {
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
+                clear_registrar: false,
                 focus_color: None,
                 selection_color: None,
                 composing_color: None,
@@ -1442,7 +1444,14 @@ impl Composer {
     fn reindex_selection_registrars(&mut self) {
         let Some(root) = self.arena.root else { return };
         // Cheap guard: most trees have no selection at all, and the walk allocates per registrar.
+        //
+        // It cannot simply return, though: "no node carries a registrar" is also what a container
+        // whose last selectable text just became unselectable looks like (DisableSelection turning
+        // on), and that container still holds the segments this walk is supposed to drop. Measured
+        // before this: the text stopped registering, the node's registrar was cleared, and the
+        // container still answered `total_text_len() == 4`.
         if !self.arena.nodes.iter().any(|n| n.registrar.borrow().is_some()) {
+            crate::text::selection::drop_all_tables();
             return;
         }
         /// A registered text with the box it occupies in window space.

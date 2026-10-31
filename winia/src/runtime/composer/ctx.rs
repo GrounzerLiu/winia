@@ -564,6 +564,15 @@ impl<'a> ComposeCtx<'a> {
     pub fn set_current_node_registrar(&mut self, reg: crate::text::selection::SelectionRegistrar) {
         if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
             desc.registrar = Some(reg);
+            desc.clear_registrar = false;
+        }
+    }
+
+    /// Clear a registrar retained by a reused node, such as when a subtree becomes unselectable.
+    pub fn clear_current_node_registrar(&mut self) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.registrar = None;
+            desc.clear_registrar = true;
         }
     }
 

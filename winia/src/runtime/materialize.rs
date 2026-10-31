@@ -31,6 +31,8 @@ pub(crate) struct DescNode {
     pub(crate) dirty: bool,
     /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
     pub(crate) registrar: Option<crate::text::selection::SelectionRegistrar>,
+    /// Explicitly clear a reused node's old registrar (e.g. when DisableSelection is toggled on).
+    pub(crate) clear_registrar: bool,
     /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
     pub(crate) focus_color: Option<crate::graphics::Color>,
     /// Selection highlight captured at compose time (see `LayoutNode::selection_color`).
@@ -257,7 +259,7 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, selection_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, clear_registrar, focus_color, selection_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
     // Detached across this node's descriptor-driven child rebuild and re-attached at the end: the
     // subcomposed child has no descriptor (see `LayoutNode::subcomposed_child`).
     let mut adopted_child: Option<usize> = None;
@@ -512,6 +514,8 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     // Skip 恢复路径的节点保留缓存 registrar，不走此处）
     if let Some(reg) = registrar {
         *composer.arena.nodes[index].registrar.borrow_mut() = Some(reg);
+    } else if clear_registrar {
+        *composer.arena.nodes[index].registrar.borrow_mut() = None;
     }
     // 应用焦点环颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
     if let Some(color) = focus_color {

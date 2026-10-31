@@ -16,9 +16,9 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour) | 0 | 6 |
+| Defects (wrong behaviour) | 0 | 7 |
 | Deviations from Compose (deliberate or accepted) | 0 | 3 |
-| Missing API surface | 5 | 2 |
+| Missing API surface | 4 | 3 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
@@ -118,6 +118,16 @@
   `a_two_column_layout_stitches_in_reading_order` with `left: A1A2B1B2, right: A1B1A2B2`. Test:
   `selection_container::tests::a_two_column_layout_stitches_in_reading_order`.
 
+- [x] **S-7 — a container kept its segments when its LAST registered text left.**
+  `reindex_selection_registrars` opens with a cheap guard — "no node carries a registrar → return"
+  (`winia/src/runtime/composer/engine.rs`) — and that guard describes exactly this case: with the
+  only text gone, no node reports a registrar, so the walk returned before `reindex` and the
+  container went on answering `total_text_len() == 4` for text that no longer exists. Found while
+  implementing M-6, but reachable without it (removing the last selectable text).
+  **Fixed 2026-10-31**: the guard now calls `text::selection::drop_all_tables()`, which reindexes
+  every live registrar against an empty slot list before returning. Red check: restoring the bare
+  `return` fails `selection_container::tests::a_container_whose_last_text_leaves_forgets_its_segments`
+  with `left: 4, right: 0`.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
@@ -200,8 +210,18 @@
 - [ ] **M-5 — no word / paragraph selection.** No double-click-to-select-word, no triple-click, no
   `SelectionAdjustment.Word` / `Paragraph`. Verified by grep: `pointer.rs` has no click-count
   tracking and there is no `SelectionAdjustment` equivalent in the crate.
-- [ ] **M-6 — no `DisableSelection`.** Compose can opt a subtree out; winia has no equivalent, so the
-  only way to keep a text unselectable is to keep it out of any `SelectionContainer`.
+- [x] **M-6 — `DisableSelection` exists.** Compose can opt a subtree out; winia has no equivalent, so the
+  **Closed 2026-10-31.** `components::selection_container::DisableSelection` provides
+  `LOCAL_SELECTION_DISABLED` for its subtree; `Text` and `RichText` read it and skip registration,
+  and a reused leaf is cleared explicitly (`ComposeCtx::clear_current_node_registrar` writes
+  `DescNode::clear_registrar`, which is the tri-state the registrar descriptor was missing —
+  `None` used to mean "no new value", so a stale registrar survived). Siblings outside the scope are
+  unaffected, and `DisableSelection::enabled(bool)` toggles the scope at a stable call site, marking
+  the subtree dirty so readers re-run.
+  Measured: `disable_selection_excludes_text_and_rich_text_only_inside_its_scope` (container reports
+  `beforeafter`, both disabled nodes render with no registrar) and
+  `disable_selection_recomposition_clears_and_restores_the_registrar` (`4 -> 0 -> 4` segments across
+  the toggle).
 - [x] **M-7 — the highlight colour is configurable.** `Color::from_argb(80, 100, 150, 255)` at
   `render/pass.rs:929`, `render/pass.rs:1095` and `render/text_field.rs:344`. Compose reads
   `LocalTextSelectionColors` (handle colour, background colour), so a themed selection is

@@ -365,13 +365,15 @@ impl Text {
             .unwrap_or_else(|| crate::theme::WiniaTheme::content_color());
 
         let content_len = self.content.len();
-        // Register with the selection container (drag-to-select), only inside a SelectionContainer's
-        // provides scope. The call happens before `self.content` is moved and borrows it;
-        // `set_current_node_registrar` has to come after `start_leaf`, when the desc exists.
+        let selection_disabled = crate::text::selection::LOCAL_SELECTION_DISABLED.current();
+        ctx.changed(&selection_disabled);
+        // Register with the enclosing container unless DisableSelection is in scope.
         let (reg_for_node, registered_off) = {
-            if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
-                let off = reg.register(key, &self.content);
-                (Some(reg), Some((key, content_len, off)))
+            if !selection_disabled {
+                if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
+                    let off = reg.register(key, &self.content);
+                    (Some(reg), Some((key, content_len, off)))
+                } else { (None, None) }
             } else { (None, None) }
         };
         // Declared parameters, one per visual input: Colour, size, weight, slant, family, spacing,
@@ -437,6 +439,8 @@ impl Text {
         );
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
+        } else {
+            ctx.clear_current_node_registrar();
         }
         if let Some((_k, _len, _off)) = registered_off {
             debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", _k, _len, _off);

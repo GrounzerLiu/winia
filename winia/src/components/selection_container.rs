@@ -8,7 +8,7 @@ use crate::runtime::composer::GroupStatus;
 
 
 
-use crate::text::selection::{LOCAL_SELECTION_REGISTRAR, Selection, SelectionRegistrar};
+use crate::text::selection::{LOCAL_SELECTION_DISABLED, LOCAL_SELECTION_REGISTRAR, Selection, SelectionRegistrar};
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
@@ -104,6 +104,40 @@ impl crate::modifier::KeyNode for CopySelectionKey {
     fn node_key(&self) -> String { "SelectionContainer.copy".to_string() }
 }
 
+/// Disable selection for this subtree, like Compose's `DisableSelection`.
+///
+/// Text and RichText below it keep rendering normally but do not register with an enclosing
+/// SelectionContainer. The local is scoped, so selectable siblings outside this wrapper are
+/// unaffected.
+pub struct DisableSelection {
+    enabled: bool,
+}
+
+impl DisableSelection {
+    /// Always disable selection, as Compose's `DisableSelection` does.
+    pub fn new() -> Self { Self { enabled: true } }
+
+    /// Conditionally disable selection while keeping this scope at a stable call site. When the
+    /// value changes, the whole subtree is marked dirty so reused Text nodes re-read the local and
+    /// clear/reapply their registrar instead of keeping a stale one across Skip.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        let changed = ctx.changed(&self.enabled);
+        if changed {
+            ctx.mark_subtree_dirty();
+        }
+        LOCAL_SELECTION_DISABLED.provides(self.enabled, || content(ctx));
+    }
+}
+
+impl Default for DisableSelection {
+    fn default() -> Self { Self::new() }
+}
 impl Default for SelectionContainer {
     fn default() -> Self { Self::new() }
 }
@@ -318,6 +352,136 @@ mod tests {
     }
 
     #[test]
+
+    /// Compose's DisableSelection applies to both Text and RichText, but not to selectable siblings
+    /// outside the scope.
+    #[test]
+    fn disable_selection_excludes_text_and_rich_text_only_inside_its_scope() {
+        use crate::runtime::composer::Composer;
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let mut composer = Composer::new();
+        let seen_in = seen.clone();
+        composer.compose(move |ctx| {
+            let seen_body = seen_in.clone();
+            SelectionContainer::new().build(ctx, move |ctx| {
+                *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                crate::layout::components::Column::new().build(ctx, |ctx| {
+                    crate::components::Text::new("before").build(ctx);
+                    DisableSelection::new().build(ctx, |ctx| {
+                        crate::components::Text::new("disabled text").build(ctx);
+                        crate::components::RichText::new().build(ctx, |rich| {
+                            rich.text("disabled rich");
+                        });
+                    });
+                    crate::components::Text::new("after").build(ctx);
+                });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let reg = seen.lock().unwrap().clone().expect("the outer container registered");
+        assert_eq!(reg.total_text_len(), "beforeafter".len());
+        reg.set_selection(0, reg.total_text_len());
+        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("beforeafter".to_string()));
+        let disabled_nodes: Vec<_> = composer.arena_nodes().iter().filter(|n| {
+            n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TextContent { content, .. } if content == "disabled text"))
+                || n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::RichTextContent { content, .. } if content == "disabled rich"))
+        }).collect();
+        assert_eq!(disabled_nodes.len(), 2, "both disabled nodes still render");
+        assert!(disabled_nodes.iter().all(|n| n.registrar.borrow().is_none()), "neither disabled node carries the outer registrar");
+    }
+
+    /// Toggling the same text position disabled -> enabled clears the reused node's stale registrar
+    /// and then registers it again when selection is re-enabled.
+    #[test]
+    fn disable_selection_recomposition_clears_and_restores_the_registrar() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+        use std::sync::{Arc, Mutex};
+
+        let disabled = State::new(false);
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let mut composer = Composer::new();
+        let compose_frame = |composer: &mut Composer, disabled: &State<bool>, seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
+            let disabled = disabled.clone();
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                let seen_body = seen.clone();
+                SelectionContainer::new().build(ctx, move |ctx| {
+                    *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                    crate::layout::components::Column::new().build(ctx, move |ctx| {
+                        let is_disabled = disabled.get();
+                        DisableSelection::new().enabled(is_disabled).build(ctx, |ctx| {
+                            crate::components::Text::new("same").build(ctx);
+                        });
+                    });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        compose_frame(&mut composer, &disabled, &seen);
+        let reg = seen.lock().unwrap().clone().expect("registrar");
+        assert_eq!(reg.total_text_len(), 4, "enabled text registers");
+
+        disabled.set(true);
+        compose_frame(&mut composer, &disabled, &seen);
+        assert_eq!(reg.total_text_len(), 0, "disabled text is removed from the registrar");
+        let disabled_node = composer.arena_nodes().iter().find(|n| {
+            n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TextContent { content, .. } if content == "same"))
+        }).expect("the disabled text still renders");
+        assert!(disabled_node.registrar.borrow().is_none(), "the reused text node's old registrar was explicitly cleared");
+
+        disabled.set(false);
+        compose_frame(&mut composer, &disabled, &seen);
+        assert_eq!(reg.total_text_len(), 4, "re-enabled text registers again");
+    }
+
+
+    /// S-7: when the LAST registered text leaves the tree, the container has to forget its segments.
+    ///
+    /// `reindex_selection_registrars` guards itself with "no node carries a registrar → return", and
+    /// that guard is exactly what this case looks like: with the only text gone, no node reports a
+    /// registrar, so the walk returned and the container kept answering `total_text_len() == 4`.
+    /// Measured before the fix: `total` stayed 4 after the text was removed.
+    #[test]
+    fn a_container_whose_last_text_leaves_forgets_its_segments() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+        use std::sync::{Arc, Mutex};
+
+        let show = State::new(true);
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer, show: &State<bool>, seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
+            let show = show.clone();
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                let seen_body = seen.clone();
+                SelectionContainer::new().build(ctx, move |ctx| {
+                    *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                    crate::layout::components::Column::new().build(ctx, move |ctx| {
+                        // Read inside the body: a read outside never re-enters this group.
+                        if show.get() {
+                            crate::components::Text::new("gone").build(ctx);
+                        }
+                    });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        frame(&mut composer, &show, &seen);
+        let reg = seen.lock().unwrap().clone().expect("registrar");
+        assert_eq!(reg.total_text_len(), 4, "precondition: the text registered");
+
+        show.set(false);
+        frame(&mut composer, &show, &seen);
+        assert_eq!(reg.total_text_len(), 0, "the table has to empty with the last text gone");
+    }
+
     /// D-1: clearing a selection IS a state change, and the callback has to hear about it.
     ///
     /// Before this, `fire_on_change` returned early unless `build_selection` answered `Some`, so a

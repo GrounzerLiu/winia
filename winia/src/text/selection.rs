@@ -213,6 +213,22 @@ pub(crate) fn clear_open_selections() {
     });
 }
 
+/// Empty every live registrar's table.
+///
+/// The composer calls this when NO node carries a registrar any more: a container whose last
+/// selectable text just became unselectable (DisableSelection) still holds its old segments, and
+/// the tree walk cannot report that, because the walk is driven by the nodes.
+pub(crate) fn drop_all_tables() {
+    LIVE_REGISTRARS.with(|live| {
+        let mut live = live.borrow_mut();
+        live.retain(|weak| {
+            let Some(inner) = weak.upgrade() else { return false };
+            SelectionRegistrar { inner }.reindex(&[]);
+            true
+        });
+    });
+}
+
 impl SelectionRegistrar {
     pub fn new() -> Self {
         let inner = Arc::new(Mutex::new(RegistrarInner {
@@ -408,6 +424,10 @@ impl Default for SelectionRegistrar {
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
+
+/// Whether selectable children are disabled in this subtree (Compose's `DisableSelection`).
+pub static LOCAL_SELECTION_DISABLED: std::sync::LazyLock<CompositionLocal<bool>> =
+    std::sync::LazyLock::new(|| CompositionLocal::new(|| false));
 
 // ═══════════════════════════════════════════════════════════
 // TextSelectionColors

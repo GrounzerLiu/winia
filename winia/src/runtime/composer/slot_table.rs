@@ -13,6 +13,7 @@ pub(super) struct NodeDesc {
     pub(super) dirty: bool,
     /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
     pub(super) registrar: Option<crate::text::selection::SelectionRegistrar>,
+    pub(super) clear_registrar: bool,
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
     pub(super) focus_color: Option<crate::graphics::Color>,
@@ -424,6 +425,7 @@ impl SlotTable {
                     on_remove: desc.on_remove,
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
+                    clear_registrar: desc.clear_registrar,
                     focus_color: desc.focus_color,
                     selection_color: desc.selection_color,
                     composing_color: desc.composing_color,
@@ -460,6 +462,7 @@ impl SlotTable {
                     on_remove: None,
                     dirty: false,
                     registrar: None,
+                    clear_registrar: false,
                     focus_color: None,
                     selection_color: None,
                     composing_color: None,

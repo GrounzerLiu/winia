@@ -488,10 +488,14 @@ impl RichText {
         // `set_current_node_registrar` has to come after `start_leaf`, when the desc exists.
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         let key = ctx.next_key();
+        let selection_disabled = crate::text::selection::LOCAL_SELECTION_DISABLED.current();
+        ctx.changed(&selection_disabled);
         let reg_for_node = {
-            if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
-                reg.register(key, &content);
-                Some(reg)
+            if !selection_disabled {
+                if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
+                    reg.register(key, &content);
+                    Some(reg)
+                } else { None }
             } else { None }
         };
 
@@ -518,6 +522,8 @@ impl RichText {
         );
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
+        } else {
+            ctx.clear_current_node_registrar();
         }
         ctx.end_node();
     }
