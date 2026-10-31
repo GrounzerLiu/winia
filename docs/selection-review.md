@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 7 |
 | Deviations from Compose (deliberate or accepted) | 0 | 3 |
-| Missing API surface | 4 | 3 |
+| Missing API surface | 3 | 4 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
@@ -199,9 +199,22 @@
   `set_clipboard`. The WRITE half is adopted; the READ half is not, because winit's read is
   asynchronous (a paste becomes a round trip through the event loop where `arboard` answers
   synchronously inside the key handler) — that is the next step, not this one.
-- [ ] **M-2 — no `SelectionState`.** Compose exposes `rememberSelectionState()` with
+- [x] **M-2 — `SelectionState` exists.** Compose exposes `rememberSelectionState()` with
   `state.selection`, `selectedText`, `selectAll()` and `clear()`; winia has only the
-  `on_selection_change` callback and no programmatic handle on the selection.
+  **Closed 2026-10-31.** `components::selection_container::SelectionState`, created with
+  `remember_selection_state(ctx)` and bound with `SelectionContainer::state(&state)`, offers
+  `selection()` / `selected_text()` (both read through a `State`, so a reader recomposes),
+  `selectable_texts()` (reading order, and a `DisableSelection` run is absent because it is not in
+  the table), and the three actions `select_all()`, `select(start, end)` and `clear()`. The container
+  merges its own publication with the caller's `on_selection_change` into the registrar's single
+  callback slot, so a drag, a press that clears, and a programmatic action all land in the state.
+  Two deliberate differences from Compose 1.13.0-beta01: the selection is exposed as one stitched
+  `String` (winia's `Selection` carries it that way, where Compose keeps a list of `AnnotatedString`),
+  and `extendSelectionByWord()` is NOT implemented — it needs word boundaries across runs, which is
+  M-5's work. Binding one state to two containers raises, as Compose does.
+  Measured: `a_state_observes_the_containers_selection`, `select_all_select_and_clear_drive_the_container`,
+  `a_state_cannot_be_bound_to_two_containers` (a `#[should_panic]`), and end to end through the real
+  pointer path `app::per_window::selection_drag_tests::a_drag_publishes_into_a_bound_selection_state`.
 - [ ] **M-3 — no selection handles.** Compose draws and drags a start/end handle
   (`SelectionHandles.kt`, `manager.handleDragObserver`); winia has none, so an existing selection
   cannot be adjusted, only re-dragged from scratch.

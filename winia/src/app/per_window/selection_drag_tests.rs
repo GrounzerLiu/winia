@@ -127,3 +127,48 @@ fn dragging_right_reaches_the_anchor_end() {
     let sel = reg.build_selection().map(|s| (s.start(), s.end()));
     assert_eq!(sel.map(|(_, e)| e), Some(reg.total_text_len()));
 }
+
+/// M-2 through the real pointer path: a drag has to reach a bound `SelectionState`, not only the
+/// registrar's own callback.
+#[test]
+fn a_drag_publishes_into_a_bound_selection_state() {
+    use crate::components::selection_container::SelectionState;
+    use std::sync::Arc;
+
+    let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
+    let state = SelectionState::new();
+    let state_in = state.clone();
+    pw.content = Box::new(move |ctx| {
+        SelectionContainer::new()
+            .state(state_in.clone())
+            .modifier(Modifier::new().size(300.0, 200.0))
+            .build(ctx, |ctx| {
+                crate::components::Text::new("aaaa bbbb")
+                    .modifier(Modifier::new().width(300.0))
+                    .build(ctx);
+            });
+    });
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.content = content;
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+
+    assert!(state.selection().is_none(), "nothing selected before the drag");
+    assert!(press(&mut pw, (8.0, 10.0)), "the press lands in the text");
+    assert!(drag(&mut pw, (60.0, 10.0)), "the move selects");
+
+    // The registrar is read straight out of the arena rather than captured in the closure: the
+    // point of this test is the pointer path, not the registration.
+    let reg = {
+        let nodes = pw.composer.arena_nodes();
+        let mut found = None;
+        for n in nodes.iter() {
+            if let Some(r) = n.registrar.borrow().as_ref() { found = Some(r.clone()); }
+        }
+        found.expect("the text registered")
+    };
+    reg.fire_on_change(); // what a pointer release does
+    let published = state.selected_text();
+    assert!(published.is_some(), "the state saw the drag: {published:?}");
+    assert!(published.unwrap_or_default().starts_with('a'), "and it is the dragged text");
+}

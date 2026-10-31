@@ -16,11 +16,12 @@ use crate::text::selection::{LOCAL_SELECTION_DISABLED, LOCAL_SELECTION_REGISTRAR
 pub struct SelectionContainer {
     modifier: Modifier,
     on_change: Option<Box<dyn Fn(&Selection) + Send + Sync>>,
+    state: Option<SelectionState>,
 }
 
 impl SelectionContainer {
     pub fn new() -> Self {
-        SelectionContainer { modifier: Modifier::new(), on_change: None }
+        SelectionContainer { modifier: Modifier::new(), on_change: None, state: None }
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
@@ -39,14 +40,35 @@ impl SelectionContainer {
         self
     }
 
+    /// Bind a [`SelectionState`], so the container's selection is observable and can be driven
+    /// programmatically — Compose's `SelectionContainer(state = ...)`.
+    pub fn state(mut self, state: SelectionState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         // One persistent registrar: a rebuild must not create a new one, because the segments have
         // to survive recomposition.
         let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
-        if let Some(cb) = self.on_change {
-            registrar.set_on_change(cb);
+        if let Some(state) = &self.state {
+            state.bind(&registrar);
+        }
+        // One callback, because the registrar has one slot: publish into the state, then hand the
+        // selection to the caller's own closure.
+        {
+            let state = self.state.clone();
+            let user = self.on_change;
+            registrar.set_on_change(move |sel: &Selection| {
+                if let Some(state) = &state {
+                    state.set_selection(if sel.is_empty() { None } else { Some(sel.clone()) });
+                }
+                if let Some(cb) = &user {
+                    cb(sel);
+                }
+            });
         }
         {
             let reg = registrar.clone();
@@ -137,6 +159,127 @@ impl DisableSelection {
 
 impl Default for DisableSelection {
     fn default() -> Self { Self::new() }
+}
+/// The observable handle on a container's selection — Compose's `SelectionState`.
+///
+/// Bind it with `SelectionContainer::state(&state)`; the container then publishes every change into
+/// it (a drag, a press that clears, and the programmatic actions below), so a composable that reads
+/// [`Self::selection`] or [`Self::selected_text`] recomposes with the selection.
+///
+/// Compose keeps a list of `AnnotatedString`s (`selectedTexts`) because one selection can span
+/// several text composables; winia's [`Selection`] already carries the stitched text as one string,
+/// so [`Self::selected_text`] answers that and the per-run list is [`Self::selectable_texts`].
+#[derive(Clone)]
+pub struct SelectionState {
+    inner: std::sync::Arc<SelectionStateInner>,
+}
+
+struct SelectionStateInner {
+    /// The container this state is bound to, if any. Compose refuses a second, different one.
+    registrar: parking_lot::Mutex<Option<SelectionRegistrar>>,
+    /// The published selection. A `State` rather than a plain field, so readers recompose.
+    selection: crate::runtime::state::State<Option<Selection>>,
+}
+
+impl SelectionState {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(SelectionStateInner {
+                registrar: parking_lot::Mutex::new(None),
+                selection: crate::runtime::state::State::new(None),
+            }),
+        }
+    }
+
+    /// The current selection, or `None` when there is none.
+    pub fn selection(&self) -> Option<Selection> {
+        self.inner.selection.get()
+    }
+
+    /// The selected text, already stitched across the runs the selection covers.
+    pub fn selected_text(&self) -> Option<String> {
+        self.inner.selection.get().map(|sel| sel.text().to_string())
+    }
+
+    /// Every selectable run in the container, in reading order — Compose's `getSelectableTexts`.
+    ///
+    /// A run excluded by [`DisableSelection`] is not in the container's table at all, so it is not
+    /// in this list either.
+    pub fn selectable_texts(&self) -> Vec<String> {
+        self.bound().map(|reg| reg.selectable_texts()).unwrap_or_default()
+    }
+
+    /// Select every selectable run in the container — Compose's `selectAll`.
+    pub fn select_all(&self) {
+        let Some(reg) = self.bound() else { return };
+        let total = reg.total_text_len();
+        reg.set_selection(0, total);
+        self.publish();
+        reg.fire_on_change();
+    }
+
+    /// Select a range in the container's global offsets — Compose's `select(range)`.
+    pub fn select(&self, start: usize, end: usize) {
+        let Some(reg) = self.bound() else { return };
+        reg.set_selection(start, end);
+        self.publish();
+        reg.fire_on_change();
+    }
+
+    /// Drop the selection — Compose's `clear`.
+    pub fn clear(&self) {
+        let Some(reg) = self.bound() else { return };
+        reg.clear_selection();
+        self.publish();
+        reg.fire_on_change();
+    }
+
+    fn bound(&self) -> Option<SelectionRegistrar> {
+        self.inner.registrar.lock().clone()
+    }
+
+    /// Bind to a container's registrar. A state belongs to ONE container; Compose raises on a
+    /// second, and so does this (the alternative is two containers writing one selection).
+    fn bind(&self, registrar: &SelectionRegistrar) {
+        let mut bound = self.inner.registrar.lock();
+        if let Some(existing) = bound.as_ref() {
+            assert!(
+                existing.is_same(registrar),
+                "A SelectionState can only be bound to one SelectionContainer. Please use \
+                 `remember_selection_state` to create a unique state for each container."
+            );
+        }
+        *bound = Some(registrar.clone());
+        drop(bound);
+        self.publish();
+    }
+
+    /// Publish what the bound registrar currently holds.
+    fn publish(&self) {
+        let selection = self.bound().and_then(|reg| reg.build_selection());
+        self.set_selection(selection);
+    }
+
+    fn set_selection(&self, selection: Option<Selection>) {
+        // `State::set` notifies on a change, so an unchanged selection costs nothing.
+        self.inner.selection.set(selection);
+    }
+}
+
+impl Default for SelectionState {
+    fn default() -> Self { Self::new() }
+}
+
+impl std::fmt::Debug for SelectionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectionState").field("selection", &self.selection()).finish()
+    }
+}
+
+/// Remember a [`SelectionState`] for this composition position — Compose's `rememberSelectionState`.
+#[composable]
+pub fn remember_selection_state(ctx: &mut ComposeCtx) -> SelectionState {
+    ctx.remember(SelectionState::new).get()
 }
 impl Default for SelectionContainer {
     fn default() -> Self { Self::new() }
@@ -439,6 +582,111 @@ mod tests {
         assert_eq!(reg.total_text_len(), 4, "re-enabled text registers again");
     }
 
+
+
+    /// M-2: the state observes whatever the container's selection becomes — the same path a drag
+    /// takes (`fire_on_change` is what the pointer handlers call on release).
+    #[test]
+    fn a_state_observes_the_containers_selection() {
+        use crate::runtime::composer::Composer;
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let state = SelectionState::new();
+        let state_in = state.clone();
+        let mut composer = Composer::new();
+        {
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                let seen_body = seen.clone();
+                SelectionContainer::new()
+                    .state(state_in.clone())
+                    .build(ctx, move |ctx| {
+                        *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                        crate::layout::components::Column::new().build(ctx, |ctx| {
+                            crate::components::Text::new("hello ").build(ctx);
+                            crate::components::Text::new("world").build(ctx);
+                        });
+                    });
+            });
+        }
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let reg = seen.lock().unwrap().clone().expect("registrar");
+
+        assert!(state.selection().is_none(), "nothing is selected to begin with");
+        assert_eq!(state.selectable_texts(), vec!["hello ".to_string(), "world".to_string()]);
+
+        reg.set_selection(6, 11);
+        reg.fire_on_change();
+        assert_eq!(state.selected_text(), Some("world".to_string()));
+        assert_eq!(state.selection().map(|s| (s.start(), s.end())), Some((6, 11)));
+
+        reg.clear_selection();
+        reg.fire_on_change();
+        assert!(state.selection().is_none(), "a clear is published as no selection");
+    }
+
+    /// The programmatic actions drive the container, and the state follows.
+    #[test]
+    fn select_all_select_and_clear_drive_the_container() {
+        use crate::runtime::composer::Composer;
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+        let state = SelectionState::new();
+        let state_in = state.clone();
+        let mut composer = Composer::new();
+        {
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                let seen_body = seen.clone();
+                SelectionContainer::new()
+                    .state(state_in.clone())
+                    .build(ctx, move |ctx| {
+                        *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                        crate::layout::components::Column::new().build(ctx, |ctx| {
+                            crate::components::Text::new("hello ").build(ctx);
+                            crate::components::Text::new("world").build(ctx);
+                        });
+                    });
+            });
+        }
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let reg = seen.lock().unwrap().clone().expect("registrar");
+        assert_eq!(reg.total_text_len(), 11, "two runs, five and six bytes");
+
+        state.select_all();
+        assert_eq!(state.selected_text(), Some("hello world".to_string()));
+
+        state.select(0, 5);
+        assert_eq!(state.selected_text(), Some("hello".to_string()));
+
+        state.clear();
+        assert!(state.selection().is_none());
+        assert_eq!(reg.total_text_len(), 11, "the container still knows its text");
+    }
+
+    /// Compose refuses to bind one state to two containers; so does this one.
+    #[test]
+    #[should_panic(expected = "can only be bound to one SelectionContainer")]
+    fn a_state_cannot_be_bound_to_two_containers() {
+        use crate::runtime::composer::Composer;
+
+        let state = SelectionState::new();
+        let state_a = state.clone();
+        let state_b = state.clone();
+        let mut composer = Composer::new();
+        composer.compose(move |ctx| {
+            crate::layout::components::Column::new().build(ctx, move |ctx| {
+                SelectionContainer::new().state(state_a.clone()).build(ctx, |ctx| {
+                    crate::components::Text::new("one").build(ctx);
+                });
+                SelectionContainer::new().state(state_b.clone()).build(ctx, |ctx| {
+                    crate::components::Text::new("two").build(ctx);
+                });
+            });
+        });
+    }
 
     /// S-7: when the LAST registered text leaves the tree, the container has to forget its segments.
     ///

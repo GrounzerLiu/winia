@@ -87,7 +87,7 @@ pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardSt
 pub use surface::{Surface, SurfaceBorder};
 pub use rich_text::RichText;
 pub use rich_text::RichTextScope;
-pub use selection_container::{DisableSelection, SelectionContainer};
+pub use selection_container::{DisableSelection, SelectionContainer, SelectionState, remember_selection_state};
 pub use text_field::{TextField, TextFieldValue, TextChange};
 pub use crate::text::field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
 pub use icon::{Icon, Tint};

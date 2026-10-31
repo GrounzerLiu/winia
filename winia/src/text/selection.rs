@@ -308,6 +308,17 @@ impl SelectionRegistrar {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    /// Every registered run's text, in reading order — Compose's `getSelectableTexts`.
+    ///
+    /// The order is the one `reindex` established, so it is what a select-all would produce.
+    pub fn selectable_texts(&self) -> Vec<String> {
+        let inner = self.inner.lock();
+        inner.order.iter()
+            .filter_map(|slot_key| inner.segments.get(slot_key))
+            .map(|seg| seg.text.to_string())
+            .collect()
+    }
+
     pub fn segment_info(&self, slot_key: u64) -> Option<(usize, usize)> {
         let inner = self.inner.lock();
         inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
