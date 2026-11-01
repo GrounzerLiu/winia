@@ -229,6 +229,88 @@ pub(crate) fn drop_all_tables() {
     });
 }
 
+/// How a selection snaps to boundaries — Compose's `SelectionAdjustment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionAdjustment {
+    /// The raw offsets, unchanged.
+    None,
+    /// The whole word under the offset (a double click).
+    Word,
+    /// The whole line under the offset (a triple click, Compose's paragraph).
+    Paragraph,
+}
+
+/// Split `text` into the run of same-class characters around `at`.
+///
+/// The classes are alphanumeric/underscore, whitespace, and everything else, so `foo.bar` gives
+/// `foo`, `.`, `bar` — the same shape ICU's word breaker produces for Latin text. Deliberately
+/// simple: a script without spaces (CJK) is one long word here, where Compose's ICU segmenter picks
+/// a smaller unit; that deviation is recorded in `docs/selection-review.md` (M-5).
+pub(crate) fn word_range(text: &str, at: usize) -> Range<usize> {
+    let at = at.min(text.len());
+    // Snap to a char boundary so a mid-character offset still answers a word.
+    let at = if text.is_char_boundary(at) { at } else {
+        let mut i = at;
+        while i > 0 && !text.is_char_boundary(i) { i -= 1; }
+        i
+    };
+    if text.is_empty() { return 0..0; }
+    fn class(c: char) -> u8 {
+        if c.is_alphanumeric() || c == '_' { 0 }
+        else if c.is_whitespace() { 1 }
+        else { 2 }
+    }
+    // The character the offset points AT; at `text.len()` take the last one.
+    let probe = if at < text.len() {
+        text[at..].chars().next().expect("a char starts at a boundary")
+    } else {
+        text[..at].chars().next_back().unwrap_or(' ')
+    };
+    let want = class(probe);
+    let mut start = at;
+    while start > 0 {
+        let prev = text[..start].chars().next_back().expect("start > 0 has a char");
+        if class(prev) != want { break; }
+        start -= prev.len_utf8();
+    }
+    let mut end = at;
+    while end < text.len() {
+        let next = text[end..].chars().next().expect("end < len has a char");
+        if class(next) != want { break; }
+        end += next.len_utf8();
+    }
+    start..end
+}
+
+/// The line around `at` (Compose's `getParagraphBoundary`): `\n`-delimited.
+pub(crate) fn line_range(text: &str, at: usize) -> Range<usize> {
+    let at = at.min(text.len());
+    let start = text[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let end = text[at..].find('\n').map(|i| at + i).unwrap_or(text.len());
+    start..end
+}
+/// The end of the next WORD at or after `at`, skipping separators — the step
+/// `extendSelectionByWord` takes.
+///
+/// `None` when nothing word-like remains in this run, which lets the caller continue into the next
+/// run instead of stopping on a trailing space.
+pub(crate) fn next_word_end(text: &str, at: usize) -> Option<usize> {
+    let mut pos = at.min(text.len());
+    while pos < text.len() {
+        let range = word_range(text, pos);
+        let starts_with_word = text[range.clone()].chars().next()
+            .map(|c| c.is_alphanumeric() || c == '_')
+            .unwrap_or(false);
+        if starts_with_word && range.end > at { return Some(range.end); }
+        pos = if range.end > pos {
+            range.end
+        } else {
+            pos + text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
+        };
+    }
+    None
+}
+
 impl SelectionRegistrar {
     pub fn new() -> Self {
         let inner = Arc::new(Mutex::new(RegistrarInner {
@@ -300,6 +382,43 @@ impl SelectionRegistrar {
 
     pub fn clear_selection(&self) {
         self.inner.lock().clear();
+    }
+
+    /// Select around `anchor_global` with a boundary adjustment (a double click asks for a word, a
+    /// triple click for the line). Returns true when there is something to select.
+    pub fn set_selection_by_adjustment(&self, anchor_global: usize, adjustment: SelectionAdjustment) -> bool {
+        let mut inner = self.inner.lock();
+        // The run the anchor falls in, in reading order; a past-the-end offset belongs to the last.
+        let mut target: Option<(u64, usize)> = None;
+        for &slot_key in &inner.order {
+            let Some(seg) = inner.segments.get(&slot_key) else { continue };
+            let end = seg.global_offset + seg.text_len;
+            if anchor_global < end {
+                target = Some((slot_key, anchor_global.saturating_sub(seg.global_offset)));
+                break;
+            }
+            target = Some((slot_key, seg.text_len));
+        }
+        let Some((slot_key, local)) = target else { return false };
+        let Some(seg) = inner.segments.get(&slot_key) else { return false };
+        let (start, end) = match adjustment {
+            SelectionAdjustment::None => (local, local),
+            SelectionAdjustment::Word => {
+                let range = word_range(&seg.text, local);
+                (range.start, range.end)
+            }
+            SelectionAdjustment::Paragraph => {
+                let range = line_range(&seg.text, local);
+                (range.start, range.end)
+            }
+        };
+        if start == end { return false; }
+        let base = seg.global_offset;
+        let (a, b) = (Anchor { slot_key, offset: start }, Anchor { slot_key, offset: end });
+        inner.selection_start = Some(a);
+        inner.selection_end = Some(b);
+        let _ = base;
+        true
     }
 
     /// Whether this is the same instance (by `Arc` identity). A cross-container drag uses it to
@@ -415,6 +534,35 @@ impl SelectionRegistrar {
         Some(Selection { start, end, text })
     }
 
+    /// Extend the selection's end by one word — Compose's `extendSelectionByWord`.
+    ///
+    /// The walk crosses runs: a word that ends exactly where its run does continues into the next
+    /// run, which is what Compose does (its `SelectionLayout` is container-wide).
+    pub fn extend_selection_by_word(&self) -> bool {
+        let mut inner = self.inner.lock();
+        let Some((start, end)) = inner.anchors() else { return false };
+        let Some(last_index) = inner.slot_index(end.slot_key) else { return false };
+        // Find the first run at or after the end anchor that has a word to reach.
+        let mut carried_whole = true;
+        let mut new_end = end;
+        for &slot_key in inner.order.iter().skip(last_index) {
+            let Some(seg) = inner.segments.get(&slot_key) else { continue };
+            let from = if slot_key == end.slot_key { end.offset } else { 0 };
+            if let Some(target) = next_word_end(&seg.text, from) {
+                new_end = Anchor { slot_key, offset: target };
+                carried_whole = false;
+                break;
+            }
+            // Nothing word-like left in this run: the next one starts from its beginning.
+            if slot_key != end.slot_key { carried_whole = false; }
+        }
+        if carried_whole { return false; }
+        if new_end.slot_key == end.slot_key && new_end.offset <= end.offset { return false; }
+        inner.selection_start = Some(start);
+        inner.selection_end = Some(new_end);
+        true
+    }
+
     pub(crate) fn fire_on_change(&self) {
         let cb = self.inner.lock().on_change.clone();
         let Some(cb) = cb else { return };
@@ -485,5 +633,52 @@ mod text_selection_colors_tests {
         assert_eq!((colors.handle.r, colors.handle.g, colors.handle.b, colors.handle.a), (0x42, 0x86, 0xF4, 255));
         assert_eq!((colors.background.r, colors.background.g, colors.background.b), (0x42, 0x86, 0xF4));
         assert_eq!(colors.background.a, 102, "0.4 * 255");
+    }
+}
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    fn word(text: &str, at: usize) -> &str {
+        let r = word_range(text, at);
+        &text[r]
+    }
+
+    #[test]
+    fn a_word_stops_at_punctuation_and_spaces() {
+        assert_eq!(word("hello world", 7), "world");
+        assert_eq!(word("hello world", 0), "hello");
+        assert_eq!(word("foo.bar", 1), "foo");
+        assert_eq!(word("foo.bar", 3), ".");
+        assert_eq!(word("foo.bar", 5), "bar");
+        assert_eq!(word("two  spaces", 4), "  ", "a separator run is its own word");
+    }
+
+    #[test]
+    fn a_word_handles_multibyte_text_without_panicking() {
+        // Two CJK characters (three bytes each) are one alphanumeric run.
+        let text = "\u{4f60}\u{597d} ab";
+        assert_eq!(word(text, 1), "\u{4f60}\u{597d}");
+        assert_eq!(word(text, 3), "\u{4f60}\u{597d}");
+        assert_eq!(word(text, 8), "ab");
+        // A mid-character offset snaps to the character start instead of slicing inside it.
+        assert_eq!(word(text, 1), "\u{4f60}\u{597d}");
+    }
+
+    #[test]
+    fn a_line_stops_at_newlines() {
+        let text = "first\nsecond line\nthird";
+        let r = line_range(text, 8);
+        assert_eq!(&text[r], "second line");
+        assert_eq!(&text[line_range(text, 0)], "first");
+        assert_eq!(&text[line_range(text, text.len())], "third");
+    }
+
+    #[test]
+    fn next_word_end_skips_separators() {
+        let text = "hello world";
+        assert_eq!(next_word_end(text, 0), Some(5), "from inside the first word: its end");
+        assert_eq!(next_word_end(text, 5), Some(11), "from the space: the next word's end");
+        assert_eq!(next_word_end(text, 11), None, "at the end: nothing left in this run");
     }
 }

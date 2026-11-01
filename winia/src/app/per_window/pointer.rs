@@ -305,6 +305,22 @@ pub(crate) fn handle_pointer_down(
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
     let Some(&innermost) = path.last() else { return false; };
 
+    // Click counting for double/triple click. It lives on `GestureState` because the release clears
+    // `down`, so the second press of a double click has nothing to compare against otherwise.
+    const MULTI_CLICK_MS: u128 = 300;
+    const MULTI_CLICK_SLOP: f32 = 6.0;
+    let click_count = match pw.input.selection_click {
+        Some((when, at, count))
+            if when.elapsed().as_millis() <= MULTI_CLICK_MS
+                && (scene_pos.0 - at.0).abs() <= MULTI_CLICK_SLOP
+                && (scene_pos.1 - at.1).abs() <= MULTI_CLICK_SLOP =>
+        {
+            if count >= 3 { 1 } else { count + 1 }
+        }
+        _ => 1,
+    };
+    pw.input.selection_click = Some((std::time::Instant::now(), scene_pos, click_count));
+
     // Clear the old selection (a new click begins).
     //
     // This sweeps EVERY live registrar rather than the one on the node that was hit: the press may
@@ -372,6 +388,21 @@ pub(crate) fn handle_pointer_down(
                 .and_then(|reg| reg.segment_info(nodes[ai].slot_key).map(|(off, _)| off + a))
         })
     });
+    // Double click selects the word under the pointer, triple click the line — Compose's
+    // `SelectionAdjustment.Word` / `Paragraph`. It runs AFTER the press cleared the old selection and
+    // before the down state is stored, so the click position stays the drag anchor and a following
+    // drag extends from it by characters (Compose re-adjusts by word there; recorded as a deviation).
+    if click_count >= 2 {
+        if let (Some(reg), Some(anchored)) = (own_reg.as_ref(), anchor_global) {
+            let adjustment = if click_count >= 3 {
+                crate::text::SelectionAdjustment::Paragraph
+            } else {
+                crate::text::SelectionAdjustment::Word
+            };
+            reg.set_selection_by_adjustment(anchored, adjustment);
+        }
+    }
+
     pw.input.down = Some(PtrDownState {
         node_id: nodes[innermost].id,
         position: scene_pos,

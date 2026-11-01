@@ -172,3 +172,52 @@ fn a_drag_publishes_into_a_bound_selection_state() {
     assert!(published.is_some(), "the state saw the drag: {published:?}");
     assert!(published.unwrap_or_default().starts_with('a'), "and it is the dragged text");
 }
+// ── M-5: double click selects the word, triple click the line ──
+
+/// Two presses inside the same word, close in time and place: the second one is a double click.
+#[test]
+fn a_double_click_selects_the_word_under_the_pointer() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    assert!(press(&mut pw, (60.0, 10.0)), "the press lands in the second word");
+    assert!(press(&mut pw, (60.0, 10.0)), "the second press of the double click");
+
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("bbbb".to_string()),
+        "a double click selects the whole word, not the two characters it covers"
+    );
+}
+
+/// A third press turns it into a line selection.
+#[test]
+fn a_triple_click_selects_the_whole_line() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    assert!(press(&mut pw, (60.0, 10.0)));
+    assert!(press(&mut pw, (60.0, 10.0)));
+    assert!(press(&mut pw, (60.0, 10.0)));
+
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("aaaa bbbb".to_string()),
+        "a triple click selects the paragraph (the line)"
+    );
+}
+
+/// A second press further away is a new single click, not a double click: nothing is word-selected.
+#[test]
+fn a_second_press_elsewhere_is_not_a_double_click() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    assert!(press(&mut pw, (10.0, 10.0)));
+    assert!(press(&mut pw, (90.0, 10.0)), "80 px away is outside the multi-click slop");
+
+    assert!(
+        r.build_selection().is_none(),
+        "a click elsewhere starts a new selection, so nothing is selected yet"
+    );
+}

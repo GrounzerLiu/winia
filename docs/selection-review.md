@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 7 |
 | Deviations from Compose (deliberate or accepted) | 0 | 3 |
-| Missing API surface | 3 | 4 |
+| Missing API surface | 2 | 5 |
 | Investigated and ruled out | — | 4 |
 
 ## Defects
@@ -220,9 +220,23 @@
   cannot be adjusted, only re-dragged from scratch.
 - [ ] **M-4 — no context menu / toolbar.** Compose adds `ContextMenuArea` + text-toolbar components
   (`addSelectionContainerTextContextMenuComponents`); winia has no selection menu at all.
-- [ ] **M-5 — no word / paragraph selection.** No double-click-to-select-word, no triple-click, no
+- [x] **M-5 — double click selects a word, triple click the line.** No double-click-to-select-word, no triple-click, no
   `SelectionAdjustment.Word` / `Paragraph`. Verified by grep: `pointer.rs` has no click-count
-  tracking and there is no `SelectionAdjustment` equivalent in the crate.
+  **Closed 2026-11-01.** `handle_pointer_down` counts presses (time + slop, carried on
+  `GestureState::selection_click` because the release clears `down`) and, from the second press on,
+  calls `SelectionRegistrar::set_selection_by_adjustment` with `SelectionAdjustment::Word` (two
+  presses) or `Paragraph` (three). The boundaries are `text::selection::word_range` / `line_range`:
+  alphanumeric-or-underscore runs, whitespace runs, and everything else, which is the shape ICU's
+  breaker gives Latin text. `SelectionState::extend_selection_by_word` (the M-2 leftover) rides the
+  same helper and walks across runs.
+  Measured: `a_double_click_selects_the_word_under_the_pointer` ("bbbb"),
+  `a_triple_click_selects_the_whole_line` ("aaaa bbbb"),
+  `a_second_press_elsewhere_is_not_a_double_click` (80 px away starts a new click). Red check:
+  disabling the adjustment call turns the first two into `left: None`. Unit cases:
+  `text::selection::boundary_tests`.
+  Deviations, deliberate and recorded: the word rule is not ICU — a script without spaces (CJK) is
+  one word here where Compose's segmenter picks a smaller unit; and a drag that STARTS from a
+  double-click extends by characters, where Compose re-adjusts by word.
 - [x] **M-6 — `DisableSelection` exists.** Compose can opt a subtree out; winia has no equivalent, so the
   **Closed 2026-10-31.** `components::selection_container::DisableSelection` provides
   `LOCAL_SELECTION_DISABLED` for its subtree; `Text` and `RichText` read it and skip registration,

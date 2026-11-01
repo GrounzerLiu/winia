@@ -226,6 +226,15 @@ impl SelectionState {
         reg.fire_on_change();
     }
 
+    /// Extend the selection's end by one word — Compose's `extendSelectionByWord`.
+    pub fn extend_selection_by_word(&self) {
+        let Some(reg) = self.bound() else { return };
+        if reg.extend_selection_by_word() {
+            self.publish();
+            reg.fire_on_change();
+        }
+    }
+
     /// Drop the selection — Compose's `clear`.
     pub fn clear(&self) {
         let Some(reg) = self.bound() else { return };
@@ -660,6 +669,10 @@ mod tests {
 
         state.select(0, 5);
         assert_eq!(state.selected_text(), Some("hello".to_string()));
+
+        // The word step: from the end of "hello" the next whole word is "world".
+        state.extend_selection_by_word();
+        assert_eq!(state.selected_text(), Some("hello world".to_string()));
 
         state.clear();
         assert!(state.selection().is_none());

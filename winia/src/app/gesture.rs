@@ -35,6 +35,10 @@ pub(crate) struct GestureState {
     /// Double-tap context (the previous tap's node/time/position — carried across gestures;
     /// bound to a node — gestures on different nodes do not share the double-tap count).
     pub(crate) tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
+    /// Text-selection click counting: `(time, position, count)` of the previous press. It cannot
+    /// live on `down`, which the release clears — and a double click is only ever seen between two
+    /// presses. A press within the time and slop window continues the count; a fourth starts over.
+    pub(crate) selection_click: Option<(std::time::Instant, (f32, f32), u8)>,
     /// slot_key of the gesture node (stable across recomposition — node_id changes, so find_node_by_id fails).
     pub(crate) slot: Option<u64>,
     /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
@@ -75,6 +79,7 @@ impl Default for GestureState {
             tracker: None,
             node: None,
             tap_ctx: None,
+            selection_click: None,
             slot: None,
             arena: None,
             axis: None,
