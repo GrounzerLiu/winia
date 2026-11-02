@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 5 |
+| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 6 — M-1, M-2, M-5..M-8 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -193,6 +193,34 @@ demo itself — `settings::shell` hands its body straight to `Scaffold`'s conten
 **Box**, so everything built into it lands at the same origin. A `Column` inside the shell fixes it
 (measured: the tags now sit at y = 185, 391, 620, 792, 917 instead of 100, 100, 100...). The harness
 was right all along.
+## Eleventh pass (2026-11-02): the selection scrolls the container it started in
+
+`- [x] **M-8 — auto-scroll while dragging a selection.** Compose keeps scrolling while the pointer
+rests in a scroll container's edge band (`SelectionManager.isSelectionAutoScrollEnabled`); winia
+deliberately disarmed scrolling for a selection drag (`scroll_slot = None`), so the pointer stopped
+at the viewport edge and the content never moved. A selection could not reach past the first
+screenful.
+
+Fixed by giving the drag its own frame-driven scroll rather than reusing the gesture one:
+
+- the press records the nearest scroll container above it (`PtrDownState::selection_scroll_slot`);
+- every move of a selection drag recomputes a velocity from how deep the pointer sits in the band
+  (32 dp, up to 1600 px/s, sign matching what a pointer move in that direction would be) and stores
+  it in `GestureState::selection_autoscroll`;
+- `PerWindow::selection_autoscroll_tick`, called from the frame path after
+  `recompose_layout_render`, scrolls by `velocity * dt`, re-runs the drag at the held pointer position
+  (`pointer::apply_text_selection_drag`, extracted from the move handler for this) and asks for the
+  next frame.
+
+The selection body moved out of `handle_pointer_move` into `apply_text_selection_drag` so both paths
+share it; the move handler is now one call.
+
+Measured: a 40-line text in a 300x100 scrollable container, pressed at the first line and held at
+y=95 — 40 ticks moved the offset past 200 px and the selection end followed it. Red check: making
+`update_selection_autoscroll` a no-op leaves `offset 0` after 40 ticks.
+
+The demo exercises it: its body is a `vertical_scroll` Column, so dragging a selection to the top or
+bottom edge scrolls the page.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

@@ -899,6 +899,10 @@ impl AppState {
                             main_nodes = crate::semantics::semantics_tree(nodes, root_idx);
                         }
                     });
+                    // A drag selection resting in a container's edge band keeps scrolling here; the
+                    // tick asks for the next frame itself and re-runs the drag at the last pointer
+                    // position, so the selection follows the content.
+                    pw.selection_autoscroll_tick();
                     // The arenas of the overlays' own Composers go into the debug tree too (modal/popup
                     // become observable; replaced wholesale every frame — an entry disappears once the
                     // overlay closes). z order = pw.overlay.layers stack order, matching the draw order

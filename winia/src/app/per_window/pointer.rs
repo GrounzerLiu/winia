@@ -416,12 +416,21 @@ pub(crate) fn handle_pointer_down(
         }
     }
 
+    // The nearest scroll container above the press: a drag selection scrolls it once the pointer
+    // reaches its edge (Compose's `isSelectionAutoScrollEnabled`).
+    let selection_scroll_slot = path.iter().rev().find_map(|&i| {
+        let node = &nodes[i];
+        (node.modifier.vertical_scroll_state().is_some()
+            || node.modifier.horizontal_scroll_state().is_some())
+            .then_some(node.slot_key)
+    });
     pw.input.down = Some(PtrDownState {
         node_id: nodes[innermost].id,
         position: scene_pos,
         time: std::time::Instant::now(),
         selection_anchor: anchor_global,
         anchor_registrar: own_reg, // None (a non-selectable node) → no anchor container.
+        selection_scroll_slot,
         anchor_text_node: anchor_node.map(|ai| nodes[ai].id),
     });
     pw.input.down_slot = Some(nodes[innermost].slot_key);
@@ -747,6 +756,36 @@ pub(crate) fn handle_pointer_move(
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
+    // Drag-select text. Shared with the auto-scroll tick, which re-runs it every frame while the
+    // pointer sits in a scroll container's edge band.
+    handled |= apply_text_selection_drag(pw, scene_pos);
+
+    // Dispatch on_pointer_event (even a hover Move can update State).
+    let nodes = pw.composer.arena_nodes();
+    let ptr_ev = crate::input::PointerEvent {
+        event_type: crate::input::PointerEventType::Move,
+        position: (0.0, 0.0),
+        scene_position: scene_pos,
+        kind,
+        is_alt_pressed: modifiers.alt_key(),
+        is_ctrl_pressed: modifiers.control_key(),
+        is_shift_pressed: modifiers.shift_key(),
+        is_meta_pressed: modifiers.meta_key(),
+    };
+    pw.input.last_kind = ptr_ev.kind.clone();
+    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
+    handled || consumed
+}
+
+
+/// Extend the text selection to `scene_pos` — the body of a selection drag, on its own so the
+/// auto-scroll tick can re-run it every frame without synthesising a pointer event.
+pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
+    let mut handled = false;
+    let nodes = pw.composer.arena_nodes();
+    let Some(r) = pw.composer.layout_root_idx() else { return false };
+    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+
     // Drag-select text.
     if pw.input.down.is_some() {
         // A drag that leaves EVERY node's box (past the content, out of the window) still belongs to
@@ -865,20 +904,73 @@ pub(crate) fn handle_pointer_move(
         }
     }
 
-    // Dispatch on_pointer_event (even a hover Move can update State).
-    let nodes = pw.composer.arena_nodes();
-    let ptr_ev = crate::input::PointerEvent {
-        event_type: crate::input::PointerEventType::Move,
-        position: (0.0, 0.0),
-        scene_position: scene_pos,
-        kind,
-        is_alt_pressed: modifiers.alt_key(),
-        is_ctrl_pressed: modifiers.control_key(),
-        is_shift_pressed: modifiers.shift_key(),
-        is_meta_pressed: modifiers.meta_key(),
-    };
-    pw.input.last_kind = ptr_ev.kind.clone();
-    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
-    handled || consumed
+    update_selection_autoscroll(pw, scene_pos);
+    handled
 }
 
+/// Decide whether a drag selection should scroll a container, and how fast.
+///
+/// Compose's rule (`SelectionManager.isSelectionAutoScrollEnabled`): while a selection drag is in
+/// flight and the pointer is inside the edge band of the scroll container the press started in, the
+/// container scrolls — the further into the band, the faster. Without it a selection could never
+/// reach past the viewport: the pointer stops at the edge and the content does not move.
+fn update_selection_autoscroll(pw: &mut PerWindow, scene_pos: (f32, f32)) {
+    const BAND: f32 = 32.0;
+    const MAX_SPEED: f32 = 1600.0;
+    let Some(down) = pw.input.down.as_ref() else {
+        pw.input.selection_autoscroll = None;
+        return;
+    };
+    // Only a text selection scrolls: a click or a component drag keeps the old rule (a drag-scroll
+    // gesture already has its own path).
+    if down.selection_anchor.is_none() {
+        pw.input.selection_autoscroll = None;
+        return;
+    }
+    let Some(slot) = down.selection_scroll_slot else {
+        pw.input.selection_autoscroll = None;
+        return;
+    };
+    let idx = (|| -> Option<usize> {
+        let nodes = pw.composer.arena_nodes();
+        let r = pw.composer.layout_root_idx()?;
+        let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
+        crate::layout::node::find_node_by_id(nodes, r, id)
+    })();
+    let Some(idx) = idx else {
+        pw.input.selection_autoscroll = None;
+        return;
+    };
+    let (velocity, vertical) = {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { pw.input.selection_autoscroll = None; return };
+        let vertical = nodes[idx].modifier.vertical_scroll_state().is_some();
+        let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[idx].id);
+        let (w, h) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
+        // The same sign a POINTER MOVE would have: pushing past the bottom edge is a downward
+        // move (the content follows, so later text comes into view), pushing past the top edge is
+        // an upward one.
+        let depth = |pos: f32, start: f32, end: f32| -> f32 {
+            if pos < start + BAND { -(start + BAND - pos) / BAND }
+            else if pos > end - BAND { (pos - (end - BAND)) / BAND }
+            else { 0.0 }
+        };
+        if vertical {
+            let d = depth(scene_pos.1, abs_y, abs_y + h);
+            (-d.clamp(-1.5, 1.5) * MAX_SPEED, true)
+        } else {
+            let d = depth(scene_pos.0, abs_x, abs_x + w);
+            (d.clamp(-1.5, 1.5) * MAX_SPEED, false)
+        }
+    };
+    let _ = vertical;
+    if velocity == 0.0 {
+        pw.input.selection_autoscroll = None;
+    } else {
+        pw.input.selection_autoscroll = Some(crate::app::gesture::SelectionAutoScroll {
+            slot,
+            velocity,
+            last_tick: std::time::Instant::now(),
+        });
+    }
+}

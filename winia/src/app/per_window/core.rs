@@ -567,6 +567,69 @@ impl PerWindow {
     /// Incremental recomposition → restore focus → layout → render (used by RedrawRequested).
     /// Drains the notification queue until it is stable, so concurrent notifications from tokio
     /// tasks are not lost.
+    /// Advance a drag selection's auto-scroll by one frame, then let the selection follow.
+    ///
+    /// Compose keeps scrolling while the pointer RESTS in a container's edge band
+    /// (`SelectionManager.isSelectionAutoScrollEnabled`). A move-event-driven scroll would stop the
+    /// moment the pointer stops, which is exactly the case that has to keep going, so this runs from
+    /// the frame path and asks for the next frame itself.
+    pub(crate) fn selection_autoscroll_tick(&mut self) {
+        let Some(auto) = self.input.selection_autoscroll else { return };
+        if self.input.down.is_none() {
+            self.input.selection_autoscroll = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt = (now - auto.last_tick).as_secs_f32().min(0.05);
+        let delta = auto.velocity * dt;
+        self.input.selection_autoscroll = Some(crate::app::gesture::SelectionAutoScroll {
+            last_tick: now,
+            ..auto
+        });
+        let idx = (|| -> Option<usize> {
+            let nodes = self.composer.arena_nodes();
+            let r = self.composer.layout_root_idx()?;
+            let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, auto.slot)?;
+            crate::layout::node::find_node_by_id(nodes, r, id)
+        })();
+        let Some(idx) = idx else {
+            self.input.selection_autoscroll = None;
+            return;
+        };
+        let (ax, ay) = {
+            let nodes = self.composer.arena_nodes();
+            if nodes[idx].modifier.vertical_scroll_state().is_some() {
+                (0.0, delta)
+            } else if nodes[idx].modifier.horizontal_scroll_state().is_some() {
+                (delta, 0.0)
+            } else {
+                self.input.selection_autoscroll = None;
+                return;
+            }
+        };
+        let Some(root) = self.composer.layout_root_idx() else { return };
+        let density = crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
+        let consumed = crate::app::dispatch_nested_scroll_delta(
+            self.composer.arena_nodes_mut(),
+            root,
+            idx,
+            crate::nested_scroll::ScrollDelta::new(ax, ay),
+            crate::nested_scroll::NestedScrollSource::Drag,
+            density,
+        );
+        let moved = consumed.x != 0.0 || consumed.y != 0.0;
+        // The selection is recomputed against the content the pointer is now over — the paragraph
+        // clamps a pointer that has left the text, which is what extends the selection.
+        if let Some(pos) = self.input.last_pos {
+            crate::app::per_window::pointer::apply_text_selection_drag(self, pos);
+        }
+        if moved || self.input.selection_autoscroll.is_some() {
+            if let Some(ref sw) = self.skia_window {
+                sw.request_redraw();
+            }
+        }
+    }
+
     pub(crate) fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // The frame clock is dispatched per window: `ComposeCtx::frame_clock()` uses it to bind

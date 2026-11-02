@@ -35,6 +35,11 @@ pub(crate) struct GestureState {
     /// Double-tap context (the previous tap's node/time/position — carried across gestures;
     /// bound to a node — gestures on different nodes do not share the double-tap count).
     pub(crate) tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
+    /// Selection auto-scroll: while a drag-selection holds the pointer inside a scroll container's
+    /// edge band, the container scrolls every frame and the selection follows. Compose does the same
+    /// (`isSelectionAutoScrollEnabled`); without it a selection could never reach past the viewport.
+    pub(crate) selection_autoscroll: Option<SelectionAutoScroll>,
+
     /// Text-selection click counting: `(time, position, count)` of the previous press. It cannot
     /// live on `down`, which the release clears — and a double click is only ever seen between two
     /// presses. A press within the time and slop window continues the count; a fourth starts over.
@@ -79,6 +84,7 @@ impl Default for GestureState {
             tracker: None,
             node: None,
             tap_ctx: None,
+            selection_autoscroll: None,
             selection_click: None,
             slot: None,
             arena: None,
@@ -91,6 +97,17 @@ impl Default for GestureState {
     }
 }
 
+/// One container scrolling under a drag-selection.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SelectionAutoScroll {
+    /// Slot key of the scroll container (resolved each tick — node ids change).
+    pub(crate) slot: u64,
+    /// Pixels per second along the container's axis; negative scrolls towards the content start.
+    pub(crate) velocity: f32,
+    /// The frame this was last applied on, so the step is time-based rather than frame-based.
+    pub(crate) last_tick: std::time::Instant,
+}
+
 /// Intermediate state of Compose-style click detection.
 pub(crate) struct PtrDownState {
     pub(crate) node_id: u64,
@@ -100,6 +117,9 @@ pub(crate) struct PtrDownState {
     pub(crate) selection_anchor: Option<usize>,
     /// SelectionContainer registrar at Down time (so a drag across containers does not switch offset spaces).
     pub(crate) anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
+    /// Slot key of the nearest scroll container above the press, if any — the container a drag
+    /// selection auto-scrolls when the pointer reaches its edge.
+    pub(crate) selection_scroll_slot: Option<u64>,
     /// Node id of the text the anchor was measured in. A move that is no longer over a text maps the
     /// pointer into THIS node's paragraph, which clamps it — that is what extends a selection past the
     /// end of the text instead of freezing it (see `handle_pointer_move`).

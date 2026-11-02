@@ -424,3 +424,65 @@ fn dragging_out_of_every_node_still_extends_the_selection() {
         "dragging out of the tree reaches the end of the anchored run"
     );
 }
+
+/// Auto-scroll: a selection drag that rests in the container's bottom edge band keeps scrolling, and
+/// the selection follows the content instead of stopping at the viewport.
+///
+/// Compose's `isSelectionAutoScrollEnabled`. Without it the pointer stops at the edge and the content
+/// never moves, so a selection can never reach past the first screenful.
+#[test]
+fn dragging_at_the_edge_scrolls_and_the_selection_follows() {
+    let text: String = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
+    let scroll = crate::modifier::ScrollState::new();
+    let reg: RegSlot = Default::default();
+    let reg_in = reg.clone();
+    let scroll_in = scroll.clone();
+    pw.content = Box::new(move |ctx| {
+        // The content closure runs on every recomposition, so the handles are cloned per run
+        // instead of being moved out of the captured values.
+        let r = reg_in.clone();
+        let scroll_run = scroll_in.clone();
+        let text_run = text.clone();
+        SelectionContainer::new()
+            .modifier(Modifier::new().size(300.0, 100.0))
+            .build(ctx, move |ctx| {
+                *r.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll_run))
+                    .build(ctx, move |ctx| {
+                        crate::components::Text::new(text_run)
+                            .modifier(Modifier::new().width(300.0))
+                            .build(ctx);
+                    });
+            });
+    });
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.content = content;
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    let reg = reg.lock().unwrap().clone().expect("registered");
+
+    // Press on the first line, then hold the pointer against the container's bottom edge (y=95 of a
+    // 100-tall viewport).
+    assert!(press(&mut pw, (20.0, 10.0)), "the press lands in the text");
+    assert!(drag(&mut pw, (20.0, 95.0)), "the move selects");
+    pw.input.last_pos = Some((20.0, 95.0));
+    let before = reg.build_selection().map(|s| s.end()).unwrap_or(0);
+
+    // Frames: each tick scrolls by velocity*dt and re-runs the drag at the held position.
+    let mut ticks = 0;
+    for _ in 0..40 {
+        pw.selection_autoscroll_tick();
+        ticks += 1;
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        if scroll.offset.get() > 200.0 { break; }
+    }
+    let offset = scroll.offset.get();
+    let after = reg.build_selection().map(|s| s.end()).unwrap_or(0);
+    assert!(offset > 1.0, "the container has to scroll ({ticks} ticks, offset {offset})");
+    assert!(
+        after > before,
+        "the selection follows the content: {before} -> {after} (offset {offset})"
+    );
+}
