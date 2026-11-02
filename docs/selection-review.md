@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 6 — M-1, M-2, M-5..M-8 |
+| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 7 — M-1, M-2, M-5..M-9 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -221,6 +221,31 @@ y=95 — 40 ticks moved the offset past 200 px and the selection end followed it
 
 The demo exercises it: its body is a `vertical_scroll` Column, so dragging a selection to the top or
 bottom edge scrolls the page.
+## Twelfth pass (2026-11-02): the desktop selection keys
+
+`- [x] **M-9 — no keyboard selection for container text.** A `TextField` answers Ctrl+A, Ctrl+C and
+Shift+arrows (`components/text_field/field.rs:462-490, 507+`); a `SelectionContainer` answered only
+Ctrl+C, through a `KeyNode` on the container — which can only fire while some OTHER component inside
+it holds focus, because a container's texts are plain leaves with nothing to focus.
+
+Fixed in two halves:
+
+- `text::selection` gained the moves a keyboard needs — `select_all`, `extend_selection_by_character`
+  (crossing run boundaries), `extend_selection_by_word_step`, `extend_selection_to_line_edge`
+  (Shift+Home/End, newline-delimited), `extend_selection_by_line` (Shift+Up/Down, keeping the byte
+  column — a real column would need the paragraph's x positions, which the registrar does not hold),
+  and `previous_word_start` as the mirror of `next_word_end`;
+- the keys are routed on the WINDOW path (`app_state::try_selection_key`) to the container the last
+  press landed in (`GestureState::last_selection_registrar`), because focus cannot be used as the
+  address here. Ctrl+A, Shift+arrows, Ctrl+Shift+arrows (words), Shift+Home/End, Escape; a bare arrow
+  is left to focus navigation.
+
+Measured: `text::selection::keyboard_selection_tests` (7 cases: character steps across runs, word
+steps, line edges, line steps, select-all, the word-start mirror) and
+`components::selection_container::tests::selection_keys_map_to_the_container` (the key map itself),
+plus end to end `app::per_window::selection_drag_tests::ctrl_a_through_the_window_key_path_selects_the_whole_container`
+(a press then Ctrl+A selects the whole container and the change is announced) and
+`a_press_records_the_container_for_keyboard_keys`.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

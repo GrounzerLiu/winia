@@ -113,6 +113,52 @@ impl SelectionContainer {
     }
 }
 
+/// Keyboard selection for the container the last press landed in — desktop Ctrl+A and the
+/// Shift-arrow family.
+///
+/// It runs on the WINDOW's key path rather than through a `KeyNode` on the container, because a
+/// selection container has nothing focusable to hand focus to: its texts are plain leaves, so a
+/// `KeyNode` only ever fires when some other component inside it holds focus. Compose routes the
+/// same keys through `SelectionManager`, which is reached from the composition that owns the
+/// selection — the press is the equivalent pointer here.
+pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::KbEvent) -> bool {
+    use crate::input::KbEventType;
+    if ke.event_type != KbEventType::KeyDown { return false; }
+    // Ctrl on every platform; Cmd (meta) is the macOS spelling, as in the copy node.
+    let ctrl = ke.is_ctrl_pressed || (cfg!(target_os = "macos") && ke.is_meta_pressed);
+    let shift = ke.is_shift_pressed;
+    let Some(named) = (match &ke.key {
+        winit::keyboard::Key::Named(n) => Some(*n),
+        _ => None,
+    }) else {
+        // The one character shortcut: Ctrl+A.
+        let is_a = matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a"));
+        if ctrl && is_a {
+            return reg.select_all();
+        }
+        return false;
+    };
+    use winit::keyboard::NamedKey;
+    let changed = if shift {
+        match named {
+            NamedKey::ArrowLeft => if ctrl { reg.extend_selection_by_word_step(false) } else { reg.extend_selection_by_character(false) },
+            NamedKey::ArrowRight => if ctrl { reg.extend_selection_by_word_step(true) } else { reg.extend_selection_by_character(true) },
+            NamedKey::ArrowUp => reg.extend_selection_by_line(false),
+            NamedKey::ArrowDown => reg.extend_selection_by_line(true),
+            NamedKey::Home => reg.extend_selection_to_line_edge(false),
+            NamedKey::End => reg.extend_selection_to_line_edge(true),
+            _ => false,
+        }
+    } else if named == NamedKey::Escape {
+        let had = reg.build_selection().is_some();
+        reg.clear_selection();
+        had
+    } else {
+        false
+    };
+    changed
+}
+
 /// Ctrl+C (and Cmd+C, which arrives as `meta`) copies the container's selection.
 ///
 /// A `KeyNode` rather than a `ModifierElement::KbEvent`, so no `TextContent`-style field list has to
@@ -622,6 +668,50 @@ mod tests {
     }
 
 
+
+    /// The key map: Ctrl+A selects everything, Shift+arrows extend (Ctrl+Shift by word), Escape
+    /// clears, and a bare arrow is left to focus navigation.
+    #[test]
+    fn selection_keys_map_to_the_container() {
+        use crate::input::{KbEvent, KbEventType};
+        use winit::keyboard::{Key, NamedKey};
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "hello world");
+        reg.reindex(&[1]);
+        let named = |k: NamedKey, shift: bool, ctrl: bool| KbEvent {
+            key: Key::Named(k),
+            event_type: KbEventType::KeyDown,
+            is_alt_pressed: false,
+            is_ctrl_pressed: ctrl,
+            is_shift_pressed: shift,
+            is_meta_pressed: false,
+            repeat: false,
+        };
+        let range = |r: &SelectionRegistrar| r.build_selection().map(|s| (s.start(), s.end()));
+
+        reg.set_selection(0, 0);
+        assert!(apply_selection_key(&reg, &named(NamedKey::ArrowRight, true, false)));
+        assert_eq!(range(&reg), Some((0, 1)), "Shift+Right extends by one character");
+        assert!(apply_selection_key(&reg, &named(NamedKey::ArrowRight, true, true)));
+        assert_eq!(range(&reg), Some((0, 5)), "Ctrl+Shift+Right extends by one word");
+        assert!(!apply_selection_key(&reg, &named(NamedKey::ArrowRight, false, false)),
+            "a bare arrow belongs to focus navigation");
+
+        let ctrl_a = KbEvent {
+            key: Key::Character("a".into()),
+            event_type: KbEventType::KeyDown,
+            is_alt_pressed: false,
+            is_ctrl_pressed: true,
+            is_shift_pressed: false,
+            is_meta_pressed: false,
+            repeat: false,
+        };
+        assert!(apply_selection_key(&reg, &ctrl_a), "Ctrl+A selects all");
+        assert_eq!(range(&reg), Some((0, 11)));
+
+        assert!(apply_selection_key(&reg, &named(NamedKey::Escape, false, false)), "Escape clears");
+        assert!(reg.build_selection().is_none());
+    }
 
     /// M-2: the state observes whatever the container's selection becomes — the same path a drag
     /// takes (`fire_on_change` is what the pointer handlers call on release).

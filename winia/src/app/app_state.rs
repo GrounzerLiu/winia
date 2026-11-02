@@ -20,6 +20,8 @@ pub(crate) struct AppState {
 
 
 mod handlers;
+
+pub(crate) use handlers::try_selection_key;
 mod helpers;
 mod windows;
 

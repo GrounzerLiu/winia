@@ -35,6 +35,11 @@ pub(crate) struct GestureState {
     /// Double-tap context (the previous tap's node/time/position — carried across gestures;
     /// bound to a node — gestures on different nodes do not share the double-tap count).
     pub(crate) tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
+    /// The registrar of the container the last press landed in. Keyboard selection keys (Ctrl+A,
+    /// Shift+arrows) act on it: a selection container has no cursor of its own, so the press is what
+    /// decides which document the keys belong to.
+    pub(crate) last_selection_registrar: Option<crate::text::selection::SelectionRegistrar>,
+
     /// Selection auto-scroll: while a drag-selection holds the pointer inside a scroll container's
     /// edge band, the container scrolls every frame and the selection follows. Compose does the same
     /// (`isSelectionAutoScrollEnabled`); without it a selection could never reach past the viewport.
@@ -84,6 +89,7 @@ impl Default for GestureState {
             tracker: None,
             node: None,
             tap_ctx: None,
+            last_selection_registrar: None,
             selection_autoscroll: None,
             selection_click: None,
             slot: None,

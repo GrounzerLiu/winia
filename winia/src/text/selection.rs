@@ -267,6 +267,32 @@ pub(crate) fn next_word_end(text: &str, at: usize) -> Option<usize> {
     None
 }
 
+impl RegistrarInner {
+    fn next_slot_after(&self, slot_key: u64) -> Option<u64> {
+        let i = self.slot_index(slot_key)?;
+        self.order.get(i + 1).copied()
+    }
+
+    fn previous_slot_before(&self, slot_key: u64) -> Option<u64> {
+        let i = self.slot_index(slot_key)?;
+        i.checked_sub(1).and_then(|j| self.order.get(j).copied())
+    }
+}
+
+/// The start of the word BEFORE `at` (the mirror of [`next_word_end`]).
+pub(crate) fn previous_word_start(text: &str, at: usize) -> Option<usize> {
+    let mut pos = at.min(text.len());
+    while pos > 0 {
+        let range = word_range(text, pos - 1);
+        let starts_with_word = text[range.clone()].chars().next()
+            .map(|c| c.is_alphanumeric() || c == '_')
+            .unwrap_or(false);
+        if starts_with_word && range.start < at { return Some(range.start); }
+        pos = if range.start < pos { range.start } else { pos - text[..pos].chars().next_back().map(|c| c.len_utf8()).unwrap_or(1) };
+    }
+    None
+}
+
 impl SelectionRegistrar {
     pub fn new() -> Self {
         let inner = Arc::new(Mutex::new(RegistrarInner {
@@ -514,6 +540,111 @@ impl SelectionRegistrar {
         true
     }
 
+    /// Select everything in the container — Ctrl+A.
+    pub fn select_all(&self) -> bool {
+        let total = {
+            let inner = self.inner.lock();
+            if inner.segments.is_empty() { return false; }
+            inner.next_global_offset
+        };
+        if total == 0 { return false; }
+        self.set_selection(0, total);
+        true
+    }
+
+    /// Extend the selection's ACTIVE end (the stored `selection_end`) by one character.
+    ///
+    /// Crossing a run boundary continues in the next/previous run, so a container made of several
+    /// texts selects through it like one document (Compose's `SelectionLayout` is container-wide).
+    pub fn extend_selection_by_character(&self, forward: bool) -> bool {
+        self.move_end(|inner, anchor| {
+            let seg = inner.segments.get(&anchor.slot_key)?;
+            if forward {
+                if anchor.offset < seg.text_len {
+                    let step = seg.text[anchor.offset..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    return Some(Anchor { slot_key: anchor.slot_key, offset: anchor.offset + step });
+                }
+                let next = inner.next_slot_after(anchor.slot_key)?;
+                Some(Anchor { slot_key: next, offset: 0 })
+            } else {
+                if anchor.offset > 0 {
+                    let step = seg.text[..anchor.offset].chars().next_back().map(|c| c.len_utf8()).unwrap_or(1);
+                    return Some(Anchor { slot_key: anchor.slot_key, offset: anchor.offset - step });
+                }
+                let prev = inner.previous_slot_before(anchor.slot_key)?;
+                let prev_len = inner.segments.get(&prev)?.text_len;
+                Some(Anchor { slot_key: prev, offset: prev_len })
+            }
+        })
+    }
+
+    /// Extend the active end by one word (Ctrl+Shift+arrow).
+    pub fn extend_selection_by_word_step(&self, forward: bool) -> bool {
+        self.move_end(|inner, anchor| {
+            let seg = inner.segments.get(&anchor.slot_key)?;
+            if forward {
+                if let Some(target) = next_word_end(&seg.text, anchor.offset) {
+                    return Some(Anchor { slot_key: anchor.slot_key, offset: target });
+                }
+                let next = inner.next_slot_after(anchor.slot_key)?;
+                let next_len = inner.segments.get(&next)?.text_len;
+                let target = next_word_end(&inner.segments.get(&next)?.text, 0).unwrap_or(next_len);
+                Some(Anchor { slot_key: next, offset: target })
+            } else {
+                if let Some(target) = previous_word_start(&seg.text, anchor.offset) {
+                    return Some(Anchor { slot_key: anchor.slot_key, offset: target });
+                }
+                let prev = inner.previous_slot_before(anchor.slot_key)?;
+                let prev_len = inner.segments.get(&prev)?.text_len;
+                let target = previous_word_start(&inner.segments.get(&prev)?.text, prev_len).unwrap_or(0);
+                Some(Anchor { slot_key: prev, offset: target })
+            }
+        })
+    }
+
+    /// Extend the active end to the start or the end of its line (Shift+Home / Shift+End).
+    pub fn extend_selection_to_line_edge(&self, to_end: bool) -> bool {
+        self.move_end(|inner, anchor| {
+            let seg = inner.segments.get(&anchor.slot_key)?;
+            let range = line_range(&seg.text, anchor.offset);
+            let target = if to_end { range.end } else { range.start };
+            (target != anchor.offset).then_some(Anchor { slot_key: anchor.slot_key, offset: target })
+        })
+    }
+
+    /// Extend the active end one line up or down (Shift+Up / Shift+Down).
+    ///
+    /// The column is kept as a BYTE offset inside the line, which is what the runs know: a real
+    /// column would need the paragraph's x positions, which the registrar does not hold.
+    pub fn extend_selection_by_line(&self, down: bool) -> bool {
+        self.move_end(|inner, anchor| {
+            let seg = inner.segments.get(&anchor.slot_key)?;
+            let text = &seg.text;
+            let here = line_range(text, anchor.offset);
+            let column = anchor.offset - here.start;
+            let target = if down {
+                if here.end >= text.len() { return None; }
+                let next = line_range(text, here.end + 1);
+                next.start + column.min(next.end - next.start)
+            } else {
+                if here.start == 0 { return None; }
+                let prev = line_range(text, here.start - 1);
+                prev.start + column.min(prev.end - prev.start)
+            };
+            Some(Anchor { slot_key: anchor.slot_key, offset: target })
+        })
+    }
+
+    /// Move the stored end anchor with `step`, then rewrite the selection.
+    fn move_end(&self, step: impl FnOnce(&RegistrarInner, Anchor) -> Option<Anchor>) -> bool {
+        let mut inner = self.inner.lock();
+        let Some((_, end)) = inner.anchors() else { return false };
+        let Some(target) = step(&inner, end) else { return false };
+        if target.slot_key == end.slot_key && target.offset == end.offset { return false; }
+        inner.selection_end = Some(target);
+        true
+    }
+
     pub(crate) fn fire_on_change(&self) {
         let cb = self.inner.lock().on_change.clone();
         let Some(cb) = cb else { return };
@@ -631,5 +762,105 @@ mod boundary_tests {
         assert_eq!(next_word_end(text, 0), Some(5), "from inside the first word: its end");
         assert_eq!(next_word_end(text, 5), Some(11), "from the space: the next word's end");
         assert_eq!(next_word_end(text, 11), None, "at the end: nothing left in this run");
+    }
+}
+#[cfg(test)]
+mod keyboard_selection_tests {
+    use super::*;
+
+    /// Two runs, as a container of two texts registers them.
+    fn two_runs() -> SelectionRegistrar {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "hello ");
+        reg.register(2, "world");
+        reg.reindex(&[1, 2]);
+        reg
+    }
+
+    fn one_run(text: &str) -> SelectionRegistrar {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, text);
+        reg.reindex(&[1]);
+        reg
+    }
+
+    fn range(reg: &SelectionRegistrar) -> Option<(usize, usize)> {
+        reg.build_selection().map(|s| (s.start(), s.end()))
+    }
+
+    #[test]
+    fn a_character_step_crosses_into_the_next_run() {
+        let reg = two_runs();
+        reg.set_selection(0, 6);
+        assert_eq!(range(&reg), Some((0, 6)));
+        assert!(reg.extend_selection_by_character(true), "the end steps into the second run");
+        assert_eq!(range(&reg), Some((0, 7)));
+        assert!(reg.extend_selection_by_character(false));
+        assert_eq!(range(&reg), Some((0, 6)));
+    }
+
+    #[test]
+    fn a_character_step_backwards_shrinks_by_one() {
+        let reg = one_run("abcd");
+        reg.set_selection(1, 4);
+        assert!(reg.extend_selection_by_character(false));
+        assert_eq!(range(&reg), Some((1, 3)));
+    }
+
+    #[test]
+    fn a_word_step_reaches_the_word_boundaries() {
+        let reg = one_run("hello world");
+        reg.set_selection(0, 0);
+        assert!(reg.extend_selection_by_word_step(true));
+        assert_eq!(range(&reg), Some((0, 5)), "the first word");
+        assert!(reg.extend_selection_by_word_step(true));
+        assert_eq!(range(&reg), Some((0, 11)), "then the second");
+        assert!(reg.extend_selection_by_word_step(false));
+        assert_eq!(range(&reg), Some((0, 6)), "and back to the start of the second");
+    }
+
+    #[test]
+    fn a_line_edge_step_uses_the_newline_boundaries() {
+        let reg = one_run("aa\nbbbb");
+        reg.set_selection(0, 0);
+        assert!(reg.extend_selection_to_line_edge(true));
+        assert_eq!(range(&reg), Some((0, 2)), "to the end of the first line");
+        // A caret at 6 sits inside the second line ("aa\nbbbb": line one is 0..2, line two starts
+        // at 3), so Shift+Home selects from the line start to the caret.
+        reg.set_selection(6, 6);
+        assert!(reg.extend_selection_to_line_edge(false));
+        assert_eq!(range(&reg), Some((3, 6)), "home goes to the start of the caret's line");
+    }
+
+    #[test]
+    fn a_line_step_keeps_the_column() {
+        let reg = one_run("aa\nbbbb");
+        reg.set_selection(1, 1);
+        assert!(reg.extend_selection_by_line(true));
+        assert_eq!(range(&reg), Some((1, 4)), "down one line, same column");
+        // Up from (line two, column 1) lands on (line one, column 1) — the stored END anchor moves
+        // onto the start anchor, which is a collapsed selection and therefore reported as none.
+        reg.set_selection(1, 4);
+        assert!(reg.extend_selection_by_line(false));
+        assert_eq!(range(&reg), None, "the end lands on the start: a collapsed selection");
+    }
+
+    #[test]
+    fn select_all_covers_every_run() {
+        let reg = two_runs();
+        assert!(reg.select_all());
+        assert_eq!(range(&reg), Some((0, 11)));
+        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("hello world".to_string()));
+        let empty = SelectionRegistrar::new();
+        assert!(!empty.select_all(), "nothing to select");
+    }
+
+    #[test]
+    fn the_previous_word_start_mirrors_next_word_end() {
+        assert_eq!(previous_word_start("hello world", 11), Some(6));
+        // At the start of "world" the previous word is "hello", so its start is what a
+        // Ctrl+Shift+Left has to land on.
+        assert_eq!(previous_word_start("hello world", 6), Some(0));
+        assert_eq!(previous_word_start("hello world", 0), None);
     }
 }

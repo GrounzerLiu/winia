@@ -543,6 +543,13 @@ impl AppState {
                     pw.tab_move_focus(pw.modifiers.shift_key());
                     consumed = true;
                 }
+                // A selection container has nothing focusable to hand focus to, so its keys are
+                // routed to the container the last press landed in (Ctrl+A, Shift+arrows); a
+                // `KeyNode` on the container only ever fires while some other component inside it
+                // holds focus.
+                if !consumed && event.state.is_pressed() {
+                    consumed = try_selection_key(pw, &ke);
+                }
                 if !consumed {
                     consumed = dispatch_key_to_overlay(pw, &ke);
                 }
@@ -1067,3 +1074,18 @@ impl AppState {
     }
 }
 
+
+/// Route a key to the selection container the last press landed in — Ctrl+A, Shift+arrows and the
+/// rest of the desktop selection keys.
+///
+/// A selection container has nothing focusable to hand focus to (its texts are plain leaves), so a
+/// `KeyNode` on the container only fires while some OTHER component inside it holds focus. Compose
+/// reaches `SelectionManager` from the composition that owns the selection; the press is the
+/// equivalent pointer here.
+pub(crate) fn try_selection_key(pw: &mut crate::app::per_window::PerWindow, ke: &crate::input::KbEvent) -> bool {
+    let Some(reg) = pw.input.last_selection_registrar.clone() else { return false };
+    if !crate::components::selection_container::apply_selection_key(&reg, ke) { return false; }
+    // The state, the caller's callback and the copy path all hang off this one notification.
+    reg.fire_on_change();
+    true
+}

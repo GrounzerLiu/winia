@@ -424,6 +424,8 @@ pub(crate) fn handle_pointer_down(
             || node.modifier.horizontal_scroll_state().is_some())
             .then_some(node.slot_key)
     });
+    // Keyboard selection keys act on the container this press landed in.
+    pw.input.last_selection_registrar = own_reg.clone();
     pw.input.down = Some(PtrDownState {
         node_id: nodes[innermost].id,
         position: scene_pos,

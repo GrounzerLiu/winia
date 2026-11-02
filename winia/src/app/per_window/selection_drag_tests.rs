@@ -486,3 +486,49 @@ fn dragging_at_the_edge_scrolls_and_the_selection_follows() {
         "the selection follows the content: {before} -> {after} (offset {offset})"
     );
 }
+/// Keyboard selection needs a target: the press records which container it landed in, because a
+/// selection container has no focused node of its own to route keys through.
+#[test]
+fn a_press_records_the_container_for_keyboard_keys() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    assert!(press(&mut pw, (8.0, 10.0)));
+    let recorded = pw.input.last_selection_registrar.clone();
+    assert!(
+        recorded.as_ref().map(|x| x.is_same(&r)).unwrap_or(false),
+        "the press has to name the container its keys belong to"
+    );
+}
+/// The window key path: Ctrl+A after a press selects the whole container, and the change is
+/// announced (the state, the caller's callback and the copy path all hang off `fire_on_change`).
+#[test]
+fn ctrl_a_through_the_window_key_path_selects_the_whole_container() {
+    use crate::input::{KbEvent, KbEventType};
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_in = seen.clone();
+    r.set_on_change(move |sel| seen_in.lock().unwrap().push(sel.text().to_string()));
+
+    assert!(press(&mut pw, (8.0, 10.0)), "the press lands in the text");
+    let ke = KbEvent {
+        key: winit::keyboard::Key::Character("a".into()),
+        event_type: KbEventType::KeyDown,
+        is_alt_pressed: false,
+        is_ctrl_pressed: true,
+        is_shift_pressed: false,
+        is_meta_pressed: false,
+        repeat: false,
+    };
+    assert!(
+        crate::app::app_state::try_selection_key(&mut pw, &ke),
+        "Ctrl+A belongs to the container the press landed in"
+    );
+    assert_eq!(
+        r.build_selection().map(|s| (s.start(), s.end())),
+        Some((0, r.total_text_len())),
+        "everything is selected"
+    );
+    assert_eq!(seen.lock().unwrap().last().map(|s| s.as_str()), Some("aaaa bbbb"), "the change was announced");
+}
