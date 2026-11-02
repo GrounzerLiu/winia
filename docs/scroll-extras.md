@@ -25,9 +25,16 @@ disable_overscroll(ctx, |ctx| { list(ctx); });
 with_overscroll_factory(ctx, Some(Arc::new(|| OverscrollEffect::new().reach(40.0))), |ctx| page(ctx));
 ```
 
-A hand-built `Column + Modifier::vertical_scroll(state)` is ordinary user code, so it opts in with
-`.overscroll(&remember_overscroll_effect(ctx).unwrap_or_default())` or by attaching its own effect;
-the modifier itself cannot read a CompositionLocal.
+A hand-built `Column + Modifier::vertical_scroll(state)` gets it too: the BUILDER attaches the
+ambient effect while it runs, and builders run inside the composing body, where the thread-local
+provider stack already holds this subtree's factory. The instance is cached on the scroll state per
+factory, so a rebuild hands back the same effect instead of one that drops a pull in flight.
+
+Two consequences worth knowing:
+
+- the LAST `Overscroll` in a chain wins, so `.vertical_scroll(s).overscroll(&mine)` uses `mine`;
+- a modifier built OUTSIDE composition (a cached one, a test fixture) reads the default factory and
+  gets an effect - that is what `CompositionLocal::current()` means everywhere else.
 
 ## Attaching it by hand (`Modifier::overscroll(effect)`)
 

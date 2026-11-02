@@ -597,12 +597,22 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     }
 
     /// 垂直滚动（绑定 ScrollState）
-    pub fn vertical_scroll(self, state: ScrollState) -> Self {
+    pub fn vertical_scroll(self, mut state: ScrollState) -> Self {
         // 无 builder 期 get 副作用（State Phase4）：依赖由物化期
         // register_modifier_deps_recursive 统一注册到实际 node slot
         //（composer.rs compose 末尾，take_deps 之前）。builder 期 get 会把
         // 依赖注册到调用 scope，与 slot 注册重复。
-        self.push(ModifierElement::VerticalScroll { state })
+        //
+        // Overscroll is attached HERE, from the ambient factory, so a plain `Column + vertical_scroll`
+        // bounces exactly like a LazyColumn (Compose's `useLocalOverscrollFactory = true`). A caller
+        // that already pushed its own effect is left alone - the chain's first `Overscroll` wins.
+        let mut out = self.push(ModifierElement::VerticalScroll { state: state.clone() });
+        if !out.has_overscroll() {
+            if let Some(effect) = crate::overscroll::ambient_effect(&state) {
+                out = out.overscroll(&effect);
+            }
+        }
+        out
     }
 
     /// 水平滚动
@@ -696,7 +706,13 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         // 无 builder 期 get 副作用（同 vertical_scroll，State Phase4）。
-        self.push(ModifierElement::HorizontalScroll { state, reverse: false })
+        let mut out = self.push(ModifierElement::HorizontalScroll { state: state.clone(), reverse: false });
+        if !out.has_overscroll() {
+            if let Some(effect) = crate::overscroll::ambient_effect(&state) {
+                out = out.overscroll(&effect);
+            }
+        }
+        out
     }
 
     /// 水平滚动是否反向（RTL：render 滚动平移镜像——offset 0 显示内容末端）

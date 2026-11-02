@@ -167,6 +167,22 @@ pub fn remember_overscroll_effect(
     Some(effect.get())
 }
 
+/// The effect a scroll container should carry RIGHT NOW, resolved from the ambient factory.
+///
+/// This is what `Modifier::vertical_scroll` / `horizontal_scroll` attach, which is why a hand-built
+/// `Column + vertical_scroll(state)` bounces with no setup: the builder runs inside the composing
+/// body, so the thread-local provider stack already holds this subtree's value. A modifier built
+/// OUTSIDE composition (a cached one, a test fixture) sees the default factory and gets an effect too -
+/// the same thing `CompositionLocal::current()` means everywhere else.
+///
+/// The instance is cached on the scroll state per factory, so rebuilding hands back the SAME effect;
+/// a fresh one would drop a pull in flight.
+pub(crate) fn ambient_effect(state: &crate::modifier::ScrollState) -> Option<OverscrollEffect> {
+    let factory = LOCAL_OVERSCROLL_FACTORY.current()?;
+    let id = factory_identity(&factory);
+    Some(state.overscroll_for(id, move || factory()))
+}
+
 /// Provide a factory for a subtree - `None` turns overscroll off for everything inside.
 ///
 /// The `ctx.changed` + dirty marking are load-bearing: a provider that only changes the local leaves
@@ -354,6 +370,67 @@ mod tests {
         assert!((back.stretch() + slow).abs() < 0.5, "the sign follows the velocity");
     }
     /// The fling path really reaches the effect: a decay that hits the end leaves a bend.
+    /// A hand-built `Column + vertical_scroll` gets the effect from the ambient factory, exactly as a
+    /// LazyColumn does - the deviation this used to have is gone.
+    #[test]
+    fn a_plain_scroll_column_takes_the_ambient_effect() {
+        fn compose(disable: bool) -> (bool, Option<u64>) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let scroll = ScrollState::new();
+            let s = scroll.clone();
+            composer.compose(crate::compose!(|ctx| {
+                let body = |ctx: &mut crate::runtime::composer::ComposeCtx| {
+                    crate::layout::Column::new()
+                        .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                        .build(ctx, |ctx| {
+                            crate::components::Text::new("row").build(ctx);
+                        });
+                };
+                if disable {
+                    disable_overscroll(ctx, body);
+                } else {
+                    body(ctx);
+                }
+            }));
+            let found = composer.arena_nodes().iter().find_map(|n| {
+                n.modifier.overscroll_effect().map(|e| e.stretch().to_bits() as u64)
+            });
+            (found.is_some(), found)
+        }
+
+        let (present, _) = compose(false);
+        assert!(present, "the builder attaches the ambient effect");
+        let (present, _) = compose(true);
+        assert!(!present, "and `disable_overscroll` keeps it off");
+    }
+
+    /// Rebuilding must hand back the SAME effect: a fresh one would drop a pull in flight.
+    #[test]
+    fn the_effect_is_stable_across_rebuilds() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        let scroll = ScrollState::new();
+        let s = scroll.clone();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            composer.compose(crate::compose!(|ctx| {
+                crate::layout::Column::new()
+                    .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("row").build(ctx);
+                    });
+            }));
+            let effect = composer
+                .arena_nodes()
+                .iter()
+                .find_map(|n| n.modifier.overscroll_effect().cloned())
+                .expect("an effect");
+            effect.pull(10.0);
+            ids.push(effect.stretch().to_bits());
+        }
+        assert_eq!(ids[0], ids[1], "the second build reused the effect, pull included");
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn a_fling_into_the_end_leaves_a_bend() {
         let effect = OverscrollEffect::new();

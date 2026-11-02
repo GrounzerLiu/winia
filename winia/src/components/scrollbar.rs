@@ -567,6 +567,7 @@ impl LazyScrollbar {
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
+            overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             offset: self.state.offset.clone(),
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),
@@ -656,6 +657,7 @@ impl HorizontalLazyScrollbar {
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
+            overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             offset: self.state.offset.clone(),
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),

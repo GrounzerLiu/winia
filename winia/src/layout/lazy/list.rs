@@ -594,9 +594,8 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&beyond_bounds);
         let user_scroll = self.user_scroll;
         ctx.changed(&user_scroll);
-        // Compose's default: a scroll container takes the platform's overscroll effect unless the
-        // subtree turned it off (`LocalOverscrollFactory provides null` -> `disable_overscroll`).
-        let overscroll = crate::scroll::overscroll::remember_overscroll_effect(ctx);
+        // Overscroll is NOT attached here: `A::scroll(scroll)` already takes the ambient factory
+        // (see `Modifier::vertical_scroll`), which is the same rule a hand-built container follows.
         // Spacing, padding and the item count are parameters too: they decide where content lands and
         // how much of it exists. Only `snap_paging`/`fill_items` used to be declared, so changing the
         // spacing on a Clean slot kept the old placement forever.
@@ -844,6 +843,7 @@ impl<A: LazyAxis> LazyList<A> {
         // viewport write-back.
         let scroll = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
+            overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             offset: state.offset.clone(),
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
@@ -935,10 +935,7 @@ impl<A: LazyAxis> LazyList<A> {
             // so the flag is the XOR of the two. A vertical list ignores the direction here — its
             // cross axis is mirrored in the policy instead.
             .lazy_scroll_reverse(mirror);
-        let m = match overscroll.as_ref() {
-            Some(effect) => m.then(Modifier::new().overscroll(effect)),
-            None => m,
-        };
+
         let m = m
             .then(Modifier::new().with_item_animation_host(state.item_animations.clone()))
             // Accessibility: the list is a COLLECTION of `total` items, and each item below declares

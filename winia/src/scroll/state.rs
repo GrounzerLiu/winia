@@ -21,6 +21,9 @@ pub struct ScrollState {
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
+    /// The overscroll effect this state resolved for an ambient factory, kept per factory identity so
+    /// a rebuild hands the scroll container the SAME effect (a fresh one would drop an in-flight pull).
+    pub(crate) overscroll_cache: std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::overscroll::OverscrollEffect)>>>,
     /// The offset `last_scrolled_forward` saw last, so it can answer "which way" without a write hook.
     pub(crate) last_read_offset: std::sync::Arc<std::sync::Mutex<f32>>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
@@ -62,6 +65,7 @@ impl ScrollState {
             is_scroll_in_progress: crate::runtime::state::State::new(false),
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::runtime::state::State::new(0),
+            overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -142,6 +146,18 @@ impl ScrollState {
     pub fn remember_saveable(ctx: &mut crate::runtime::composer::ComposeCtx, key: &str) -> Self {
         let offset = crate::runtime::saveable::remember_saveable::<f32>(ctx, key, || 0.0);
         ctx.remember(move || Self::with_offset(offset)).get()
+    }
+
+    /// The effect this state uses for an ambient factory: created on first use and reused after that,
+    /// so a rebuild does not hand the container a fresh effect (which would drop a pull in flight).
+    pub(crate) fn overscroll_for(&self, factory_id: u64, create: impl FnOnce() -> crate::overscroll::OverscrollEffect) -> crate::overscroll::OverscrollEffect {
+        let mut cache = self.overscroll_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, effect)) = cache.iter().find(|(id, _)| *id == factory_id) {
+            return effect.clone();
+        }
+        let effect = create();
+        cache.push((factory_id, effect.clone()));
+        effect
     }
 
     /// 立即滚动到指定位置

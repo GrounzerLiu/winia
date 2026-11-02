@@ -304,8 +304,15 @@ impl Modifier {
     }
 
     /// The overscroll effect attached to this chain, if any.
+    /// Whether an effect is already attached (the builders use it to avoid a second one).
+    pub fn has_overscroll(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::Overscroll { .. }))
+    }
+
     pub fn overscroll_effect(&self) -> Option<&crate::overscroll::OverscrollEffect> {
-        self.elements.iter().find_map(|el| match el {
+        // LAST wins: `vertical_scroll` attaches the ambient effect itself, so a caller writing
+        // `.vertical_scroll(s).overscroll(&mine)` must get THEIRS, not the one the builder added.
+        self.elements.iter().rev().find_map(|el| match el {
             ModifierElement::Overscroll { effect } => Some(effect),
             _ => None,
         })

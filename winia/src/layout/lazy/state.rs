@@ -238,6 +238,7 @@ impl LazyListState {
         // path.)
         let state = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
+            overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             offset: self.offset.clone(),
             is_scroll_in_progress: self.is_scrolling.clone(),
             fling_limit: self.fling_limit.clone(),
