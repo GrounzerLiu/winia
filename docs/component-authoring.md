@@ -141,7 +141,7 @@ finds it where Compose puts it.
 
 Shape, colour and elevation defaults go in `ButtonDefaults` / `CardDefaults`-style types with
 associated functions, not as `impl Default for X` and not inline in the builder. `ButtonDefaults::
-filled_button_elevation()` is the Compose name and the Compose value; a component that inlines
+elevated_button_elevation()` (`button.rs:448`) is the Compose name and the Compose value; a component that inlines
 `Shadow::new(0.0, 2.0)` is a token drift waiting to happen.
 
 ### 2.3 The caller's modifier goes LAST
@@ -159,7 +159,7 @@ exceptions, both about what the component still has to add afterwards:
 - **semantics** - a role declared before `then(user_modifier)` survives a caller adding their own
   description, which is why `docs/semantics.md` states that ordering as a rule.
 - **input nodes** - every clickable component appends `clickable`/ripple AFTER the caller's modifier
-  (`button.rs:898` before `:905-909`, `card.rs:457-462`, `list_item.rs:146-150`), because the
+  (`button.rs:909` before `:917`, `card.rs:457-462`, `list_item.rs:146-150`), because the
   interaction node has to be added by the component, not by the caller.
 - **the drawing itself** - a leaf whose payload IS its content appends that payload after the caller's
   chain (`components/text.rs` ends its chain with `text_content_full`, `rich_text.rs` likewise): the
@@ -211,6 +211,13 @@ Rules that follow:
 - **Test the pair, not the number.** Setting the state and asserting the element resolves the new
   value catches "frozen at build time"; asserting that two dynamic values compare equal catches
   "Skip broken". `modifier.rs`'s border-width and padding tests are the two shapes.
+- **A new parameter on an existing leaf payload goes in its OWN element, not a new field.**
+  `ModifierElement::TextContent` is built by hand in 72 places across the crate and the suite, so a
+  new field is a 72-site edit that also breaks every handwritten literal at once; the text work added
+  `TextPaint` (shadow, feature settings, draw style, brush, geometric transform) and
+  `TextLayoutCallback` as separate elements instead, and the places that construct `TextContent` did
+  not move. Reach for a new element whenever the payload is a struct other code constructs directly.
+
 - **Not every number should animate.** A policy value - a touch-target floor, a padding derived from
   the measured content - stays static; making it dynamic invents a state the component cannot
   sensibly consume.
@@ -278,9 +285,10 @@ pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) 
 **MUST** declare every parameter the content or the slots read. The modifier chain carries some of
 them and the declaration carries the rest - know which channel you are using: `Modifier::param_eq`
 (`modifier.rs`) compares sizes, padding, border, semantics, layout direction, z-index and `test_tag`,
-and `TextField` relies on that for its visual parameters (`text_field.rs:909-916`); everything the
-chain cannot express - closures, flag-shaped branch controls, values passed outside the modifier -
-has to go through `ctx.changed`, or a Clean slot Skips past it.
+and `TextField` relies on that for its visual parameters (`text_field/field.rs:872`, with the rest
+declared through `ctx.changed` at `:256-259`); everything the chain cannot express - closures,
+flag-shaped branch controls, values passed outside the modifier - has to go through `ctx.changed`,
+or a Clean slot Skips past it.
 
 **A container whose CONTENT changes without any parameter changing** declares a SIGNATURE of that
 content instead of a parameter: a lazy list compares the sequence of item KEYS (`docs/lazy-column.md`
@@ -495,7 +503,7 @@ system theme - otherwise the components keep the colours they composed with.
 ## 7. Slots
 
 Optional named content goes in `Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>` (the shape the
-real slots use, `text_field.rs:880`) with a builder
+real slots use, `text_field/field.rs:19`) with a builder
 method per slot (`navigation_icon`, `actions`, `subtitle`). **MUST** give a slot the M3 geometry it
 has in Compose (touch slot, inset, alignment) instead of letting the content decide.
 
@@ -515,7 +523,7 @@ has in Compose (touch slot, inset, alignment) instead of letting the content dec
   (`docs/semantics.md`, rule 1).
 - A focusable component **MUST** obtain a `FocusRequester` and attach it with
   `Modifier::focus_requester(..)` (the requester's own `request_focus()` is what moves focus);
-  `TextField` is the model to copy (`text_field.rs:1568`). Focus has to survive recomposition: the runtime
+  `TextField` is the model to copy (`text_field/field.rs:951`). Focus has to survive recomposition: the runtime
   restores it by slot key, so a component that changes its slot layout on a branch can lose it
   (that is what `ctx.key` is for).
 
@@ -584,7 +592,8 @@ re-exported from there and from the prelude. Steps 2-3 are the same obligation, 
 ## 12. Documentation
 
 Every NEW component ships `docs/<component>.md` with these sections, in this order (existing docs are
-converted when they are edited for another reason - 5 of the 95 docs have all six, measured).
+converted when they are edited for another reason - 2 of the 106 docs have all six, measured
+2026-11-02: `docs/pager.md` and `docs/text.md`).
 Layout primitives (`Column`, `Row`, `Stack`, `FlowRow`, `FlowColumn`) are not components in this
 sense, and neither are the container families built on them (the lazy lists, `docs/lazy-column.md`):
 their docs use the shorter Sources / API and semantics / Differences / Tests shape, of which
