@@ -347,6 +347,20 @@ menu drawn but not interactive, and `is_animating` turns false after `CLOSE_MS`)
 a pixel just inside the settled right edge is empty early (channel sum 0-ish) and covered once
 settled (sum > 60). Red check: making `progress` return 1.0 fails it with "the growing menu has not
 reached the far edge yet (sum 135)".
+## Eighteenth pass (2026-11-02): reviewing the menu and handles
+
+Three defects in the new code, all fixed and measured:
+
+| Id | Defect | Fix |
+| --- | --- | --- |
+| R-1 | The menu's hover fill never appeared: a pointer move wrote `hovered` but nothing dirtied the window, so a settled menu produced no frame at all | the move handler requests a frame when the row under the pointer changes |
+| R-2 | Escape did not close the menu: the key path went straight to the focus/dialog dismissal, leaving the menu open over a cleared selection | `begin_closing_selection_menu` runs first and consumes Escape; the debug `k Escape` path calls the same helper (it used to keep its own copy of the rule) |
+| R-3 | The menu was hit-tested BEFORE overlays, so a press meant for a dialog opened over an open menu was eaten by the menu | the menu block moved after `overlay_down`, and an overlay press closes the menu underneath it |
+
+Measured: `a_move_over_the_menu_marks_the_row` (row 0 / row 1 / none; red check: dropping the assignment reads `left: None, right: Some(0)`),
+`escape_closes_the_menu_and_keeps_the_selection` (the menu stops being interactive, the selection survives, a second Escape has nothing to close).
+In the demo through the debug server: the pixel under the menu reads `44,41,50` before `k Escape` and `42,39,46` after,
+while the readout still says `2 .. 28 — 26 chars`.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

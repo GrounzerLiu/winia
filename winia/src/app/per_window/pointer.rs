@@ -244,6 +244,19 @@ pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
 /// Compose-style click detection: Down records (`pointer_down_state`) and Up fires on_click on
 /// release. Shared by the real PointerButton Up path and the debug simulation (d/u), so there is
 /// no parallel implementation and the behaviour can be verified by simulation.
+/// Start the close animation of an open selection menu. Returns true when there was one to close —
+/// Escape uses that to stop before the focus/dialog dismissal, and an overlay that takes the press
+/// uses it to drop a menu the overlay is drawn over.
+pub(crate) fn begin_closing_selection_menu(pw: &mut PerWindow) -> bool {
+    let Some(menu) = pw.input.selection_menu.as_mut() else { return false };
+    if !menu.is_open() {
+        return false;
+    }
+    menu.closing = Some(std::time::Instant::now());
+    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+    true
+}
+
 pub(crate) fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -295,6 +308,15 @@ pub(crate) fn handle_pointer_down(
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
+    // Top-level popups first: an overlay hit records the click target (the event does not reach the
+    // main tree); an outside click dismisses (modal / dismissible).
+    if overlay_down(pw, scene_pos, kind.clone()) {
+        // The overlay is drawn above the menu, so a menu left open underneath would be invisible
+        // and still eat presses in the gaps.
+        begin_closing_selection_menu(pw);
+        return true;
+    }
+
     // An open selection menu sits above everything (it is drawn last, by the render pass): it takes
     // the press, or the press dismisses it and carries on as an ordinary press.
     if let Some(menu) = pw.input.selection_menu.clone() {
@@ -320,11 +342,6 @@ pub(crate) fn handle_pointer_down(
         }
     }
 
-    // Top-level popups first: an overlay hit records the click target (the event does not reach the
-    // main tree); an outside click dismisses (modal / dismissible).
-    if overlay_down(pw, scene_pos, kind.clone()) {
-        return true;
-    }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -601,6 +618,21 @@ pub(crate) fn handle_pointer_move(
     // ⚠ Must run before the `nodes` borrow (`gesture_move` takes `nodes` and a mutable `pw`
     // itself).
     let mut handled = false;
+    // A menu that is open follows the pointer for its hover fill.
+    if let Some(menu) = pw.input.selection_menu.clone() {
+        let window = (pw.width, pw.height);
+        let hovered = crate::render::selection_menu_row_at(&menu, window, scene_pos);
+        // A hover-only change dirties nothing, so ask for the frame explicitly — without it the
+        // row fill only appeared when something else happened to repaint (measured: no frame at all
+        // while the menu sits settled).
+        if menu.hovered != hovered {
+            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+        }
+        if let Some(open) = pw.input.selection_menu.as_mut() {
+            open.hovered = hovered;
+        }
+    }
+
     if pw.input.node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
     }
@@ -813,15 +845,6 @@ pub(crate) fn handle_pointer_move(
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-
-    // A menu that is open follows the pointer for its hover fill.
-    if let Some(menu) = pw.input.selection_menu.clone() {
-        let window = (pw.width, pw.height);
-        let hovered = crate::render::selection_menu_row_at(&menu, window, scene_pos);
-        if let Some(open) = pw.input.selection_menu.as_mut() {
-            open.hovered = hovered;
-        }
-    }
 
     // Drag-select text. Shared with the auto-scroll tick, which re-runs it every frame while the
     // pointer sits in a scroll container's edge band.

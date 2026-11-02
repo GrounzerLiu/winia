@@ -170,7 +170,9 @@ impl AppState {
                 }
                 debug::DebugEvent::Key { key } => {
                     if key == "Escape" {
-                        // The same helper the real key path calls — see `PerWindow::escape_key`.
+                        // The same helpers the real key path calls: an open selection menu closes
+                        // first, then `PerWindow::escape_key` runs (see the real key branch).
+                        crate::app::per_window::begin_closing_selection_menu(pw);
                         pw.escape_key();
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     } else if key == "Tab" {

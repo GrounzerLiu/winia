@@ -537,7 +537,9 @@ impl AppState {
                 };
                 let mut consumed = false;
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                    consumed = pw.escape_key();
+                    // An open selection menu takes Escape first: it closes, and the selection stays.
+                    consumed = crate::app::per_window::begin_closing_selection_menu(pw)
+                        || pw.escape_key();
                 }
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     pw.tab_move_focus(pw.modifiers.shift_key());

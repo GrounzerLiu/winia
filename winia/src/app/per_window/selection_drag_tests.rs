@@ -712,3 +712,42 @@ fn the_menu_animates_in_and_out() {
     std::thread::sleep(std::time::Duration::from_millis(SelectionMenu::CLOSE_MS as u64 + 30));
     assert!(!closing.is_animating(std::time::Instant::now()), "the fade finished");
 }
+/// Escape closes an open menu and leaves the selection alone (Compose closes the menu first).
+#[test]
+fn escape_closes_the_menu_and_keeps_the_selection() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+    let before = r.build_selection().map(|s| s.text().to_string());
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+    assert!(pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false));
+
+    assert!(super::pointer::begin_closing_selection_menu(&mut pw), "Escape takes the menu");
+    assert!(
+        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        "the menu is closing"
+    );
+    assert_eq!(r.build_selection().map(|s| s.text().to_string()), before, "the selection survives");
+    // Nothing left to close.
+    assert!(!super::pointer::begin_closing_selection_menu(&mut pw));
+}
+
+/// The menu's rows follow the pointer.
+#[test]
+fn a_move_over_the_menu_marks_the_row() {
+    let (mut pw, _reg) = container_with_padding_below("aaaa bbbb");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+    let row0 = menu_row_point(&pw, 0);
+    let row1 = menu_row_point(&pw, 1);
+
+    let modifiers = winit::keyboard::ModifiersState::empty();
+    super::pointer::handle_pointer_move(&mut pw, row0, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
+    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), Some(0), "row 0 is hovered");
+    super::pointer::handle_pointer_move(&mut pw, row1, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
+    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), Some(1), "row 1 is hovered");
+    super::pointer::handle_pointer_move(&mut pw, (5.0, 250.0), crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
+    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), None, "and nothing outside");
+}
