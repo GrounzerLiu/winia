@@ -221,3 +221,166 @@ fn a_second_press_elsewhere_is_not_a_double_click() {
         "a click elsewhere starts a new selection, so nothing is selected yet"
     );
 }
+/// S-8: a SECOND composer laying out must not touch this one's table.
+///
+/// The sweep that empties a container whose last text left used to be thread-wide, so any other
+/// window — or an overlay layer — laying out with no selectable text emptied every container on the
+/// thread. Measured before the fix: window A went from `total=11` to `total=0` and its selection from
+/// `Some("hello world")` to `None`, from nothing but window B's layout.
+#[test]
+fn a_second_window_laying_out_keeps_the_first_windows_table() {
+    let (_pw_a, reg_a) = container_with_padding_below("hello world");
+    let r = reg_a.lock().unwrap().clone().expect("registered");
+    r.set_selection(0, 11);
+
+    let mut pw_b = PerWindow::new(Box::new(|_| {}), 300.0, 200.0, ThemeColors::default_light());
+    pw_b.content = Box::new(|ctx| { crate::components::Text::new("plain").build(ctx); });
+    let content = std::mem::replace(&mut pw_b.content, Box::new(|_| {}));
+    pw_b.composer.recompose(|ctx| content(ctx));
+    pw_b.content = content;
+    pw_b.composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+
+    assert_eq!(r.total_text_len(), 11, "window A keeps its runs");
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("hello world".to_string()),
+        "and its selection"
+    );
+}
+
+/// S-9: a press in another window leaves this window's selection alone.
+///
+/// The press sweep was thread-wide too (measured before the fix: a press on window B's padding turned
+/// window A's `Some("hello")` into `None`).
+#[test]
+fn a_press_in_another_window_keeps_this_windows_selection() {
+    let (_pw_a, reg_a) = container_with_padding_below("hello world");
+    let (mut pw_b, _reg_b) = container_with_padding_below("second");
+    let r = reg_a.lock().unwrap().clone().expect("registered");
+    r.set_selection(0, 5);
+
+    assert!(press(&mut pw_b, (200.0, 200.0)), "the press lands on window B's padding");
+
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("hello".to_string()),
+        "window A's selection survives a press in window B"
+    );
+}
+
+/// And the sweep still does its job inside the window it belongs to.
+#[test]
+fn a_press_in_the_same_window_still_ends_its_selection() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    r.set_selection(0, 4);
+    assert!(r.build_selection().is_some());
+    assert!(press(&mut pw, (200.0, 120.0)), "the press lands on the container's padding");
+    assert!(
+        r.build_selection().is_none(),
+        "a press inside the container still ends the selection"
+    );
+}
+/// A container inside a container keeps its own table: the inner one must not steal the outer's
+/// runs, and a text after the inner container belongs to the outer again.
+#[test]
+fn nested_containers_keep_their_own_tables() {
+    let outer: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+    let inner: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
+    let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
+    let (o, i) = (outer.clone(), inner.clone());
+    pw.content = Box::new(move |ctx| {
+        let o = o.clone();
+        let i = i.clone();
+        SelectionContainer::new().modifier(Modifier::new().size(300.0, 200.0)).build(ctx, move |ctx| {
+            *o.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+            crate::components::Text::new("aa").build(ctx);
+            let i2 = i.clone();
+            SelectionContainer::new().modifier(Modifier::new().size(200.0, 100.0)).build(ctx, move |ctx| {
+                *i2.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                crate::components::Text::new("bb").build(ctx);
+            });
+            crate::components::Text::new("cc").build(ctx);
+        });
+    });
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.content = content;
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    let o = outer.lock().unwrap().clone();
+    let i = inner.lock().unwrap().clone();
+    let (o, i) = (o.expect("outer registrar"), i.expect("inner registrar"));
+    assert!(!o.is_same(&i), "two containers, two registrars");
+    assert_eq!(o.selectable_texts(), vec!["aa".to_string(), "cc".to_string()], "the outer keeps its own runs");
+    assert_eq!(i.selectable_texts(), vec!["bb".to_string()], "the inner holds only its own");
+    assert_eq!(o.total_text_len(), 4);
+    assert_eq!(i.total_text_len(), 2);
+}
+
+/// The container's group still Skips: M-1 hangs a `CopySelectionKey` on its modifier, and a modifier
+/// that compares unequal to itself would re-enter the whole subtree on every frame.
+#[test]
+fn a_container_body_skips_a_frame_with_no_changes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let body = Arc::new(AtomicUsize::new(0));
+    let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
+    let b = body.clone();
+    pw.content = Box::new(move |ctx| {
+        let b = b.clone();
+        SelectionContainer::new().build(ctx, move |ctx| {
+            b.fetch_add(1, Ordering::SeqCst);
+            crate::components::Text::new("hello").build(ctx);
+        });
+    });
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    for _ in 0..3 {
+        pw.composer.recompose(|ctx| content(ctx));
+        pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    }
+    pw.content = content;
+    assert_eq!(body.load(Ordering::SeqCst), 1, "the body ran once, not once per frame");
+}
+/// S-10: a `SelectionState` has to be released when its container leaves composition.
+///
+/// Compose does it in a `DisposableEffect` (`state.manager = null; state.selection = null`); without
+/// the release the state stayed bound to a dead container, so handing it to the next one panicked
+/// (measured: frame 3 of this test died with "A SelectionState can only be bound to one
+/// SelectionContainer") and the stale selection kept being published.
+#[test]
+fn a_state_binds_again_after_its_container_leaves() {
+    use crate::components::selection_container::SelectionState;
+    use crate::runtime::state::State;
+    let show = State::new(true);
+    let state = SelectionState::new();
+    let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
+    let st = state.clone();
+    let show_in = show.clone();
+    pw.content = Box::new(move |ctx| {
+        let st = st.clone();
+        let show = show_in.clone();
+        Column::new().build(ctx, move |ctx| {
+            let st = st.clone();
+            let visible = show.get();
+            if visible {
+                SelectionContainer::new()
+                    .state(st)
+                    .modifier(Modifier::new().size(200.0, 100.0))
+                    .build(ctx, |ctx| { crate::components::Text::new("aa").build(ctx); });
+            }
+        });
+    });
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    show.set(false);
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    show.set(true);
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    pw.content = content;
+    assert!(
+        state.selection().is_none(),
+        "the state publishes nothing once its container is gone"
+    );
+}

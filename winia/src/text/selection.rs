@@ -6,10 +6,9 @@
 
 use crate::runtime::composition_local::CompositionLocal;
 use parking_lot::Mutex;
-use std::cell::RefCell;
 use std::ops::Range;
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════
 // Supporting types.
@@ -186,49 +185,6 @@ pub struct SelectionRegistrar {
     inner: Arc<Mutex<RegistrarInner>>,
 }
 
-thread_local! {
-    /// Every registrar alive on this thread, so a press outside any of them can clear the one that
-    /// owns the open selection. Weak: a container that leaves composition drops out on its own, and
-    /// the list is pruned on every use (`clear_open_selections`).
-    static LIVE_REGISTRARS: RefCell<Vec<Weak<Mutex<RegistrarInner>>>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Clear the selection of every registrar that currently has one.
-///
-/// A press that is not continuing a selection ends it (Compose: `onClearSelectionRequested` / the tap
-/// handler call `onRelease`). The press does not know which container owns the selection — it lands
-/// on a node, and only registered text leaves carry a registrar — so this sweeps the live ones
-/// instead of trusting a hit.
-pub(crate) fn clear_open_selections() {
-    LIVE_REGISTRARS.with(|live| {
-        let mut live = live.borrow_mut();
-        live.retain(|weak| {
-            let Some(inner) = weak.upgrade() else { return false };
-            let mut inner = inner.lock();
-            if inner.has_selection() {
-                inner.clear();
-            }
-            true
-        });
-    });
-}
-
-/// Empty every live registrar's table.
-///
-/// The composer calls this when NO node carries a registrar any more: a container whose last
-/// selectable text just became unselectable (DisableSelection) still holds its old segments, and
-/// the tree walk cannot report that, because the walk is driven by the nodes.
-pub(crate) fn drop_all_tables() {
-    LIVE_REGISTRARS.with(|live| {
-        let mut live = live.borrow_mut();
-        live.retain(|weak| {
-            let Some(inner) = weak.upgrade() else { return false };
-            SelectionRegistrar { inner }.reindex(&[]);
-            true
-        });
-    });
-}
-
 /// How a selection snaps to boundaries — Compose's `SelectionAdjustment`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionAdjustment {
@@ -321,11 +277,6 @@ impl SelectionRegistrar {
             segments: HashMap::new(),
             on_change: None,
         }));
-        LIVE_REGISTRARS.with(|live| {
-            let mut live = live.borrow_mut();
-            live.retain(|weak| weak.strong_count() > 0);
-            live.push(Arc::downgrade(&inner));
-        });
         Self { inner }
     }
 

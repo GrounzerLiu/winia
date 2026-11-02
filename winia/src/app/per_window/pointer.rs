@@ -327,7 +327,7 @@ pub(crate) fn handle_pointer_down(
     // land on a node that carries none (a plain Text, a container's padding, a Button), and reading
     // the hit node's registrar then cleared nothing, so the highlight survived a click elsewhere
     // (measured: two containers each held a selection at once).
-    crate::text::selection::clear_open_selections();
+    pw.composer.clear_open_selections();
     // Grapheme anchor placement.
     // ⚠ With a containerized TextField the paragraph is cached only on the **input leaf**, so a
     // container node has no `cached_paragraph` — clicking the container's blank area hits the

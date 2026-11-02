@@ -128,6 +128,31 @@
   every live registrar against an empty slot list before returning. Red check: restoring the bare
   `return` fails `selection_container::tests::a_container_whose_last_text_leaves_forgets_its_segments`
   with `left: 4, right: 0`.
+## Ninth pass (2026-11-02): the sweeps were thread-wide, and a state outlived its container
+
+The whole file was re-read from scratch. Three defects, all measured first and fixed with a
+regression test; two suspicions were measured and ruled out.
+
+| Id | What was wrong | Evidence | Fix |
+| --- | --- | --- | --- |
+| S-8 | A second composer laying out emptied THIS composer's table | window A: `total` 11 -> 0, selection `Some("hello world")` -> `None`, from nothing but window B's layout | the walk remembers the registrars it saw (`Composer::known_registrars`) and empties only those |
+| S-9 | A press in another window cleared this window's selection | press on B's padding: A's `Some("hello")` -> `None` | `Composer::clear_open_selections` walks its own arena instead of a thread-wide list |
+| S-10 | A `SelectionState` stayed bound after its container left composition | show/hide/show: frame 3 panicked with "A SelectionState can only be bound to one SelectionContainer" | the container registers `remember_on_forget(|| state.unbind(&registrar))`, as Compose's `DisposableEffect` does (`state.manager = null; state.selection = null`) |
+
+S-8 and S-9 shared one root cause: `LIVE_REGISTRARS` was a thread-local list of every registrar ever
+created, so `drop_all_tables()` and `clear_open_selections()` broadcast across windows, and across an
+open popup's own composer. Both helpers are gone; a composer now owns the set it saw.
+
+Tests: `a_second_window_laying_out_keeps_the_first_windows_table`,
+`a_press_in_another_window_keeps_this_windows_selection`,
+`a_press_in_the_same_window_still_ends_its_selection`,
+`a_state_binds_again_after_its_container_leaves`. Red checks: removing the release hook panics with
+the binding message again; making the empty-walk cleanup a bare `return` fails S-7's test with
+`left: 4, right: 0`; making the press sweep clear nothing fails the same-window test.
+
+Ruled out by measurement: `.container_body` still Skips (the `CopySelectionKey` M-1 hangs on the
+modifier does not make the modifier compare unequal to itself - 1 body entry over 3 frames), and
+nested containers keep separate tables (outer `["aa", "cc"]`, inner `["bb"]`).
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

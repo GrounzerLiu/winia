@@ -147,6 +147,11 @@ pub struct Composer {
     pub(crate) live_residue: usize,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::text::selection::SelectionRegistrar>,
+    /// The registrars THIS composer saw in its last walk. It is what makes both sweeps scoped:
+    /// a lookup that went through a thread-wide list cleared the selection of every other window on
+    /// the thread (measured: a press in window B turned window A's selection from Some to None, and
+    /// a second window merely laying out took A's table from 11 runs to 0).
+    pub(crate) known_registrars: Vec<crate::text::selection::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
     pub(crate) lifecycle: crate::runtime::lifecycle::LifecycleState,
     /// The winit window this composer belongs to; 0 when unwired (a test, an overlay composer).
@@ -285,6 +290,7 @@ impl Composer {
             #[cfg(test)]
             live_residue: 0,
             selection_registrar: None,
+            known_registrars: Vec::new(),
             lifecycle: crate::runtime::lifecycle::LifecycleState::default(),
             window_id: 0,
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
@@ -1451,7 +1457,12 @@ impl Composer {
         // before this: the text stopped registering, the node's registrar was cleared, and the
         // container still answered `total_text_len() == 4`.
         if !self.arena.nodes.iter().any(|n| n.registrar.borrow().is_some()) {
-            crate::text::selection::drop_all_tables();
+            // Only the registrars THIS composer saw: a thread-wide sweep emptied every other
+            // window's table (measured: 11 runs -> 0, selection Some -> None, when a second window
+            // with no selectable text laid out).
+            for reg in std::mem::take(&mut self.known_registrars) {
+                reg.reindex(&[]);
+            }
             return;
         }
         /// A registered text with the box it occupies in window space.
@@ -1498,6 +1509,7 @@ impl Composer {
             if let Some(sub) = node.subcomposed_child { stack.push((sub, child_x, child_y)); }
             for &child in node.children.iter().rev() { stack.push((child, child_x, child_y)); }
         }
+        self.known_registrars = groups.iter().map(|(r, _)| r.clone()).collect();
         for (reg, mut placed) in groups {
             placed.sort_by(|a, b| {
                 // Reading order: side by side compares x, otherwise y (Compose's `sort`).
@@ -1506,6 +1518,25 @@ impl Composer {
             });
             let slots: Vec<u64> = placed.into_iter().map(|p| p.slot_key).collect();
             reg.reindex(&slots);
+        }
+    }
+
+    /// Clear every selection that belongs to THIS composer — a press inside it ends them.
+    ///
+    /// The press cannot read the registrar off the node it hit (a press on padding, a Spacer or a
+    /// Button carries none — that is why the sweep exists), but it must stay inside this tree: a
+    /// thread-wide sweep also cleared windows the press never touched (measured: a press in window B
+    /// turned window A's `Some("hello")` into `None`).
+    pub(crate) fn clear_open_selections(&self) {
+        let mut seen: Vec<crate::text::selection::SelectionRegistrar> = Vec::new();
+        for node in self.arena.nodes.iter() {
+            let Some(reg) = node.registrar.borrow().as_ref().cloned() else { continue };
+            if !seen.iter().any(|s| s.is_same(&reg)) {
+                seen.push(reg);
+            }
+        }
+        for reg in seen {
+            reg.clear_selection();
         }
     }
 

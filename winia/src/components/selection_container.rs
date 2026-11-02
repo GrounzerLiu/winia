@@ -53,8 +53,11 @@ impl SelectionContainer {
         // One persistent registrar: a rebuild must not create a new one, because the segments have
         // to survive recomposition.
         let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
-        if let Some(state) = &self.state {
+        if let Some(state) = self.state.clone() {
             state.bind(&registrar);
+            // Release it again when this container leaves composition (Compose's DisposableEffect).
+            let reg = registrar.clone();
+            ctx.remember_on_forget(move || state.unbind(&reg));
         }
         // One callback, because the registrar has one slot: publish into the state, then hand the
         // selection to the caller's own closure.
@@ -261,6 +264,21 @@ impl SelectionState {
         *bound = Some(registrar.clone());
         drop(bound);
         self.publish();
+    }
+
+    /// Release the binding when the container that owns it leaves composition.
+    ///
+    /// Compose does this in a `DisposableEffect` (`state.manager = null; state.selection = null`).
+    /// Without it the binding outlives the container, so the same state cannot be handed to a new
+    /// container — a container inside an `if`, or one whose slot key changed, panics on the second
+    /// bind (measured: frame 3 of a show/hide/show test died with "can only be bound to one
+    /// SelectionContainer") — and the state keeps publishing a selection nothing can change.
+    fn unbind(&self, registrar: &SelectionRegistrar) {
+        let mut bound = self.inner.registrar.lock();
+        if !bound.as_ref().is_some_and(|r| r.is_same(registrar)) { return; }
+        *bound = None;
+        drop(bound);
+        self.set_selection(None);
     }
 
     /// Publish what the bound registrar currently holds.
