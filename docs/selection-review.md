@@ -295,6 +295,26 @@ Deviations, recorded deliberately: the handles are painted for EVERY selection, 
 them on touch mode (`manager.isInTouchMode`) — winia has no touch-mode tracking yet; and they are
 drawn by the main `render()` entry, so a selection inside a popup (its own Composer) gets none until
 the overlay render path calls the same helper.
+## M-4 (context menu): attempted, blocked, reverted — 2026-11-02
+
+First shape tried: the container owns the menu. A `State<bool>` per container, the registrar relaying
+`request_context_menu(x, y)` from a secondary press, and the container building a `DropdownMenu` with
+Copy / Select all after `end_restartable_group`.
+
+It does not work, and the measurement is unambiguous: with the menu built inside the container, EIGHT
+existing tests failed (`selection_anchor_tests` x2, `selection_drag_tests` x6 — every press stopped
+being handled, and `press(&mut pw, ..)` returned false where it had returned true). Removing only the
+`DropdownMenu` build brought all eight back; the registrar relay and the pointer hook were not the
+cause. So a menu built under a `SelectionContainer` perturbs that container's own measurement or slot
+structure badly enough that hit testing stops finding its text.
+
+Reverted rather than worked around: a half-wired menu that breaks presses is worse than no menu. What
+the next attempt needs is a menu that is NOT a child of the container — an overlay-level menu the
+window hosts (the same layer `Popup`/`DropdownMenu` already use for their surfaces), opened by the
+registrar callback and anchored at the press point, which is also what Compose does
+(`ContextMenuArea` is drawn by the window, not by the text).
+
+Status: M-4 stays open, now with a measured reason and a stated direction instead of a hunch.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
