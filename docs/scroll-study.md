@@ -69,8 +69,8 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 
 | Behaviour | Compose | winia |
 | --- | --- | --- |
-| `scrollBy(pixels)` | `ScrollableState.kt:182` | absent - only `scroll_to` / `animate_scroll_to` |
-| `dispatchRawDelta` | `ScrollableState.kt:73` | absent |
+| `scrollBy(pixels)` | `ScrollableState.kt:182` | **shipped** `ScrollState::scroll_by` (clamped, returns what it consumed, cancels a fling first) |
+| `dispatchRawDelta` | `ScrollableState.kt:73` | deliberately not mirrored: it exists to bypass the nested dispatcher while clamping, and `ScrollState` has no dispatcher - the chain lives in `app::scroll`, so a second name would just invite the wrong pick |
 | `canScrollForward/Backward` | `ScrollableState.kt:92` | present (`layout/lazy/state.rs:160`, plus a `remember_can_scroll_forward` that notifies only on flips) |
 | `lastScrolledForward/Backward` | `ScrollableState.kt:115` | absent |
 | `animateScrollBy` | named in `ScrollableState.kt:33`; the suspend API | absent; `animate_scroll_to(value, max)` exists |
@@ -93,8 +93,11 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
    list 0 -> 48 -> 96 -> 144, PageDown moved exactly one viewport (150), Home/End reached 0 / 7050.
    The debug `k` command needed `PageUp`/`PageDown` added to its key-name table before any of that
    could be driven; a key the debug path cannot name is a path nobody tests.
-2. **No `scrollBy` / `dispatchRawDelta`.** Every programmatic scroll has to go through `scroll_to` with
-   an absolute value and a caller-computed limit; a "scroll by one line" has no shape.
+2. ~~**No `scrollBy` / `dispatchRawDelta`.**~~ **`scroll_by` shipped 2026-11-02**, together with
+   `max_value`, `can_scroll_forward` and `can_scroll_backward` (`scroll/state.rs`, tests in its
+   `scroll_by_tests`: moves and reports the consumed amount, clamps at both ends and says so,
+   follows a limit that starts open-ended and settles after the first measure). `dispatchRawDelta` is
+   intentionally NOT mirrored - see the table above.
 3. **Overscroll does not apply to flings.** A drag past the edge bends the content, a fling past it just
    stops. Compose pipes the fling through the effect (`Scrollable.kt:717`).
 4. **No `lastScrolledForward/Backward`.** A bar that hides on scroll direction has to diff offsets

@@ -66,6 +66,42 @@ impl ScrollState {
         }
     }
 
+    /// How far this container can scroll, as the layout last wrote it back: `content - viewport`,
+    /// `0` when the content fits, and `f32::MAX` until the first measure has measured it.
+    ///
+    /// Compose's `ScrollState.maxValue` (`foundation/gestures/ScrollableState.kt`); the limit used to
+    /// be reachable only through the private `fling_limit`, so a caller driving a list by hand had to
+    /// remember the last "content height" itself.
+    pub fn max_value(&self) -> f32 {
+        let limit = self.fling_limit.peek();
+        if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
+    }
+
+    /// Whether anything is left to scroll toward the end / toward the start.
+    pub fn can_scroll_forward(&self) -> bool { self.offset.peek() < self.max_value() - 0.5 }
+    pub fn can_scroll_backward(&self) -> bool { self.offset.peek() > 0.5 }
+
+    /// Scroll by `delta` pixels (positive = toward the end, the sign Compose uses) and return how
+    /// much was actually consumed — the movement is clamped to `[0, max_value]`, so a caller that
+    /// wants to know whether it hit an end gets the answer in the return value.
+    ///
+    /// Compose's `ScrollableState.scrollBy` (`ScrollableState.kt:182`). Its sibling
+    /// `dispatchRawDelta` is deliberately NOT mirrored: that one exists to bypass the nested-scroll
+    /// dispatcher while still clamping, and this state has no dispatcher — the chain lives in
+    /// `app::scroll`. A second name for the same function would only invite a caller to pick the
+    /// wrong one.
+    ///
+    /// Unlike `scroll_to`, this CANCELS a fling or a page step in flight: the caller is taking over.
+    pub fn scroll_by(&self, delta: f32) -> f32 {
+        if delta == 0.0 { return 0.0; }
+        self.cancel_fling();
+        let current = self.offset.peek();
+        let next = (current + delta).clamp(0.0, self.max_value());
+        if next == current { return 0.0; }
+        self.offset.set(next);
+        next - current
+    }
+
     /// 立即滚动到指定位置
     pub fn scroll_to(&self, value: f32, max_offset: f32) {
         self.offset.set(value.clamp(0.0, max_offset));
@@ -316,3 +352,61 @@ impl Default for ScrollState {
     fn default() -> Self { Self::new() }
 }
 
+
+#[cfg(test)]
+mod scroll_by_tests {
+    use super::ScrollState;
+
+    /// The limit comes from the layout write-back, so the test writes it the same way.
+    fn state(offset: f32, limit: f32) -> ScrollState {
+        let s = ScrollState::new();
+        s.offset.set(offset);
+        s.fling_limit.set(limit);
+        s
+    }
+
+    #[test]
+    fn scroll_by_moves_and_reports_what_it_consumed() {
+        let s = state(0.0, 300.0);
+        assert_eq!(s.scroll_by(48.0), 48.0);
+        assert_eq!(s.offset.peek(), 48.0);
+        assert_eq!(s.scroll_by(-20.0), -20.0);
+        assert_eq!(s.offset.peek(), 28.0);
+        // Zero is a no-op, not a cancellation.
+        assert_eq!(s.scroll_by(0.0), 0.0);
+    }
+
+    #[test]
+    fn scroll_by_clamps_at_both_ends_and_says_so() {
+        let s = state(290.0, 300.0);
+        assert_eq!(s.scroll_by(50.0), 10.0, "only the last 10 px were available");
+        assert_eq!(s.offset.peek(), 300.0);
+        assert_eq!(s.scroll_by(50.0), 0.0, "at the end nothing moves");
+        assert_eq!(s.scroll_by(-400.0), -300.0);
+        assert_eq!(s.offset.peek(), 0.0);
+    }
+
+    #[test]
+    fn can_scroll_follows_the_offset_and_the_limit() {
+        // A container whose content fits: nowhere to go.
+        let tight = state(0.0, 0.0);
+        assert!(!tight.can_scroll_forward());
+        assert!(!tight.can_scroll_backward());
+
+        let s = state(0.0, 300.0);
+        assert!(s.can_scroll_forward());
+        assert!(!s.can_scroll_backward());
+        s.offset.set(300.0);
+        assert!(!s.can_scroll_forward());
+        assert!(s.can_scroll_backward());
+    }
+
+    #[test]
+    fn an_unmeasured_limit_is_open_ended_and_then_settles() {
+        let s = ScrollState::new();
+        assert_eq!(s.max_value(), f32::MAX, "until the layout measures, everything is reachable");
+        assert!(s.can_scroll_forward());
+        s.fling_limit.set(120.0);
+        assert_eq!(s.max_value(), 120.0);
+    }
+}
