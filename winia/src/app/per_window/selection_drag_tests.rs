@@ -29,6 +29,16 @@ fn drag(pw: &mut PerWindow, to: (f32, f32)) -> bool {
     )
 }
 
+/// Keep the multi-click window fresh between presses.
+///
+/// The window is 300 ms of real time, and the suite runs under load: a test thread that gets
+/// descheduled between the two presses would turn the second click of a double click into a fresh
+/// single click and fail for no reason. Only the clock is refreshed — the position and the count stay
+/// whatever the press recorded, so the rules under test (slop, wrap-around) are unchanged.
+fn refresh_click_clock(pw: &mut PerWindow, at: (f32, f32), count: u8) {
+    pw.input.selection_click = Some((std::time::Instant::now(), at, count));
+}
+
 /// One container, 300x200, holding a single 300-wide line of text at the top.
 fn container_with_padding_below(text: &'static str) -> (PerWindow, RegSlot) {
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 400.0, ThemeColors::default_light());
@@ -181,6 +191,7 @@ fn a_double_click_selects_the_word_under_the_pointer() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     assert!(press(&mut pw, (60.0, 10.0)), "the press lands in the second word");
+    refresh_click_clock(&mut pw, (60.0, 10.0), 1);
     assert!(press(&mut pw, (60.0, 10.0)), "the second press of the double click");
 
     assert_eq!(
@@ -197,7 +208,9 @@ fn a_triple_click_selects_the_whole_line() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     assert!(press(&mut pw, (60.0, 10.0)));
+    refresh_click_clock(&mut pw, (60.0, 10.0), 1);
     assert!(press(&mut pw, (60.0, 10.0)));
+    refresh_click_clock(&mut pw, (60.0, 10.0), 2);
     assert!(press(&mut pw, (60.0, 10.0)));
 
     assert_eq!(

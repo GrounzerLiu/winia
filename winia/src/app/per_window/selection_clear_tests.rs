@@ -63,9 +63,15 @@ fn select_all_in(reg: &SelectionRegistrar) {
     reg.set_selection(1, reg.total_text_len());
 }
 
-/// Pressing a node with NO registrar (a plain output Text) used to leave the highlight standing.
+/// A press OUTSIDE the container leaves its selection alone.
+///
+/// Compose has no window-wide sweep: a tap only ends a selection when it reaches that container's
+/// own pointer input (its `SelectionManager.onRelease`). Pressing a plain output Text under both
+/// containers never reaches A, so A keeps its highlight. The press used to be swept window-wide --
+/// first because the hit node carried no registrar at all (D-2), then because the sweep covered every
+/// container in the window -- and both of those were over-corrections.
 #[test]
-fn pressing_outside_the_container_clears_its_selection() {
+fn pressing_outside_the_container_leaves_its_selection_alone() {
     let (mut pw, a, _b) = two_containers_and_a_plain_text();
     let reg = a.lock().unwrap().clone().expect("A registered");
     select_all_in(&reg);
@@ -73,12 +79,19 @@ fn pressing_outside_the_container_clears_its_selection() {
 
     // y 130 is the plain Text under both containers (each 60 tall).
     assert!(press(&mut pw, (20.0, 130.0)), "the press has to hit something");
-    assert!(reg.build_selection().is_none(), "a press elsewhere ends the selection");
+    assert!(
+        reg.build_selection().is_some(),
+        "a press outside the container never reaches it, so the selection stands"
+    );
 }
 
-/// Pressing a SECOND container clears the first: only one container holds a selection at a time.
+/// Pressing a SECOND container leaves the first alone: each container owns its selection.
+///
+/// Compose gives every container its own `SelectionManager`; a press in B is not delivered to A.
+/// Pressing B here used to clear A because the sweep covered the whole window (measured before the
+/// fix: `Some("aaaa")` -> `None`).
 #[test]
-fn pressing_another_container_clears_the_first() {
+fn pressing_another_container_leaves_the_first_alone() {
     let (mut pw, a, b) = two_containers_and_a_plain_text();
     let reg_a = a.lock().unwrap().clone().expect("A registered");
     let reg_b = b.lock().unwrap().clone().expect("B registered");
@@ -86,6 +99,10 @@ fn pressing_another_container_clears_the_first() {
 
     // y 70 is inside B's container (60..120); its text sits at the top of that box.
     assert!(press(&mut pw, (20.0, 70.0)));
-    assert!(reg_a.build_selection().is_none(), "B's press ended A's selection");
+    assert!(
+        reg_a.build_selection().is_some(),
+        "a press inside B does not end A's selection"
+    );
+    assert!(reg_b.build_selection().is_none(), "and B has nothing selected");
     assert!(!reg_a.is_same(&reg_b), "different containers, different registrars");
 }

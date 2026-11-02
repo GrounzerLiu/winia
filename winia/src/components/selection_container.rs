@@ -89,7 +89,15 @@ impl SelectionContainer {
         // can answer for the whole container's selection.
         let copy_registrar = registrar.clone();
         let modifier = self.modifier.key_node(CopySelectionKey { registrar: copy_registrar });
-        match ctx.start_restartable_group(key, modifier, BoxLayout::new()) {
+        let group = ctx.start_restartable_group(key, modifier, BoxLayout::new());
+        // This node carries the registrar too — AFTER the group opened, so the registrar lands on the
+        // container's own descriptor rather than on the enclosing node's. A press has to be able to
+        // tell WHICH container it landed in from the hit path alone: with only text leaves carrying
+        // one, a press on the container's own padding found nothing, the press sweep had to be
+        // window-wide, and that also cleared a SIBLING container (measured: pressing in container B
+        // turned container A's `aaaa` into `None`). Compose clears only the manager the press reached.
+        ctx.set_current_node_registrar(registrar.clone());
+        match group {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         content(ctx);

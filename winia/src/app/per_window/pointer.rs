@@ -321,13 +321,26 @@ pub(crate) fn handle_pointer_down(
     };
     pw.input.selection_click = Some((std::time::Instant::now(), scene_pos, click_count));
 
-    // Clear the old selection (a new click begins).
+    // Clear the old selection (a new click begins) — but only the containers the press actually
+    // reached.
     //
-    // This sweeps EVERY live registrar rather than the one on the node that was hit: the press may
-    // land on a node that carries none (a plain Text, a container's padding, a Button), and reading
-    // the hit node's registrar then cleared nothing, so the highlight survived a click elsewhere
-    // (measured: two containers each held a selection at once).
-    pw.composer.clear_open_selections();
+    // The registrars are read off the HIT PATH, not off the hit node alone: a press on a container's
+    // padding, a Spacer or a Button inside it hits a node that carries none of its own, and reading
+    // just that node cleared nothing (the highlight survived a click inside the container). Both the
+    // container node and its text leaves carry the registrar now, so an ancestor lookup finds it.
+    //
+    // It must not be window-wide either: two containers can be visible at once, and Compose clears
+    // only the manager the press reached (measured before this: pressing in container B cleared
+    // container A's `aaaa`).
+    {
+        let mut seen: Vec<crate::text::selection::SelectionRegistrar> = Vec::new();
+        for &idx in path.iter() {
+            let Some(reg) = nodes[idx].registrar.borrow().as_ref().cloned() else { continue };
+            if seen.iter().any(|s| s.is_same(&reg)) { continue; }
+            reg.clear_selection();
+            seen.push(reg);
+        }
+    }
     // Grapheme anchor placement.
     // ⚠ With a containerized TextField the paragraph is cached only on the **input leaf**, so a
     // container node has no `cached_paragraph` — clicking the container's blank area hits the

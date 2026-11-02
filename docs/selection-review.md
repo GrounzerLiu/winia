@@ -137,7 +137,17 @@ regression test; two suspicions were measured and ruled out.
 | --- | --- | --- | --- |
 | S-8 | A second composer laying out emptied THIS composer's table | window A: `total` 11 -> 0, selection `Some("hello world")` -> `None`, from nothing but window B's layout | the walk remembers the registrars it saw (`Composer::known_registrars`) and empties only those |
 | S-9 | A press in another window cleared this window's selection | press on B's padding: A's `Some("hello")` -> `None` | `Composer::clear_open_selections` walks its own arena instead of a thread-wide list |
+| S-11 | A press in one container cleared a SIBLING container's selection | pressing in B turned A's `Some("aaaa")` into `None` (same window) | the container node carries its registrar, and the press clears only the registrars on its hit path |
 | S-10 | A `SelectionState` stayed bound after its container left composition | show/hide/show: frame 3 panicked with "A SelectionState can only be bound to one SelectionContainer" | the container registers `remember_on_forget(|| state.unbind(&registrar))`, as Compose's `DisposableEffect` does (`state.manager = null; state.selection = null`) |
+
+S-11 corrects an over-correction of its own: D-2 fixed "clicking the container's padding did not
+clear" by sweeping every container in the window, but Compose clears only the `SelectionManager` the
+press reached. Putting the registrar on the container's own descriptor (AFTER `start_restartable_group`,
+so it lands on the container rather than on the enclosing node) makes the hit path answer "which
+container did this press land in", so the sweep can be the hit path. Two tests that encoded the old
+rule now assert the Compose one: `pressing_outside_the_container_leaves_its_selection_alone` (a tap
+that never reaches the container does not end its selection) and
+`pressing_another_container_leaves_the_first_alone`.
 
 S-8 and S-9 shared one root cause: `LIVE_REGISTRARS` was a thread-local list of every registrar ever
 created, so `drop_all_tables()` and `clear_open_selections()` broadcast across windows, and across an
