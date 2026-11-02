@@ -397,3 +397,30 @@ fn a_state_binds_again_after_its_container_leaves() {
         "the state publishes nothing once its container is gone"
     );
 }
+
+
+/// S-12: a drag that leaves every node's box still extends the selection.
+///
+/// The move used to be dropped when the hit test found nothing (the pointer past the content, or out
+/// of the window): the whole drag block sat behind `if let Some(&innermost) = path.last()`, so the
+/// selection froze at its last value (measured: `3..6` while the pointer moved on to y=280). It now
+/// falls back to the text the press anchored on, whose paragraph clamps the pointer — the same
+/// fallback that already covered "drag past the end of the line" while still inside the container.
+#[test]
+fn dragging_out_of_every_node_still_extends_the_selection() {
+    let (mut pw, a, _b) = two_containers_in_a_row();
+    let r = a.lock().unwrap().clone().expect("A registered");
+    let total = r.total_text_len();
+
+    assert!(press(&mut pw, (20.0, 10.0)), "the press lands in A's text");
+    assert!(drag(&mut pw, (40.0, 10.0)), "a move inside the text selects");
+    assert_eq!(r.build_selection().map(|s| (s.start(), s.end())), Some((3, 6)));
+
+    // (380, 280) is below both containers and past the window content: no node contains it.
+    assert!(drag(&mut pw, (380.0, 280.0)), "the move still belongs to the anchored text");
+    assert_eq!(
+        r.build_selection().map(|s| (s.start(), s.end())),
+        Some((3, total)),
+        "dragging out of the tree reaches the end of the anchored run"
+    );
+}

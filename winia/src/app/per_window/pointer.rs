@@ -749,7 +749,18 @@ pub(crate) fn handle_pointer_move(
 
     // Drag-select text.
     if pw.input.down.is_some() {
-        if let Some(&innermost) = path.last() {
+        // A drag that leaves EVERY node's box (past the content, out of the window) still belongs to
+        // the text the press anchored on: its paragraph clamps the pointer, which is exactly what
+        // extends the selection to the end of that run. Without the fallback the move was dropped
+        // entirely and the selection froze at its last value (measured: dragging from a text into
+        // the empty area below the window content left the range at 3..6 while the pointer moved
+        // on to y=200).
+        let drag_node = match path.last().copied() {
+            Some(innermost) => Some(innermost),
+            None => pw.input.down.as_ref().and_then(|d| d.anchor_text_node)
+                .and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id)),
+        };
+        if let Some(innermost) = drag_node {
             let down = pw.input.down.as_ref().unwrap();
             let dx = scene_pos.0 - down.position.0;
             let dy = scene_pos.1 - down.position.1;

@@ -163,6 +163,30 @@ the binding message again; making the empty-walk cleanup a bare `return` fails S
 Ruled out by measurement: `.container_body` still Skips (the `CopySelectionKey` M-1 hangs on the
 modifier does not make the modifier compare unequal to itself - 1 body entry over 3 frames), and
 nested containers keep separate tables (outer `["aa", "cc"]`, inner `["bb"]`).
+## Tenth pass (2026-11-02): the drag that left the tree, and a one-byte selection
+
+`compute_selection` and the cross-container drag were re-read with probes against the real pointer
+path. One live defect and one latent one.
+
+| Id | What was wrong | Evidence | Fix |
+| --- | --- | --- | --- |
+| S-12 | A drag that left every node's box froze the selection | press in a text, move to `3..6` inside it, then move to (380, 280) — below both containers, past the content: the range stayed `3..6` and the move was not even handled | the move falls back to the text the press anchored on when the hit test finds nothing, the same fallback that already covered "drag past the end of the line" inside the container |
+| S-13 | `compute_selection` answered `current_global + 1` when the press had no anchor | not reachable today (the surrounding block needs a paragraph, and a press without an anchor rarely gets one) — but on a multi-byte character the range is not a boundary, so `build_selection` would skip the run and report a range whose text is empty | no anchor means no selection |
+
+Tests: `dragging_out_of_every_node_still_extends_the_selection` (red check: restoring the bare
+`path.last()` fails it with "the move still belongs to the anchored text") and
+`no_anchor_selects_nothing`.
+
+Measured and correct (no change): cross-container drags pick the anchor container's edge by the
+drag's dominant axis (press in A at offset 3, drag right into B, then back into A gave
+`3..8`, and the edge snap reached `3..9`); a press on the container's padding followed by a drag
+selects nothing (there is no anchor), which is what Compose does too.
+
+Demo: `examples/selection_demo.rs` covers this surface end to end and is registered as the
+`selection` fixture scenario. It is NOT covered by a UI test yet: scripted taps on its tags land on
+the wrong card because `find_tag` accumulates `pos` over the tree dump, and the dump does not carry
+every layout-only ancestor, so the accumulated coordinates drift for this nesting depth. Worth
+chasing as a harness issue, not a selection one.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

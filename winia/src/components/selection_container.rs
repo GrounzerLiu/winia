@@ -350,10 +350,14 @@ pub(crate) fn compute_selection(
 ) -> Option<(SelectionRegistrar, usize, usize)> {
     let same_reg = anchor_reg.map(|ar| ar.is_same(cur_reg)).unwrap_or(false);
     if same_reg {
+        // No anchor means the press never landed on a selectable run, so there is nothing to drag
+        // FROM. It used to answer `current_global + 1`, a one-byte range: on a multi-byte character
+        // that is not a boundary, so `build_selection` skipped the run and the highlight covered a
+        // range whose text was empty.
+        let a = anchor_global?;
         let off = cur_global_off?;
         let current_global = off + cur_index;
-        let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
-        let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+        let (s, e) = (a.min(current_global), a.max(current_global));
         Some((cur_reg.clone(), s, e))
     } else if let (Some(anchor_reg), Some(a)) = (anchor_reg, anchor_global) {
         // Across containers: snap inside the anchor's container, clamping to its bounds.
@@ -1054,6 +1058,18 @@ mod compute_selection_tests {
         // nothing.
         let r = compute_selection(None, None, &b, Some(0), 5, 0.0, 200.0, 0.0, 50.0);
         assert!(r.is_none());
+    }
+
+    /// No anchor at all: the press missed every selectable run, so nothing is selected — not the
+    /// one-byte range this used to answer (which splits a multi-byte character).
+    #[test]
+    fn no_anchor_selects_nothing() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "\u{4f60}\u{597d}");
+        assert!(
+            compute_selection(Some(&reg), None, &reg, Some(0), 1, 10.0, 10.0, 10.0, 10.0).is_none(),
+            "no anchor means nothing to drag from"
+        );
     }
 
     #[test]
