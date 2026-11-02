@@ -576,3 +576,35 @@ fn no_handles_without_a_selection() {
         "a click with no drag has no selection, so no handles"
     );
 }
+
+/// M-4: a secondary press over a selection opens the container's menu (Copy / Select all).
+#[test]
+fn a_secondary_press_opens_the_selection_menu() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)), "a drag makes a selection");
+    let before = r.build_selection().map(|s| s.text().to_string());
+    assert!(before.is_some(), "the drag made a selection");
+
+    let secondary = crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary };
+    assert!(
+        super::pointer::handle_pointer_down(&mut pw, (20.0, 10.0), secondary, &winit::keyboard::ModifiersState::empty(), true),
+        "the secondary press is answered by the menu"
+    );
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        before,
+        "opening the menu leaves the selection alone"
+    );
+
+    // The menu is a popup: it appears once the composition that owns it has run again.
+    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+    pw.composer.recompose(|ctx| content(ctx));
+    pw.content = content;
+    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+    // The popup records collected during composition become layers in the frame path, which a
+    // headless test has to drive itself (that is where `recompose_layout_render` calls it).
+    crate::app::sync_overlays(&mut pw, true);
+    assert!(!pw.overlay.layers.is_empty(), "the menu opened as an overlay layer");
+}

@@ -53,6 +53,12 @@ impl SelectionContainer {
         // One persistent registrar: a rebuild must not create a new one, because the segments have
         // to survive recomposition.
         let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
+        // Whether the context menu is open, plus the relay the pointer path calls to open it.
+        let menu_open = ctx.remember(|| crate::runtime::state::State::new(false)).get();
+        {
+            let menu_open = menu_open.clone();
+            registrar.set_context_menu_requested(move |_x, _y| menu_open.set(true));
+        }
         if let Some(state) = self.state.clone() {
             state.bind(&registrar);
             // Release it again when this container leaves composition (Compose's DisposableEffect).
@@ -101,6 +107,47 @@ impl SelectionContainer {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         content(ctx);
+                            // The menu is built WITH the content, inside the group: a popup built as the
+                            // container's sibling instead perturbs the parent's slot layout and broke eight
+                            // existing press tests. While the group Skips the overlay record is absent, which
+                            // `sync_overlays` treats as "owner skipped" and retains, so an open menu survives.
+                    {
+                        let _open = menu_open.get();
+                        let reg = registrar.clone();
+                        let close_dismiss = menu_open.clone();
+                        crate::components::dropdown_menu::DropdownMenu::new(menu_open.clone())
+                            .on_dismiss_request(move || close_dismiss.set(false))
+                            // The anchor must not be a TEXT: an empty Text registers a zero-length run with
+                        // the container, which showed up in `selectable_texts()` and shifted the
+                        // selection anchors (measured: ["aa", "cc"] became ["aa", "cc", ""]).
+                        .build(ctx, |ctx| { crate::layout::spacer::Spacer::new().build(ctx); }, {
+                                let reg = reg.clone();
+                                let close = menu_open.clone();
+                                move |ctx| {
+                                    let reg_copy = reg.clone();
+                                    let close_copy = close.clone();
+                                    crate::components::dropdown_menu::DropdownMenuItem::new("Copy")
+                                        .on_click(move || {
+                                            if let Some(selection) = reg_copy.build_selection() {
+                                                crate::clipboard::request_text(selection.text());
+                                            }
+                                            close_copy.set(false);
+                                        })
+                                        .build(ctx);
+                                    let reg_all = reg.clone();
+                                    let close_all = close.clone();
+                                    crate::components::dropdown_menu::DropdownMenuItem::new("Select all")
+                                        .on_click(move || {
+                                            if reg_all.select_all() {
+                                                reg_all.fire_on_change();
+                                            }
+                                            close_all.set(false);
+                                        })
+                                        .build(ctx);
+                                }
+                            });
+                    }
+
                     }
                 }
                 ctx.end_restartable_group();

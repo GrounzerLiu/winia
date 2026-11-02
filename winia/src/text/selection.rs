@@ -87,6 +87,8 @@ struct RegistrarInner {
     next_global_offset: usize,
     segments: HashMap<u64, RegisteredSegment>,
     on_change: Option<OnChangeFn>,
+    /// Where the container's context menu opens from (see `set_context_menu_requested`).
+    context_menu: Option<Arc<dyn Fn(f32, f32) + Send + Sync>>,
 }
 
 impl RegistrarInner {
@@ -302,6 +304,7 @@ impl SelectionRegistrar {
             next_global_offset: 0,
             segments: HashMap::new(),
             on_change: None,
+            context_menu: None,
         }));
         Self { inner }
     }
@@ -663,6 +666,20 @@ impl SelectionRegistrar {
     /// The global offset of one end, for seeding a handle drag from the OTHER end.
     pub fn end_global(&self, slot_key: u64, offset: usize) -> Option<usize> {
         self.inner.lock().global_of(Anchor { slot_key, offset })
+    }
+
+    /// Install the container's context-menu opener: the pointer path knows WHERE the press was, the
+    /// container owns the menu.
+    pub fn set_context_menu_requested(&self, f: impl Fn(f32, f32) + Send + Sync + 'static) {
+        self.inner.lock().context_menu = Some(Arc::new(f));
+    }
+
+    /// Ask the container to open its menu at a scene position. False when it has none.
+    pub fn request_context_menu(&self, x: f32, y: f32) -> bool {
+        let cb = self.inner.lock().context_menu.clone();
+        let Some(cb) = cb else { return false };
+        cb(x, y);
+        true
     }
 
     pub(crate) fn fire_on_change(&self) {

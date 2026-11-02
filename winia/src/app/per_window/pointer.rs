@@ -321,6 +321,21 @@ pub(crate) fn handle_pointer_down(
     };
     pw.input.selection_click = Some((std::time::Instant::now(), scene_pos, click_count));
 
+    // A secondary press over a selection opens the container's context menu (Copy / Select all).
+    // Like the keyboard route, the press names the container and the container owns the menu.
+    if matches!(kind, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary }) {
+        let target = path.iter().rev().find_map(|&i| {
+            let reg = nodes[i].registrar.borrow().as_ref().cloned()?;
+            reg.build_selection().is_some().then_some(reg)
+        });
+        if let Some(reg) = target {
+            if reg.request_context_menu(scene_pos.0, scene_pos.1) {
+                pw.input.last_selection_registrar = Some(reg);
+                return true;
+            }
+        }
+    }
+
     // A press on a selection handle grabs THAT end instead of starting a new selection.
     //
     // Without it a handle is decoration: the press would begin a fresh selection at the same point,
