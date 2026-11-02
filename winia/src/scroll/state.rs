@@ -4,9 +4,9 @@ use crate::fling::SnapInfo;
 
 #[derive(Debug, Clone)]
 pub struct ScrollState {
-    /// 当前偏移
+    /// The current offset.
     pub offset: crate::runtime::state::State<f32>,
-    /// 是否正在滚动
+    /// Whether a scroll is in progress.
     pub is_scroll_in_progress: crate::runtime::state::State<bool>,
     /// How far a fling may travel: written back by the layout as `content height - viewport height`, or
     /// `f32::MAX` while that is still unknown.
@@ -17,9 +17,11 @@ pub struct ScrollState {
     /// but the momentum after the release was not (measured on a three-item menu: a drag that moved
     /// nothing left the offset at 74).
     pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
-    /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
-    /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
-    /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
+    /// A scroll-activity pulse (P1-3: what lights the scrollbar at a boundary - the offset stops
+    /// changing there, so change detection cannot see the wheel. Dispatch bumps this counter for a
+    /// wheel event that HIT but consumed nothing, and the scrollbar lights its fade on a change. u64
+    /// and monotonic, so every set differs and every set notifies - no `PartialEq` dedup to worry
+    /// about).
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// The overscroll effect this state resolved for an ambient factory, kept per factory identity so
     /// a rebuild hands the scroll container the SAME effect (a fresh one would drop an in-flight pull).
@@ -177,7 +179,7 @@ impl ScrollState {
         cache.iter().find(|(id, _)| *id == factory_id).map(|(_, effect)| effect.clone())
     }
 
-    /// 立即滚动到指定位置
+    /// Jump to `value` immediately.
     pub fn scroll_to(&self, value: f32, max_offset: f32) {
         // A non-finite target would poison the offset (NaN compares false against every limit, so
         // nothing clamps it out later and the render translates by NaN).
@@ -189,9 +191,9 @@ impl ScrollState {
         self.offset.set(value.clamp(0.0, max_offset.max(0.0)));
     }
 
-    /// 动画滚动到指定位置（对标 Compose `animateScrollTo`）——用 spring 平滑
-    /// 驱动 offset；目标 clamp 到 [0, max_offset]。滚动期间
-    /// `is_scroll_in_progress` 为 true，动画结束回 false。
+    /// Animate to `value` (Compose's `animateScrollTo`): a spring drives the offset, and the target is
+    /// clamped to `[0, max_offset]`. `is_scroll_in_progress` is true while it runs and false once the
+    /// animation finishes.
     pub fn animate_scroll_to(&self, value: f32, max_offset: f32, spec: crate::animation::AnimationSpec) {
         if !value.is_finite() { return; }
         let target = value.clamp(0.0, max_offset.max(0.0));
@@ -211,11 +213,11 @@ impl ScrollState {
         );
     }
 
-    /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
-    /// 滚动，撞到滚动极限立即停止（极限由布局期回写——LazyColumn 精确值、
-    /// 普通容器由 measure_node 计算）。手动滚动（wheel/拖拽）自动取消进行中
-    /// 的 fling（apply_scroll_delta 内 cancel）。滚动期间 `is_scroll_in_progress`
-    /// 为 true，动画结束回 false。
+    /// A fling (Compose's `flingBehavior`): exponential decay from `velocity` (px/s) that stops as soon
+    /// as it hits the scroll limit (written back during layout - the exact value for a LazyColumn,
+    /// computed by `measure_node` for a plain container). A manual scroll (wheel or drag) cancels a
+    /// running fling (`apply_scroll_delta` does the cancel). `is_scroll_in_progress` is true while it
+    /// runs and false once it finishes.
     pub fn fling(&self, velocity: f32) {
         self.fling_with_boundary(velocity, |_| {});
     }
@@ -312,10 +314,8 @@ impl ScrollState {
         true
     }
 
-    /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
-    ///
-    /// A snapping container takes the snap branch instead of the decay: one spring, launched with the
-    /// gesture's velocity, landing on a page. See [`Self::snaps`] and the note on the velocity floor below.
+    /// Start a fling and hand the caller the instantaneous remaining velocity when the child hits a
+    /// boundary.
     pub fn fling_with_boundary(&self, velocity: f32, on_boundary: impl FnOnce(f32) + Send + 'static) {
         if !velocity.is_finite() {
             return;

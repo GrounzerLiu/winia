@@ -362,7 +362,7 @@ impl Modifier {
         None
     }
 
-    /// lazy 列表内容高度 State（如果有 LazyScroll modifier）
+    /// The lazy list's content-height State, when a LazyScroll modifier is present.
     pub fn lazy_scroll_content_height(&self) -> Option<&crate::runtime::state::Backchannel<f32>> {
         for el in &self.elements {
             if let ModifierElement::LazyScroll { content_height, .. } = el {
@@ -372,7 +372,7 @@ impl Modifier {
         None
     }
 
-    /// 水平滚动状态（如果有 HorizontalScroll modifier）
+    /// The horizontal scroll state, when a HorizontalScroll modifier is present.
     /// Whether the vertical scroll at this node is reversed (offset 0 = the content's end).
     pub fn is_vertical_scroll_reversed(&self) -> Option<bool> {
         self.elements.iter().find_map(|el| match el {
@@ -390,8 +390,9 @@ impl Modifier {
         None
     }
 
-    /// 水平滚动是否反向（None = 无横向滚动容器）——scrollbar 横向 reverse
-    /// 镜像用（P2-3：offset 语义镜像，条位置须跟内容走）。
+    /// Whether horizontal scrolling is reversed (`None` = no horizontal container) - what the
+    /// scrollbar's horizontal reverse mirroring reads (P2-3: the offset semantics are mirrored, so
+    /// the bar has to travel with the content).
     pub fn is_horizontal_scroll_reversed(&self) -> Option<bool> {
         for el in &self.elements {
             if let ModifierElement::HorizontalScroll { reverse, .. } = el {
@@ -401,7 +402,7 @@ impl Modifier {
         None
     }
 
-    /// 当前节点上的嵌套滚动连接。
+    /// The nested-scroll connection on this node.
     pub fn nested_scroll_connection(&self) -> Option<Arc<dyn crate::nested_scroll::NestedScrollConnection>> {
         self.elements.iter().find_map(|el| match el {
             ModifierElement::NestedScroll { connection } => Some(connection.clone()),

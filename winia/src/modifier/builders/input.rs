@@ -596,12 +596,12 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         }
     }
 
-    /// 垂直滚动（绑定 ScrollState）
+    /// Vertical scrolling, bound to a `ScrollState`.
     pub fn vertical_scroll(self, mut state: ScrollState) -> Self {
-        // 无 builder 期 get 副作用（State Phase4）：依赖由物化期
-        // register_modifier_deps_recursive 统一注册到实际 node slot
-        //（composer.rs compose 末尾，take_deps 之前）。builder 期 get 会把
-        // 依赖注册到调用 scope，与 slot 注册重复。
+        // No builder-time `get` side effect (State Phase 4): the dependencies are registered against
+        // the real node slot by `register_modifier_deps_recursive` during materialisation (end of
+        // compose, before take_deps), and a builder-time get would register them on the CALLING scope
+        // as well as the slot.
         //
         // Overscroll is attached HERE, from the ambient factory, so a plain `Column + vertical_scroll`
         // bounces exactly like a LazyColumn (Compose's `useLocalOverscrollFactory = true`). A caller
@@ -615,18 +615,18 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         out
     }
 
-    /// 水平滚动
-    /// 标记为 lazy 滚动容器（LazyColumn 内部使用——内容总高 State）
+    /// Horizontal scrolling.
+    /// Marks the node as a lazy scroll container (LazyColumn internal - the content-height State).
     pub fn lazy_scroll(self, content_height: crate::runtime::state::Backchannel<f32>) -> Self {
         self.push(ModifierElement::LazyScroll { content_height, reverse: false })
     }
 
-    /// lazy 列表是否反向布局（reverseLayout：render 滚动平移镜像）
+    /// Whether a lazy list is laid out in reverse (`reverseLayout`: the render mirrors the scroll translate).
     pub fn is_lazy_scroll_reverse(&self) -> bool {
         self.elements.iter().any(|el| matches!(el, ModifierElement::LazyScroll { reverse: true, .. }))
     }
 
-    /// lazy 列表反向布局标记（reverseLayout：render 侧镜像滚动平移）
+    /// The reverse-layout marker for a lazy list (`reverseLayout`: the render mirrors the scroll translate).
     pub fn lazy_scroll_reverse(mut self, reverse: bool) -> Self {
         if let Some(el) = self.elements.last_mut() {
             if let ModifierElement::LazyScroll { reverse: r, .. } = el {
@@ -651,7 +651,7 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::AnimateItem(spec))
     }
 
-    /// 绑定嵌套滚动连接。连接会在 descendant scrollable 的 pre/post 阶段被调度。
+    /// Bind a nested-scroll connection. It is dispatched in the pre/post phases of the descendant scrollable.
     /// Compose's `clipScrollableContainer(orientation)`: clip the scroll container on its SCROLL
     /// axis while leaving 30 dp of room on the cross axis, so a shadow drawn there survives.
     /// winia always clips its scroll viewport; this modifier makes the clip cross-axis aware.
@@ -703,8 +703,8 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::NestedScroll { connection })
     }
 
-    /// 垂直滚动是否反向（`reverseScrolling`：offset 0 显示内容末端——文件浏览器的
-    /// "从底部开始"、聊天记录的常见配法）。与 `horizontal_scroll_reverse` 同一形状。
+    /// Whether vertical scrolling is reversed (`reverseScrolling`: offset 0 shows the content's end -
+    /// the "start from the bottom" file browser, chat logs). Same shape as `horizontal_scroll_reverse`.
     pub fn vertical_scroll_reverse(mut self, reverse: bool) -> Self {
         // NOT `last_mut`: `vertical_scroll` appends the ambient `Overscroll` element after the
         // state element, so the last element is usually not the one this sets.
@@ -719,9 +719,9 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self
     }
 
-    /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
+    /// Horizontal scrolling, bound to a `ScrollState` (mirrors `vertical_scroll`).
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
-        // 无 builder 期 get 副作用（同 vertical_scroll，State Phase4）。
+        // No builder-time `get` side effect (same as `vertical_scroll`, State Phase 4).
         let mut out = self.push(ModifierElement::HorizontalScroll { state: state.clone(), reverse: false });
         if !out.has_overscroll() {
             if let Some(effect) = crate::overscroll::ambient_effect(&state) {
@@ -731,13 +731,13 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         out
     }
 
-    /// 水平滚动是否反向（RTL：render 滚动平移镜像——offset 0 显示内容末端）
+    /// Whether horizontal scrolling is reversed (RTL: the render mirrors the scroll translate - offset 0 shows the content's end).
     pub fn is_horizontal_scroll_reverse(&self) -> bool {
         self.elements.iter().any(|el| matches!(el, ModifierElement::HorizontalScroll { reverse: true, .. }))
     }
 
-    /// 水平滚动反向标记（RTL：`scroll_reverse` 语义——render 镜像平移；
-    /// 同 lazy_scroll_reverse，但作用于 HorizontalScroll 元素）
+    /// The reverse marker for horizontal scrolling (RTL: the `scroll_reverse` semantics - the render
+    /// mirrors the translate; the same flag as lazy_scroll_reverse, but on the HorizontalScroll element).
     pub fn horizontal_scroll_reverse(mut self, reverse: bool) -> Self {
         // NOT `last_mut` - see `vertical_scroll_reverse`: the ambient overscroll element comes after.
         if let Some(ModifierElement::HorizontalScroll { reverse: r, .. }) = self
@@ -752,4 +752,4 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     }
 }
 
-// ── 查询方法: 布局参数提取 ──
+// -- Query methods: layout parameter extraction --
