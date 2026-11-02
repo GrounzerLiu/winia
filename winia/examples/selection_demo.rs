@@ -51,7 +51,7 @@ fn readout(ctx: &mut ComposeCtx, label: &str, state: &SelectionState) {
     Text::new(format!("[{label}] {summary}"))
         .font_size(12.0)
         .color(WARM)
-        .modifier(Modifier::new().test_tag("sel-cover"))
+        .modifier(Modifier::new().test_tag(&format!("sel-cover-{label}")))
         .build(ctx);
     // The text itself, quoted so an empty selection is still a line of its own.
     let quoted = if text.is_empty() {
@@ -63,7 +63,7 @@ fn readout(ctx: &mut ComposeCtx, label: &str, state: &SelectionState) {
         .font_size(12.0)
         .color(MUTED)
         .max_lines(2)
-        .modifier(Modifier::new().test_tag("sel-text"))
+        .modifier(Modifier::new().test_tag(&format!("sel-text-{label}")))
         .build(ctx);
 }
 
@@ -74,7 +74,14 @@ pub fn main() {
                 .size(760.0, 1040.0)
                 .title("Selection demo")
                 .build(ctx, |ctx| {
-                    settings::shell("Selection", ctx, selection_demo);
+                    // The Scaffold's content slot is a Box: everything built straight into it lands
+                    // at the same origin (the cards overlapped until this Column wrapped them).
+                    settings::shell("Selection", ctx, |ctx| {
+                        Column::new()
+                            .spacing(12.0)
+                            .modifier(Modifier::new().fill_max_size().padding(16.0))
+                            .build(ctx, selection_demo);
+                    });
                 });
         });
     });
@@ -287,7 +294,7 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                         .modifier(Modifier::new().fill_max_width().test_tag("sel-words"))
                         .build(ctx);
                 });
-            readout(ctx, "main", &state);
+            readout(ctx, "words", &words);
         }
     });
 

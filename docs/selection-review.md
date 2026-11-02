@@ -183,10 +183,16 @@ drag's dominant axis (press in A at offset 3, drag right into B, then back into 
 selects nothing (there is no anchor), which is what Compose does too.
 
 Demo: `examples/selection_demo.rs` covers this surface end to end and is registered as the
-`selection` fixture scenario. It is NOT covered by a UI test yet: scripted taps on its tags land on
-the wrong card because `find_tag` accumulates `pos` over the tree dump, and the dump does not carry
-every layout-only ancestor, so the accumulated coordinates drift for this nesting depth. Worth
-chasing as a harness issue, not a selection one.
+`selection` fixture scenario, with four UI tests (`winia/tests/ui_selection_test.rs`): the panel
+observes a drag, Select all and Clear drive the container, a `DisableSelection` run is skipped, and a
+double click selects one word.
+
+One correction, because the first diagnosis was wrong: the demo's cards overlapped, which also made
+every tag resolve to the same y and made the UI tests look like a harness problem. The cause was the
+demo itself — `settings::shell` hands its body straight to `Scaffold`'s content slot, which is a
+**Box**, so everything built into it lands at the same origin. A `Column` inside the shell fixes it
+(measured: the tags now sit at y = 185, 391, 620, 792, 917 instead of 100, 100, 100...). The harness
+was right all along.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
