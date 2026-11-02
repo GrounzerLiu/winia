@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 8 — M-1, M-2, M-5..M-10 |
+| Missing API surface | 1 — M-4 (context menu) | 9 — M-1..M-3, M-5..M-10 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -267,6 +267,34 @@ both mangle non-ASCII text — a Chinese clipboard came back as "????").
 
 The debug server's `k` command learned `ctrl+` / `shift+` / `alt+` / `meta+` prefixes for this
 (`parse_debug_key_with_modifiers`); without them no shortcut test could exist at all.
+## Fourteenth pass (2026-11-02): the selection handles
+
+`- [x] **M-3 — no selection handles.** Compose draws a grab handle at each end of a selection and
+drags that end from it (`SelectionHandles.kt`, `manager.handleDragObserver`); winia had none, so an
+existing selection could only be re-dragged from scratch.
+
+Three pieces:
+
+- **geometry** — `layout::selection_handles::selection_handle_points` answers both ends in scene
+  coordinates: `SelectionRegistrar::selection_ends` names the run and local offset for each end, and
+  that run's paragraph reports the caret through `TextLayout::get_cursor_position` (the paragraph
+  maps a truncated run's content offset to display bytes first);
+- **drawing** — `render::selection_handles::draw` runs at the end of `render()` (after
+  `render_pass1`): a dot of the selection colour with a short stem, so a neighbouring node can never
+  paint over a grab area;
+- **grabbing** — `handle_pointer_down` checks the last pressed container's handle points BEFORE it
+  clears the old selection (`pointer::try_handle_drag`). A hit sets the drag anchor to the OTHER end,
+  which is what makes the existing text-drag path adjust the grabbed end — no second implementation.
+
+Measured: `a_handle_drag_adjusts_that_end` (a press on the end handle then a drag leaves the start at
+0 and moves the end past 4; red check: disabling `try_handle_drag` fails it),
+`no_handles_without_a_selection`, and `ui_selection_test::the_selection_paints_handles` (the dot is
+actually painted — a blue pixel below the first line after Select all).
+
+Deviations, recorded deliberately: the handles are painted for EVERY selection, where Compose gates
+them on touch mode (`manager.isInTouchMode`) — winia has no touch-mode tracking yet; and they are
+drawn by the main `render()` entry, so a selection inside a popup (its own Composer) gets none until
+the overlay render path calls the same helper.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

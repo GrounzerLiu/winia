@@ -321,6 +321,15 @@ pub(crate) fn handle_pointer_down(
     };
     pw.input.selection_click = Some((std::time::Instant::now(), scene_pos, click_count));
 
+    // A press on a selection handle grabs THAT end instead of starting a new selection.
+    //
+    // Without it a handle is decoration: the press would begin a fresh selection at the same point,
+    // and dragging would move the wrong end (the anchor is the pressed character, so the far end
+    // would follow the pointer).
+    if try_handle_drag(&mut pw.input, nodes, r, &path, scene_pos) {
+        return true;
+    }
+
     // Clear the old selection (a new click begins) — but only the containers the press actually
     // reached.
     //
@@ -975,4 +984,55 @@ fn update_selection_autoscroll(pw: &mut PerWindow, scene_pos: (f32, f32)) {
             last_tick: std::time::Instant::now(),
         });
     }
+}
+/// Grab a selection handle if the press landed on one.
+///
+/// The grabbed end is the one that will follow the pointer; the OTHER end becomes the drag anchor,
+/// which is what makes the existing text-drag path (compute_selection + `set_selection`) adjust the
+/// right side without a second implementation.
+fn try_handle_drag(
+    input: &mut crate::app::gesture::GestureState,
+    nodes: &[crate::layout::node::LayoutNode],
+    root: usize,
+    path: &[usize],
+    scene_pos: (f32, f32),
+) -> bool {
+    let Some(reg) = input.last_selection_registrar.clone() else { return false };
+    let Some(points) = crate::layout::selection_handles::selection_handle_points(nodes, root, &reg) else {
+        return false;
+    };
+    let radius = crate::render::HANDLE_GRAB_RADIUS;
+    let hit = |point: &crate::layout::selection_handles::HandlePoint| {
+        let centre = (point.x, point.y + 5.0);
+        let (dx, dy) = (scene_pos.0 - centre.0, scene_pos.1 - centre.1);
+        (dx * dx + dy * dy).sqrt() <= radius
+    };
+    let grabbed = if hit(&points[0]) { Some(0usize) } else if hit(&points[1]) { Some(1) } else { None };
+    let Some(which) = grabbed else { return false };
+    let Some((start, end)) = reg.selection_ends() else { return false };
+    // The end that stays put becomes the anchor.
+    let fixed = if which == 0 { end } else { start };
+    let Some(anchor_global) = reg.end_global(fixed.0, fixed.1) else { return false };
+    let anchor_text_node = crate::layout::node::find_node_id_by_slot_key(nodes, root, fixed.0)
+        .and_then(|id| crate::layout::node::find_node_by_id(nodes, root, id))
+        .map(|idx| nodes[idx].id);
+    let selection_scroll_slot = path.iter().rev().find_map(|&i| {
+        let node = &nodes[i];
+        (node.modifier.vertical_scroll_state().is_some()
+            || node.modifier.horizontal_scroll_state().is_some())
+            .then_some(node.slot_key)
+    });
+    let innermost = path.last().copied().unwrap_or(0);
+    input.last_selection_registrar = Some(reg.clone());
+    input.down = Some(PtrDownState {
+        node_id: nodes[innermost].id,
+        position: scene_pos,
+        time: std::time::Instant::now(),
+        selection_anchor: Some(anchor_global),
+        anchor_registrar: Some(reg),
+        selection_scroll_slot,
+        anchor_text_node,
+    });
+    input.down_slot = Some(nodes[innermost].slot_key);
+    true
 }

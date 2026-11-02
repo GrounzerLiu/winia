@@ -645,6 +645,26 @@ impl SelectionRegistrar {
         true
     }
 
+    /// The two ends of the selection as `(slot_key, local offset)`, in document order.
+    ///
+    /// A handle needs to know WHICH run and offset it sits at; the stitched `Selection` only
+    /// carries global bytes.
+    pub fn selection_ends(&self) -> Option<((u64, usize), (u64, usize))> {
+        let inner = self.inner.lock();
+        let (a, b) = inner.anchors()?;
+        let order = |anchor: Anchor| inner.slot_index(anchor.slot_key).unwrap_or(usize::MAX);
+        if (order(a), a.offset) <= (order(b), b.offset) {
+            Some(((a.slot_key, a.offset), (b.slot_key, b.offset)))
+        } else {
+            Some(((b.slot_key, b.offset), (a.slot_key, a.offset)))
+        }
+    }
+
+    /// The global offset of one end, for seeding a handle drag from the OTHER end.
+    pub fn end_global(&self, slot_key: u64, offset: usize) -> Option<usize> {
+        self.inner.lock().global_of(Anchor { slot_key, offset })
+    }
+
     pub(crate) fn fire_on_change(&self) {
         let cb = self.inner.lock().on_change.clone();
         let Some(cb) = cb else { return };

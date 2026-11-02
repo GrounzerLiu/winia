@@ -21,6 +21,8 @@ use std::cell::RefCell;
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
     render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false, false);
+    // Selection handles last, so a neighbouring node can never paint over a grab area.
+    selection_handles::draw(nodes, root_idx, canvas);
 }
 
 /// Draw one node as a **transition-layer root** at an explicit absolute
@@ -63,6 +65,8 @@ mod backdrop;
 mod helpers;
 mod paint;
 mod pass;
+mod selection_handles;
+pub(crate) use selection_handles::HANDLE_RADIUS as HANDLE_GRAB_RADIUS;
 mod text_field;
 
 use pass::render_pass1;

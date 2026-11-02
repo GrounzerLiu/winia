@@ -532,3 +532,47 @@ fn ctrl_a_through_the_window_key_path_selects_the_whole_container() {
     );
     assert_eq!(seen.lock().unwrap().last().map(|s| s.as_str()), Some("aaaa bbbb"), "the change was announced");
 }
+/// M-3: the two ends of a selection have grab points, and a press on one drags THAT end.
+#[test]
+fn a_handle_drag_adjusts_that_end() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    // A real press first: it is what records the container the handles belong to.
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)), "a drag makes a selection");
+    r.set_selection(0, 4);
+
+    let points = {
+        let nodes = pw.composer.arena_nodes();
+        let root = pw.composer.layout_root_idx().expect("root");
+        crate::layout::selection_handles::selection_handle_points(nodes, root, &r).expect("handles")
+    };
+    assert!(points[1].x > points[0].x, "the end handle sits to the right: {points:?}");
+
+    // Press exactly on the end handle and drag past the first word.
+    let grab = (points[1].x, points[1].y + 5.0);
+    assert!(press(&mut pw, grab), "the press lands on the handle");
+    assert!(drag(&mut pw, (200.0, 10.0)), "the move drags the end");
+
+    let sel = r.build_selection().map(|s| (s.start(), s.end()));
+    assert_eq!(sel.map(|(start, _)| start), Some(0), "the OTHER end stays put: {sel:?}");
+    assert!(
+        sel.map(|(_, end)| end).unwrap_or(0) > 4,
+        "the grabbed end follows the pointer: {sel:?}"
+    );
+}
+
+/// Without a selection there is nothing to grab.
+#[test]
+fn no_handles_without_a_selection() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    let nodes = pw.composer.arena_nodes();
+    let root = pw.composer.layout_root_idx().expect("root");
+    assert!(
+        crate::layout::selection_handles::selection_handle_points(nodes, root, &r).is_none(),
+        "a click with no drag has no selection, so no handles"
+    );
+}

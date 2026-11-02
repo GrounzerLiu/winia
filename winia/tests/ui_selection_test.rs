@@ -196,3 +196,30 @@ fn ctrl_c_puts_the_selection_on_the_clipboard() {
         "the OS clipboard has to hold the selection, got {got:?}"
     );
 }
+/// M-3: a selection paints a grab dot at each end. The dot is the selection colour (a strong blue),
+/// which nothing else in the card uses, so a small scan below the first line is enough to tell a
+/// drawn handle from an empty card.
+#[test]
+fn the_selection_paints_handles() {
+    let mut app = UiTest::launch("selection");
+    tap_tag(&mut app, "sel-select-all");
+    let a = app.expect_tag("sel-a");
+
+    // Each pixel query is a round trip, so the tight box around the expected dot is tried first and
+    // the wide scan only runs when that misses (a failure should be diagnosable, not slow).
+    let bluish = |app: &mut UiTest, from: (f32, f32), span: (i32, i32)| -> bool {
+        for dx in 0..span.0 {
+            for dy in 0..span.1 {
+                let x = from.0 + dx as f32;
+                let y = from.1 + dy as f32;
+                if let Some((r, g, b, _)) = app.pixel_at_logical(x, y) {
+                    if b as i32 > r as i32 + 40 && b > 120 { return true; }
+                }
+            }
+        }
+        false
+    };
+    let tight = (a.0 - 4.0, a.1 + a.3);
+    let found = bluish(&mut app, tight, (9, 9)) || bluish(&mut app, (a.0, a.1 + a.3 - 2.0), (20, 18));
+    assert!(found, "the start handle has to be painted below the first line (rect {a:?})");
+}
