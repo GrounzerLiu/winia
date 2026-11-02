@@ -365,7 +365,26 @@ impl PerWindow {
             self.focused_slot_key = new_slot;
             self.apply_ime_for_focus(new_id);
         }
+        self.reveal_focused();
     }
+
+    /// Scroll the newly focused node into view. Compose's focus owner does this on every focus move;
+    /// without it an arrow-key user can focus a row the viewport does not show.
+    ///
+    /// The keyboard-owning overlay is checked first (its arena owns focus while it is up), then the
+    /// page - the same precedence `keyboard_scope` uses for keys.
+    pub(crate) fn reveal_focused(&mut self) {
+                if let Some(i) = keyboard_scope(self) {
+            let ov = &mut self.overlay.layers[i];
+            let (Some(root), Some(fid)) = (ov.composer.layout_root_idx(), ov.focused_id) else { return };
+            let nodes = ov.composer.arena_nodes_mut();
+            if let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, fid) {
+                crate::layout::relocation::reveal_node(nodes, root, idx);
+            }
+            return;
+        }
+        let (Some(root), Some(fid)) = (self.composer.layout_root_idx(), self.focused_id) else { return };
+            }
 
     /// Focus one node id from UIA / any non-keyboard entry point: same bookkeeping as Tab (the
     /// single-focus invariant, `focused_id`/`focused_slot_key` and IME), and the target's arena is

@@ -83,6 +83,48 @@ impl std::fmt::Debug for BringIntoViewRequester {
     }
 }
 
+/// Reveal `target` in every scrolling ancestor it has. The focus system calls this when a key move
+/// lands on a node the viewport cannot show: Compose's focus owner brings the newly focused item into
+/// view, and without it an arrow-key user can focus something they cannot see.
+///
+/// Unlike [`BringIntoViewRequester`] this needs no handle on the node - the focus owner knows only an
+/// index - so it derives the chain from the layout tree and reuses the same `reveal_in` arithmetic
+/// (and therefore the same spring).
+pub(crate) fn reveal_node(nodes: &mut [LayoutNode], root: usize, target: usize) {
+    let mut chain: Vec<(usize, f32, f32)> = Vec::new();
+    if !chain_to(nodes, root, target, 0.0, 0.0, &mut chain) { return; }
+    let (tx, ty) = (
+        chain.last().map(|c| c.1).unwrap_or(0.0),
+        chain.last().map(|c| c.2).unwrap_or(0.0),
+    );
+    let size = nodes[target].measured_size;
+    let mut rect = (tx, ty, size.width, size.height);
+    // Innermost first: the closest container moves the least, and an outer one only sees the
+    // rectangle that the inner scroll left behind.
+    for &(ancestor, ax, ay) in chain.iter().rev().skip(1) {
+        rect = reveal_in(nodes, ancestor, ax, ay, rect);
+    }
+}
+
+fn chain_to(
+    nodes: &[LayoutNode],
+    idx: usize,
+    target: usize,
+    x: f32,
+    y: f32,
+    out: &mut Vec<(usize, f32, f32)>,
+) -> bool {
+    out.push((idx, x, y));
+    if idx == target { return true; }
+    let (sx, sy) = scroll_offset_for_node(&nodes[idx]);
+    for &child in &nodes[idx].children {
+        let (px, py) = (nodes[child].position.x, nodes[child].position.y);
+        if chain_to(nodes, child, target, x + px - sx, y + py - sy, out) { return true; }
+    }
+    out.pop();
+    false
+}
+
 /// Serve every queued request in the tree, after layout produced final positions.
 pub(crate) fn process_bring_into_view(nodes: &mut [LayoutNode], root: usize) {
     let mut ancestors: Vec<(usize, f32, f32)> = Vec::new();
@@ -298,5 +340,95 @@ mod tests {
         let before = requester.0.tick.peek();
         requester.bring_into_view();
         assert_eq!(requester.0.tick.peek(), before + 1);
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::reveal_node;
+    use crate::layout::node::LayoutNode;
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::unit::Size;
+
+    /// root(scroll, 200 tall, 600 of content) -> 6 rows of 100. Returns the nodes and the state.
+    fn list(offset: f32) -> (Vec<LayoutNode>, ScrollState) {
+        let scroll = ScrollState::new();
+        scroll.offset.set(offset);
+        scroll.fling_limit.set(400.0);
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).size(200.0, 200.0))];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[0].scroll_viewport_height = 200.0;
+        nodes[0].scroll_content_height = 600.0;
+        for i in 0..6 {
+            let mut row = LayoutNode::leaf(Modifier::new().size(200.0, 100.0));
+            row.measured_size = Size::new(200.0, 100.0);
+            row.position.y = (i * 100) as f32;
+            nodes.push(row);
+            nodes[0].children.push(i + 1);
+        }
+        (nodes, scroll)
+    }
+
+    fn animated(state: &ScrollState) -> bool {
+        crate::animation::has_animation_for_state(state.offset.state_id())
+    }
+
+    #[test]
+    fn a_row_below_the_viewport_is_scrolled_into_view() {
+        let (mut nodes, scroll) = list(0.0);
+        // Row 3 spans 300..400: entirely below the 200-tall viewport.
+        reveal_node(&mut nodes, 0, 4);
+        assert!(animated(&scroll), "the reveal starts a spring");
+        let target: Option<f32> = crate::animation::animation_target(scroll.offset.state_id());
+        assert_eq!(target, Some(200.0), "rows 300..400 land at the viewport bottom");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn a_visible_row_is_left_alone() {
+        let (mut nodes, scroll) = list(0.0);
+        // Row 1 spans 100..200: fully inside.
+        reveal_node(&mut nodes, 0, 2);
+        assert!(!animated(&scroll), "nothing to do");
+    }
+
+    #[test]
+    fn a_row_above_the_viewport_scrolls_back_up() {
+        let (mut nodes, scroll) = list(300.0);
+        // Row 0 spans 0..100: above the visible 300..500.
+        reveal_node(&mut nodes, 0, 1);
+        let target: Option<f32> = crate::animation::animation_target(scroll.offset.state_id());
+        assert_eq!(target, Some(0.0), "its top aligns with the viewport top");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn a_nested_list_reveals_inside_itself_before_the_outer_one_moves() {
+        // outer(scroll, 200 tall) -> inner(scroll, 200 tall, 600 content) -> rows of 100.
+        let outer = ScrollState::new();
+        let inner = ScrollState::new();
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().vertical_scroll(outer.clone()).size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().vertical_scroll(inner.clone()).size(200.0, 200.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[0].scroll_content_height = 200.0;
+        nodes[0].scroll_viewport_height = 200.0;
+        nodes[1].measured_size = Size::new(200.0, 200.0);
+        nodes[1].scroll_content_height = 600.0;
+        nodes[1].scroll_viewport_height = 200.0;
+        nodes[0].children.push(1);
+        for i in 0..6 {
+            let mut row = LayoutNode::leaf(Modifier::new().size(200.0, 100.0));
+            row.measured_size = Size::new(200.0, 100.0);
+            row.position.y = (i * 100) as f32;
+            nodes.push(row);
+            nodes[1].children.push(i + 2);
+        }
+
+        reveal_node(&mut nodes, 0, 4);
+        assert!(animated(&inner), "the inner list does the work");
+        assert!(!animated(&outer), "and the outer one has nothing left to scroll");
+        crate::animation::clear_all_animations();
     }
 }

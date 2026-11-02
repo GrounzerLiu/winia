@@ -583,6 +583,8 @@ impl AppState {
                     };
                     if let Some(dir) = dir {
                         if pw.focus_move_directional(dir) {
+                            // The row that just took focus may be outside the viewport.
+                            pw.reveal_focused();
                             consumed = true;
                         }
                     }

@@ -259,6 +259,15 @@ pull. A fling that dies at an edge bends by velocity/40 px instead of just stopp
                 )
                 .build(ctx, |ctx| {
                     rows(ctx, 9, 32.0, "key");
+                    // Focus targets at the BOTTOM of the band: tabbing to one scrolls the band
+                    // (focus reveal), the half of keyboard usability scrolling alone does not give.
+                    for i in 0..3 {
+                        // A button with no action is not focusable, and a focus target is the point
+                        // of this row.
+                        Button::filled().on_click(|| {}).build(ctx, |ctx| {
+                            Text::new(format!("focus me {i}")).font_size(12.0).build(ctx);
+                        });
+                    }
                 });
             Text::new(format!("offset {:.0}", scroll.offset.get()))
                 .font_size(12.0)

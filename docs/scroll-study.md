@@ -123,6 +123,24 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
   same node size), and `modifier_order_tests` in `app/scroll.rs` now pins that.
 
 
+### 6.2 Focus reveal (shipped 2026-11-02)
+
+Plain scroll containers already had `BringIntoViewRequester` (`layout/relocation.rs`) but nothing
+called it, so keyboard focus could land on a row the viewport does not show. `tab_move_focus` and
+arrow focus navigation now call `PerWindow::reveal_focused` after the focus move, which resolves the
+focused node to an INDEX and reveals it through `reveal_node` - the same `reveal_in` arithmetic and
+spring as the requester, but driven from the tree instead of a handle, because the focus owner knows
+only an id.
+
+Measured in `scroll_demo` through the debug server: tabbing onto a button that sits below the band
+scrolled the band from 0 to 330 (its end). Unit tests in `layout/relocation.rs` cover a row below the
+viewport (spring target 200), a visible row (no animation), a row above (target 0) and a nested list
+(the inner container moves, the outer one stays).
+
+Limits inherited from `reveal_in`: `reverseLayout` containers are skipped rather than scrolled the
+wrong way, and a lazy list can only reveal items that are composed.
+
+
 ## 7. Test map (and the two thin spots)
 
 | Area | Tests in file | Where else it is covered |
