@@ -129,6 +129,8 @@ pub(crate) fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
         // editable menu anchor). This name exists so a test can press it at all.
         "Space" => Some(Key::Character(" ".into())),
         "Home" => Some(Key::Named(NamedKey::Home)),
+        "PageUp" => Some(Key::Named(NamedKey::PageUp)),
+        "PageDown" => Some(Key::Named(NamedKey::PageDown)),
         "End" => Some(Key::Named(NamedKey::End)),
         _ if s.chars().count() == 1 => Some(Key::Character(s.to_string().into())),
         _ => None,

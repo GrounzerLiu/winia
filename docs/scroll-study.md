@@ -77,14 +77,22 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 | Wheel on a pager | nudges a few pixels | steps a whole page (deliberate; see section 3) |
 | Overscroll applied to flings | `Scrollable.kt:717` `overscroll.applyToFling(...)` | pull only; a fling that hits the end does not bend the content |
 | Overscroll shape | stretch with scale/glow on some platforms | shift only, capped at 120 px, no scale (`docs/scroll-extras.md`) |
-| Keyboard scrolling | a focused scrollable consumes arrows / Page keys **(not vendored)** | absent: arrows are focus traversal (`app/app_state/handlers.rs:571-574`), PageUp/PageDown appear nowhere except the Slider |
+| Keyboard scrolling | `Scrollable` handles **PageUp/PageDown only**, one viewport per press (`foundation/gestures/Scrollable.kt:428-471`); arrow keys move FOCUS there and the next item is brought into view | arrows / PageUp / PageDown / Home / End scroll the focused node's nearest scroll container (winia has no bring-into-view, so the arrows scroll instead) |
 | Nested scroll protocol | pre/post scroll + pre/post fling, `Offset` returns **(not vendored)** | same four hooks, same order, clamped (`scroll/nested.rs:59-64`) |
 
 ## 6. Gaps, in the order I would close them
 
-1. **No keyboard scrolling for scroll containers.** A desktop list cannot be scrolled without a
-   wheel or a scrollbar drag; Compose's scrollable takes arrows and Page keys when focused. This is
-   the one gap a user hits in the first minute.
+1. ~~**No keyboard scrolling for scroll containers.**~~ **Shipped 2026-11-02** - arrows move 48 px,
+   Page keys one viewport, Home/End jump to an end; the step walks the focused node's ancestry
+   inside-out (else the innermost node under the last pointer press) so a lazy list scrolls before the
+   page does, and a container with nothing left to scroll lets the key fall through to focus
+   navigation (`app/scroll.rs` `scroll_by_key`, tests in its `key_scroll_tests`). Compose's own
+   `Scrollable` handles Page keys only (`foundation/gestures/Scrollable.kt:428-471`); the arrow step
+   is a winia addition, because there is no bring-into-view to fall back on.
+   Measured in `lazy_layout_demo` through the debug server: three ArrowDown presses took the inner
+   list 0 -> 48 -> 96 -> 144, PageDown moved exactly one viewport (150), Home/End reached 0 / 7050.
+   The debug `k` command needed `PageUp`/`PageDown` added to its key-name table before any of that
+   could be driven; a key the debug path cannot name is a path nobody tests.
 2. **No `scrollBy` / `dispatchRawDelta`.** Every programmatic scroll has to go through `scroll_to` with
    an absolute value and a caller-computed limit; a "scroll by one line" has no shape.
 3. **Overscroll does not apply to flings.** A drag past the edge bends the content, a fling past it just

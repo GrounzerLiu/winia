@@ -563,6 +563,13 @@ impl AppState {
                         consumed = dispatch_key_to_focus(pw, &ke);
                     }
                 }
+                // Keyboard scrolling: the focused node's nearest scrollable ancestor takes the key
+                // BEFORE focus navigation, so a list scrolls instead of the focus ring jumping out
+                // of it. Consumed only when something actually moved, so a container at its end
+                // still lets the arrow move focus onward.
+                if !consumed && event.state.is_pressed() {
+                    consumed = crate::app::scroll::scroll_by_key_in_window(pw, &event.logical_key);
+                }
                 // Arrow-key focus navigation (mirroring Compose Desktop's arrow-key navigation) —
                 // picks the focusable node in the target direction's half-plane with the smallest
                 // "directional distance + perpendicular offset x 2".

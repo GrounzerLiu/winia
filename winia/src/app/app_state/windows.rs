@@ -201,9 +201,12 @@ impl AppState {
                         if crate::app::app_state::try_selection_key(pw, &ke) {
                             if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         } else if !dispatch_key_to_overlay(pw, &ke) && !focus_scope_is_open(pw) {
-                            // Same gate as the real key path: a focus-scope overlay owns the keyboard,
-                            // so a key it does not consume does not reach the page behind it either.
-                            dispatch_key_to_focus(pw, &ke);
+                            // Same gate as the real key path, and the same steps in the same order:
+                            // keyboard scrolling first (a list scrolls instead of the ring jumping out),
+                            // then the focus dispatch.
+                            if !crate::app::scroll::scroll_by_key_in_window(pw, &ke.key) {
+                                dispatch_key_to_focus(pw, &ke);
+                            }
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }

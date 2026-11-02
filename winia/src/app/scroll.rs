@@ -405,6 +405,219 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
     consumed
 }
 
+/// One key press of keyboard scrolling: arrows move a line, Page keys a viewport, Home/End jump to
+/// an end. Returns whether it scrolled anything, so the caller can fall through to focus navigation
+/// when nothing in the focused node's ancestry can move.
+///
+/// Compose's `Scrollable` handles PageUp/PageDown only, one viewport per press
+/// (`foundation/gestures/Scrollable.kt:428-471`); arrow keys there move FOCUS and the focused item is
+/// brought into view. winia has no bring-into-view, so the arrows scroll instead - a desktop list that
+/// only reacts to the wheel is the one gap a first-time user hits.
+///
+/// The step walks the focused node's ancestry from the inside out and stops at the first container
+/// that can still move in that direction, so a nested list scrolls itself before its parent - the same
+/// order a wheel takes.
+pub(crate) fn scroll_by_key(
+    nodes: &mut [LayoutNode],
+    root: usize,
+    focused_id: Option<u64>,
+    key: &winit::keyboard::Key,
+) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    /// One arrow press, in logical pixels (Windows scrolls three 16 px lines per notch).
+    const LINE_STEP: f32 = 48.0;
+    let Some(id) = focused_id else { return false };
+    let Some(path) = crate::layout::node::path_to_id(nodes, root, id) else { return false };
+    let density = crate::runtime::density::current_density();
+    // The sign is the wheel's: a NEGATIVE vertical delta scrolls DOWN (offset grows).
+    let step = match key {
+        Key::Named(NamedKey::ArrowDown) => (0.0, -LINE_STEP),
+        Key::Named(NamedKey::ArrowUp) => (0.0, LINE_STEP),
+        Key::Named(NamedKey::ArrowLeft) => (LINE_STEP, 0.0),
+        Key::Named(NamedKey::ArrowRight) => (-LINE_STEP, 0.0),
+        Key::Named(NamedKey::Home) => (0.0, f32::MAX / 4.0),
+        Key::Named(NamedKey::End) => (0.0, f32::MIN / 4.0),
+        Key::Named(NamedKey::PageUp) | Key::Named(NamedKey::PageDown) => {
+            let down = matches!(key, Key::Named(NamedKey::PageDown));
+            // A page is the viewport of the container that will take it, so the step cannot be
+            // resolved before the container is known; a placeholder is replaced per candidate.
+            (0.0, if down { -1.0 } else { 1.0 })
+        }
+        _ => return false,
+    };
+    let is_page = matches!(key, Key::Named(NamedKey::PageUp) | Key::Named(NamedKey::PageDown));
+    for &idx in path.iter().rev() {
+        let (max_offset, current, visible) = scroll_range(&nodes[idx]);
+        let (mut dx, mut dy) = step;
+        if is_page {
+            let extent = if dy != 0.0 { visible.1 } else { visible.0 };
+            if extent <= 0.0 { continue; }
+            dy = if dy < 0.0 { -extent } else { extent };
+        }
+        if dx == 0.0 && dy == 0.0 { continue; }
+        // Only the container that can still move in this direction takes the key.
+        if dy != 0.0 {
+            if nodes[idx].modifier.vertical_scroll_state().is_none() { continue; }
+            if dy < 0.0 && current >= max_offset - 0.5 { continue; }
+            if dy > 0.0 && current <= 0.5 { continue; }
+        } else {
+            if nodes[idx].modifier.horizontal_scroll_state().is_none() { continue; }
+            if dx < 0.0 && current >= max_offset - 0.5 { continue; }
+            if dx > 0.0 && current <= 0.5 { continue; }
+        }
+        let consumed = dispatch_nested_scroll_delta(
+            nodes,
+            root,
+            idx,
+            crate::nested_scroll::ScrollDelta::new(dx, dy),
+            crate::nested_scroll::NestedScrollSource::Drag,
+            density,
+        );
+        return consumed.x != 0.0 || consumed.y != 0.0;
+    }
+    false
+}
+
+/// The window-level entry: the focused node takes the key, else the innermost node under the last
+/// pointer position (a list nobody tabbed into is still what the last click aimed at). Both the real
+/// key path and the debug `k` path call THIS, so a debug-driven arrow and a real one cannot diverge.
+pub(crate) fn scroll_by_key_in_window(pw: &mut crate::app::per_window::PerWindow, key: &winit::keyboard::Key) -> bool {
+    let Some(root) = pw.composer.layout_root_idx() else { return false };
+    let start_id = pw.focused_id.or_else(|| {
+        let pos = pw.input.last_pos?;
+        let nodes = pw.composer.arena_nodes();
+        let path = crate::layout::node::hit_test(nodes, root, pos.0, pos.1);
+        path.last().map(|&idx| nodes[idx].id)
+    });
+    let Some(start_id) = start_id else { return false };
+    let nodes = pw.composer.arena_nodes_mut();
+    scroll_by_key(nodes, root, Some(start_id), key)
+}
+
+/// `(max offset, current offset, visible extent)` for a node - the same numbers
+/// `apply_scroll_delta_inner` works with, so a key step and a wheel notch agree about how far the
+/// container can go. The axis choice follows the state that exists (vertical first).
+fn scroll_range(node: &LayoutNode) -> (f32, f32, (f32, f32)) {
+    let vertical = node.modifier.vertical_scroll_state();
+    let state = vertical.clone().or_else(|| node.modifier.horizontal_scroll_state());
+    let Some(state) = state else { return (0.0, 0.0, (0.0, 0.0)) };
+    let vertical_axis = vertical.is_some();
+    let visible = if vertical_axis {
+        if node.measured_size.height > 0.0 { node.measured_size.height } else { node.scroll_viewport_height }
+    } else if node.measured_size.width > 0.0 {
+        node.measured_size.width
+    } else {
+        node.scroll_viewport_width
+    };
+    let content = if vertical_axis {
+        if node.scroll_content_height > 0.0 { node.scroll_content_height } else { node.measured_size.height }
+    } else if node.scroll_content_width > 0.0 {
+        node.scroll_content_width
+    } else {
+        node.measured_size.width
+    };
+    let max = (content - visible).max(0.0);
+    (max, state.offset.peek(), (visible, visible))
+}
+#[cfg(test)]
+mod key_scroll_tests {
+    use super::scroll_by_key;
+    use crate::layout::node::LayoutNode;
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::unit::Size;
+    use winit::keyboard::{Key, NamedKey};
+
+    fn key(named: NamedKey) -> Key { Key::Named(named) }
+
+    /// root -> scroller(400x100 holding 400 px of content), the scroller is the focused node.
+    fn one_list(offset: f32) -> (Vec<LayoutNode>, ScrollState) {
+        let scroll = ScrollState::new();
+        scroll.offset.set(offset);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 100.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .size(400.0, 100.0),
+            ),
+        ];
+        nodes[0].id = 1;
+        nodes[1].id = 2;
+        nodes[0].measured_size = Size::new(400.0, 100.0);
+        nodes[0].children.push(1);
+        nodes[1].measured_size = Size::new(400.0, 100.0);
+        nodes[1].scroll_viewport_height = 100.0;
+        nodes[1].scroll_content_height = 400.0;
+        (nodes, scroll)
+    }
+
+    #[test]
+    fn an_arrow_scrolls_one_line_and_a_page_scrolls_a_viewport() {
+        let (mut nodes, scroll) = one_list(0.0);
+        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowDown)), "the arrow scrolled");
+        assert_eq!(scroll.offset.peek(), 48.0, "one line down");
+
+        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::PageDown)));
+        assert_eq!(scroll.offset.peek(), 148.0, "a page is the viewport (100)");
+
+        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowUp)));
+        assert_eq!(scroll.offset.peek(), 100.0, "and back up one line");
+    }
+
+    #[test]
+    fn home_and_end_reach_the_ends() {
+        let (mut nodes, scroll) = one_list(150.0);
+        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::End)));
+        assert_eq!(scroll.offset.peek(), 300.0, "the end is content minus viewport");
+        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::Home)));
+        assert_eq!(scroll.offset.peek(), 0.0);
+    }
+
+    #[test]
+    fn a_key_with_nothing_left_to_scroll_falls_through() {
+        let (mut nodes, scroll) = one_list(300.0);
+        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowDown)),
+            "at the end the arrow must reach focus navigation");
+        assert_eq!(scroll.offset.peek(), 300.0);
+        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::End)));
+    }
+
+    #[test]
+    fn unrelated_keys_and_missing_focus_do_nothing() {
+        let (mut nodes, scroll) = one_list(0.0);
+        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::Enter)));
+        assert!(!scroll_by_key(&mut nodes, 0, None, &key(NamedKey::ArrowDown)), "no focus, no scroll");
+        assert!(!scroll_by_key(&mut nodes, 0, Some(99), &key(NamedKey::ArrowDown)), "unknown focus id");
+        assert_eq!(scroll.offset.peek(), 0.0);
+    }
+
+    #[test]
+    fn an_inner_list_at_its_end_passes_the_key_to_the_outer_one() {
+        // root -> outer(0..200) -> inner(0..60, already at its end), focus inside the inner one.
+        let outer = ScrollState::new();
+        let inner = ScrollState::new();
+        inner.offset.set(60.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().vertical_scroll(outer.clone()).size(400.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().vertical_scroll(inner.clone()).size(400.0, 50.0)),
+        ];
+        nodes[0].id = 1;
+        nodes[1].id = 2;
+        nodes[2].id = 3;
+        nodes[0].measured_size = Size::new(400.0, 100.0);
+        nodes[1].measured_size = Size::new(400.0, 100.0);
+        nodes[1].scroll_content_height = 300.0;
+        nodes[2].measured_size = Size::new(400.0, 50.0);
+        nodes[2].scroll_content_height = 110.0;
+        nodes[1].children.push(2);
+        nodes[0].children.push(1);
+
+        assert!(scroll_by_key(&mut nodes, 0, Some(3), &key(NamedKey::ArrowDown)));
+        assert_eq!(inner.offset.peek(), 60.0, "the inner list is at its end");
+        assert_eq!(outer.offset.peek(), 48.0, "so the outer one scrolls");
+    }
+}
 #[cfg(test)]
 mod nested_scroll_chain_tests {
     use super::{dispatch_nested_scroll_delta};
