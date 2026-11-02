@@ -663,7 +663,14 @@ fn the_menu_copy_row_copies_the_selection() {
     let at = menu_row_point(&pw, 0);
     assert!(press(&mut pw, at), "the press lands on the Copy row");
     assert_eq!(crate::clipboard::take_pending(), vec![selected.clone()], "the selection is on the clipboard");
-    assert!(pw.input.selection_menu.is_none(), "a chosen row closes at once (no fade)");
+    assert!(
+        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        "a chosen row stops taking input at once…"
+    );
+    assert!(
+        pw.input.selection_menu.is_some(),
+        "…but the menu is still there to fade out"
+    );
 }
 
 /// The second row selects everything in the container.
@@ -750,4 +757,17 @@ fn a_move_over_the_menu_marks_the_row() {
     assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), Some(1), "row 1 is hovered");
     super::pointer::handle_pointer_move(&mut pw, (5.0, 250.0), crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
     assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), None, "and nothing outside");
+}
+/// The menu opens with the row under the press point already highlighted.
+#[test]
+fn the_menu_opens_with_the_pressed_row_highlighted() {
+    let (mut pw, _reg) = container_with_padding_below("aaaa bbbb");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+    assert_eq!(
+        pw.input.selection_menu.as_ref().and_then(|m| m.hovered),
+        Some(0),
+        "the press point sits in the first row of the menu it opens"
+    );
 }

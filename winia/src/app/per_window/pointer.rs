@@ -330,7 +330,9 @@ pub(crate) fn handle_pointer_down(
             } else if menu.registrar.select_all() {
                 menu.registrar.fire_on_change();
             }
-                pw.input.selection_menu = None;
+                // A chosen row fades out like any other dismissal (the menu stops taking input
+                // immediately, because a closing menu is no longer open).
+                begin_closing_selection_menu(pw);
                 return true;
             }
         }
@@ -373,14 +375,18 @@ pub(crate) fn handle_pointer_down(
         });
         if let Some(registrar) = target {
             pw.input.last_selection_registrar = Some(registrar.clone());
-            pw.input.selection_menu = Some(crate::app::gesture::SelectionMenu {
+            let mut menu = crate::app::gesture::SelectionMenu {
                 registrar,
                 x: scene_pos.0,
                 y: scene_pos.1,
                 hovered: None,
                 opened_at: std::time::Instant::now(),
                 closing: None,
-            });
+            };
+            // The menu hangs from the press point, so the pointer is already over its first row;
+            // without this the menu opened with no highlight until the pointer moved.
+            menu.hovered = crate::render::selection_menu_row_at(&menu, (pw.width, pw.height), scene_pos);
+            pw.input.selection_menu = Some(menu);
             return true;
         }
     }

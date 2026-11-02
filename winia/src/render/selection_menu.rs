@@ -21,8 +21,11 @@ const TEXT: (u8, u8, u8) = (232, 227, 240);
 /// The menu box in scene coordinates, clamped so it stays inside the window.
 pub(crate) fn menu_rect(menu: &SelectionMenu, window: (f32, f32)) -> (f32, f32, f32, f32) {
     let height = PADDING * 2.0 + ROW_HEIGHT * ITEMS.len() as f32;
+    // The box starts one padding ABOVE the press point, so the first row begins exactly at the
+    // press: a menu that hangs from the point leaves the pointer in its own padding, which reads
+    // as "nothing highlighted" even though the pointer is over the menu.
     let x = menu.x.min(window.0 - WIDTH - 4.0).max(4.0);
-    let y = menu.y.min(window.1 - height - 4.0).max(4.0);
+    let y = (menu.y - PADDING).min(window.1 - height - 4.0).max(4.0);
     (x, y, WIDTH, height)
 }
 

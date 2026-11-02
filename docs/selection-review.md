@@ -361,6 +361,16 @@ Measured: `a_move_over_the_menu_marks_the_row` (row 0 / row 1 / none; red check:
 `escape_closes_the_menu_and_keeps_the_selection` (the menu stops being interactive, the selection survives, a second Escape has nothing to close).
 In the demo through the debug server: the pixel under the menu reads `44,41,50` before `k Escape` and `42,39,46` after,
 while the readout still says `2 .. 28 — 26 chars`.
+## Nineteenth pass (2026-11-02): two menu polish gaps
+
+| Id | Gap | Fix |
+| --- | --- | --- |
+| P-1 | Choosing a row made the menu vanish instantly; only a press elsewhere faded it | a chosen row starts the same close animation (the menu stops taking input at once, because a closing menu is not open) |
+| P-2 | The menu opened with NO row highlighted even though the pointer was over it: the box hung from the press point, leaving the pointer inside the box's own padding | the box starts one padding above the press point, so row 0 begins exactly at the press; the initial `hovered` is computed from the press point instead of waiting for a move |
+
+Measured: `the_menu_opens_with_the_pressed_row_highlighted` (red check: dropping the assignment reads `left None / right Some(0)`),
+`the_menu_copy_row_copies_the_selection` now asserts the menu is still present but not open (red check: restoring `= None` fails "…but the menu is still there to fade out").
+In the demo the pixel over the first row reads `66,62,76` — the hover fill — immediately after the secondary press.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
