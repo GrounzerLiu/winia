@@ -299,7 +299,8 @@ pub(crate) fn handle_pointer_down(
     // the press, or the press dismisses it and carries on as an ordinary press.
     if let Some(menu) = pw.input.selection_menu.clone() {
         let window = (pw.width, pw.height);
-        if let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos) {
+        if menu.is_open() {
+            if let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos) {
             if row == 0 {
                 if let Some(selection) = menu.registrar.build_selection() {
                     crate::clipboard::request_text(selection.text());
@@ -307,10 +308,16 @@ pub(crate) fn handle_pointer_down(
             } else if menu.registrar.select_all() {
                 menu.registrar.fire_on_change();
             }
-            pw.input.selection_menu = None;
-            return true;
+                pw.input.selection_menu = None;
+                return true;
+            }
         }
-        pw.input.selection_menu = None;
+        // Anything else starts the close animation; a closing menu no longer takes input.
+        if let Some(open) = pw.input.selection_menu.as_mut() {
+            if open.closing.is_none() {
+                open.closing = Some(std::time::Instant::now());
+            }
+        }
     }
 
     // Top-level popups first: an overlay hit records the click target (the event does not reach the
@@ -354,6 +361,8 @@ pub(crate) fn handle_pointer_down(
                 x: scene_pos.0,
                 y: scene_pos.1,
                 hovered: None,
+                opened_at: std::time::Instant::now(),
+                closing: None,
             });
             return true;
         }

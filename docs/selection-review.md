@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 0 | 10 — M-1..M-10 |
+| Missing API surface | 0 | 11 — M-1..M-11 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -325,6 +325,28 @@ Measured:
 - the menu is really painted: after a secondary press the pixels under it read `44,41,50` (the menu
   background) where the card was `42,39,46`, and the `Copy` label contributes `232,227,240` glyph
   pixels.
+## Seventeenth pass (2026-11-02): the menu's open and close animation
+
+`- [x] **M-11 — the menu appears and disappears instantly.** Compose's menus scale and fade (about
+120 ms in, 90 ms out); the window-hosted menu had no motion at all.
+
+Because the menu is window state rather than composition, no `animate*AsState` applies. The animation
+is therefore part of the state and the renderer:
+
+- `SelectionMenu` carries `opened_at` and `closing`, and `progress(now)` answers an eased 0..1 for
+  either direction;
+- `draw` scales about the PRESS POINT (0.85 → 1.0) and multiplies every colour's alpha by the same
+  factor, so the menu grows out of where the user clicked and fades;
+- the frame path notices `is_animating(now)`, requests another frame, and drops the menu once the
+  close has finished. A closing menu is `!is_open()`, so it stops taking input immediately while it
+  is still painted.
+
+Measured: `the_menu_animates_in_and_out` (progress rises to 1 after `OPEN_MS`, a dismiss leaves the
+menu drawn but not interactive, and `is_animating` turns false after `CLOSE_MS`) and
+`the_selection_menu_grows_into_its_box`, which renders the menu into a bitmap at 5 ms and at 500 ms:
+a pixel just inside the settled right edge is empty early (channel sum 0-ish) and covered once
+settled (sum > 60). Red check: making `progress` return 1.0 fails it with "the growing menu has not
+reached the far edge yet (sum 135)".
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

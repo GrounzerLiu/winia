@@ -713,7 +713,7 @@
         let root = c.layout_root_idx().unwrap();
 
         let mut surface = surfaces::raster_n32_premul((100, 100)).unwrap();
-        surface.canvas().clear(SkColor::BLACK);
+        surface.canvas().clear(skia_safe::Color::BLACK);
         crate::render::render(c.arena_nodes(), root, surface.canvas());
 
         let mut px = [0u8; 4];
@@ -800,3 +800,41 @@
             "the item must paint at its offset y=50, not be clipped by the alpha layer: {p:?}"
         );
     }
+
+/// The context menu animates: at the start of the open it is smaller (and fainter) than its final box,
+/// so a pixel just inside the settled right edge is still empty.
+#[test]
+fn the_selection_menu_grows_into_its_box() {
+    use crate::app::gesture::SelectionMenu;
+    let menu_at = |age: std::time::Duration| SelectionMenu {
+        registrar: crate::text::selection::SelectionRegistrar::new(),
+        x: 40.0,
+        y: 40.0,
+        hovered: None,
+        opened_at: std::time::Instant::now() - age,
+        closing: None,
+    };
+    let sample = |menu: &SelectionMenu| {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 300)).unwrap();
+        surface.canvas().clear(skia_safe::Color::BLACK);
+        let canvas = surface.canvas();
+        canvas.save();
+        crate::render::selection_menu::draw(Some(menu), (400.0, 300.0), canvas);
+        canvas.restore();
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut px = [0u8; 4];
+        surface.read_pixels(&info, &mut px, 4, (200, 60));
+        px.iter().take(3).map(|c| *c as u32).sum::<u32>()
+    };
+    // 5 ms into a 120 ms open the box is ~90% of its size: its right edge has not reached x=200.
+    let early = sample(&menu_at(std::time::Duration::from_millis(5)));
+    // Settled: the box covers that pixel.
+    let settled = sample(&menu_at(std::time::Duration::from_millis(500)));
+    assert!(early < 40, "the growing menu has not reached the far edge yet (sum {early})");
+    assert!(settled > 60, "the settled menu covers it (sum {settled})");
+}

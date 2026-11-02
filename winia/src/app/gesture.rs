@@ -120,6 +120,40 @@ pub(crate) struct SelectionMenu {
     pub(crate) y: f32,
     /// The row under the pointer, for the hover fill.
     pub(crate) hovered: Option<usize>,
+    /// When the menu opened, for the entry animation.
+    pub(crate) opened_at: std::time::Instant,
+    /// When it started closing; the menu fades and shrinks out, then disappears.
+    pub(crate) closing: Option<std::time::Instant>,
+}
+
+impl SelectionMenu {
+    /// Compose's menu motion is a short scale+fade: 120 ms in, 90 ms out.
+    pub(crate) const OPEN_MS: u128 = 120;
+    pub(crate) const CLOSE_MS: u128 = 90;
+
+    /// 0 at the start of the animation, 1 when it has settled — the factor for scale and alpha.
+    pub(crate) fn progress(&self, now: std::time::Instant) -> f32 {
+        let t = match self.closing {
+            None => now.duration_since(self.opened_at).as_millis() as f32 / Self::OPEN_MS as f32,
+            Some(since) => 1.0 - now.duration_since(since).as_millis() as f32 / Self::CLOSE_MS as f32,
+        };
+        let t = t.clamp(0.0, 1.0);
+        // Ease-out, so the menu arrives quickly and settles.
+        1.0 - (1.0 - t).powi(3)
+}
+
+    /// Whether the menu is still interactive (a closing one is not).
+    pub(crate) fn is_open(&self) -> bool {
+        self.closing.is_none()
+    }
+
+    /// Whether another frame is needed for the animation.
+    pub(crate) fn is_animating(&self, now: std::time::Instant) -> bool {
+        match self.closing {
+            None => self.progress(now) < 1.0,
+            Some(since) => now.duration_since(since).as_millis() < Self::CLOSE_MS,
+        }
+    }
 }
 
 /// One container scrolling under a drag-selection.

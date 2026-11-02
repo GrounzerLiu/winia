@@ -40,24 +40,35 @@ pub(crate) fn row_at(
 
 pub(crate) fn draw(menu: Option<&SelectionMenu>, window: (f32, f32), canvas: &Canvas) {
     let Some(menu) = menu else { return };
+    // Compose's menu motion: a short scale+fade. The scale is about the press point, so the menu
+    // grows out of where the user clicked.
+    let progress = menu.progress(std::time::Instant::now());
+    if progress <= 0.0 { return; }
+    let alpha = (progress * 255.0) as u8;
+    let scale = 0.85 + 0.15 * progress;
+    canvas.save();
+    canvas.translate((menu.x, menu.y));
+    canvas.scale((scale, scale));
+    canvas.translate((-menu.x, -menu.y));
     let (x, y, w, h) = menu_rect(menu, window);
     let mut bg = Paint::default();
     bg.set_anti_alias(true);
-    bg.set_color(skia_safe::Color::from_argb(255, BG.0, BG.1, BG.2));
+    bg.set_color(skia_safe::Color::from_argb(alpha, BG.0, BG.1, BG.2));
     canvas.draw_round_rect(skia_safe::Rect::from_xywh(x, y, w, h), 8.0, 8.0, &bg);
     for (index, label) in ITEMS.iter().enumerate() {
         let row_y = y + PADDING + ROW_HEIGHT * index as f32;
         if menu.hovered == Some(index) {
             let mut hover = Paint::default();
             hover.set_anti_alias(true);
-            hover.set_color(skia_safe::Color::from_argb(255, HOVER.0, HOVER.1, HOVER.2));
+            hover.set_color(skia_safe::Color::from_argb(alpha, HOVER.0, HOVER.1, HOVER.2));
             canvas.draw_round_rect(
                 skia_safe::Rect::from_xywh(x + 3.0, row_y + 1.0, w - 6.0, ROW_HEIGHT - 2.0),
                 6.0, 6.0, &hover,
             );
         }
-        let color = crate::graphics::Color::from_argb(255, TEXT.0, TEXT.1, TEXT.2);
+        let color = crate::graphics::Color::from_argb(alpha, TEXT.0, TEXT.1, TEXT.2);
         let paragraph = crate::text::build_plain_paragraph(label, 14.0, color, w - 24.0);
         paragraph.paint(canvas, x + 12.0, row_y + 9.0);
     }
+    canvas.restore();
 }

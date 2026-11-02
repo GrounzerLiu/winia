@@ -635,7 +635,10 @@ fn a_menu_cycle_leaves_selection_working() {
 
     // A press elsewhere dismisses it — and this press is an ordinary press again.
     assert!(press(&mut pw, (200.0, 150.0)), "the dismissing press is handled");
-    assert!(pw.input.selection_menu.is_none(), "the menu closed");
+    assert!(
+        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        "the menu is no longer interactive (it fades out from here)"
+    );
 
     // ... and selection still works in the same container.
     assert!(press(&mut pw, (8.0, 10.0)), "a new press still finds the text");
@@ -660,7 +663,7 @@ fn the_menu_copy_row_copies_the_selection() {
     let at = menu_row_point(&pw, 0);
     assert!(press(&mut pw, at), "the press lands on the Copy row");
     assert_eq!(crate::clipboard::take_pending(), vec![selected.clone()], "the selection is on the clipboard");
-    assert!(pw.input.selection_menu.is_none(), "and the menu closed");
+    assert!(pw.input.selection_menu.is_none(), "a chosen row closes at once (no fade)");
 }
 
 /// The second row selects everything in the container.
@@ -679,4 +682,33 @@ fn the_menu_select_all_row_selects_everything() {
         Some((0, r.total_text_len())),
         "the whole container is selected"
     );
+}
+/// The menu animates in and out: state the frame path and the renderer read.
+#[test]
+fn the_menu_animates_in_and_out() {
+    use crate::app::gesture::SelectionMenu;
+    let (mut pw, _reg) = container_with_padding_below("aaaa bbbb");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+
+    let opened = std::time::Instant::now();
+    let menu = pw.input.selection_menu.as_ref().expect("open");
+    assert!(menu.is_open(), "a fresh menu is interactive");
+    assert!(menu.progress(opened) < 1.0, "and still growing");
+
+    // After the open duration the animation is settled.
+    std::thread::sleep(std::time::Duration::from_millis(SelectionMenu::OPEN_MS as u64 + 30));
+    let settled = std::time::Instant::now();
+    let menu = pw.input.selection_menu.as_ref().expect("open");
+    assert!(menu.progress(settled) > 0.99, "settled after OPEN_MS");
+    assert!(!menu.is_animating(settled), "no more frames needed");
+
+    // Dismissing starts the fade-out: not interactive, but still animating for a moment.
+    assert!(press(&mut pw, (200.0, 150.0)));
+    let closing = pw.input.selection_menu.as_ref().expect("still drawn while it fades");
+    assert!(!closing.is_open(), "a closing menu takes no input");
+    assert!(closing.is_animating(std::time::Instant::now()), "and asks for frames");
+    std::thread::sleep(std::time::Duration::from_millis(SelectionMenu::CLOSE_MS as u64 + 30));
+    assert!(!closing.is_animating(std::time::Instant::now()), "the fade finished");
 }

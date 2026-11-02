@@ -811,7 +811,20 @@ impl PerWindow {
             }
         }
         });
-    }
+
+        // The context menu animates in and out: keep frames coming while it does, and drop it once
+        // the close has finished (a press never sees a finished menu — `is_open` is false as soon as
+        // it starts closing).
+        if let Some(menu) = self.input.selection_menu.as_ref() {
+            let now = std::time::Instant::now();
+            let animating = menu.is_animating(now);
+            let finished = menu.closing.is_some() && !animating;
+            if finished {
+                self.input.selection_menu = None;
+            } else if animating {
+                if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+            }
+        }    }
 }
 
 
