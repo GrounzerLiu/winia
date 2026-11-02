@@ -376,7 +376,10 @@ fn scrollbar_build_shared(
         // The viewport is not known yet (first frame, constraints not settled) -> fall back to the
         // remembered previous value; nothing is drawn on the first frame.
     let viewport = viewport_state.get();
+    let viewport_for_size = viewport_state.clone();
+    let viewport_for_start = viewport_state.clone();
     let content = limit + viewport;
+
 
     let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
         viewport,
@@ -401,27 +404,40 @@ fn scrollbar_build_shared(
         // double-build tests hid this; the horizontal bar once kept a peek and never showed on the
         // first frame - measured). `set` dedups by PartialEq and on_size_changed dedups per element,
         // so a stable size stops the cycle.
-    let track = (viewport - 2.0 * cfg.inset).max(0.0);
-    let max_offset = (content - viewport).max(0.0);
-    let drag_thumb_len = thumb_len;
-        // Drag the thumb -> derive the offset (track/thumb/max are build-time values captured by the
-        // closure).
+    // Drag the thumb -> derive the offset. The geometry is read INSIDE the closure, not captured:
+    // the first frame has no viewport yet and a lazy list's limit keeps changing, so a build-time
+    // snapshot can be stale (measured: a drag against a bar built before its viewport was known
+    // wrote 200 for a 50 px move, and a pre-measure limit would have written f32::MAX).
     let grab_offset = ctx.remember_backchannel(|| 0.0f32);
-    let drag_inset = cfg.inset;
     let drag_cb = {
         let scroll_state_src = scroll_state_src.clone();
         let grab_offset = grab_offset.clone();
-                // Under reverse the visual -> raw write-back has to be mirrored (visual = max - raw).
-        let reverse_write = matches!(scroll_reverse, Some(true));
-        let write_max = max_offset;
+        let viewport_state = viewport_state.clone();
         move |pos: (f32, f32)| {
-                        // `pos` is in the thumb bar's local coordinates (inset included); subtracting the inset
-                        // gives the position inside the track.
-            let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
+            // `pos` is in the bar's local coordinates (inset included); subtracting the inset gives
+            // the position inside the track.
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
+            let viewport = viewport_state.peek();
+            let limit = scroll_state_src.fling_limit.peek();
+            let content = limit + viewport;
+            // No thumb (content fits, or the track cannot hold the minimum) means nothing to drag.
+            let Some((_, thumb_len)) = scrollbar_geometry(
+                viewport,
+                content,
+                scroll_state_src.offset.peek(),
+                cfg.thumb_min_length,
+                SCROLLBAR_THUMB_MAX_FRACTION,
+                cfg.inset,
+            ) else {
+                return;
+            };
+            let track_now = (viewport - 2.0 * cfg.inset).max(0.0);
+            let max_now = (content - viewport).max(0.0);
             let target = pos_in_track - grab_offset.peek();
-            let off_visual = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
-            let off = if reverse_write {
-                (write_max - off_visual).clamp(0.0, write_max.max(0.0))
+            let off_visual = scrollbar_offset_for_thumb_pos(target, track_now, thumb_len, max_now);
+            // Under reverse the visual -> raw write-back is mirrored (visual = max - raw).
+            let off = if matches!(scroll_reverse, Some(true)) {
+                (max_now - off_visual).clamp(0.0, max_now.max(0.0))
             } else {
                 off_visual
             };
@@ -446,6 +462,7 @@ fn scrollbar_build_shared(
     }
     .hoverable(&hover_src)
     .on_size_changed(move |w, h| {
+
         if vertical {
             let _ = w;
             viewport_state.set(h);
@@ -468,18 +485,32 @@ fn scrollbar_build_shared(
         let hover_src = hover_src_clone.clone();
         let scroll_state = scroll_state_clone.clone();
         let grab_offset = grab_offset.clone();
+        let viewport_state = viewport_for_start.clone();
         move |pos: (f32, f32)| {
             hover_src.emit_drag_start();
-                        // Take over: cancel the list's fling (otherwise the next frame's update_animations writes
-                        // the offset back and the thumb cannot move); mark scrolling (cleared on release).
+            // Take over: cancel the list's fling (otherwise the next frame's update_animations writes
+            // the offset back and the thumb cannot move); mark scrolling (cleared on release).
             scroll_state.cancel_fling();
             scroll_state.is_scroll_in_progress.set(true);
-                        // Grab offset = press point inside the track minus the thumb's top at that moment
-                        // (captured from the build values). Clamped to [0, thumb]: a press outside the thumb
-                        // (on the empty track) puts grab at the thumb edge, so the first frame does not jump
-                        // ("grab the edge you pressed and follow from there").
-            let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
-            grab_offset.set((pos_in_track - thumb_offset).clamp(0.0, drag_thumb_len.max(0.0)));
+            // Grab offset = press point inside the track minus the thumb's top at that moment.
+            // Clamped to [0, thumb]: a press outside the thumb (on the empty track) puts grab at the
+            // thumb edge, so the first frame does not jump ("grab the edge you pressed and follow
+            // from there"). Read LIVE like the move callback: a build-time snapshot can be from a
+            // frame before the viewport was known, and then the press would grab 0 and the first move
+            // would jump by the grab it should have kept.
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
+            let viewport = viewport_state.peek();
+            let content = scroll_state.fling_limit.peek() + viewport;
+            let (thumb_top, thumb_now) = scrollbar_geometry(
+                viewport,
+                content,
+                scroll_state.offset.peek(),
+                cfg.thumb_min_length,
+                SCROLLBAR_THUMB_MAX_FRACTION,
+                cfg.inset,
+            )
+            .unwrap_or((0.0, 0.0));
+            grab_offset.set((pos_in_track - thumb_top).clamp(0.0, thumb_now.max(0.0)));
         }
     })
     .on_drag_end(move || {

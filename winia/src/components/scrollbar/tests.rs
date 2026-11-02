@@ -581,3 +581,49 @@
         assert!(ltr[1] > ltr[0], "LTR: the bar is after the content: {ltr:?}");
         assert!(rtl[1] < rtl[0], "RTL: it lands on the other side: {rtl:?}");
     }
+    /// Drive the bar through its own callbacks (the pointer path only forwards to them).
+    fn drag_callbacks(node: &crate::layout::node::LayoutNode) -> (Option<std::sync::Arc<dyn Fn((f32, f32)) + Send + Sync>>, Option<std::sync::Arc<dyn Fn((f32, f32), (f32, f32)) + Send + Sync>>) {
+        let mut start = None;
+        let mut mv = None;
+        for el in node.modifier.elements() {
+            match el {
+                crate::modifier::ModifierElement::DragOnStart { cb } => start = Some(cb.clone()),
+                crate::modifier::ModifierElement::DragOnMove { cb } => mv = Some(cb.clone()),
+                _ => {},
+            }
+        }
+        (start, mv)
+    }
+
+    /// The drag reads geometry LIVE. A build-time capture is stale whenever the bar was built before
+    /// its viewport write-back (track 0, thumb 0, travel floored at 1 px): a 50 px move then jumped
+    /// the list to its end (measured: 200 of 200), and a captured pre-measure limit is f32::MAX.
+    /// With live values, a press 3 px into the thumb and a 50 px move give 50/64 of the range.
+    #[test]
+    fn a_thumb_drag_uses_the_live_geometry() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("x").modifier(crate::modifier::Modifier::new().size(100.0, 300.0)).build(ctx);
+                    });
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        scroll.fling_limit.set(200.0);
+        let (start, mv) = {
+            let nodes = composer.arena_nodes();
+            let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::DragOnStart { .. }))).expect("the bar node");
+            drag_callbacks(bar)
+        };
+        (start.expect("start"))((3.0, 5.0));
+        (mv.expect("move"))((3.0, 55.0), (0.0, 50.0));
+        assert!((scroll.offset.peek() - 156.25).abs() < 0.5, "50 of the 64 px travel across a 200 px range, got {}", scroll.offset.peek());
+    }

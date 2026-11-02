@@ -33,6 +33,18 @@ was silently dropped — the RTL tab row (`components/tab_row/scrollable.rs:206`
 scan for the last `HorizontalScroll` / `VerticalScroll` instead of assuming it is last.
 Test: `a_reverse_flag_survives_the_ambient_overscroll_element`.
 
+### S-4 The scrollbar dragged with build-time geometry — FIXED
+
+The thumb drag captured `track`, `thumb_len` and `max_offset` from the build that created the
+callbacks. A bar built before its viewport write-back exists (the first frame) has `track = 0`,
+`thumb = 0`, and `scrollbar_offset_for_thumb_pos` floors the travel at 1 px - so a 50 px move wrote
+the whole range (measured: offset 200 of 200), and with a pre-measure limit the same arithmetic
+would have written `f32::MAX` into the offset. A lazy list's limit also changes while the bar is
+alive, so the capture could go stale in normal use. The drag and drag-start callbacks now read
+`viewport`/`fling_limit`/`offset` from the states and recompute the geometry per event, and a bar
+without a thumb ignores the drag entirely. Test: `a_thumb_drag_uses_the_live_geometry` (a press 3 px
+into the thumb plus a 50 px move is 50/64 of a 200 px range = 156.25; with a stale capture it read 0).
+
 ## Missing API
 
 ### M-1 `verticalScroll(reverseScrolling = true)` — ADDED
