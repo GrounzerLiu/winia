@@ -606,7 +606,7 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         // Overscroll is attached HERE, from the ambient factory, so a plain `Column + vertical_scroll`
         // bounces exactly like a LazyColumn (Compose's `useLocalOverscrollFactory = true`). A caller
         // that already pushed its own effect is left alone - the chain's first `Overscroll` wins.
-        let mut out = self.push(ModifierElement::VerticalScroll { state: state.clone() });
+        let mut out = self.push(ModifierElement::VerticalScroll { state: state.clone(), reverse: false });
         if !out.has_overscroll() {
             if let Some(effect) = crate::overscroll::ambient_effect(&state) {
                 out = out.overscroll(&effect);
@@ -703,6 +703,22 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::NestedScroll { connection })
     }
 
+    /// 垂直滚动是否反向（`reverseScrolling`：offset 0 显示内容末端——文件浏览器的
+    /// "从底部开始"、聊天记录的常见配法）。与 `horizontal_scroll_reverse` 同一形状。
+    pub fn vertical_scroll_reverse(mut self, reverse: bool) -> Self {
+        // NOT `last_mut`: `vertical_scroll` appends the ambient `Overscroll` element after the
+        // state element, so the last element is usually not the one this sets.
+        if let Some(ModifierElement::VerticalScroll { reverse: r, .. }) = self
+            .elements
+            .iter_mut()
+            .rev()
+            .find(|el| matches!(el, ModifierElement::VerticalScroll { .. }))
+        {
+            *r = reverse;
+        }
+        self
+    }
+
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         // 无 builder 期 get 副作用（同 vertical_scroll，State Phase4）。
@@ -723,10 +739,14 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// 水平滚动反向标记（RTL：`scroll_reverse` 语义——render 镜像平移；
     /// 同 lazy_scroll_reverse，但作用于 HorizontalScroll 元素）
     pub fn horizontal_scroll_reverse(mut self, reverse: bool) -> Self {
-        if let Some(el) = self.elements.last_mut() {
-            if let ModifierElement::HorizontalScroll { reverse: r, .. } = el {
-                *r = reverse;
-            }
+        // NOT `last_mut` - see `vertical_scroll_reverse`: the ambient overscroll element comes after.
+        if let Some(ModifierElement::HorizontalScroll { reverse: r, .. }) = self
+            .elements
+            .iter_mut()
+            .rev()
+            .find(|el| matches!(el, ModifierElement::HorizontalScroll { .. }))
+        {
+            *r = reverse;
         }
         self
     }

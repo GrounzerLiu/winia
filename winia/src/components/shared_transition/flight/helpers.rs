@@ -116,7 +116,7 @@ pub(crate) fn ancestor_scroll_sum(
         let p = &nodes[pidx];
         for el in p.modifier.elements() {
             match el {
-                ModifierElement::VerticalScroll { state } => {
+                ModifierElement::VerticalScroll { state, .. } => {
                     let mut off = state.offset.get();
                     if p.scroll_reverse {
                         off = (p.scroll_content_height - p.scroll_viewport_height - off).max(0.0);

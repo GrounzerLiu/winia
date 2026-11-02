@@ -332,7 +332,12 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                 node.measured_size.height
             };
             let max_offset = (content_h - visible_h).max(0.0);
-            let raw = current - dy;
+            // `reverseScrolling` / `reverseLayout`: the render translate is mirrored (offset 0 is
+            // the content's end), so the gesture delta is mirrored with it - a drag must still
+            // follow the finger. The horizontal branch below has always done this; the vertical one
+            // did not, which left plain reversed containers (and any reversed list) scrolling
+            // against the drag.
+            let raw = if node.scroll_reverse { current + dy } else { current - dy };
             let new = raw.clamp(0.0, max_offset);
             state.offset.set(new);
             consumed.y = current - new;
@@ -1043,5 +1048,60 @@ mod modifier_order_tests {
         assert_eq!(scroll_first.2, 832.0, "content height");
         assert_eq!(scroll_first.3, 268.0, "viewport height (300 - 32)");
         assert!(scroll_first.2 > scroll_first.3, "and the content really overflows");
+    }
+}
+#[cfg(test)]
+mod vertical_reverse_tests {
+    use super::apply_scroll_delta;
+    use crate::runtime::composer::Composer;
+    use crate::unit::Density;
+
+    fn container(reverse: bool) -> (Composer, crate::modifier::ScrollState) {
+        let scroll = crate::modifier::ScrollState::new();
+        let s = scroll.clone();
+        let mut composer = Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Column::new()
+                .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()).vertical_scroll_reverse(reverse))
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("content")
+                        .modifier(crate::modifier::Modifier::new().size(100.0, 300.0))
+                        .build(ctx);
+                });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        (composer, scroll)
+    }
+
+    /// The reverse setters used to assume the scroll element was LAST, but `vertical_scroll` /
+    /// `horizontal_scroll` append the ambient `Overscroll` element after it - so the flag was
+    /// silently dropped (the tab row's RTL call site was affected).
+    #[test]
+    fn a_reverse_flag_survives_the_ambient_overscroll_element() {
+        let vertical = crate::modifier::Modifier::new()
+            .vertical_scroll(crate::modifier::ScrollState::new())
+            .vertical_scroll_reverse(true);
+        assert_eq!(vertical.is_vertical_scroll_reversed(), Some(true));
+        assert!(vertical.overscroll_effect().is_some(), "the ambient effect is still there");
+
+        let horizontal = crate::modifier::Modifier::new()
+            .horizontal_scroll(crate::modifier::ScrollState::new())
+            .horizontal_scroll_reverse(true);
+        assert_eq!(horizontal.is_horizontal_scroll_reversed(), Some(true));
+    }
+
+    /// Compose's `verticalScroll(reverseScrolling = true)`: offset 0 shows the END, and the gesture
+    /// delta is mirrored so dragging still follows the finger.
+    #[test]
+    fn a_reversed_vertical_container_mirrors_the_delta() {
+        let (mut forward, fwd) = container(false);
+        apply_scroll_delta(forward.arena_nodes_mut(), 0, 0.0, -10.0, Density::from_density(1.0));
+        assert_eq!(fwd.offset.peek(), 10.0, "a normal container moves on a negative delta");
+
+        let (mut reversed, rev) = container(true);
+        let root = reversed.layout_root_idx().expect("root");
+        assert!(reversed.arena_nodes()[root].scroll_reverse, "the flag reaches the node during measure");
+        apply_scroll_delta(reversed.arena_nodes_mut(), root, 0.0, 10.0, Density::from_density(1.0));
+        assert_eq!(rev.offset.peek(), 10.0, "the reversed one takes the opposite sign");
     }
 }

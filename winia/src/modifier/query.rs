@@ -355,7 +355,7 @@ impl Modifier {
 
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
-            if let ModifierElement::VerticalScroll { state } = el {
+            if let ModifierElement::VerticalScroll { state, .. } = el {
                 return Some(state);
             }
         }
@@ -373,6 +373,14 @@ impl Modifier {
     }
 
     /// 水平滚动状态（如果有 HorizontalScroll modifier）
+    /// Whether the vertical scroll at this node is reversed (offset 0 = the content's end).
+    pub fn is_vertical_scroll_reversed(&self) -> Option<bool> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::VerticalScroll { reverse, .. } => Some(*reverse),
+            _ => None,
+        })
+    }
+
     pub fn horizontal_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::HorizontalScroll { state, .. } = el {
@@ -860,7 +868,7 @@ impl Modifier {
     pub(crate) fn register_state_deps(&self) {
         for el in &self.elements {
             match el {
-                ModifierElement::VerticalScroll { state } => { let _ = state.offset.get(); }
+                ModifierElement::VerticalScroll { state, .. } => { let _ = state.offset.get(); }
                 ModifierElement::HorizontalScroll { state, .. } => { let _ = state.offset.get(); }
                 _ => {}
             }

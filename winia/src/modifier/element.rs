@@ -719,7 +719,7 @@ pub(crate) enum ModifierElement {
     /// Vertical scrolling, bound to an offset State.
     /// The whole `ScrollState` (offset, is_scroll_in_progress, fling_limit). The input path (drag
     /// and wheel in the app) reads it through the node to run a fling and to clamp at the limit.
-    VerticalScroll { state: ScrollState },
+    VerticalScroll { state: ScrollState, reverse: bool },
     /// The scroll container at this node keeps its clip and its viewport, but the GESTURE paths skip
     /// it: what a lazy list with `user_scroll(false)` needs. Dropping the container instead (the old
     /// behaviour) also dropped the clip, so the list painted its items outside its own box.

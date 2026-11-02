@@ -636,7 +636,7 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         }
         // The offset is what a test can assert on a scroll container: scrolling moves the RENDER
         // translation, not the children's layout positions, so a node's reported rect never changes.
-        ModifierElement::VerticalScroll { state } => Some(format!("vscroll({:.0})", state.offset.get())),
+        ModifierElement::VerticalScroll { state, .. } => Some(format!("vscroll({:.0})", state.offset.get())),
         ModifierElement::HorizontalScroll { state, .. } => {
             Some(format!("hscroll({:.0})", state.offset.get()))
         }

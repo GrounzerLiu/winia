@@ -238,7 +238,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
-        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.state_id() == bs.offset.state_id(),
+        (VerticalScroll { state: as_, reverse: ar }, VerticalScroll { state: bs, reverse: br }) =>
+            as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (LazyScroll { content_height: ac, reverse: ar }, LazyScroll { content_height: bc, reverse: br }) => {
             ac.state_id() == bc.state_id() && ar == br
         }

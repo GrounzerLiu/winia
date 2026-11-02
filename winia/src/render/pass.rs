@@ -646,7 +646,7 @@ pub(super) fn render_pass1(
                     clip_shape = Some(shape.eval());
                 }
             }
-            ModifierElement::VerticalScroll { state } => {
+            ModifierElement::VerticalScroll { state, .. } => {
                 let mut off = state.offset.get();
                 // reverseLayout (a reversed LazyColumn) mirrors the scroll translation:
                 // scroll_origin = content - vh - offset, so content coordinates run bottom-up.

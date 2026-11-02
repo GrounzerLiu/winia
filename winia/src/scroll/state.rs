@@ -120,7 +120,7 @@ impl ScrollState {
     ///
     /// Unlike `scroll_to`, this CANCELS a fling or a page step in flight: the caller is taking over.
     pub fn scroll_by(&self, delta: f32) -> f32 {
-        if delta == 0.0 { return 0.0; }
+        if !delta.is_finite() || delta == 0.0 { return 0.0; }
         self.cancel_fling();
         let current = self.offset.peek();
         let next = (current + delta).clamp(0.0, self.max_value());
@@ -179,14 +179,22 @@ impl ScrollState {
 
     /// 立即滚动到指定位置
     pub fn scroll_to(&self, value: f32, max_offset: f32) {
-        self.offset.set(value.clamp(0.0, max_offset));
+        // A non-finite target would poison the offset (NaN compares false against every limit, so
+        // nothing clamps it out later and the render translates by NaN).
+        if !value.is_finite() { return; }
+        // Compose's `scrollTo` runs through `scrollableState.scroll`, which cancels a fling; without
+        // this the decay kept writing its own trajectory and the jump was overwritten next frame
+        // (measured: `scroll_to(0)` during a fling left 260.26 on the next frame).
+        self.cancel_fling();
+        self.offset.set(value.clamp(0.0, max_offset.max(0.0)));
     }
 
     /// 动画滚动到指定位置（对标 Compose `animateScrollTo`）——用 spring 平滑
     /// 驱动 offset；目标 clamp 到 [0, max_offset]。滚动期间
     /// `is_scroll_in_progress` 为 true，动画结束回 false。
     pub fn animate_scroll_to(&self, value: f32, max_offset: f32, spec: crate::animation::AnimationSpec) {
-        let target = value.clamp(0.0, max_offset);
+        if !value.is_finite() { return; }
+        let target = value.clamp(0.0, max_offset.max(0.0));
         if (self.offset.peek() - target).abs() < 0.5 {
             return;
         }
@@ -543,6 +551,45 @@ mod scroll_by_tests {
 
     /// A restored offset can outlive its content: clamping happens during measure, the way Compose
     /// does it, so the container never opens on blank space.
+    /// Compose's `scrollTo` runs through `scrollableState.scroll`, which cancels a fling. Without the
+    /// cancel the decay kept writing its own trajectory over the jump (measured: 260.26 on the next
+    /// frame after a `scroll_to(0)`).
+    #[test]
+    fn a_scroll_to_cancels_a_running_fling() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let state = ScrollState::new();
+        state.fling_limit.set(1000.0);
+        state.fling(4000.0);
+        clock.advance(std::time::Duration::from_millis(60));
+        crate::animation::update_animations();
+        assert!(state.offset.peek() > 0.0, "the fling is running");
+
+        state.scroll_to(0.0, 1000.0);
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        assert_eq!(state.offset.peek(), 0.0, "the jump sticks: the fling was cancelled");
+        crate::animation::clear_all_animations();
+    }
+
+    /// A NaN would poison the offset: every limit comparison against it is false, so nothing clamps
+    /// it out later and the render translates by NaN.
+    #[test]
+    fn a_non_finite_scroll_is_ignored() {
+        let state = ScrollState::new();
+        state.fling_limit.set(100.0);
+        state.scroll_to(f32::NAN, 100.0);
+        assert_eq!(state.offset.peek(), 0.0, "NaN scroll_to is a no-op");
+        state.scroll_to(10.0, 100.0);
+        assert_eq!(state.scroll_by(f32::NAN), 0.0, "NaN scroll_by is a no-op");
+        assert_eq!(state.offset.peek(), 10.0, "and leaves the offset alone");
+        state.animate_scroll_to(f32::NAN, 100.0, crate::animation::AnimationSpec::Tween(Default::default()));
+        assert!(!crate::animation::has_animation_for_state(state.offset.state_id()), "no NaN animation starts");
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn a_restored_offset_past_the_end_is_pulled_back() {
         use std::collections::HashMap;
@@ -597,3 +644,4 @@ mod scroll_by_tests {
         assert_eq!(s.max_value(), 120.0);
     }
 }
+

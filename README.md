@@ -64,6 +64,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Floating Action Button 文档](docs/floating-action-button.md) — M3 图标型 FAB、尺寸、颜色与交互
 - [ListItem 文档](docs/list-item.md) — M3 一行/二行/三行列表项、slots 与 LazyColumn 集成
 - [Typography 文档](docs/typography.md) — M3 字体 token、继承优先级与兼容策略
+- [滚动子系统 review 清单](docs/scroll-review.md) — 状态/修饰符/滚轮/嵌套/fling/回弹/滚动条逐项核对，缺陷与缺失 API 已修，附实测数字
 - [Text 子系统 review 清单](docs/text-review.md) — 对 Compose 逐项核对的缺陷/差异/缺失 API，含实测数字与未修原因
 - [Selection 子系统 review 清单](docs/selection-review.md) — SelectionContainer 与其拖动管线对照 Compose，含实测数字与未修原因
 - [视觉回归矩阵](docs/visual-regression.md) — light/dark、LTR/RTL、自定义 Typography 与组件语义快照

@@ -723,9 +723,15 @@ pub(crate) fn measure_node_inner(
         // Lazy lists: the content-height State goes into a node field (apply_scroll_delta reads it).
         // It is read before measuring, so the value is the previous frame's write-back; on the first
         // frame it is 0, which degrades to the node's own height.
+        // Reversed vertical scrolling: `reverseScrolling` on a plain container (offset 0 = the end)
+        // and `reverseLayout` on a lazy list both land here; the flag mirrors the render translate
+        // AND the gesture delta, so the two ends of the offset range keep one meaning.
+        if nodes[idx].modifier.vertical_scroll_state().is_some() {
+            nodes[idx].scroll_reverse = nodes[idx].modifier.is_lazy_scroll_reverse()
+                || nodes[idx].modifier.is_vertical_scroll_reversed().unwrap_or(false);
+        }
         if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_height = ch.get();
-            nodes[idx].scroll_reverse = nodes[idx].modifier.is_lazy_scroll_reverse();
         }
         // A lazy container is NOT rewritten to unbounded: its policy sets the children's constraints
         // itself (an infinite height) and keeps the finite max_height so it can see the real viewport
