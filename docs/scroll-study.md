@@ -141,6 +141,26 @@ Limits inherited from `reveal_in`: `reverseLayout` containers are skipped rather
 wrong way, and a lazy list can only reveal items that are composed.
 
 
+### 6.3 Scroll position across a saveable restore (shipped 2026-11-02)
+
+`ScrollState::remember_saveable(ctx, key)` (`scroll/state.rs`) keeps the offset in the saveable
+registry, so a list opens where it was after a window recreate or a navigation push/pop. Compose's
+`rememberScrollState` is saveable for the same reason. The saved value is the offset alone - for a
+plain container the content belongs to the caller's composition, so the offset is the whole state; a
+LAZY list also needs its first visible item, which is NOT saved yet.
+
+Test: `a_saved_scroll_position_comes_back_in_the_next_composition` (compose under one registry,
+scroll to 240, `perform_save`, compose again under a registry seeded with it, offset is 240).
+`Saveable` gained an `f32` impl stored as `F64`, since the registry's closed set had i32/i64/f64.
+
+### 6.4 `max_value` is a peek, not a subscription
+
+The limit is written back by the measure through a `Backchannel` (a `State` write during measure
+would notify in the middle of layout), so a readout that reads only `max_value()` never re-renders.
+Read the offset too - it is a `State`, and it changes whenever the limit stops mattering. This is
+documented on the method and is what `scroll_demo`'s cards do.
+
+
 ## 7. Test map (and the two thin spots)
 
 | Area | Tests in file | Where else it is covered |

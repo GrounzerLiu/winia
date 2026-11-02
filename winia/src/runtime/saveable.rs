@@ -57,6 +57,13 @@ macro_rules! saveable_int {
 saveable_int!(i32);
 saveable_int!(i64);
 
+impl Saveable for f32 {
+    fn to_saved(&self) -> SavedValue { SavedValue::F64(*self as f64) }
+    fn from_saved(value: &SavedValue) -> Option<Self> {
+        match value { SavedValue::F64(v) => Some(*v as f32), _ => None }
+    }
+}
+
 impl Saveable for f64 {
     fn to_saved(&self) -> SavedValue { SavedValue::F64(*self) }
     fn from_saved(value: &SavedValue) -> Option<Self> {

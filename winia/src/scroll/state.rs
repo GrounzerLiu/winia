@@ -90,6 +90,11 @@ impl ScrollState {
     /// Compose's `ScrollState.maxValue` (`foundation/gestures/ScrollableState.kt`); the limit used to
     /// be reachable only through the private `fling_limit`, so a caller driving a list by hand had to
     /// remember the last "content height" itself.
+    ///
+    /// It is a PEEK, not a subscription: the measure writes the limit back through a `Backchannel`
+    /// (a State write during measure would notify in the middle of layout), so reading it alone does
+    /// not re-render the reader. A readout therefore reads the offset too - the offset is a `State`
+    /// and changes whenever the limit stops mattering - which is what `scroll_demo` does.
     pub fn max_value(&self) -> f32 {
         let limit = self.fling_limit.peek();
         if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
@@ -118,6 +123,25 @@ impl ScrollState {
         if next == current { return 0.0; }
         self.offset.set(next);
         next - current
+    }
+
+    /// A state whose offset is an EXTERNALLY owned handle — what the saveable constructor needs,
+    /// and what a caller driving the offset from outside (a shared page scroll) already does by hand.
+    pub fn with_offset(offset: crate::runtime::state::State<f32>) -> Self {
+        Self { offset, ..Self::new() }
+    }
+
+    /// A scroll state whose position survives a saveable restore: window recreate, a navigation
+    /// push/pop, anything that hands a `SaveableStateRegistry` across compositions.
+    ///
+    /// Compose's `rememberScrollState` is saveable for the same reason - a list that jumps back to the
+    /// top after a back navigation is the bug this exists to prevent. The saved value is the offset
+    /// alone: for a plain container the content is the caller's composition, so the offset is the whole
+    /// state (a LAZY list needs its first visible item too, which is not saved here yet).
+    #[crate::composable]
+    pub fn remember_saveable(ctx: &mut crate::runtime::composer::ComposeCtx, key: &str) -> Self {
+        let offset = crate::runtime::saveable::remember_saveable::<f32>(ctx, key, || 0.0);
+        ctx.remember(move || Self::with_offset(offset)).get()
     }
 
     /// 立即滚动到指定位置
@@ -417,6 +441,71 @@ mod scroll_by_tests {
         s.offset.set(300.0);
         assert!(!s.can_scroll_forward());
         assert!(s.can_scroll_backward());
+    }
+
+    /// The point of the saveable constructor: a scroll position that a back navigation would reset.
+    /// `snap_page` is what a pager's wheel notch runs, and until now only the wheel tests reached it.
+    /// One notch = one page, and it REFUSES rather than clamps at the ends (clamping scrolls into a
+    /// trailing content padding and the settle drags it back).
+    #[test]
+    fn a_page_step_moves_one_page_and_refuses_at_the_end() {
+        let state = state(0.0, 400.0);
+        state.snap.set(Some(crate::fling::SnapInfo {
+            step: 100.0,
+            anchor: 0.0,
+            ..crate::fling::SnapInfo::default()
+        }));
+        assert!(state.snap_page(true, false), "a notch starts a step");
+        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(100.0),
+            "forward goes to the next page");
+        crate::animation::clear_all_animations();
+
+        // At the last page there is nothing forward: the call refuses, so the caller falls back to a
+        // pixel scroll (or lets an ancestor take the delta).
+        state.offset.set(400.0);
+        assert!(!state.snap_page(true, false), "no page past the end");
+        assert!(state.snap_page(false, false), "but back is fine");
+        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(300.0));
+        crate::animation::clear_all_animations();
+    }
+
+    /// A reversed container mirrors the direction: "forward" steps BACK.
+    #[test]
+    fn a_reversed_container_steps_the_other_way() {
+        let state = state(200.0, 400.0);
+        state.snap.set(Some(crate::fling::SnapInfo {
+            step: 100.0,
+            anchor: 0.0,
+            ..crate::fling::SnapInfo::default()
+        }));
+        assert!(state.snap_page(true, true));
+        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(100.0));
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn a_saved_scroll_position_comes_back_in_the_next_composition() {
+        use std::collections::HashMap;
+        let first = crate::runtime::saveable::SaveableStateRegistry::new(HashMap::new());
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut seen = None;
+        crate::runtime::saveable::with_saveable_registry(first.clone(), || {
+            composer.compose(|ctx| seen = Some(ScrollState::remember_saveable(ctx, "page")));
+        });
+        let scroll: ScrollState = seen.expect("composed");
+        assert_eq!(scroll.offset.peek(), 0.0, "nothing to restore yet");
+        scroll.offset.set(240.0);
+
+        let saved = first.perform_save();
+        assert_eq!(saved.get("page"), Some(&crate::runtime::saveable::SavedValue::F64(240.0)));
+
+        let second = crate::runtime::saveable::SaveableStateRegistry::new(saved);
+        let mut next = crate::runtime::composer::Composer::new();
+        let mut restored = None;
+        crate::runtime::saveable::with_saveable_registry(second, || {
+            next.compose(|ctx| restored = Some(ScrollState::remember_saveable(ctx, "page")));
+        });
+        assert_eq!(restored.expect("composed").offset.peek(), 240.0, "the list opens where it was");
     }
 
     #[test]
