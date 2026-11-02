@@ -45,6 +45,14 @@ alive, so the capture could go stale in normal use. The drag and drag-start call
 without a thumb ignores the drag entirely. Test: `a_thumb_drag_uses_the_live_geometry` (a press 3 px
 into the thumb plus a 50 px move is 50/64 of a 200 px range = 156.25; with a stale capture it read 0).
 
+### S-5 A drag start took over the gesture with no thumb to drag — FIXED
+
+`on_drag_start` cancelled the list's fling and set `is_scroll_in_progress` before checking that the
+bar had a thumb. On a bar whose content fits (or whose viewport is not known yet) the move callback
+now returns early, so the flag stayed set until the pointer was released - a press on an empty bar
+cancelled a running fling for nothing. The take-over is now behind the same live geometry check the
+move uses. Test: `a_drag_start_without_a_thumb_leaves_the_container_alone`.
+
 ## Missing API
 
 ### M-1 `verticalScroll(reverseScrolling = true)` — ADDED
@@ -55,6 +63,15 @@ and `nodes[].scroll_reverse` already understood vertical reversal for lazy lists
 `param_eq`) and the measure-time write. The vertical delta path also did not mirror the gesture for a
 reversed container (the horizontal one always did) — fixed: a drag now follows the finger in both
 directions. Tests: `a_reversed_vertical_container_mirrors_the_delta`, plus the flag test above.
+
+### M-2 Hover/drag colour feedback — ADDED
+
+CMP's `ScrollbarStyle` takes an `unhoverColor` and a `hoverColor`; winia only faded the alpha, so a
+hovered bar looked identical. The shared build now resolves the thumb colour per interaction state
+(`scrollbar_thumb_tint`) and animates it with `animate_color_as_state` over 300 ms. The default hover
+colour is the same theme outline token at full alpha (the bar darkens rather than changing hue).
+Test: `the_thumb_tint_follows_the_interaction`. A pixel test of the tint is not possible in the
+harness (it cannot deliver a hover), so the visual check is by hand in `scroll_demo`.
 
 ## Checked and ruled out
 

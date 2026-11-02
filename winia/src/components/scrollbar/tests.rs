@@ -627,3 +627,51 @@
         (mv.expect("move"))((3.0, 55.0), (0.0, 50.0));
         assert!((scroll.offset.peek() - 156.25).abs() < 0.5, "50 of the 64 px travel across a 200 px range, got {}", scroll.offset.peek());
     }
+
+    /// A bar with nothing to drag (the content fits) must not take over the gesture: the drag start
+    /// used to cancel a running fling and mark the container as scrolling, and the move callback then
+    /// did nothing - the flag stayed set until release.
+    #[test]
+    fn a_drag_start_without_a_thumb_leaves_the_container_alone() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        scroll.fling_limit.set(0.0);
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("x").modifier(crate::modifier::Modifier::new().size(100.0, 60.0)).build(ctx);
+                    });
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        let (start, _mv) = {
+            let nodes = composer.arena_nodes();
+            let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::DragOnStart { .. }))).expect("the bar node");
+            drag_callbacks(bar)
+        };
+        (start.expect("start"))((3.0, 50.0));
+        assert!(!scroll.is_scroll_in_progress.peek(), "no thumb, so the gesture is not taken over");
+    }
+
+    /// CMP's `ScrollbarStyle.hoverColor` / `unhoverColor`: the thumb colour is chosen per interaction
+    /// state; `animate_color_as_state` smooths the change (300 ms), and the node only sees the result.
+    #[test]
+    fn the_thumb_tint_follows_the_interaction() {
+        let base = crate::graphics::Color::from_argb(179, 120, 120, 120);
+        let hover = crate::graphics::Color::from_argb(255, 120, 120, 120);
+        assert_eq!(scrollbar_thumb_tint(base, hover, false), base, "at rest");
+        assert_eq!(scrollbar_thumb_tint(base, hover, true), hover, "hovered or dragged");
+        // The default hover colour is the same outline token at full alpha, so the bar darkens
+        // instead of changing hue (a caller can still pass its own through the config).
+        let theme = crate::theme::WiniaTheme::colors();
+        let default_base = scrollbar_thumb_color(&theme);
+        let default_hover = scrollbar_thumb_hover_color(&theme);
+        assert_eq!((default_base.r, default_base.g, default_base.b), (default_hover.r, default_hover.g, default_hover.b));
+        assert!(default_hover.a > default_base.a, "hovering raises the alpha: {} vs {}", default_hover.a, default_base.a);
+    }

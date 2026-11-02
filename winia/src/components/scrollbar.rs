@@ -41,6 +41,18 @@ pub const SCROLLBAR_THUMB_MIN_LENGTH: f32 = 24.0;
 /// Maximum thumb length as a fraction of the track (M3 `ThumbMaxLengthFraction = 0.9`).
 pub const SCROLLBAR_THUMB_MAX_FRACTION: f32 = 0.9;
 /// Default thumb colour (M3 outline at 70% - `NonInteractiveScrollbarDefaults.thumbColor`).
+/// The thumb colour for the current interaction state (CMP's `unhoverColor` / `hoverColor`).
+///
+/// Pure so the choice is testable: the animation that smooths the change is
+/// `animate_color_as_state`, and the node only ever sees the resolved colour.
+pub(crate) fn scrollbar_thumb_tint(base: Color, hover: Color, active: bool) -> Color {
+    if active { hover } else { base }
+}
+
+pub fn scrollbar_thumb_hover_color(theme: &crate::theme::ThemeColors) -> Color {
+    theme.outline
+}
+
 pub fn scrollbar_thumb_color(theme: &crate::theme::ThemeColors) -> Color {
     let o = theme.outline;
     Color::from_argb(((o.a as f32) * 0.7) as u8, o.r, o.g, o.b)
@@ -233,6 +245,9 @@ enum ScrollbarAxis {
 struct ScrollbarConfig {
     thickness: f32,
     thumb_color: Option<Color>,
+    /// The thumb colour while hovered or dragged (CMP's `ScrollbarStyle.hoverColor`). `None` uses the
+    /// theme default: the same outline token at full alpha, so the bar darkens rather than changes hue.
+    hover_color: Option<Color>,
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
@@ -278,6 +293,21 @@ fn scrollbar_build_shared(
         ctx.remember(|| MutableInteractionSource::new()).get();
     let hovered = hover_src.is_hovered();
     let dragged = hover_src.is_dragged();
+    // Hover/drag tint (CMP's `ScrollbarStyle.hoverColor`, 300 ms there): the thumb colour itself
+    // animates, so a bar that lights up does it over 300 ms instead of snapping.
+    let hover_color = cfg
+        .hover_color
+        .unwrap_or_else(|| scrollbar_thumb_hover_color(&theme));
+    let thumb_target = scrollbar_thumb_tint(thumb_color, hover_color, hovered || dragged);
+    let thumb_color_now = ctx
+        .animate_color_as_state(
+            thumb_target,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(300),
+                crate::animation::interpolator::Linear::new(),
+            )),
+        )
+        .get();
         // Visible while hovered or dragged too (a hidden bar cannot be grabbed) - the interaction source
         // is remembered and held.
     let last_scroll = ctx.remember_backchannel(|| scroll);
@@ -472,7 +502,7 @@ fn scrollbar_build_shared(
     })
     .draw_node(ScrollbarNode {
         vertical,
-        thumb_color,
+        thumb_color: thumb_color_now,
         track_color: cfg.track_color,
         thickness: cfg.thickness,
         inset: cfg.inset,
@@ -488,6 +518,23 @@ fn scrollbar_build_shared(
         let viewport_state = viewport_for_start.clone();
         move |pos: (f32, f32)| {
             hover_src.emit_drag_start();
+            // A bar with no thumb has nothing to drag: taking over here would cancel a fling and
+            // mark the container as scrolling for a gesture that cannot move anything (the move
+            // callback returns early, so nothing would ever clear the flag until release).
+            let viewport = viewport_state.peek();
+            let content = scroll_state.fling_limit.peek() + viewport;
+            if scrollbar_geometry(
+                viewport,
+                content,
+                scroll_state.offset.peek(),
+                cfg.thumb_min_length,
+                SCROLLBAR_THUMB_MAX_FRACTION,
+                cfg.inset,
+            )
+            .is_none()
+            {
+                return;
+            }
             // Take over: cancel the list's fling (otherwise the next frame's update_animations writes
             // the offset back and the thumb cannot move); mark scrolling (cleared on release).
             scroll_state.cancel_fling();
@@ -596,6 +643,7 @@ impl LazyScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
+            hover_color: None,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
@@ -690,6 +738,7 @@ impl HorizontalLazyScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
+            hover_color: None,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
@@ -778,6 +827,7 @@ impl VerticalScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
+            hover_color: None,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
@@ -849,6 +899,7 @@ impl HorizontalScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
+            hover_color: None,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
