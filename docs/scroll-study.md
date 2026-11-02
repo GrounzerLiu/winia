@@ -109,6 +109,20 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 5. **Scrollbar placement is the caller's job** (no RTL mirroring). Already recorded in
    `docs/scrollbar.md` section 3.
 
+### 6.1 Two measurement traps (both hit while writing the demo)
+
+- **The layout tree does not show scrolling.** `t` reports LAYOUT positions; a scroll offset is
+  applied when painting, so text positions are identical before and after a scroll. Read the
+  container's `vscroll(<offset>)` entry instead - or the state's own readout.
+- **A wheel goes to the innermost scrollable under the pointer, not to the page.** Driving a page by
+  wheel from a point that sits over a card's inner list scrolls that list; the page only sees the
+  delta once the inner one is at its end. Pick a point outside every inner scroller, or press/hover
+  the container under test.
+- Together these produced a false finding - ".padding().vertical_scroll() never scrolls, the reverse
+  order does" - that the probe refuted: both orders measure identically (content 832, viewport 268,
+  same node size), and `modifier_order_tests` in `app/scroll.rs` now pins that.
+
+
 ## 7. Test map (and the two thin spots)
 
 | Area | Tests in file | Where else it is covered |

@@ -553,6 +553,7 @@ fn scroll_range(node: &LayoutNode) -> (f32, f32, (f32, f32)) {
 mod key_scroll_tests {
     use super::scroll_by_key;
     use crate::layout::node::LayoutNode;
+    use crate::layout::Column;
     use crate::modifier::{Modifier, ScrollState};
     use crate::unit::Size;
     use winit::keyboard::{Key, NamedKey};
@@ -966,5 +967,52 @@ mod release_velocity_floor_tests {
             crate::animation::has_animation_for_state(scroll.offset.state_id()),
             "a fast release on an ordinary container still flings"
         );
+    }
+}
+
+/// The demo made it look like `.padding(16).vertical_scroll(state)` never scrolled while the reverse
+/// order did. It was a measurement artifact - the tree reports LAYOUT positions, and a scroll offset
+/// is applied when painting, so reading text positions cannot see a scroll at all. Both orders give
+/// the same scroll range; this test keeps that true.
+#[cfg(test)]
+mod modifier_order_tests {
+    use crate::layout::node::LayoutNode;
+    use crate::layout::Column;
+    use crate::layout::Constraints;
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::runtime::composer::Composer;
+
+    fn run(scroll_first: bool) -> (f32, f32, f32, f32) {
+        let mut c = Composer::new();
+        let scroll = ScrollState::new();
+        let s = scroll.clone();
+        c.compose(move |ctx| {
+            let mut m = Modifier::new().fill_max_size();
+            m = if scroll_first { m.vertical_scroll(s.clone()).padding(16.0) } else { m.padding(16.0).vertical_scroll(s.clone()) };
+            Column::new()
+                .modifier(m)
+                .build(ctx, |ctx| {
+                    for i in 0..20 {
+                        crate::components::Text::new(format!("row {i}"))
+                            .modifier(Modifier::new().height(40.0))
+                            .build(ctx);
+                    }
+                });
+        });
+        c.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        let nodes: &[LayoutNode] = c.arena_nodes();
+        let node = nodes.iter().find(|n| n.modifier.vertical_scroll_state().is_some()).expect("a scroll node");
+        (node.measured_size.width, node.measured_size.height, node.scroll_content_height, node.scroll_viewport_height)
+    }
+
+    #[test]
+    fn both_modifier_orders_give_the_same_scroll_range() {
+        let scroll_first = run(true);
+        let pad_first = run(false);
+        assert_eq!(scroll_first, pad_first, "the order of padding and vertical_scroll must not matter");
+        // 20 rows of 40 inside a 300-tall viewport, 16 px of padding on each side.
+        assert_eq!(scroll_first.2, 832.0, "content height");
+        assert_eq!(scroll_first.3, 268.0, "viewport height (300 - 32)");
+        assert!(scroll_first.2 > scroll_first.3, "and the content really overflows");
     }
 }
