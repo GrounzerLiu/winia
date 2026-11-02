@@ -70,6 +70,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [TopAppBar 文档](docs/top-app-bar.md) — 四种高度变体、Typography 与共享滚动 offset 折叠
 - [Scaffold 文档](docs/scaffold.md) — top/bottom/content/FAB 页面布局与 RTL 定位
 - [Nested Scroll 文档](docs/nested-scroll.md) — pre/post scroll、TopAppBarState 与行为工厂
+- [滚动布局研究](docs/scroll-study.md) — 分层、协议、一次滚轮/一次拖拽的完整链路，以及与 Compose 的差距清单
 - [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
 - [Debug Server 指南](docs/debug-server.md) — WS/stdin 调试通道：事件注入、布局树（含 overlay）、帧抓取
 - [架构文档](docs/architecture.md) — 当前的模块分层、一帧的流程、各子系统与 Compose 对照
