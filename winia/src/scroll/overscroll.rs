@@ -131,6 +131,68 @@ impl OverscrollEffect {
         self.raw.state_id() == other.raw.state_id()
     }
 }
+/// Compose's `OverscrollFactory`: what a scroll container asks for the effect it should use when the
+/// caller did not hand it one (`foundation/Overscroll.kt:360-366`).
+pub type OverscrollFactory = std::sync::Arc<dyn Fn() -> OverscrollEffect + Send + Sync>;
+
+/// A stable identity for a factory value (a fat pointer cannot be cast to `u64` directly).
+fn factory_identity(factory: &OverscrollFactory) -> u64 {
+    std::sync::Arc::as_ptr(factory) as *const () as u64
+}
+
+fn platform_factory() -> OverscrollFactory {
+    std::sync::Arc::new(OverscrollEffect::new)
+}
+
+/// Compose's `LocalOverscrollFactory`, and its default alike: the value is `Some(platform factory)`,
+/// so a scroll container overscrolls unless something turns it off - `provides(None)` here is
+/// Compose's `LocalOverscrollFactory provides null`.
+static LOCAL_OVERSCROLL_FACTORY: std::sync::LazyLock<
+    crate::runtime::composition_local::CompositionLocal<Option<OverscrollFactory>>,
+> = std::sync::LazyLock::new(|| {
+    crate::runtime::composition_local::CompositionLocal::new(|| Some(platform_factory()))
+});
+
+/// Compose's `rememberOverscrollEffect()`: the effect this composition's scroll containers should
+/// feed, or `None` when overscroll is turned off for the subtree.
+#[crate::composable]
+pub fn remember_overscroll_effect(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+) -> Option<OverscrollEffect> {
+    let factory = LOCAL_OVERSCROLL_FACTORY.current()?;
+    // Keyed by the factory INSTANCE: replacing the factory has to build a new effect, exactly as
+    // Compose re-remembers when `LocalOverscrollFactory` changes (`Overscroll.kt:342-350`).
+    let key = factory_identity(&factory) ^ 0x4F56_4552_5343_524F;
+    let effect: crate::runtime::state::State<OverscrollEffect> = ctx.remember_at_key(key, move || factory());
+    Some(effect.get())
+}
+
+/// Provide a factory for a subtree - `None` turns overscroll off for everything inside.
+///
+/// The `ctx.changed` + dirty marking are load-bearing: a provider that only changes the local leaves
+/// already-Skipped children reading the old value (the same trap `DisableSelection` documents).
+#[crate::composable]
+pub fn with_overscroll_factory(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    factory: Option<OverscrollFactory>,
+    content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx),
+) {
+    let identity = factory.as_ref().map(factory_identity);
+    if ctx.changed(&identity) {
+        ctx.mark_subtree_dirty();
+    }
+    LOCAL_OVERSCROLL_FACTORY.provides(factory, || content(ctx));
+}
+
+/// Turn the overscroll off for a subtree, the same way `LocalOverscrollFactory provides null` does.
+#[crate::composable]
+pub fn disable_overscroll(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx),
+) {
+    with_overscroll_factory(ctx, None, content);
+}
+
 impl Default for OverscrollEffect {
     fn default() -> Self {
         Self::new()

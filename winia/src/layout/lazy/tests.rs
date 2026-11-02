@@ -293,6 +293,38 @@
     }
 
     /// `Modifier::padding` on the list itself deflates the VIEWPORT (the padding is outside the
+    /// Compose applies the platform overscroll effect to every scroll container unless the subtree
+    /// turns it off (`LocalOverscrollFactory provides null`). The list carries the element by default.
+    #[test]
+    fn a_lazy_list_overscrolls_by_default_and_that_can_be_turned_off() {
+        fn compose(disable: bool) -> bool {
+            let mut composer = Composer::new();
+            composer.compose(crate::compose!(|ctx| {
+                if disable {
+                    crate::scroll::overscroll::disable_overscroll(ctx, |ctx| {
+                        list(ctx);
+                    });
+                } else {
+                    list(ctx);
+                }
+            }));
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+            composer.arena_nodes().iter().any(|n| n.modifier.overscroll_effect().is_some())
+        }
+        fn list(ctx: &mut ComposeCtx) {
+            LazyColumn::new()
+                .items(4, |i| i as u64, |ctx, i| {
+                    crate::components::Text::new(format!("Item {i}"))
+                        .modifier(Modifier::new().size(50.0, 40.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        }
+
+        assert!(compose(false), "the default factory gives the list an effect");
+        assert!(!compose(true), "and `disable_overscroll` takes it away");
+    }
+
     /// lazy node, Compose's rule), while the items are shifted into the padded area by the engine.
     /// The node still fills its slot exactly: the viewport is the inner size, and the padding is
     /// added on top of it — not the other way round.

@@ -117,6 +117,10 @@ pub mod prelude {
         AxisValue, ContentScale, Dyn, IconSource, ImageAlignment, PathFillType, SymbolAxes,
     };
     pub use crate::modifier::{Modifier, FocusRequester, ScrollState};
+    pub use crate::overscroll::{
+        remember_overscroll_effect, with_overscroll_factory, disable_overscroll, OverscrollEffect,
+        OverscrollFactory,
+    };
     pub use crate::layout::{Dimension, SizeValue};
     pub use crate::text::{DecoStyle, DecoMode, FontEdge, FontHint};
     pub use crate::input::{KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};

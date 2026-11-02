@@ -10,7 +10,26 @@ winia already clips every scroll viewport exactly at its bounds; this modifier w
 30 dp on the cross axis only (`render_pass1`'s scroll block). The main axis stays exact, so scrolled
 content still cannot paint over a sibling.
 
-## `Modifier::overscroll(effect)`
+## `Modifier::overscroll(effect)` (and the default)
+
+Overscroll is ON BY DEFAULT for scroll containers, the way Compose does it: `LocalOverscrollFactory`
+has a default factory (`foundation/Overscroll.kt:341-350`), and `Modifier.verticalScroll` opts into it
+(`Scroll.kt:259` `useLocalOverscrollFactory = true`). winia mirrors that shape with
+`winia::overscroll::remember_overscroll_effect(ctx)`: every `LazyColumn`/`LazyRow` (and so every
+`Pager`) asks for it while building, so a list bends at its edges with no setup.
+
+```rust
+// a subtree without the bounce - Compose: `LocalOverscrollFactory provides null`
+disable_overscroll(ctx, |ctx| { list(ctx); });
+// or a different one everywhere inside
+with_overscroll_factory(ctx, Some(Arc::new(|| OverscrollEffect::new().reach(40.0))), |ctx| page(ctx));
+```
+
+A hand-built `Column + Modifier::vertical_scroll(state)` is ordinary user code, so it opts in with
+`.overscroll(&remember_overscroll_effect(ctx).unwrap_or_default())` or by attaching its own effect;
+the modifier itself cannot read a CompositionLocal.
+
+## Attaching it by hand (`Modifier::overscroll(effect)`)
 
 `OverscrollEffect` (hoist it with `remember`) turns the delta a container cannot consume into a
 rubber-band:
