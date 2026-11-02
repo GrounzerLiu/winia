@@ -31,6 +31,9 @@ mod flexbox_demo;
 #[path = "../../examples/text_demo.rs"]
 mod text_demo;
 
+#[path = "../../examples/selection_demo.rs"]
+mod selection_demo;
+
 const SCENARIOS: &[(&str, fn())] = &[
     ("flow_features", flow_features::main),
     ("item_animation", item_animation::main),
@@ -44,6 +47,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("lazy_staggered", lazy_staggered_demo::main),
     ("flexbox", flexbox_demo::main),
     ("text", text_demo::main),
+    ("selection", selection_demo::main),
 ];
 
 fn main() {
