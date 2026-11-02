@@ -75,7 +75,7 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 | `lastScrolledForward/Backward` | `ScrollableState.kt:115` | absent |
 | `animateScrollBy` | named in `ScrollableState.kt:33`; the suspend API | absent; `animate_scroll_to(value, max)` exists |
 | Wheel on a pager | nudges a few pixels | steps a whole page (deliberate; see section 3) |
-| Overscroll applied to flings | `Scrollable.kt:717` `overscroll.applyToFling(...)` | pull only; a fling that hits the end does not bend the content |
+| Overscroll applied to flings | `Scrollable.kt:717` `overscroll.applyToFling(...)` | **shipped**: the velocity left when the decay hits a boundary becomes a bend (`pull(velocity / 40)`), capped by the same 120 px |
 | Overscroll shape | stretch with scale/glow on some platforms | shift only, capped at 120 px, no scale (`docs/scroll-extras.md`) |
 | Keyboard scrolling | `Scrollable` handles **PageUp/PageDown only**, one viewport per press (`foundation/gestures/Scrollable.kt:428-471`); arrow keys move FOCUS there and the next item is brought into view | arrows / PageUp / PageDown / Home / End scroll the focused node's nearest scroll container (winia has no bring-into-view, so the arrows scroll instead) |
 | Nested scroll protocol | pre/post scroll + pre/post fling, `Offset` returns **(not vendored)** | same four hooks, same order, clamped (`scroll/nested.rs:59-64`) |
@@ -98,8 +98,11 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
    `scroll_by_tests`: moves and reports the consumed amount, clamps at both ends and says so,
    follows a limit that starts open-ended and settles after the first measure). `dispatchRawDelta` is
    intentionally NOT mirrored - see the table above.
-3. **Overscroll does not apply to flings.** A drag past the edge bends the content, a fling past it just
-   stops. Compose pipes the fling through the effect (`Scrollable.kt:717`).
+3. ~~**Overscroll does not apply to flings.**~~ **Shipped 2026-11-02** - the boundary callback the
+   fling already reported now feeds the effect: `pull_for_velocity` turns the remaining velocity into
+   a bend (40 px/s per pixel, 120 px cap), so a fling into an end bends and returns instead of just
+   stopping. Tests: `a_fling_bend_follows_velocity_and_caps` and `a_fling_into_the_end_leaves_a_bend`
+   (the second drives the real `dispatch_nested_scroll_fling` and asserts a non-zero stretch).
 4. **No `lastScrolledForward/Backward`.** A bar that hides on scroll direction has to diff offsets
    itself; the state already knows the direction but does not publish it.
 5. **Scrollbar placement is the caller's job** (no RTL mirroring). Already recorded in

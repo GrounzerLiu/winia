@@ -51,6 +51,19 @@ impl OverscrollEffect {
         self.value.peek()
     }
 
+    /// A fling that dies at a boundary keeps a little of its speed as a bend: 40 px/s per pixel, so a
+    /// slow fling barely bends and a hard one reaches [`MAX_PULL`]. Compose hands the whole fling to the
+    /// effect (`overscroll.applyToFling`, `foundation/gestures/Scrollable.kt:717`); winia flings through
+    /// its own decay, so the effect is given the velocity that was left when the decay hit the limit.
+    pub(crate) const PULL_PER_VELOCITY: f32 = 1.0 / 40.0;
+
+    /// Bend for a fling that hit a boundary with `remaining_velocity` (VALUE space, the same sign the
+    /// decay runs on: positive moves the offset toward the end). Positive pull = past the end, matching
+    /// [`Self::pull`].
+    pub(crate) fn pull_for_velocity(&self, remaining_velocity: f32) -> f32 {
+        self.pull(remaining_velocity * Self::PULL_PER_VELOCITY)
+    }
+
     /// Absorb `leftover` (the delta the container could not consume). Returns the signed amount the
     /// effect absorbed, which the caller adds to its consumed delta so the gesture does not fall
     /// through to an ancestor.
@@ -105,6 +118,7 @@ impl Default for OverscrollEffect {
 mod tests {
     use super::*;
     use crate::layout::node::LayoutNode;
+    // (tests below use these)
     use crate::modifier::{Modifier, ScrollState};
     use crate::unit::{Density, Size};
 
@@ -214,4 +228,47 @@ mod tests {
         );
         crate::animation::clear_all_animations();
     }
-}
+
+    /// A fling that dies at the end bends the content past the END (a positive pull), one pixel per
+    /// 40 px/s, and the bend is capped.
+    #[test]
+    fn a_fling_bend_follows_velocity_and_caps() {
+        let effect = OverscrollEffect::new();
+        assert_eq!(effect.pull_for_velocity(2000.0), 50.0, "2000 px/s toward the end -> +50 past it");
+        assert_eq!(effect.stretch(), 50.0, "and the content is bent by that much");
+        effect.pull_for_velocity(-800.0);
+        assert_eq!(effect.stretch(), 30.0, "back 20 px (800 px/s the other way -> -20)");
+        effect.pull_for_velocity(100_000.0);
+        assert_eq!(effect.stretch(), 120.0, "a hard fling stops at the cap");
+        effect.pull_for_velocity(10.0);
+        assert_eq!(effect.stretch(), 120.0, "a slow one at the cap does not move it");
+    }
+
+    /// The fling path really reaches the effect: a decay that hits the end leaves a bend.
+    #[test]
+    fn a_fling_into_the_end_leaves_a_bend() {
+        let effect = OverscrollEffect::new();
+        let scroll = ScrollState::new();
+        scroll.offset.set(100.0);
+        scroll.fling_limit.set(100.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .overscroll(&effect)
+                    .size(100.0, 100.0),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].scroll_viewport_height = 100.0;
+        nodes[1].scroll_content_height = 200.0;
+        nodes[0].children.push(1);
+
+        crate::app::scroll::dispatch_nested_scroll_fling(&mut nodes, 0, 1, crate::nested_scroll::ScrollVelocity { x: 0.0, y: 1500.0 });
+        // The decay clamps on its first tick; give the animation one.
+        crate::animation::update_animations();
+        assert!(effect.stretch() > 0.0, "the fling bent the content: got {}", effect.stretch());
+        crate::animation::clear_all_animations();
+    }}

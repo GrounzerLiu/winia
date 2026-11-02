@@ -26,6 +26,13 @@ rubber-band:
   the delay too (the value does not move), so a finger held at the cap does not see the return start
   underneath it.
 
+A FLING that dies at a boundary bends too: the velocity left when the decay hits the limit becomes
+`pull(velocity / 40)` px, so a 2000 px/s fling bends 50 px and anything past 4800 px/s reaches the
+same 120 px cap. Compose hands the whole fling to the effect (`overscroll.applyToFling`,
+`foundation/gestures/Scrollable.kt:717`); winia flings through its own decay and reports the remainder,
+which is why the bend is a function of that remainder rather than of the fling's whole shape.
+Reverse containers skip it, exactly as they skip the delta path.
+
 Deliberate scope: the content SHIFTS past the edge (there is no content scaling and no platform
 glow), the pull is capped at 120 logical px, and containers with `reverseLayout` skip the effect
 (their offsets are mirrored, so a signed pull would point the wrong way).

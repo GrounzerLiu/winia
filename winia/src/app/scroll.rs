@@ -204,7 +204,14 @@ pub(crate) fn dispatch_nested_scroll_fling(
         if let Some(ss) = node.modifier.vertical_scroll_state() {
             if child_velocity.y.abs() >= 50.0 || ss.wants_fling() {
                 let post_connections = post_connections.clone();
+                // A fling that dies at the end bends the content instead of just stopping (Compose
+                // pipes the whole fling through the effect: Scrollable.kt:717). Reverse containers
+                // skip it - their offsets are mirrored, so a signed pull would point the wrong way.
+                let effect = if node.scroll_reverse { None } else { node.modifier.overscroll_effect().cloned() };
                 ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
+                    if let Some(effect) = effect.as_ref() {
+                        effect.pull_for_velocity(remaining_velocity);
+                    }
                     // child consumption = start minus the boundary remainder (all of it when the remainder is 0).
                     let consumed_by_child = crate::nested_scroll::ScrollVelocity {
                         x: 0.0,
@@ -225,7 +232,11 @@ pub(crate) fn dispatch_nested_scroll_fling(
                 // gesture delta (apply_scroll_delta already mirrors the delta, so mirroring here keeps
                 // the two consistent).
                 let fling_vx = if node.scroll_reverse { -child_velocity.x } else { child_velocity.x };
+                let effect = if node.scroll_reverse { None } else { node.modifier.overscroll_effect().cloned() };
                 ss.fling_with_boundary(fling_vx, move |remaining_velocity| {
+                    if let Some(effect) = effect.as_ref() {
+                        effect.pull_for_velocity(remaining_velocity);
+                    }
                     // child consumption = start minus the boundary remainder.
                     let consumed_by_child = crate::nested_scroll::ScrollVelocity {
                         x: child_velocity.x - remaining_velocity,
