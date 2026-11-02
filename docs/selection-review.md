@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 7 — M-1, M-2, M-5..M-9 |
+| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 8 — M-1, M-2, M-5..M-10 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -246,6 +246,27 @@ steps, line edges, line steps, select-all, the word-start mirror) and
 plus end to end `app::per_window::selection_drag_tests::ctrl_a_through_the_window_key_path_selects_the_whole_container`
 (a press then Ctrl+A selects the whole container and the change is announced) and
 `a_press_records_the_container_for_keyboard_keys`.
+## Thirteenth pass (2026-11-02): Ctrl+C never reached the clipboard
+
+`- [x] **M-10 — the copy went nowhere.** Reported by the user: select text in the demo, press Ctrl+C,
+the clipboard still holds the old contents. The container's copy lived in a `KeyNode` on the
+container (`CopySelectionKey`), which only fires while some OTHER component inside the container
+holds focus — and a container of plain texts has nothing focusable, so it never fired at all. The
+`KeyNode` had been measured only through its own `on_event`, never through a real key path.
+
+Fixed by routing Ctrl+C through the same window-level path M-9 added for Ctrl+A and the arrows
+(`apply_selection_key`), which addresses the container the last press landed in. The `KeyNode`
+stays as the focused case.
+
+Measured end to end against the REAL clipboard: `ui_selection_test::ctrl_c_puts_the_selection_on_the_clipboard`
+launches the demo, drag-selects, sends `ctrl+c` and then reads the Windows clipboard through
+PowerShell — it holds the selected text. Red check: disabling the routed copy leaves the previous
+clipboard contents in place and the test fails. The test restores whatever was on the clipboard
+before it ran (as base64, because a command-line argument and PowerShell's default output encoding
+both mangle non-ASCII text — a Chinese clipboard came back as "????").
+
+The debug server's `k` command learned `ctrl+` / `shift+` / `alt+` / `meta+` prefixes for this
+(`parse_debug_key_with_modifiers`); without them no shortcut test could exist at all.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which

@@ -131,10 +131,20 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
         winit::keyboard::Key::Named(n) => Some(*n),
         _ => None,
     }) else {
-        // The one character shortcut: Ctrl+A.
+        // The character shortcuts.
         let is_a = matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a"));
         if ctrl && is_a {
             return reg.select_all();
+        }
+        // Ctrl+C copies here as well as in the container's `KeyNode`. The node only fires while
+        // some OTHER component inside the container holds focus, which a container of plain texts
+        // never does — so the routed path is the one that actually runs (measured: a selection in
+        // the demo, Ctrl+C, and the clipboard still held the previous contents).
+        let is_c = matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
+        if ctrl && is_c {
+            let Some(selection) = reg.build_selection() else { return false };
+            crate::clipboard::request_text(selection.text());
+            return true;
         }
         return false;
     };
@@ -711,6 +721,30 @@ mod tests {
 
         assert!(apply_selection_key(&reg, &named(NamedKey::Escape, false, false)), "Escape clears");
         assert!(reg.build_selection().is_none());
+    }
+
+    /// Ctrl+C has to reach the clipboard from the ROUTED path: the container's `KeyNode` only fires
+    /// while some other component inside it holds focus, which a container of plain texts never does.
+    #[test]
+    fn ctrl_c_requests_the_clipboard() {
+        use crate::input::{KbEvent, KbEventType};
+        use winit::keyboard::Key;
+        let _ = crate::clipboard::take_pending();
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "hello world");
+        reg.reindex(&[1]);
+        reg.set_selection(0, 5);
+        let ke = KbEvent {
+            key: Key::Character("c".into()),
+            event_type: KbEventType::KeyDown,
+            is_alt_pressed: false,
+            is_ctrl_pressed: true,
+            is_shift_pressed: false,
+            is_meta_pressed: false,
+            repeat: false,
+        };
+        assert!(apply_selection_key(&reg, &ke), "Ctrl+C is ours");
+        assert_eq!(crate::clipboard::take_pending(), vec!["hello".to_string()]);
     }
 
     /// M-2: the state observes whatever the container's selection becomes — the same path a drag

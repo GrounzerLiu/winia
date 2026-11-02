@@ -180,7 +180,7 @@ impl AppState {
                         // and a UI test driving Tab over the debug server would have measured that
                         // copy instead of the framework). Shift is not expressible in `k <key>`.
                         pw.tab_move_focus(false);
-                    } else if let Some(k) = parse_debug_key(&key) {
+                    } else if let Some((k, ctrl, shift, alt, meta)) = parse_debug_key_with_modifiers(&key) {
                         // Any key: reuse the real keyboard dispatch path (Preview/Bubble/activation) —
                         // so WS can simulate character input, deletion and arrow keys. Modifiers default
                         // to none (Ctrl and other combinations are not supported yet — add modifier
@@ -188,13 +188,17 @@ impl AppState {
                         let ke = crate::input::KbEvent {
                             key: k,
                             event_type: crate::input::KbEventType::KeyDown,
-                            is_alt_pressed: pw.modifiers.alt_key(),
-                            is_ctrl_pressed: pw.modifiers.control_key(),
-                            is_shift_pressed: pw.modifiers.shift_key(),
-                            is_meta_pressed: pw.modifiers.meta_key(),
+                            is_alt_pressed: alt,
+                            is_ctrl_pressed: ctrl,
+                            is_shift_pressed: shift,
+                            is_meta_pressed: meta,
                             repeat: false,
                         };
-                        if !dispatch_key_to_overlay(pw, &ke) && !focus_scope_is_open(pw) {
+                        // Selection keys are routed exactly as the window path routes them, so a
+                        // debug-driven Ctrl+C lands where a real one would.
+                        if crate::app::app_state::try_selection_key(pw, &ke) {
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        } else if !dispatch_key_to_overlay(pw, &ke) && !focus_scope_is_open(pw) {
                             // Same gate as the real key path: a focus-scope overlay owns the keyboard,
                             // so a key it does not consume does not reach the page behind it either.
                             dispatch_key_to_focus(pw, &ke);

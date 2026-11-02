@@ -92,6 +92,26 @@ pub(crate) fn dispatch_key_in_arena(
 
 /// Parse a key string from the debug `k` command into a winit Key (a single character →
 /// `Character`, a special name → `NamedKey`). Returns None when it cannot be parsed (ignored).
+/// Parse a `k` command with modifiers: `ctrl+c`, `shift+ArrowRight`, `ctrl+shift+ArrowLeft`.
+///
+/// The UI suite drives the REAL key paths through the debug server, so a shortcut that needs a
+/// modifier (Ctrl+C, Shift+arrows) could not be tested at all while `k` carried no modifiers. The
+/// window's own live modifier state is still the base; these prefixes only add to it.
+pub(crate) fn parse_debug_key_with_modifiers(
+    s: &str,
+) -> Option<(winit::keyboard::Key, bool, bool, bool, bool)> {
+    let (mut ctrl, mut shift, mut alt, mut meta) = (false, false, false, false);
+    let mut rest = s;
+    loop {
+        if let Some(r) = rest.strip_prefix("ctrl+") { ctrl = true; rest = r; }
+        else if let Some(r) = rest.strip_prefix("shift+") { shift = true; rest = r; }
+        else if let Some(r) = rest.strip_prefix("alt+") { alt = true; rest = r; }
+        else if let Some(r) = rest.strip_prefix("meta+") { meta = true; rest = r; }
+        else { break; }
+    }
+    parse_debug_key(rest).map(|key| (key, ctrl, shift, alt, meta))
+}
+
 pub(crate) fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
     use winit::keyboard::{Key, NamedKey};
     match s {

@@ -131,3 +131,68 @@ fn the_demo_scrolls_to_reach_the_lower_cards() {
     let same = top.iter().zip(restored.iter()).filter(|(a, b)| a == b).count();
     assert!(same > top.len() - 8, "scrolling back restores the top: {same} of {} samples match", top.len());
 }
+/// The Windows clipboard, through PowerShell: the only way to see what OTHER applications would
+/// paste. `Set-Clipboard -Raw` semantics are close enough for a test (trailing newlines trimmed).
+fn read_system_clipboard() -> String {
+    // `[Console]::OutputEncoding` first: without it PowerShell writes the console code page and a
+    // non-ASCII clipboard comes back as "????" (which is what the restore then put back).
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard -Raw",
+        ])
+        .output()
+        .expect("powershell runs");
+    String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// Put `text` back after the test. It travels as base64: a command-line argument mangles non-ASCII
+/// (a Chinese clipboard came back as "????"), and writing a file first is refused inside the test
+/// sandbox — the restore silently did nothing and the test's own text stayed on the clipboard.
+fn write_system_clipboard(text: &str) {
+    if text.is_empty() { return; }
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = text.as_bytes();
+    let mut encoded = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        encoded.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        encoded.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        encoded.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        encoded.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    let script = format!(
+        "$b=[Convert]::FromBase64String('{encoded}'); Set-Clipboard -Value ([System.Text.Encoding]::UTF8.GetString($b))"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+}
+#[test]
+fn ctrl_c_puts_the_selection_on_the_clipboard() {
+    let previous = read_system_clipboard();
+    let mut app = UiTest::launch("selection");
+    let a = app.expect_tag("sel-a");
+    let b = app.expect_tag("sel-b");
+    app.drag(a.0 + 4.0, a.1 + a.3 / 2.0, b.0 + 120.0, b.1 + b.3 / 2.0);
+    assert!(
+        readout(&mut app, "main").iter().any(|line| line.contains("first run")),
+        "the drag has to select something first: {:?}",
+        readout(&mut app, "main")
+    );
+
+    app.key("ctrl+c");
+    let mut got = String::new();
+    for _ in 0..40 {
+        got = read_system_clipboard();
+        if got.contains("first run") { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    write_system_clipboard(&previous);
+    assert!(
+        got.contains("first run"),
+        "the OS clipboard has to hold the selection, got {got:?}"
+    );
+}
