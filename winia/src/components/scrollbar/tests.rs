@@ -542,3 +542,42 @@
         let key_nobar = scrollbar_key(composer3.arena_nodes(), root3).expect("条应存在");
         assert_ne!(key_nobar, key_rev0, "不传 reverse 应与镜像位不同（反向错误复现）");
     }
+
+    /// Where a row puts the bar: at the END edge, which mirrors with the layout direction. The bar
+    /// itself is direction-neutral (its inset is symmetric), so the placement is the row's job - this
+    /// pins that a caller who puts it LAST gets the M3 position in both directions.
+    #[test]
+    fn a_bar_placed_last_sits_at_the_end_edge_in_both_directions() {
+        // The bar's fade runs through a LaunchedEffect, which needs a runtime even in a test.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        fn child_xs(rtl: bool) -> Vec<f32> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let scroll = crate::modifier::ScrollState::new();
+            composer.compose(crate::compose!(|ctx| {
+                let mut m = crate::modifier::Modifier::new().size(200.0, 100.0);
+                if rtl {
+                    m = m.layout_direction(crate::layout::LayoutDirection::Rtl);
+                }
+                crate::layout::Row::new().modifier(m).build(ctx, |ctx| {
+                    crate::components::Text::new("content")
+                        .modifier(crate::modifier::Modifier::new().width(100.0))
+                        .build(ctx);
+                    VerticalScrollbar::new(scroll.clone())
+                        .modifier(crate::modifier::Modifier::new().width(10.0))
+                        .build(ctx);
+                });
+            }));
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 100.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.arena.root.unwrap();
+            nodes[root].children.iter().map(|c| nodes[*c].position.x).collect()
+        }
+
+        let ltr = child_xs(false);
+        let rtl = child_xs(true);
+        assert!(ltr.len() >= 2, "a content child and a bar: {ltr:?}");
+        assert!(rtl.len() >= 2, "{rtl:?}");
+        assert!(ltr[1] > ltr[0], "LTR: the bar is after the content: {ltr:?}");
+        assert!(rtl[1] < rtl[0], "RTL: it lands on the other side: {rtl:?}");
+    }

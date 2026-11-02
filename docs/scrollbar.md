@@ -89,7 +89,10 @@ HorizontalLazyScrollbar::new(row_state).always_show(true).build(ctx);
 
 ## 3. 与 Compose 的差异（v1 范围）
 
-- 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
+- RTL：条自身是方向中性的（inset 对称，不假设左右）。摆在 `Row`/`Stack` 的**末位**就落在 end 边，
+  RTL 下自动镜像到左侧——M3 的位置语义因此由调用方的容器决定，而不是由条硬编码。
+  实测记录在 `components/scrollbar/tests.rs::a_bar_placed_last_sits_at_the_end_edge_in_both_directions`
+  （LTR 子节点 x：内容 0、条 100；RTL：内容 100、条 0）。
 - 无 LazyList 适配（已做：`LazyScrollbar` 吃 `LazyListState`——offset 同像素
   语义，fling_limit/pulse 测量期回写；scrolling 通道 lazy 侧无，fade 靠脉冲）。
 - `LazyRow` 适配（已做）：`HorizontalLazyScrollbar` 吃 `LazyListState`，

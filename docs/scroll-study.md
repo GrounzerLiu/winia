@@ -106,8 +106,11 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 4. ~~**No `lastScrolledForward/Backward`.**~~ **Shipped 2026-11-02** as `ScrollState::last_scrolled_forward()`,
    sampled at read time rather than updated per scroll: reading it once a frame is what a bar that
    hides on direction needs, and it costs one float when nobody reads it.
-5. **Scrollbar placement is the caller's job** (no RTL mirroring). Already recorded in
-   `docs/scrollbar.md` section 3.
+5. ~~**Scrollbar placement is the caller's job** (no RTL mirroring).~~ **Checked 2026-11-02: there was
+   nothing to fix.** The bar is direction-neutral (symmetric inset) and a caller who puts it LAST in a
+   `Row`/`Stack` lands on the end edge, which mirrors in RTL because the row does. The claim in
+   `docs/scrollbar.md` was the outdated part; it now states the rule and points at the test that pins
+   it (`components/scrollbar/tests.rs`, LTR content x=0/bar x=100, RTL the reverse).
 
 ### 6.1 Two measurement traps (both hit while writing the demo)
 
