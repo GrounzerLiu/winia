@@ -10,6 +10,19 @@ winia already clips every scroll viewport exactly at its bounds; this modifier w
 30 dp on the cross axis only (`render_pass1`'s scroll block). The main axis stays exact, so scrolled
 content still cannot paint over a sibling.
 
+## The fling bend never showed (2026-11-02, reported by the user)
+
+A fling that travelled to an edge applied its pull - `effect=true`, raw 33, stretch 29.6 - and the
+screen did not move. The default factory was the cause: `LOCAL_OVERSCROLL_FACTORY`'s default closure
+built a NEW `Arc` on every `current()` call, and a factory identity is a pointer, so every build minted
+a fresh effect for the same scroll state. Measured: the same slot's effect state id changed on every
+frame (213/228/230/232) while the fling pulled StateId(234) - an instance the next build discarded.
+
+It is one static value now (`PLATFORM_FACTORY`). Re-measured: the slot keeps StateId(38), and the
+fling's 25.4 px pull is painted for 76 frames. Regression tests: `the_default_factory_keeps_one_identity`
+(churns the allocator between two reads) and `the_effect_is_stable_across_rebuilds` (pulls once, then
+asserts the pull survives a rebuild). Both fail with a per-read factory.
+
 ## Reviewed 2026-11-02: three defects the review found
 
 - **A restored offset outlived its content.** `remember_saveable` restores 240 into a list that now

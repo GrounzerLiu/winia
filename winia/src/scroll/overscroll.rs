@@ -140,8 +140,16 @@ fn factory_identity(factory: &OverscrollFactory) -> u64 {
     std::sync::Arc::as_ptr(factory) as *const () as u64
 }
 
+/// The ONE platform factory. It has to be a single static value: a factory identity is a pointer, and
+/// `CompositionLocal::current()` calls its default closure on every read - a default that built a new
+/// `Arc` each time gave every scroll state a NEW effect on every build (measured: the same slot's
+/// effect state id changed every frame, 213/228/230/232, and a fling's pull landed on an instance the
+/// next build had already thrown away, so it never rendered).
+static PLATFORM_FACTORY: std::sync::LazyLock<OverscrollFactory> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(OverscrollEffect::new));
+
 fn platform_factory() -> OverscrollFactory {
-    std::sync::Arc::new(OverscrollEffect::new)
+    std::sync::Arc::clone(&PLATFORM_FACTORY)
 }
 
 /// Compose's `LocalOverscrollFactory`, and its default alike: the value is `Some(platform factory)`,
@@ -442,14 +450,28 @@ mod tests {
         assert_eq!(scroll.overscroll_cache.lock().unwrap().len(), 1, "and one cached effect");
     }
 
-    /// Rebuilding must hand back the SAME effect: a fresh one would drop a pull in flight.
+    /// The default factory is ONE value. `CompositionLocal::current()` calls its default closure on
+    /// every read, so a default that built a new `Arc` each time gave every scroll state a new effect
+    /// on every build - and a fling's pull landed on an instance the next build had thrown away.
+    #[test]
+    fn the_default_factory_keeps_one_identity() {
+        let first = LOCAL_OVERSCROLL_FACTORY.current().expect("a default factory");
+        // Churn the allocator between the reads: a per-read Arc would land somewhere else.
+        let junk: Vec<_> = (0..16).map(|i| std::sync::Arc::new(vec![i as u8; 64])).collect();
+        let second = LOCAL_OVERSCROLL_FACTORY.current().expect("a default factory");
+        assert_eq!(factory_identity(&first), factory_identity(&second), "one static value");
+        drop(junk);
+    }
+
+    /// Rebuilding must hand back the SAME effect: a fresh one would drop a pull in flight. The pull
+    /// is taken ONCE and must still be there after a rebuild (a per-build effect reports 0).
     #[test]
     fn the_effect_is_stable_across_rebuilds() {
         let mut composer = crate::runtime::composer::Composer::new();
         let scroll = ScrollState::new();
         let s = scroll.clone();
-        let mut ids = Vec::new();
-        for _ in 0..2 {
+        let mut stretches = Vec::new();
+        for build in 0..2 {
             composer.compose(crate::compose!(|ctx| {
                 crate::layout::Column::new()
                     .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
@@ -462,10 +484,17 @@ mod tests {
                 .iter()
                 .find_map(|n| n.modifier.overscroll_effect().cloned())
                 .expect("an effect");
-            effect.pull(10.0);
-            ids.push(effect.stretch().to_bits());
+            if build == 0 {
+                effect.pull(10.0);
+            }
+            stretches.push(effect.stretch());
+            // Same interference a real build has: an unstable factory would mint a different
+            // effect here and lose the pull.
+            let junk: Vec<_> = (0..16).map(|i| std::sync::Arc::new(vec![i as u8; 64])).collect();
+            drop(junk);
         }
-        assert_eq!(ids[0], ids[1], "the second build reused the effect, pull included");
+        assert!((stretches[0] - 9.6).abs() < 0.3, "the first build pulled, got {}", stretches[0]);
+        assert_eq!(stretches[0].to_bits(), stretches[1].to_bits(), "the second build reused the effect, pull included");
         crate::animation::clear_all_animations();
     }
 
