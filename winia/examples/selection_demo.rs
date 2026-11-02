@@ -75,11 +75,18 @@ pub fn main() {
                 .title("Selection demo")
                 .build(ctx, |ctx| {
                     // The Scaffold's content slot is a Box: everything built straight into it lands
-                    // at the same origin (the cards overlapped until this Column wrapped them).
+                    // at the same origin (the cards overlapped until this Column wrapped them). The
+                    // Column scrolls, because the cards are taller than the window.
                     settings::shell("Selection", ctx, |ctx| {
+                        let scroll = ctx.remember(|| ScrollState::new()).get();
                         Column::new()
                             .spacing(12.0)
-                            .modifier(Modifier::new().fill_max_size().padding(16.0))
+                            .modifier(
+                                Modifier::new()
+                                    .fill_max_size()
+                                    .vertical_scroll(scroll)
+                                    .padding(16.0),
+                            )
                             .build(ctx, selection_demo);
                     });
                 });

@@ -107,3 +107,27 @@ fn a_double_click_selects_one_word() {
     assert!(!inner.is_empty(), "a word is selected: {quoted}");
     assert!(!inner.contains(' '), "one word, not a run of them: {inner:?}");
 }
+
+/// The demo is taller than its window, so the body has to scroll — otherwise the lower cards are
+/// unreachable (the last one sits at y=917 in a 1040-tall window with a 64-tall app bar above it).
+#[test]
+fn the_demo_scrolls_to_reach_the_lower_cards() {
+    let mut app = UiTest::launch("selection");
+    // One sample every 16 px: enough resolution to see the content move, half the round trips.
+    let ys: Vec<f32> = (0..60).map(|i| 80.0 + i as f32 * 16.0).collect();
+    let column = |app: &mut UiTest| -> Vec<Option<(u8, u8, u8, u8)>> {
+        ys.iter().map(|y| app.pixel_at_logical(40.0, *y)).collect()
+    };
+    let top = column(&mut app);
+
+    app.scroll(-300.0);
+    let scrolled = column(&mut app);
+    let changed = top.iter().zip(scrolled.iter()).filter(|(a, b)| a != b).count();
+    assert!(changed > 10, "scrolling has to move the content, {changed} of {} samples differ", top.len());
+
+    // Scrolling back to the top restores it: the offset is bounded, not accumulated forever.
+    app.scroll(4000.0);
+    let restored = column(&mut app);
+    let same = top.iter().zip(restored.iter()).filter(|(a, b)| a == b).count();
+    assert!(same > top.len() - 8, "scrolling back restores the top: {same} of {} samples match", top.len());
+}
