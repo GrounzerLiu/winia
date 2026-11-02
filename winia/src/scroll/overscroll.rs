@@ -375,6 +375,47 @@ mod tests {
         assert!(effect.stretch() < 1.0, "after the gesture stops the return runs, got {}", effect.stretch());
         crate::animation::clear_all_animations();
     }
+    /// The whole chain, in pixels: the render has to READ the pull. This is the test that would
+    /// have caught the per-build effect identity - the pull was applied, the effect was real, and
+    /// the frame drew nothing.
+    #[test]
+    fn a_pull_shifts_the_painted_content() {
+        fn frame(pull: f32) -> (u8, u8, u8) {
+            let effect = OverscrollEffect::new();
+            if pull != 0.0 {
+                effect.pull(pull);
+            }
+            let scroll = crate::modifier::ScrollState::new();
+            let s = scroll.clone();
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(crate::compose!(|ctx| {
+                crate::layout::Column::new()
+                    .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()).overscroll(&effect))
+                    .build(ctx, |ctx| {
+                        for _ in 0..3 {
+                            crate::layout::Column::new()
+                                .modifier(Modifier::new().size(100.0, 40.0).background(crate::graphics::Color::RED, crate::graphics::Shape::Rectangle))
+                                .build(ctx, |_| {});
+                        }
+                    });
+            }));
+            composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+            surface.canvas().clear(skia_safe::Color::WHITE);
+            let idx = composer.layout_root_idx().unwrap();
+            crate::render::render(composer.arena_nodes(), idx, surface.canvas());
+            let mut px = [0u8; 4];
+            let info = skia_safe::ImageInfo::new((1, 1), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
+            surface.read_pixels(&info, &mut px, 4, (50, 95));
+            crate::animation::clear_all_animations();
+            (px[0], px[1], px[2])
+        }
+        let still = frame(0.0);
+        let pulled = frame(40.0);
+        assert_eq!(still, (255, 0, 0), "the content fills the bottom of the viewport at rest");
+        assert_eq!(pulled, (255, 255, 255), "and a pull lifts it away, leaving the background");
+    }
+
     /// A fling that dies at the end bends the content past the END (a positive pull), damped by the
     /// same curve: a slow fling is nearly proportional, a hard one approaches the cap.
     #[test]

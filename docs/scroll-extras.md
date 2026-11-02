@@ -21,7 +21,9 @@ frame (213/228/230/232) while the fling pulled StateId(234) - an instance the ne
 It is one static value now (`PLATFORM_FACTORY`). Re-measured: the slot keeps StateId(38), and the
 fling's 25.4 px pull is painted for 76 frames. Regression tests: `the_default_factory_keeps_one_identity`
 (churns the allocator between two reads) and `the_effect_is_stable_across_rebuilds` (pulls once, then
-asserts the pull survives a rebuild). Both fail with a per-read factory.
+asserts the pull survives a rebuild). Both fail with a per-read factory. `a_pull_shifts_the_painted_content`
+closes the loop in pixels: a 40 px pull must lift the content off the viewport bottom (red at rest,
+background after the pull), and it fails if the render stops reading `stretch()`.
 
 ## Reviewed 2026-11-02: three defects the review found
 

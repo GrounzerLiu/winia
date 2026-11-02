@@ -151,19 +151,30 @@ impl ScrollState {
     /// The effect this state uses for an ambient factory: created on first use and reused after that,
     /// so a rebuild does not hand the container a fresh effect (which would drop a pull in flight).
     pub(crate) fn overscroll_for(&self, factory_id: u64, create: impl FnOnce() -> crate::overscroll::OverscrollEffect) -> crate::overscroll::OverscrollEffect {
+        if let Some(cached) = self.cached_overscroll(factory_id) {
+            return cached;
+        }
+        // Build OUTSIDE the lock. A factory is user code (and `remember_overscroll_factory`)
+        // lets it be anything), so running it under the cache mutex would deadlock the day it
+        // touched this state - and it costs nothing to keep user code out of a lock.
+        let fresh = create();
         let mut cache = self.overscroll_cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((_, effect)) = cache.iter().find(|(id, _)| *id == factory_id) {
             return effect.clone();
         }
-        let effect = create();
         // A small cap, not an unbounded log: a state that met several factories (a theme switch, a
         // test) should not keep every effect it ever built. Four is more than any real subtree uses.
         const MAX_CACHED_FACTORIES: usize = 4;
         if cache.len() >= MAX_CACHED_FACTORIES {
             cache.remove(0);
         }
-        cache.push((factory_id, effect.clone()));
-        effect
+        cache.push((factory_id, fresh.clone()));
+        fresh
+    }
+
+    fn cached_overscroll(&self, factory_id: u64) -> Option<crate::overscroll::OverscrollEffect> {
+        let cache = self.overscroll_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.iter().find(|(id, _)| *id == factory_id).map(|(_, effect)| effect.clone())
     }
 
     /// 立即滚动到指定位置
