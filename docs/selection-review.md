@@ -16,10 +16,10 @@
 
 | Bucket | Open | Fixed |
 |---|---|---|
-| Defects (wrong behaviour) | 0 | 7 |
-| Deviations from Compose (deliberate or accepted) | 0 | 3 |
-| Missing API surface | 2 | 5 |
-| Investigated and ruled out | — | 4 |
+| Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
+| Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
+| Missing API surface | 2 — M-3 (handles), M-4 (context menu) | 5 |
+| Investigated and ruled out | — | 8 |
 
 ## Defects
 
