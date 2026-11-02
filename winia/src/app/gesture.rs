@@ -40,6 +40,12 @@ pub(crate) struct GestureState {
     /// decides which document the keys belong to.
     pub(crate) last_selection_registrar: Option<crate::text::selection::SelectionRegistrar>,
 
+    /// The selection context menu, when one is open. It is drawn by the render pass and hit-tested by
+    /// the pointer layer — deliberately NOT a composition child: hosting a popup under a
+    /// `SelectionContainer` broke selection in that same container after one open/dismiss cycle
+    /// (measured, see docs/selection-review.md).
+    pub(crate) selection_menu: Option<SelectionMenu>,
+
     /// Selection auto-scroll: while a drag-selection holds the pointer inside a scroll container's
     /// edge band, the container scrolls every frame and the selection follows. Compose does the same
     /// (`isSelectionAutoScrollEnabled`); without it a selection could never reach past the viewport.
@@ -90,6 +96,7 @@ impl Default for GestureState {
             node: None,
             tap_ctx: None,
             last_selection_registrar: None,
+            selection_menu: None,
             selection_autoscroll: None,
             selection_click: None,
             slot: None,
@@ -101,6 +108,18 @@ impl Default for GestureState {
             pending_taps: Vec::new(),
         }
     }
+}
+
+/// An open selection context menu.
+#[derive(Clone, Debug)]
+pub(crate) struct SelectionMenu {
+    /// The container the menu acts on.
+    pub(crate) registrar: crate::text::selection::SelectionRegistrar,
+    /// Where the press was; the menu hangs from this point.
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    /// The row under the pointer, for the hover fill.
+    pub(crate) hovered: Option<usize>,
 }
 
 /// One container scrolling under a drag-selection.

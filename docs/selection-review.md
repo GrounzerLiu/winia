@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 1 — M-4 | 9 — M-1..M-3, M-5..M-10 |
+| Missing API surface | 0 | 10 — M-1..M-10 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -295,35 +295,36 @@ Deviations, recorded deliberately: the handles are painted for EVERY selection, 
 them on touch mode (`manager.isInTouchMode`) — winia has no touch-mode tracking yet; and they are
 drawn by the main `render()` entry, so a selection inside a popup (its own Composer) gets none until
 the overlay render path calls the same helper.
-## M-4 (context menu): shipped, then reverted on a measured regression — 2026-11-02
+## Sixteenth pass (2026-11-02): the context menu, window-hosted
 
-Second attempt reached a working menu: built with the content inside the container's group, anchored
-on a `Spacer`, opened by a secondary press through the registrar. `selection_` was green (89) and the
-full suite passed (2152).
+`- [x] **M-4 — context menu.** Copy and Select all from a menu that opens on a secondary press.
 
-**The user then reported the real defect it introduced, and it reproduces.** Driving the demo through
-the debug server (`pb right` + `d`/`u` now exists for exactly this) shows:
+Three shapes were tried. The first two are recorded because they are instructive:
 
-| Step | `[main]` readout |
+| Shape | Result |
 | --- | --- |
-| drag in the first card | `2 .. 28 — 26 chars` |
-| right press inside the selection | unchanged (menu opens: `Copy` + `Select all` appear in the tree) |
-| press elsewhere (dismiss) | `no selection` |
-| drag in the SAME card again | `no selection` — it never selects again |
+| `DropdownMenu` as the container's sibling | 8 existing press tests failed (every press stopped being handled) |
+| `DropdownMenu` inside the container's group | 89 green, but the user then hit the real defect: after one open/dismiss cycle the SAME container could never start a selection again (a drag that selected `2..28` in the demo stopped selecting), while other containers still worked |
+| window state: drawn by the render pass, hit-tested by the pointer layer | selection unaffected; the menu is paint plus hit-testing and cannot perturb any composition |
 
-Another card still selects after the cycle, so the damage is local to the container whose menu was
-opened. Whatever the menu's composition does to that container (a rebuild on open, an extra child, a
-popup record) leaves it unable to start a new selection, and the readouts say nothing about why.
+The final shape: `GestureState::selection_menu` holds the registrar, the press point and the hovered row;
+`render::selection_menu::draw` paints a small rounded box with the two labels after the content (and
+after the selection handles); `handle_pointer_down` takes the press for a row, or dismisses the menu
+and carries on as an ordinary press. `render` gained `render_with_menu`, which the live frame path and
+the capture path both use — without the capture path the menu was missing from screenshots, which is
+how the first verification attempt measured nothing.
 
-Reverted: a menu that kills selection in the container it belongs to is not shippable, and the M-4
-surface is small enough that it can wait for the right shape. What survives is the debug infrastructure
-that made the reproduction possible (`pb left|right`, so pointer events can carry a secondary button)
-— it is what a future attempt will need to prove the fix.
+Measured:
 
-Next attempt, concretely: the menu must NOT live under the container's composition. Compose draws
-`ContextMenuArea` from the window, and winia's overlay host is the same layer (`Popup` already renders
-there) — a window-owned menu opened by the registrar callback, anchored at the press point, is the
-shape that cannot perturb the container it describes.
+- `a_menu_cycle_leaves_selection_working` — the reported defect as a test: drag, open, dismiss, drag
+  again, selection is there;
+- `the_menu_copy_row_copies_the_selection` (the clipboard request carries the selected text) and
+- `the_menu_select_all_row_selects_everything`;
+- in the demo, through the debug server: drag selects `2..28`, the secondary press leaves it alone,
+  and after the dismiss a drag selects `30..57` — the cycle the user reported as broken;
+- the menu is really painted: after a secondary press the pixels under it read `44,41,50` (the menu
+  background) where the card was `42,39,46`, and the `Copy` label contributes `232,227,240` glyph
+  pixels.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
@@ -415,9 +416,9 @@ shape that cannot perturb the container it describes.
   (`SelectionHandles.kt`, `manager.handleDragObserver`); winia had none, so an existing selection
   cannot be adjusted, only re-dragged from scratch.
   **Closed 2026-11-02** — see the fourteenth pass.
-- [ ] **M-4 — context menu.** Compose adds `ContextMenuArea` + text-toolbar components
-  (`addSelectionContainerTextContextMenuComponents`); winia has no selection menu. Two shapes tried and
-  reverted, both measured; the next one has to be window-hosted — see the M-4 section.
+- [x] **M-4 — context menu.** Compose adds `ContextMenuArea` + text-toolbar components
+  (`addSelectionContainerTextContextMenuComponents`); winia had no selection menu.
+  **Closed 2026-11-02** — window-hosted, see the sixteenth pass.
 - [x] **M-5 — double click selects a word, triple click the line.** No double-click-to-select-word, no triple-click, no
   `SelectionAdjustment.Word` / `Paragraph`. Verified by grep: `pointer.rs` has no click-count
   **Closed 2026-11-01.** `handle_pointer_down` counts presses (time + slop, carried on

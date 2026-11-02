@@ -781,7 +781,7 @@ impl PerWindow {
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
                     canvas.scale((sf, sf));
-                    render::render(nodes, root_idx, canvas);
+                    render::render_with_menu(nodes, root_idx, canvas, self.input.selection_menu.as_ref(), (self.width, self.height));
                     if !cross_active {
                         // Shared-element transition layer: detached sources AND
                         // elevated (render_in_overlay) endpoints, drawn rootless

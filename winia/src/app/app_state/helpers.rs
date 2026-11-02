@@ -138,7 +138,7 @@ impl AppState {
                 let sf2 = sf as f32;
                 sw.draw(|surface| {
                     let canvas = surface.canvas(); canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
-                    canvas.save(); canvas.scale((sf2, sf2)); render::render(nodes, root_idx, canvas); pw.composer.render_layer(canvas); canvas.restore();
+                    canvas.save(); canvas.scale((sf2, sf2)); render::render_with_menu(nodes, root_idx, canvas, pw.input.selection_menu.as_ref(), (pw.width, pw.height)); pw.composer.render_layer(canvas); canvas.restore();
                 });
                 sw.set_visible(true);
             }

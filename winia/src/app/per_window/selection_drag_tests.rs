@@ -579,7 +579,7 @@ fn no_handles_without_a_selection() {
 
 /// M-4: a secondary press over a selection opens the container's menu (Copy / Select all).
 #[test]
-fn a_secondary_press_opens_the_selection_menu() {
+fn a_secondary_press_opens_the_context_menu() {
     let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
     let r = reg.lock().unwrap().clone().expect("registered");
     assert!(press(&mut pw, (8.0, 10.0)));
@@ -598,13 +598,85 @@ fn a_secondary_press_opens_the_selection_menu() {
         "opening the menu leaves the selection alone"
     );
 
-    // The menu is a popup: it appears once the composition that owns it has run again.
-    let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
-    pw.composer.recompose(|ctx| content(ctx));
-    pw.content = content;
-    pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-    // The popup records collected during composition become layers in the frame path, which a
-    // headless test has to drive itself (that is where `recompose_layout_render` calls it).
-    crate::app::sync_overlays(&mut pw, true);
-    assert!(!pw.overlay.layers.is_empty(), "the menu opened as an overlay layer");
+    // The menu is WINDOW state, not a popup: nothing to compose, nothing to sync.
+    assert!(pw.input.selection_menu.is_some(), "the menu is open");
+}
+/// The point at the centre of menu `row` for an open menu.
+fn menu_row_point(pw: &PerWindow, row: usize) -> (f32, f32) {
+    let menu = pw.input.selection_menu.clone().expect("a menu is open");
+    let (x, y, w, _h) = crate::render::selection_menu_rect(&menu, (pw.width, pw.height));
+    (x + w / 2.0, y + crate::render::SELECTION_MENU_PADDING + crate::render::SELECTION_MENU_ROW_HEIGHT * (row as f32 + 0.5))
+}
+
+fn secondary_press(pw: &mut PerWindow, at: (f32, f32)) -> bool {
+    super::pointer::handle_pointer_down(
+        pw,
+        at,
+        crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary },
+        &winit::keyboard::ModifiersState::empty(),
+        true,
+    )
+}
+
+/// The reported defect, as a test: after the menu is opened and dismissed, selection in that same
+/// container has to work again. The popup-hosted versions both failed exactly here (measured: a drag
+/// that selected `2..28` in the demo stopped selecting after one cycle).
+#[test]
+fn a_menu_cycle_leaves_selection_working() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)), "the first drag selects");
+    assert!(r.build_selection().is_some());
+
+    assert!(secondary_press(&mut pw, (20.0, 10.0)), "the secondary press opens the menu");
+    assert!(pw.input.selection_menu.is_some(), "the menu is window state");
+
+    // A press elsewhere dismisses it — and this press is an ordinary press again.
+    assert!(press(&mut pw, (200.0, 150.0)), "the dismissing press is handled");
+    assert!(pw.input.selection_menu.is_none(), "the menu closed");
+
+    // ... and selection still works in the same container.
+    assert!(press(&mut pw, (8.0, 10.0)), "a new press still finds the text");
+    assert!(drag(&mut pw, (40.0, 10.0)), "and dragging still selects");
+    assert!(
+        r.build_selection().is_some(),
+        "the selection works after the menu cycle"
+    );
+}
+
+/// The Copy row copies the selection and closes the menu.
+#[test]
+fn the_menu_copy_row_copies_the_selection() {
+    let _ = crate::clipboard::take_pending();
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+    let selected = r.build_selection().map(|s| s.text().to_string()).expect("a selection");
+
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+    let at = menu_row_point(&pw, 0);
+    assert!(press(&mut pw, at), "the press lands on the Copy row");
+    assert_eq!(crate::clipboard::take_pending(), vec![selected.clone()], "the selection is on the clipboard");
+    assert!(pw.input.selection_menu.is_none(), "and the menu closed");
+}
+
+/// The second row selects everything in the container.
+#[test]
+fn the_menu_select_all_row_selects_everything() {
+    let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
+    let r = reg.lock().unwrap().clone().expect("registered");
+    assert!(press(&mut pw, (8.0, 10.0)));
+    assert!(drag(&mut pw, (30.0, 10.0)));
+
+    assert!(secondary_press(&mut pw, (20.0, 10.0)));
+    let at = menu_row_point(&pw, 1);
+    assert!(press(&mut pw, at), "the press lands on the Select all row");
+    assert_eq!(
+        r.build_selection().map(|s| (s.start(), s.end())),
+        Some((0, r.total_text_len())),
+        "the whole container is selected"
+    );
 }

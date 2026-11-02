@@ -295,6 +295,24 @@ pub(crate) fn handle_pointer_down(
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
+    // An open selection menu sits above everything (it is drawn last, by the render pass): it takes
+    // the press, or the press dismisses it and carries on as an ordinary press.
+    if let Some(menu) = pw.input.selection_menu.clone() {
+        let window = (pw.width, pw.height);
+        if let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos) {
+            if row == 0 {
+                if let Some(selection) = menu.registrar.build_selection() {
+                    crate::clipboard::request_text(selection.text());
+                }
+            } else if menu.registrar.select_all() {
+                menu.registrar.fire_on_change();
+            }
+            pw.input.selection_menu = None;
+            return true;
+        }
+        pw.input.selection_menu = None;
+    }
+
     // Top-level popups first: an overlay hit records the click target (the event does not reach the
     // main tree); an outside click dismisses (modal / dismissible).
     if overlay_down(pw, scene_pos, kind.clone()) {
@@ -321,18 +339,23 @@ pub(crate) fn handle_pointer_down(
     };
     pw.input.selection_click = Some((std::time::Instant::now(), scene_pos, click_count));
 
-    // A secondary press over a selection opens the container's context menu (Copy / Select all).
-    // Like the keyboard route, the press names the container and the container owns the menu.
+    // A secondary press over a selection opens the context menu at the press point. The menu is
+    // window state (drawn by the render pass, hit-tested here) rather than a popup built under the
+    // container: hosting one there broke selection in that container (measured, see the doc).
     if matches!(kind, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary }) {
         let target = path.iter().rev().find_map(|&i| {
             let reg = nodes[i].registrar.borrow().as_ref().cloned()?;
             reg.build_selection().is_some().then_some(reg)
         });
-        if let Some(reg) = target {
-            if reg.request_context_menu(scene_pos.0, scene_pos.1) {
-                pw.input.last_selection_registrar = Some(reg);
-                return true;
-            }
+        if let Some(registrar) = target {
+            pw.input.last_selection_registrar = Some(registrar.clone());
+            pw.input.selection_menu = Some(crate::app::gesture::SelectionMenu {
+                registrar,
+                x: scene_pos.0,
+                y: scene_pos.1,
+                hovered: None,
+            });
+            return true;
         }
     }
 
@@ -781,6 +804,15 @@ pub(crate) fn handle_pointer_move(
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+
+    // A menu that is open follows the pointer for its hover fill.
+    if let Some(menu) = pw.input.selection_menu.clone() {
+        let window = (pw.width, pw.height);
+        let hovered = crate::render::selection_menu_row_at(&menu, window, scene_pos);
+        if let Some(open) = pw.input.selection_menu.as_mut() {
+            open.hovered = hovered;
+        }
+    }
 
     // Drag-select text. Shared with the auto-scroll tick, which re-runs it every frame while the
     // pointer sits in a scroll container's edge band.

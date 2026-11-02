@@ -20,9 +20,22 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
+    render_with_menu(nodes, root_idx, canvas, None, (0.0, 0.0));
+}
+
+/// A frame that may have a selection context menu open. The window is only needed to clamp the menu
+/// inside it; a test or an overlay render passes `(0.0, 0.0)` and gets the unclamped box.
+pub fn render_with_menu(
+    nodes: &[LayoutNode],
+    root_idx: usize,
+    canvas: &Canvas,
+    menu: Option<&crate::app::gesture::SelectionMenu>,
+    window: (f32, f32),
+) {
     render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false, false);
     // Selection handles last, so a neighbouring node can never paint over a grab area.
     selection_handles::draw(nodes, root_idx, canvas);
+    selection_menu::draw(menu, window, canvas);
 }
 
 /// Draw one node as a **transition-layer root** at an explicit absolute
@@ -66,6 +79,8 @@ mod helpers;
 mod paint;
 mod pass;
 mod selection_handles;
+mod selection_menu;
+pub(crate) use selection_menu::{menu_rect as selection_menu_rect, row_at as selection_menu_row_at, ITEMS as SELECTION_MENU_ITEMS, PADDING as SELECTION_MENU_PADDING, ROW_HEIGHT as SELECTION_MENU_ROW_HEIGHT};
 pub(crate) use selection_handles::HANDLE_RADIUS as HANDLE_GRAB_RADIUS;
 mod text_field;
 
