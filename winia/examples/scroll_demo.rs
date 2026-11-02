@@ -225,22 +225,32 @@ falls through to the outer list, in that order (pre -> child -> post).")
 
         // ---- 3. overscroll ---------------------------------------------------------
         card(ctx, "3. Overscroll: drag or fling past an edge", |ctx| {
-            let scroll = ctx.remember(|| ScrollState::new()).get();
-            let effect = ctx.remember(|| winia::overscroll::OverscrollEffect::new()).get();
-            Column::new()
-                .modifier(
-                    Modifier::new()
-                        .fill_max_width()
-                        .height(130.0)
-                        .vertical_scroll(scroll)
-                        .overscroll(&effect),
-                )
-                .build(ctx, |ctx| {
-                    rows(ctx, 5, 34.0, "bend");
-                });
+            // Two bands, same content, different stiffness: the pull starts 1:1 and fades, and
+            // `reach` is the raw travel that gets 63% of the way to the cap. Compare them by hand.
+            for (label, effect) in [
+                ("default (reach 120)", winia::overscroll::OverscrollEffect::new()),
+                ("stiff (reach 40)", winia::overscroll::OverscrollEffect::new().reach(40.0)),
+            ] {
+                let scroll = ctx.remember(|| ScrollState::new()).get();
+                let effect = ctx.remember(move || effect).get();
+                Text::new(label).font_size(11.0).color(MUTED).build(ctx);
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(90.0)
+                            .vertical_scroll(scroll)
+                            .overscroll(&effect),
+                    )
+                    .build(ctx, |ctx| {
+                        rows(ctx, 4, 34.0, "bend");
+                    });
+            }
             Text::new(
-                "The content shifts past the edge (120 px cap) and springs back 60 ms after the last \
-pull. A fling that dies at an edge bends by velocity/40 px instead of just stopping.",
+                "The content SHIFTS past the edge - never scales. The shift starts 1:1 and fades: each \
+pull moves it less, approaching 120 px without reaching it. `reach` is the raw travel that gets 63% \
+of the way there, so a smaller reach is stiffer. It springs back 60 ms after the last pull, and a \
+fling that dies at an edge bends by velocity/40 through the same curve.",
             )
             .font_size(11.0)
             .color(MUTED)

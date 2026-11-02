@@ -23,8 +23,8 @@ pub enum Orientation {
     Horizontal,
 }
 
-/// How far the content may be pulled past the edge, in logical pixels.
-const MAX_PULL: f32 = 120.0;
+/// The default asymptote: the content never moves further than this past an edge.
+const DEFAULT_MAX_PULL: f32 = 120.0;
 /// How long the rubber-band waits before returning (a new pull re-arms it).
 const RETURN_DELAY_MS: u64 = 60;
 /// The return motion's duration.
@@ -32,66 +32,89 @@ const RETURN_MS: u64 = 220;
 
 /// Compose's `OverscrollEffect`: hoist it with `remember` and pass it to
 /// [`Modifier::overscroll`](crate::modifier::Modifier::overscroll).
+///
+/// The content SHIFTS past the edge (it is never scaled), and the shift is DAMPED: the first pixels
+/// of travel move the content one-to-one, and every further pixel buys less, approaching
+/// `max_pull` without reaching it. That is what makes the edge feel like rubber instead of a wall
+/// with a hard stop - and it is why the accumulator below is RAW travel (unbounded) while
+/// [`Self::stretch`] is the damped answer.
 #[derive(Clone, Debug)]
 pub struct OverscrollEffect {
-    /// Signed pull along the scroll axis, in logical pixels. Positive = past the END (content is
-    /// translated in the scroll direction), negative = past the START.
-    value: State<f32>,
+    /// Signed finger travel past the edge, in logical pixels, BEFORE damping. Positive = past the
+    /// END. This is what the return animation drives back to 0.
+    raw: State<f32>,
+    /// The asymptote: the content never travels further than this past an edge.
+    max_pull: f32,
+    /// The raw travel that gets 63% of the way to `max_pull`. Smaller = stiffer.
+    reach: f32,
 }
 
 impl OverscrollEffect {
     pub fn new() -> Self {
         Self {
-            value: State::new(0.0),
+            raw: State::new(0.0),
+            max_pull: DEFAULT_MAX_PULL,
+            reach: DEFAULT_MAX_PULL,
         }
     }
 
-    /// The current pull, in logical pixels (what the renderer subtracts from the scroll offset).
-    pub fn stretch(&self) -> f32 {
-        self.value.peek()
+    /// How far the content may travel past an edge at all (`max_pull`). Default 120.
+    ///
+    /// This is an ASYMPTOTE, not a clamp: no amount of dragging reaches it, which is the point -
+    /// a hard stop is what makes a rubber band feel like a wall.
+    pub fn max_pull(mut self, pixels: f32) -> Self {
+        self.max_pull = pixels.max(1.0);
+        self.reach = self.reach.min(self.max_pull);
+        self
     }
 
-    /// A fling that dies at a boundary keeps a little of its speed as a bend: 40 px/s per pixel, so a
-    /// slow fling barely bends and a hard one reaches [`MAX_PULL`]. Compose hands the whole fling to the
-    /// effect (`overscroll.applyToFling`, `foundation/gestures/Scrollable.kt:717`); winia flings through
-    /// its own decay, so the effect is given the velocity that was left when the decay hit the limit.
+    /// How STIFF the band is: the raw travel that gets 63% of the way to `max_pull`, in pixels.
+    /// Defaults to `max_pull` (a gentle band); a smaller value saturates sooner.
+    pub fn reach(mut self, pixels: f32) -> Self {
+        self.reach = pixels.max(1.0);
+        self
+    }
+
+    /// The damped shift, in logical pixels (what the renderer subtracts from the scroll offset).
+    /// Positive = past the end.
+    pub fn stretch(&self) -> f32 {
+        self.curve(self.raw.peek())
+    }
+
+    /// `max_pull * (1 - e^(-|raw| / reach))`, with the sign of `raw`: one-to-one at the origin
+    /// (slope `max_pull / reach`), flattening towards the asymptote.
+    fn curve(&self, raw: f32) -> f32 {
+        if raw == 0.0 { return 0.0; }
+        let magnitude = raw.abs();
+        let damped = self.max_pull * (1.0 - (-magnitude / self.reach).exp());
+        if raw < 0.0 { -damped } else { damped }
+    }
+
+    /// A fling that dies at a boundary keeps a little of its speed as a bend: 40 px/s of raw travel
+    /// per pixel, damped by the same curve. Compose hands the whole fling to the effect
+    /// (`overscroll.applyToFling`, `foundation/gestures/Scrollable.kt:717`); winia flings through its
+    /// own decay, so the effect is given the velocity that was left when the decay hit the limit.
     pub(crate) const PULL_PER_VELOCITY: f32 = 1.0 / 40.0;
 
     /// Bend for a fling that hit a boundary with `remaining_velocity` (VALUE space, the same sign the
-    /// decay runs on: positive moves the offset toward the end). Positive pull = past the end, matching
-    /// [`Self::pull`].
+    /// decay runs on: positive moves the offset toward the end).
     pub(crate) fn pull_for_velocity(&self, remaining_velocity: f32) -> f32 {
         self.pull(remaining_velocity * Self::PULL_PER_VELOCITY)
     }
 
-    /// Absorb `leftover` (the delta the container could not consume). Returns the signed amount the
-    /// effect absorbed, which the caller adds to its consumed delta so the gesture does not fall
-    /// through to an ancestor.
+    /// Absorb `leftover` (the delta the container could not consume) and return it: the effect takes
+    /// the WHOLE gesture, so nothing falls through to an ancestor - the damping is in the displayed
+    /// shift, not in how much of the gesture is accounted for.
     pub(crate) fn pull(&self, leftover: f32) -> f32 {
         if leftover == 0.0 {
             return 0.0;
         }
-        let current = self.value.peek();
-        let next = (current + leftover).clamp(-MAX_PULL, MAX_PULL);
-        let absorbed = next - current;
-        if absorbed == 0.0 {
-            // At the cap the value cannot move, but the finger is still pulling: re-arm the return
-            // so the rubber-band does not start shrinking under it. Re-arming without a new pull
-            // would let the 60 ms timer fire while the gesture is still live.
-            let still_pulling = (current >= MAX_PULL && leftover > 0.0)
-                || (current <= -MAX_PULL && leftover < 0.0);
-            if still_pulling {
-                crate::animation::cancel_animation_by_id(self.value.state_id());
-                self.arm_return();
-            }
-            return 0.0;
-        }
-        // Take the value over from any return already in flight, then set the new pull and re-arm
-        // the return. Each pull restarts the delay, so a gesture in progress keeps its tension.
-        crate::animation::cancel_animation_by_id(self.value.state_id());
-        self.value.set(next);
+        // Take the accumulator over from any return already in flight, add the travel and re-arm.
+        // Each pull restarts the delay, so a gesture in progress keeps its tension.
+        crate::animation::cancel_animation_by_id(self.raw.state_id());
+        self.raw.update(|v| *v += leftover);
         self.arm_return();
-        absorbed
+        leftover
     }
 
     fn arm_return(&self) {
@@ -100,15 +123,14 @@ impl OverscrollEffect {
             delay: std::time::Duration::from_millis(RETURN_DELAY_MS),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         });
-        crate::animation::push_animatable(self.value.clone(), 0.0, spec);
+        crate::animation::push_animatable(self.raw.clone(), 0.0, spec);
     }
 
     /// Identity for `element_param_eq` (two different handles are different parameters).
     pub(crate) fn same(&self, other: &Self) -> bool {
-        self.value.state_id() == other.value.state_id()
+        self.raw.state_id() == other.raw.state_id()
     }
 }
-
 impl Default for OverscrollEffect {
     fn default() -> Self {
         Self::new()
@@ -136,24 +158,53 @@ mod tests {
         (vec![node], state)
     }
 
+    /// The band is DAMPED: the first pixels are one-to-one, every further pixel buys less, and the
+    /// cap is an asymptote rather than a clamp.
     #[test]
-    fn pull_absorbs_and_clamps() {
+    fn a_pull_starts_one_to_one_and_then_fades_towards_the_cap() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::animation::clear_all_animations();
         let effect = OverscrollEffect::new();
-        assert_eq!(effect.pull(40.0), 40.0);
-        assert_eq!(effect.stretch(), 40.0);
-        assert_eq!(effect.pull(1_000.0), MAX_PULL - 40.0);
-        assert_eq!(effect.stretch(), MAX_PULL);
-        assert_eq!(effect.pull(10.0), 0.0, "at the cap nothing more is absorbed");
-        // The negative direction is independent: pulling back first releases the positive pull.
-        assert_eq!(effect.pull(-50.0), -50.0);
-        assert_eq!(effect.stretch(), MAX_PULL - 50.0);
+        // pull() returns what it TOOK (the whole gesture), stretch() what it SHOWED.
+        assert_eq!(effect.pull(10.0), 10.0, "the gesture is fully consumed");
+        assert!((effect.stretch() - 9.6).abs() < 0.3, "and moves the content almost 1:1, got {}", effect.stretch());
+
+        effect.pull(10.0);
+        let second = effect.stretch() - 9.6;
+        assert!(second < 9.0, "the second 10 px buys less than the first: {second}");
+
+        // A huge pull approaches the asymptote: at raw 240 it is still visibly short of the cap,
+        // and only f32 rounding makes a 5 000 px pull read as exactly 120.
+        effect.pull(220.0);
+        assert!((effect.stretch() - 103.7).abs() < 1.5, "raw 240 -> ~104, got {}", effect.stretch());
+        effect.pull(5_000.0);
+        assert!(effect.stretch() <= 120.0, "the cap is an asymptote, got {}", effect.stretch());
+
+        // The other direction is symmetric.
+        let back = OverscrollEffect::new();
+        back.pull(-10.0);
+        assert!((back.stretch() + 9.6).abs() < 0.3, "mirrored, got {}", back.stretch());
         crate::animation::clear_all_animations();
     }
 
+    /// The knobs: a smaller `reach` saturates sooner, a smaller `max_pull` caps lower.
+    #[test]
+    fn reach_and_cap_shape_the_band() {
+        let stiff = OverscrollEffect::new().reach(20.0);
+        stiff.pull(20.0);
+        assert!((stiff.stretch() - 120.0 * (1.0 - (-1.0f32).exp())).abs() < 0.5,
+            "reach 20 at raw 20 is 63% of the cap, got {}", stiff.stretch());
+        let soft = OverscrollEffect::new();
+        soft.pull(20.0);
+        assert!(stiff.stretch() > soft.stretch(), "the stiffer band moves further for the same drag");
+
+        let small = OverscrollEffect::new().max_pull(40.0);
+        small.pull(5_000.0);
+        assert!(small.stretch() <= 40.0, "the cap bounds it, got {}", small.stretch());
+        crate::animation::clear_all_animations();
+    }
     #[test]
     fn the_delta_past_the_end_is_absorbed_by_the_effect() {
         let _guard = crate::animation::tests::TEST_SERIAL
@@ -170,7 +221,7 @@ mod tests {
             Density::from_density(1.0),
         );
         assert_eq!(state.offset.peek(), 200.0, "the offset stays clamped");
-        assert_eq!(effect.stretch(), 10.0, "the leftover is the pull");
+        assert!((effect.stretch() - 9.6).abs() < 0.3, "the leftover is the (damped) pull, got {}", effect.stretch());
         assert_eq!(
             consumed.y, -10.0,
             "the gesture is consumed in the DELTA's direction, so no ancestor sees it"
@@ -194,56 +245,52 @@ mod tests {
             Density::from_density(1.0),
         );
         assert_eq!(state.offset.peek(), 0.0);
-        assert_eq!(effect.stretch(), -10.0);
+        assert!((effect.stretch() + 9.6).abs() < 0.3, "got {}", effect.stretch());
         assert_eq!(consumed.y, 10.0, "the pull is consumed in the gesture's direction");
         crate::animation::clear_all_animations();
     }
 
+    /// A live gesture keeps its tension: every pull restarts the 60 ms delay, so the band does not
+    /// start shrinking under a finger that never left the screen.
     #[test]
-    fn at_the_cap_a_live_gesture_rearms_the_return() {
+    fn a_live_gesture_keeps_its_tension() {
         let (_guard, clock) = crate::animation::tests::serial_clock();
         crate::animation::clear_all_animations();
         let effect = OverscrollEffect::new();
-        assert_eq!(effect.pull(MAX_PULL), MAX_PULL);
+        effect.pull(60.0);
+        let held = effect.stretch();
         clock.advance(std::time::Duration::from_millis(50));
         crate::animation::update_animations();
-        assert_eq!(effect.stretch(), MAX_PULL, "the 60 ms delay has not elapsed yet");
+        assert!((effect.stretch() - held).abs() < 0.01, "the 60 ms delay has not elapsed yet");
 
-        // Still pulling at the cap: this must restart the delay instead of letting the first
-        // one fire, or the rubber-band would shrink under a finger that never left the screen.
-        assert_eq!(effect.pull(10.0), 0.0, "the cap absorbs nothing more");
+        effect.pull(5.0);
         clock.advance(std::time::Duration::from_millis(50));
         crate::animation::update_animations();
-        assert_eq!(
-            effect.stretch(),
-            MAX_PULL,
-            "the re-armed delay keeps the pull while the gesture is live"
-        );
+        assert!(effect.stretch() > held, "the re-armed delay keeps the pull alive ({})", effect.stretch());
 
         clock.advance(std::time::Duration::from_millis(400));
         crate::animation::update_animations();
-        assert!(
-            effect.stretch() < MAX_PULL,
-            "after the gesture stops the return runs"
-        );
+        assert!(effect.stretch() < 1.0, "after the gesture stops the return runs, got {}", effect.stretch());
         crate::animation::clear_all_animations();
     }
-
-    /// A fling that dies at the end bends the content past the END (a positive pull), one pixel per
-    /// 40 px/s, and the bend is capped.
+    /// A fling that dies at the end bends the content past the END (a positive pull), damped by the
+    /// same curve: a slow fling is nearly proportional, a hard one approaches the cap.
     #[test]
-    fn a_fling_bend_follows_velocity_and_caps() {
+    fn a_fling_bend_follows_velocity_and_fades() {
         let effect = OverscrollEffect::new();
-        assert_eq!(effect.pull_for_velocity(2000.0), 50.0, "2000 px/s toward the end -> +50 past it");
-        assert_eq!(effect.stretch(), 50.0, "and the content is bent by that much");
-        effect.pull_for_velocity(-800.0);
-        assert_eq!(effect.stretch(), 30.0, "back 20 px (800 px/s the other way -> -20)");
-        effect.pull_for_velocity(100_000.0);
-        assert_eq!(effect.stretch(), 120.0, "a hard fling stops at the cap");
-        effect.pull_for_velocity(10.0);
-        assert_eq!(effect.stretch(), 120.0, "a slow one at the cap does not move it");
-    }
+        effect.pull_for_velocity(2_000.0);
+        let slow = effect.stretch();
+        assert!((slow - 120.0 * (1.0 - (-(2000.0 / 40.0) / 120.0f32).exp())).abs() < 0.5,
+            "2000 px/s -> raw 50 damped, got {slow}");
 
+        let hard = OverscrollEffect::new();
+        hard.pull_for_velocity(100_000.0);
+        assert!(hard.stretch() <= 120.0, "even a huge fling stops at the cap, got {}", hard.stretch());
+
+        let back = OverscrollEffect::new();
+        back.pull_for_velocity(-2_000.0);
+        assert!((back.stretch() + slow).abs() < 0.5, "the sign follows the velocity");
+    }
     /// The fling path really reaches the effect: a decay that hits the end leaves a bend.
     #[test]
     fn a_fling_into_the_end_leaves_a_bend() {

@@ -33,6 +33,14 @@ same 120 px cap. Compose hands the whole fling to the effect (`overscroll.applyT
 which is why the bend is a function of that remainder rather than of the fling's whole shape.
 Reverse containers skip it, exactly as they skip the delta path.
 
+The pull is DAMPED, not linear: the effect accumulates the RAW finger travel and shows
+`max_pull * (1 - e^(-raw / reach))`. The first pixels are one-to-one (slope `max_pull / reach`),
+every further pixel buys less, and the cap is an ASYMPTOTE - no drag reaches it, which is what makes
+the edge feel like rubber instead of a wall with a hard stop. `max_pull` (default 120 px) and `reach`
+(default `max_pull`; smaller = stiffer) are builder knobs, so the feel can be tuned per app without a
+recompile. `pull` still returns the WHOLE leftover, so an ancestor never sees the gesture; only the
+displayed shift is damped.
+
 Deliberate scope: the content SHIFTS past the edge (there is no content scaling and no platform
 glow), the pull is capped at 120 logical px, and containers with `reverseLayout` skip the effect
 (their offsets are mirrored, so a signed pull would point the wrong way).

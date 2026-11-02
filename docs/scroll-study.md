@@ -161,6 +161,24 @@ Read the offset too - it is a `State`, and it changes whenever the limit stops m
 documented on the method and is what `scroll_demo`'s cards do.
 
 
+### 6.5 The rubber band is damped, and its feel is a parameter (2026-11-02)
+
+`OverscrollEffect` used to be linear: `clamp(raw, +-120)`, so the content tracked the finger exactly
+until it hit a hard stop. It now accumulates raw travel and DISPLAYS a saturating curve
+(`max_pull * (1 - e^(-raw / reach))`): 1:1 at the origin, fading, approaching the cap without
+reaching it. `max_pull` (default 120) and `reach` (default = `max_pull`) are builder methods, and the
+fling bend goes through the same curve.
+
+Numbers with the defaults: a 10 px pull shows 9.6, a 20 px pull 18.4, a 240 px pull 103.7, and even
+a 5 000 px pull only reads 120 because f32 rounds there. `pull` still returns the whole leftover, so a
+nested ancestor never sees an edge gesture.
+
+Tests: `a_pull_starts_one_to_one_and_then_fades_towards_the_cap` (red check: making the curve linear
+again fails it), `reach_and_cap_shape_the_band`, `a_fling_bend_follows_velocity_and_fades`, and
+`a_live_gesture_keeps_its_tension`. `scroll_demo`'s third card shows two bands side by side -
+default and `reach(40)` - so the feel can be chosen by hand.
+
+
 ## 7. Test map (and the two thin spots)
 
 | Area | Tests in file | Where else it is covered |

@@ -744,7 +744,7 @@ mod nested_scroll_chain_tests {
             crate::unit::Density::from_density(1.0),
         );
         assert_eq!(consumed.y, -10.0, "the whole gesture is accounted for");
-        assert_eq!(effect.stretch(), 10.0, "and it became the rubber-band pull");
+        assert!((effect.stretch() - 9.6).abs() < 0.3, "and it became the (damped) rubber-band pull, got {}", effect.stretch());
         assert_eq!(
             mailbox.lock().unwrap().y, 0.0,
             "the ancestor must not see the absorbed pull (nor its opposite)"
