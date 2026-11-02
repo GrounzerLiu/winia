@@ -183,6 +183,22 @@ pub(crate) fn ambient_effect(state: &crate::modifier::ScrollState) -> Option<Ove
     Some(state.overscroll_for(id, move || factory()))
 }
 
+/// Remember a factory across rebuilds, the way Compose's `rememberPlatformOverscrollFactory` does.
+///
+/// Building `Arc::new(..)` inline and handing it to [`with_overscroll_factory`] makes a NEW identity
+/// every rebuild: the scroll states then mint a new effect each frame (a pull in flight is lost) and
+/// the provider dirties its subtree every frame because the identity changed. Measured before this
+/// helper existed: two rebuilds left two cache entries.
+#[crate::composable]
+pub fn remember_overscroll_factory(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    create: impl Fn() -> OverscrollEffect + Send + Sync + 'static,
+) -> OverscrollFactory {
+    let factory: crate::runtime::state::State<OverscrollFactory> =
+        ctx.remember(move || std::sync::Arc::new(create) as OverscrollFactory);
+    factory.get()
+}
+
 /// Provide a factory for a subtree - `None` turns overscroll off for everything inside.
 ///
 /// The `ctx.changed` + dirty marking are load-bearing: a provider that only changes the local leaves
@@ -402,6 +418,28 @@ mod tests {
         assert!(present, "the builder attaches the ambient effect");
         let (present, _) = compose(true);
         assert!(!present, "and `disable_overscroll` keeps it off");
+    }
+
+    /// A factory built inline would be a new identity every rebuild; the remember helper keeps one.
+    #[test]
+    fn a_remembered_factory_is_one_identity_across_rebuilds() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        let scroll = ScrollState::new();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let sc = scroll.clone();
+            composer.compose(crate::compose!(|ctx| {
+                let factory = remember_overscroll_factory(ctx, || OverscrollEffect::new());
+                ids.push(std::sync::Arc::as_ptr(&factory) as *const () as u64);
+                with_overscroll_factory(ctx, Some(factory), |ctx| {
+                    crate::layout::Column::new()
+                        .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(sc.clone()))
+                        .build(ctx, |ctx| { crate::components::Text::new("x").build(ctx); });
+                });
+            }));
+        }
+        assert_eq!(ids[0], ids[1], "the same factory identity both times");
+        assert_eq!(scroll.overscroll_cache.lock().unwrap().len(), 1, "and one cached effect");
     }
 
     /// Rebuilding must hand back the SAME effect: a fresh one would drop a pull in flight.

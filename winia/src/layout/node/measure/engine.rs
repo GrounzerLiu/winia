@@ -912,6 +912,12 @@ pub(crate) fn measure_node_inner(
                 let max_off = (content_h - node_h).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
                     ss.fling_limit.set(max_off);
+                    // A restored offset can point past a SHORTER list than the one that was saved
+                    // (a saveable position outliving its content). Compose clamps during measure;
+                    // without this the container draws blank space and the bar sits at the end.
+                    if ss.offset.peek() > max_off {
+                        ss.offset.set(max_off);
+                    }
                 }
             }
         }
@@ -933,6 +939,10 @@ pub(crate) fn measure_node_inner(
                 let max_off = (content_w - node_w).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
                     ss.fling_limit.set(max_off);
+                    // Same clamp as the vertical case above.
+                    if ss.offset.peek() > max_off {
+                        ss.offset.set(max_off);
+                    }
                 }
             }
         }

@@ -415,6 +415,7 @@ impl PerWindow {
                     }
                 }
                 self.apply_ime_for_focus(Some(node_id));
+                self.reveal_focused();
                 return true;
             }
         }

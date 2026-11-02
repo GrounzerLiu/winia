@@ -156,6 +156,12 @@ impl ScrollState {
             return effect.clone();
         }
         let effect = create();
+        // A small cap, not an unbounded log: a state that met several factories (a theme switch, a
+        // test) should not keep every effect it ever built. Four is more than any real subtree uses.
+        const MAX_CACHED_FACTORIES: usize = 4;
+        if cache.len() >= MAX_CACHED_FACTORIES {
+            cache.remove(0);
+        }
         cache.push((factory_id, effect.clone()));
         effect
     }
@@ -522,6 +528,43 @@ mod scroll_by_tests {
             next.compose(|ctx| restored = Some(ScrollState::remember_saveable(ctx, "page")));
         });
         assert_eq!(restored.expect("composed").offset.peek(), 240.0, "the list opens where it was");
+    }
+
+    /// A restored offset can outlive its content: clamping happens during measure, the way Compose
+    /// does it, so the container never opens on blank space.
+    #[test]
+    fn a_restored_offset_past_the_end_is_pulled_back() {
+        use std::collections::HashMap;
+        let first = crate::runtime::saveable::SaveableStateRegistry::new(HashMap::new());
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut seen = None;
+        crate::runtime::saveable::with_saveable_registry(first.clone(), || {
+            composer.compose(crate::compose!(|ctx| {
+                seen = Some(ScrollState::remember_saveable(ctx, "page"));
+            }));
+        });
+        seen.unwrap().offset.set(240.0);
+        let saved = first.perform_save();
+
+        let second = crate::runtime::saveable::SaveableStateRegistry::new(saved);
+        let mut next = crate::runtime::composer::Composer::new();
+        let mut restored = None;
+        crate::runtime::saveable::with_saveable_registry(second, || {
+            next.compose(crate::compose!(|ctx| {
+                let scroll = ScrollState::remember_saveable(ctx, "page");
+                restored = Some(scroll.clone());
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().height(100.0).vertical_scroll(scroll))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("only 60 tall")
+                            .modifier(crate::modifier::Modifier::new().size(100.0, 60.0))
+                            .build(ctx);
+                    });
+            }));
+        });
+        next.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let scroll = restored.expect("composed");
+        assert_eq!(scroll.offset.peek(), 0.0, "the content does not scroll, so the offset is 0");
     }
 
     #[test]

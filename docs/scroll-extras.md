@@ -10,6 +10,21 @@ winia already clips every scroll viewport exactly at its bounds; this modifier w
 30 dp on the cross axis only (`render_pass1`'s scroll block). The main axis stays exact, so scrolled
 content still cannot paint over a sibling.
 
+## Reviewed 2026-11-02: three defects the review found
+
+- **A restored offset outlived its content.** `remember_saveable` restores 240 into a list that now
+  scrolls 0; the container then draws blank space until the next gesture. Plain containers now clamp
+  during measure (`measure/engine.rs`, both axes), the way the lazy policy already did. Test:
+  `a_restored_offset_past_the_end_is_pulled_back`.
+- **A key step fed the rubber band.** ArrowDown 20 px from the end left the offset at the end AND a
+  24.97 px stretch: the spill went into `apply_scroll_delta`, which hands its leftover to the effect.
+  Key steps are now clamped to the room that is left, so only a POINTER gesture bends the content.
+  Test: `a_key_step_stops_at_the_end_without_bending_the_content`.
+- **An inline factory made a new identity every rebuild**, so every scroll state minted a new effect
+  (losing a pull in flight) and the provider dirtied its subtree each frame. `remember_overscroll_factory`
+  keeps one identity; the per-state cache is also capped at four factories. Test:
+  `a_remembered_factory_is_one_identity_across_rebuilds`.
+
 ## `Modifier::overscroll(effect)` (and the default)
 
 Overscroll is ON BY DEFAULT for scroll containers, the way Compose does it: `LocalOverscrollFactory`

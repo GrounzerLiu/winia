@@ -475,6 +475,21 @@ pub(crate) fn scroll_by_key(
             if dx < 0.0 && current >= max_offset - 0.5 { continue; }
             if dx > 0.0 && current <= 0.5 { continue; }
         }
+        // A key step stops at the edge: clamp it to the room that is left, so the spill cannot
+        // feed the overscroll effect. Compose's key handling clamps too - only a POINTER gesture
+        // bends the content; measured before this: ArrowDown 20 px from the end left the offset at
+        // the end AND a 24.97 px stretch.
+        let has_vertical = nodes[idx].modifier.vertical_scroll_state().is_some();
+        let has_horizontal = nodes[idx].modifier.horizontal_scroll_state().is_some();
+        let forward = (max_offset - current).max(0.0);
+        let backward = current.max(0.0);
+        if dy != 0.0 && has_vertical {
+            dy = if dy < 0.0 { dy.max(-forward) } else { dy.min(backward) };
+        } else if dx != 0.0 && has_horizontal && !has_vertical {
+            // `scroll_range` reports the VERTICAL axis when a node has both, so a dual-axis node
+            // keeps its unclamped step rather than clamping against the wrong numbers.
+            dx = if dx < 0.0 { dx.max(-forward) } else { dx.min(backward) };
+        }
         let consumed = dispatch_nested_scroll_delta(
             nodes,
             root,
@@ -593,6 +608,20 @@ mod key_scroll_tests {
 
         assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::ArrowUp)));
         assert_eq!(scroll.offset.peek(), 100.0, "and back up one line");
+    }
+
+    /// A key step near the end stops AT the end and does not bend the content: the spill used to go
+    /// into the overscroll effect (measured: 24.97 px of stretch from one ArrowDown).
+    #[test]
+    fn a_key_step_stops_at_the_end_without_bending_the_content() {
+        let (mut nodes, scroll) = one_list(280.0);
+        scroll.fling_limit.set(300.0);
+        let effect = crate::overscroll::OverscrollEffect::new();
+        nodes[1].modifier = nodes[1].modifier.clone().overscroll(&effect);
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::ArrowDown)));
+        assert_eq!(scroll.offset.peek(), 300.0, "the step stops at the end");
+        assert_eq!(effect.stretch(), 0.0, "and nothing spills into the rubber band");
+        crate::animation::clear_all_animations();
     }
 
     #[test]
