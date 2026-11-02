@@ -431,14 +431,13 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
 pub(crate) fn scroll_by_key(
     nodes: &mut [LayoutNode],
     root: usize,
-    focused_id: Option<u64>,
+    start_idx: usize,
     key: &winit::keyboard::Key,
 ) -> bool {
     use winit::keyboard::{Key, NamedKey};
     /// One arrow press, in logical pixels (Windows scrolls three 16 px lines per notch).
     const LINE_STEP: f32 = 48.0;
-    let Some(id) = focused_id else { return false };
-    let Some(path) = crate::layout::node::path_to_id(nodes, root, id) else { return false };
+    let Some(path) = node_path(nodes, root, start_idx) else { return false };
     let density = crate::runtime::density::current_density();
     // The sign is the wheel's: a NEGATIVE vertical delta scrolls DOWN (offset grows).
     let step = match key {
@@ -459,7 +458,7 @@ pub(crate) fn scroll_by_key(
     let is_page = matches!(key, Key::Named(NamedKey::PageUp) | Key::Named(NamedKey::PageDown));
     for &idx in path.iter().rev() {
         let (max_offset, current, visible) = scroll_range(&nodes[idx]);
-        let (mut dx, mut dy) = step;
+                let (mut dx, mut dy) = step;
         if is_page {
             let extent = if dy != 0.0 { visible.1 } else { visible.0 };
             if extent <= 0.0 { continue; }
@@ -489,20 +488,40 @@ pub(crate) fn scroll_by_key(
     false
 }
 
+/// The node indices from `root` down to `target`, or `None` when `target` is not under `root`.
+fn node_path(nodes: &[LayoutNode], root: usize, target: usize) -> Option<Vec<usize>> {
+    fn walk(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
+        path.push(current);
+        if current == target { return true; }
+        for &child in &nodes[current].children {
+            if walk(nodes, child, target, path) { return true; }
+        }
+        path.pop();
+        false
+    }
+    let mut path = Vec::new();
+    walk(nodes, root, target, &mut path).then_some(path)
+}
+
 /// The window-level entry: the focused node takes the key, else the innermost node under the last
 /// pointer position (a list nobody tabbed into is still what the last click aimed at). Both the real
 /// key path and the debug `k` path call THIS, so a debug-driven arrow and a real one cannot diverge.
 pub(crate) fn scroll_by_key_in_window(pw: &mut crate::app::per_window::PerWindow, key: &winit::keyboard::Key) -> bool {
     let Some(root) = pw.composer.layout_root_idx() else { return false };
-    let start_id = pw.focused_id.or_else(|| {
+    // An INDEX, not an id: a node without one has id 0, and resolving 0 found the root - the arrow
+    // then scrolled the page instead of the card the pointer was in (measured: two ArrowDown presses
+    // moved the card 0 px in one run and 120 in another, depending on what the press had focused).
+    let start_idx = pw.focused_id.and_then(|id| {
+        let nodes = pw.composer.arena_nodes();
+        crate::layout::node::path_to_id(nodes, root, id).and_then(|path| path.last().copied())
+    }).or_else(|| {
         let pos = pw.input.last_pos?;
         let nodes = pw.composer.arena_nodes();
-        let path = crate::layout::node::hit_test(nodes, root, pos.0, pos.1);
-        path.last().map(|&idx| nodes[idx].id)
+        crate::layout::node::hit_test(nodes, root, pos.0, pos.1).last().copied()
     });
-    let Some(start_id) = start_id else { return false };
+        let Some(start_idx) = start_idx else { return false };
     let nodes = pw.composer.arena_nodes_mut();
-    scroll_by_key(nodes, root, Some(start_id), key)
+    scroll_by_key(nodes, root, start_idx, key)
 }
 
 /// `(max offset, current offset, visible extent)` for a node - the same numbers
@@ -565,40 +584,40 @@ mod key_scroll_tests {
     #[test]
     fn an_arrow_scrolls_one_line_and_a_page_scrolls_a_viewport() {
         let (mut nodes, scroll) = one_list(0.0);
-        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowDown)), "the arrow scrolled");
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::ArrowDown)), "the arrow scrolled");
         assert_eq!(scroll.offset.peek(), 48.0, "one line down");
 
-        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::PageDown)));
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::PageDown)));
         assert_eq!(scroll.offset.peek(), 148.0, "a page is the viewport (100)");
 
-        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowUp)));
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::ArrowUp)));
         assert_eq!(scroll.offset.peek(), 100.0, "and back up one line");
     }
 
     #[test]
     fn home_and_end_reach_the_ends() {
         let (mut nodes, scroll) = one_list(150.0);
-        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::End)));
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::End)));
         assert_eq!(scroll.offset.peek(), 300.0, "the end is content minus viewport");
-        assert!(scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::Home)));
+        assert!(scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::Home)));
         assert_eq!(scroll.offset.peek(), 0.0);
     }
 
     #[test]
     fn a_key_with_nothing_left_to_scroll_falls_through() {
         let (mut nodes, scroll) = one_list(300.0);
-        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::ArrowDown)),
+        assert!(!scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::ArrowDown)),
             "at the end the arrow must reach focus navigation");
         assert_eq!(scroll.offset.peek(), 300.0);
-        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::End)));
+        assert!(!scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::End)));
     }
 
     #[test]
     fn unrelated_keys_and_missing_focus_do_nothing() {
         let (mut nodes, scroll) = one_list(0.0);
-        assert!(!scroll_by_key(&mut nodes, 0, Some(2), &key(NamedKey::Enter)));
-        assert!(!scroll_by_key(&mut nodes, 0, None, &key(NamedKey::ArrowDown)), "no focus, no scroll");
-        assert!(!scroll_by_key(&mut nodes, 0, Some(99), &key(NamedKey::ArrowDown)), "unknown focus id");
+        assert!(!scroll_by_key(&mut nodes, 0, 1, &key(NamedKey::Enter)));
+        assert!(!scroll_by_key(&mut nodes, 0, 0, &key(NamedKey::ArrowDown)), "a node outside any scroller");
+        assert!(!scroll_by_key(&mut nodes, 0, 99, &key(NamedKey::ArrowDown)), "an index that is not in the tree");
         assert_eq!(scroll.offset.peek(), 0.0);
     }
 
@@ -624,7 +643,7 @@ mod key_scroll_tests {
         nodes[1].children.push(2);
         nodes[0].children.push(1);
 
-        assert!(scroll_by_key(&mut nodes, 0, Some(3), &key(NamedKey::ArrowDown)));
+        assert!(scroll_by_key(&mut nodes, 0, 2, &key(NamedKey::ArrowDown)));
         assert_eq!(inner.offset.peek(), 60.0, "the inner list is at its end");
         assert_eq!(outer.offset.peek(), 48.0, "so the outer one scrolls");
     }
