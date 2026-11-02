@@ -18,7 +18,7 @@
 |---|---|---|
 | Defects (wrong behaviour) | 0 | 13 — S-1..S-7 here, S-8..S-13 in the pass sections below |
 | Deviations from Compose (deliberate or accepted) | 0 | 6 — D-1..D-3 here, the rest recorded with their passes |
-| Missing API surface | 0 | 10 — M-1..M-10 |
+| Missing API surface | 1 — M-4 | 9 — M-1..M-3, M-5..M-10 |
 | Investigated and ruled out | — | 8 |
 
 ## Defects
@@ -295,33 +295,35 @@ Deviations, recorded deliberately: the handles are painted for EVERY selection, 
 them on touch mode (`manager.isInTouchMode`) — winia has no touch-mode tracking yet; and they are
 drawn by the main `render()` entry, so a selection inside a popup (its own Composer) gets none until
 the overlay render path calls the same helper.
-## Fifteenth pass (2026-11-02): the context menu, after one wrong shape
+## M-4 (context menu): shipped, then reverted on a measured regression — 2026-11-02
 
-`- [x] **M-4 — no context menu.** Compose offers Copy / Select all from a menu anchored at the press
-(`ContextMenuArea` + `addSelectionContainerTextContextMenuComponents`). A secondary press in a
-container now opens one.
+Second attempt reached a working menu: built with the content inside the container's group, anchored
+on a `Spacer`, opened by a secondary press through the registrar. `selection_` was green (89) and the
+full suite passed (2152).
 
-The first shape failed and was reverted: building the `DropdownMenu` as the container's SIBLING (after
-`end_restartable_group`) broke eight existing press tests — every press stopped being handled.
-Removing only that build restored them. Two more measurements pinned it down:
+**The user then reported the real defect it introduced, and it reproduces.** Driving the demo through
+the debug server (`pb right` + `d`/`u` now exists for exactly this) shows:
 
-- a menu built INSIDE the container's content is harmless (probe: `press` still true, node counts 4
-  and 5 for the two anchor shapes);
-- the first inside-the-group version still failed three tests because the anchor was an empty
-  `Text` — an empty text registers a zero-length run, so `selectable_texts()` grew a `""` and the
-  anchors shifted (measured: `["aa", "cc"]` became `["aa", "cc", ""]`).
+| Step | `[main]` readout |
+| --- | --- |
+| drag in the first card | `2 .. 28 — 26 chars` |
+| right press inside the selection | unchanged (menu opens: `Copy` + `Select all` appear in the tree) |
+| press elsewhere (dismiss) | `no selection` |
+| drag in the SAME card again | `no selection` — it never selects again |
 
-Final shape: the menu is built with the content, inside the group, anchored on a `Spacer`; the open
-flag is a plain `ctx.remember`, and the registrar relays `request_context_menu` from the pointer path
-(which names the container the same way the keyboard route does). `sync_overlays` retains an open
-popup across a Skipped frame, so the menu survives while the content itself does not recompose.
+Another card still selects after the cycle, so the damage is local to the container whose menu was
+opened. Whatever the menu's composition does to that container (a rebuild on open, an extra child, a
+popup record) leaves it unable to start a new selection, and the readouts say nothing about why.
 
-Measured: `a_secondary_press_opens_the_selection_menu` (the press is answered by the menu, the
-selection is unchanged, and the popup becomes an overlay layer — the test drives `sync_overlays`
-itself, since that is the frame path's job); red check: disabling the pointer hook fails it.
+Reverted: a menu that kills selection in the container it belongs to is not shippable, and the M-4
+surface is small enough that it can wait for the right shape. What survives is the debug infrastructure
+that made the reproduction possible (`pb left|right`, so pointer events can carry a secondary button)
+— it is what a future attempt will need to prove the fix.
 
-Deviation: the menu anchors to the CONTAINER, not to the press point — `DropdownMenu` positions
-itself against an anchor node, and the anchor here is a zero-size spacer inside the container.
+Next attempt, concretely: the menu must NOT live under the container's composition. Compose draws
+`ContextMenuArea` from the window, and winia's overlay host is the same layer (`Popup` already renders
+there) — a window-owned menu opened by the registrar callback, anchored at the press point, is the
+shape that cannot perturb the container it describes.
 ## Deviations from Compose
 
 - [x] **D-1 — clearing a selection is reported.** `fire_on_change` only runs `build_selection()`, which
@@ -413,10 +415,9 @@ itself against an anchor node, and the anchor here is a zero-size spacer inside 
   (`SelectionHandles.kt`, `manager.handleDragObserver`); winia had none, so an existing selection
   cannot be adjusted, only re-dragged from scratch.
   **Closed 2026-11-02** — see the fourteenth pass.
-- [x] **M-4 — context menu.** Compose adds `ContextMenuArea` + text-toolbar components
-  (`addSelectionContainerTextContextMenuComponents`); winia had no selection menu at all.
-  **Closed 2026-11-02** — see the fifteenth pass; the menu offers Copy and Select all, anchored to the
-  container rather than to the press point.
+- [ ] **M-4 — context menu.** Compose adds `ContextMenuArea` + text-toolbar components
+  (`addSelectionContainerTextContextMenuComponents`); winia has no selection menu. Two shapes tried and
+  reverted, both measured; the next one has to be window-hosted — see the M-4 section.
 - [x] **M-5 — double click selects a word, triple click the line.** No double-click-to-select-word, no triple-click, no
   `SelectionAdjustment.Word` / `Paragraph`. Verified by grep: `pointer.rs` has no click-count
   **Closed 2026-11-01.** `handle_pointer_down` counts presses (time + slop, carried on

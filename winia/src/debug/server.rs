@@ -679,7 +679,11 @@ pub fn start_stdin_channel() {
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event_for_window(target_window, DebugEvent::Click { x, y });
                 }
-                "d" if parts.len() >= 3 => {
+                "pb" if parts.len() >= 2 => {
+                    let secondary = parts[1] == "right";
+                    queue_event_for_window(target_window, DebugEvent::PointerKind { secondary });
+                }
+            "d" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event_for_window(target_window, DebugEvent::PointerDown { x, y });
@@ -882,6 +886,11 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let y: f32 = parts[2].parse().unwrap_or(0.0);
                 queue_event(DebugEvent::Click { x, y });
                 let _ = write.send(Message::Text("ok click".into())).await;
+            }
+            "pb" if parts.len() >= 2 => {
+                let secondary = parts[1] == "right";
+                queue_event(DebugEvent::PointerKind { secondary });
+                let _ = write.send(Message::Text("ok button".into())).await;
             }
             "d" if parts.len() >= 3 => {
                 let x: f32 = parts[1].parse().unwrap_or(0.0);

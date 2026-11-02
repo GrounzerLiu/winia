@@ -277,6 +277,16 @@ impl AppState {
                         }
                     }
                 }
+                debug::DebugEvent::PointerKind { secondary } => {
+                    pw.input.last_kind = crate::input::PointerKind::Mouse {
+                        button: if secondary {
+                            crate::input::PointerButton::Secondary
+                        } else {
+                            crate::input::PointerButton::Primary
+                        },
+                    };
+                    handled = true;
+                }
                 debug::DebugEvent::PointerDown { x, y } => {
                     // Simulate a pointer down: shares the core with the real PointerButton Down
                     // (with_focus=false — the debug path does no cursor/focus work).

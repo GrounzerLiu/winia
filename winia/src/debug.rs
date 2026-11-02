@@ -44,6 +44,8 @@ pub enum DebugEvent {
     RequestFocus { id: u64 },
     /// Simulate a pointer press (the start of a drag selection).
     PointerDown { x: f32, y: f32 },
+    /// Choose the button the following pointer events carry (`d`/`m`/`u` use the last kind).
+    PointerKind { secondary: bool },
     /// Simulate a pointer move (drag selection).
     PointerMove { x: f32, y: f32 },
     /// Simulate a pointer release.
