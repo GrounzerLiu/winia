@@ -34,8 +34,9 @@ impl AnimatableValue for SharedBounds {
 impl Default for BoundsTransform {
     /// Compose's default flight shaping: `SharedTransitionDefaults.BoundsTransform` is
     /// `spring(stiffness = StiffnessMediumLow, visibilityThreshold = Rect.VisibilityThreshold)`
-    /// (`animation/SharedTransitionScope.kt:1534`, `:1608`; `StiffnessMediumLow` is 400,
-    /// `Rect.VisibilityThreshold` is one pixel per edge, `VisibilityThresholds.kt:39-42`).
+    /// (`androidx.compose.animation/SharedTransitionScope.kt:1534`, `:1608` — not vendored here;
+    /// `StiffnessMediumLow` is 400,
+    /// `Rect.VisibilityThreshold` is one pixel per edge, `animation/core/VisibilityThresholds.kt:39-42`).
     ///
     /// The threshold is one PIXEL because the spec now animates the flight's four edges, which are
     /// window pixels — the same units Compose's `Rect.VectorConverter` hands its animation. (It used to

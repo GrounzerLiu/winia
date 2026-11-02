@@ -24,6 +24,21 @@
 - [x] `placeHolderSize` parameter on `shared_element()` (default `JumpCut`,
   matching current behavior). Trivial.
 
+## Deviations and source health (checked 2026-11-02, against `docs/component-authoring.md`)
+
+- [x] **`SharedTransitionLayout` takes no `modifier`** (Compose: `SharedTransitionLayout(modifier,
+  content)`). winia's is a pure scope provider with no node of its own — it publishes the
+  `CompositionLocal` and hands the caller's closure straight through — so a modifier would have
+  nothing to apply to; callers wrap the scope's content in their own container
+  (`docs/shared-element-usage.md` step 1). Reopen the moment the layout grows a node (a padding that
+  applies to the whole scope, a clip).
+- [x] **The flight-motion citations point outside `reference/`.** `SharedTransitionScope.kt` lives in
+  the `animation` artifact, and this tree vendors `animation-core` only, so its line numbers cannot be
+  diffed here; the comments in `shared_transition.rs` / `shared_transition/state.rs` now say so, and
+  the one citation that IS vendored is named with its real path
+  (`animation/core/VisibilityThresholds.kt:39-42` — `RectVisibilityThreshold` is one pixel per edge).
+  Contract section 12.1 asks for paths a reader can diff; a citation that cannot be reached is worse
+  than none, because it reads as verified.
 ## P1 — small behavior additions
 
 - [x] `PathMotion::ArcBelow` / `ArcAbove` — Compose `ArcSpline.Arc` math

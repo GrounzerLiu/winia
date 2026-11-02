@@ -18,9 +18,11 @@
 //!
 //! Motion note: the spec runs on the flight's four EDGES (`FlightEdges`, window pixels), which is
 //! Compose's shape — its `BoundsTransform` returns a `FiniteAnimationSpec<Rect>` and the flight runs it
-//! through `Rect.VectorConverter` (`animation/SharedTransitionScope.kt:265-268`, `:1323`, `:1534`), so
+//! through `Rect.VectorConverter` (`androidx.compose.animation/SharedTransitionScope.kt:265-268`,
+//! `:1323`, `:1534` — the `animation` artifact is NOT vendored under `reference/`, so those line
+//! numbers cannot be re-checked here; the vendored neighbour is `animation-core`), so
 //! each edge is its own spring with `Rect.VisibilityThreshold` (one pixel each,
-//! `VisibilityThresholds.kt:39-42`) and each inherits its own velocity when the endpoints change
+//! `animation/core/VisibilityThresholds.kt:39-42`) and each inherits its own velocity when the endpoints change
 //! mid-flight. A flight also carries a scalar 0→1 CLOCK on the same spec, which is what winia's content
 //! crossfade rides (Compose runs enter/exit transitions on their own specs instead); the clock's
 //! threshold stays in progress units — see `BoundsTransform::clock_spec`.
