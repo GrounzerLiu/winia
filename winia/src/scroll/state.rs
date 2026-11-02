@@ -21,6 +21,8 @@ pub struct ScrollState {
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
+    /// The offset `last_scrolled_forward` saw last, so it can answer "which way" without a write hook.
+    pub(crate) last_read_offset: std::sync::Arc<std::sync::Mutex<f32>>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
     /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
     pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::fling::SnapInfo>>,
@@ -60,10 +62,26 @@ impl ScrollState {
             is_scroll_in_progress: crate::runtime::state::State::new(false),
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::runtime::state::State::new(0),
+            last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             fling_behavior: None,
         }
+    }
+
+    /// Which way the offset moved since the last time this was asked: `true` = toward the end.
+    ///
+    /// Compose publishes `ScrollableState.lastScrolledForward/Backward` and updates them on every
+    /// scroll; winia's offset is written straight by the delta path and by the fling's motion, so
+    /// there is no single write to hook. This SAMPLES instead: read it once per frame and it answers
+    /// "did we move toward the end since the previous frame", which is what a bar that hides on scroll
+    /// direction actually needs. A caller that never reads it gets no cost beyond one float.
+    pub fn last_scrolled_forward(&self) -> bool {
+        let current = self.offset.peek();
+        let mut last = self.last_read_offset.lock().unwrap_or_else(|e| e.into_inner());
+        let forward = current > *last;
+        *last = current;
+        forward
     }
 
     /// How far this container can scroll, as the layout last wrote it back: `content - viewport`,
@@ -399,6 +417,16 @@ mod scroll_by_tests {
         s.offset.set(300.0);
         assert!(!s.can_scroll_forward());
         assert!(s.can_scroll_backward());
+    }
+
+    #[test]
+    fn last_scrolled_forward_samples_the_direction() {
+        let s = state(100.0, 300.0);
+        s.offset.set(140.0);
+        assert!(s.last_scrolled_forward(), "moved toward the end");
+        assert!(!s.last_scrolled_forward(), "nothing moved since the last read");
+        s.offset.set(120.0);
+        assert!(!s.last_scrolled_forward(), "moved back toward the start");
     }
 
     #[test]

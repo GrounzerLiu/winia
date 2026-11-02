@@ -72,7 +72,7 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
 | `scrollBy(pixels)` | `ScrollableState.kt:182` | **shipped** `ScrollState::scroll_by` (clamped, returns what it consumed, cancels a fling first) |
 | `dispatchRawDelta` | `ScrollableState.kt:73` | deliberately not mirrored: it exists to bypass the nested dispatcher while clamping, and `ScrollState` has no dispatcher - the chain lives in `app::scroll`, so a second name would just invite the wrong pick |
 | `canScrollForward/Backward` | `ScrollableState.kt:92` | present (`layout/lazy/state.rs:160`, plus a `remember_can_scroll_forward` that notifies only on flips) |
-| `lastScrolledForward/Backward` | `ScrollableState.kt:115` | absent |
+| `lastScrolledForward/Backward` | `ScrollableState.kt:115` | **shipped as a sample**: `last_scrolled_forward()` answers "did the offset move toward the end since the previous read" - there is no single write to hook (the delta path and the fling's motion both set the offset) |
 | `animateScrollBy` | named in `ScrollableState.kt:33`; the suspend API | absent; `animate_scroll_to(value, max)` exists |
 | Wheel on a pager | nudges a few pixels | steps a whole page (deliberate; see section 3) |
 | Overscroll applied to flings | `Scrollable.kt:717` `overscroll.applyToFling(...)` | **shipped**: the velocity left when the decay hits a boundary becomes a bend (`pull(velocity / 40)`), capped by the same 120 px |
@@ -103,8 +103,9 @@ animation-core, but NOT the `ui` module, and nested-scroll and many `ScrollState
    a bend (40 px/s per pixel, 120 px cap), so a fling into an end bends and returns instead of just
    stopping. Tests: `a_fling_bend_follows_velocity_and_caps` and `a_fling_into_the_end_leaves_a_bend`
    (the second drives the real `dispatch_nested_scroll_fling` and asserts a non-zero stretch).
-4. **No `lastScrolledForward/Backward`.** A bar that hides on scroll direction has to diff offsets
-   itself; the state already knows the direction but does not publish it.
+4. ~~**No `lastScrolledForward/Backward`.**~~ **Shipped 2026-11-02** as `ScrollState::last_scrolled_forward()`,
+   sampled at read time rather than updated per scroll: reading it once a frame is what a bar that
+   hides on direction needs, and it costs one float when nobody reads it.
 5. **Scrollbar placement is the caller's job** (no RTL mirroring). Already recorded in
    `docs/scrollbar.md` section 3.
 

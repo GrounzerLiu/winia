@@ -840,6 +840,7 @@ impl<A: LazyAxis> LazyList<A> {
         // Install the custom measure policy: real measurement, height write-back, placement, and the
         // viewport write-back.
         let scroll = crate::modifier::ScrollState {
+            last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             offset: state.offset.clone(),
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),

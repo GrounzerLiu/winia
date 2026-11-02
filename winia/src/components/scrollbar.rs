@@ -566,6 +566,7 @@ impl LazyScrollbar {
         // 同一帧内有效；松手清同样落拼装 state，无残留）。
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
+            last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             offset: self.state.offset.clone(),
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),
@@ -654,6 +655,7 @@ impl HorizontalLazyScrollbar {
         // fade 靠脉冲，拖拽置位落拼装 state 无残留。
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
+            last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             offset: self.state.offset.clone(),
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),

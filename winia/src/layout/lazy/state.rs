@@ -237,6 +237,7 @@ impl LazyListState {
         // entry point runs the built-in strategy; it is the list-level escape hatch, not the component
         // path.)
         let state = crate::modifier::ScrollState {
+            last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
             offset: self.offset.clone(),
             is_scroll_in_progress: self.is_scrolling.clone(),
             fling_limit: self.fling_limit.clone(),
