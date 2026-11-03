@@ -731,6 +731,17 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// Set the callback for IME edits that change committed text (Commit and DeleteSurrounding)
+    /// on the current node.
+    pub fn set_current_node_ime_edit_callback(
+        &mut self,
+        callback: Box<dyn Fn(crate::layout::node::ImeEdit) + Send>,
+    ) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.ime_edit_callback = Some(callback);
+        }
+    }
+
     /// 同步 composing_range 到当前节点（渲染画下划线用）。desc 通道——
     /// 外层 Option 区分"未设置"（非 TextField）与"清空"（组合结束）
     pub fn sync_composing_range(&mut self, range: Option<std::ops::Range<usize>>) {

@@ -564,6 +564,7 @@ impl Composer {
             cursor_callback: None,
             display_focused: None,
             ime_callback: None,
+            ime_edit_callback: None,
             composing_range: None,
             direction,
         }));
@@ -663,6 +664,7 @@ impl Composer {
             cursor_callback: None,
             display_focused: None,
             ime_callback: None,
+            ime_edit_callback: None,
                 composing_range: None,
                 direction,
             }));

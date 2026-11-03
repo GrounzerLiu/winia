@@ -294,6 +294,21 @@ pub(crate) fn note_platform_theme(dark: bool) {
     }
 }
 
+/// Detect the platform theme on platforms where dark-light returns a Result.
+#[cfg(not(target_os = "android"))]
+fn detected_dark() -> bool {
+    matches!(
+        dark_light::detect().unwrap_or(dark_light::Mode::Unspecified),
+        dark_light::Mode::Dark
+    )
+}
+
+/// Android's dark-light fallback returns a Mode directly (it has no platform backend yet).
+#[cfg(target_os = "android")]
+fn detected_dark() -> bool {
+    matches!(dark_light::detect(), dark_light::Mode::Dark)
+}
+
 /// Detect whether the system is in dark mode — or answer with the mode an application pinned through
 /// [`set_system_dark_mode`].
 ///
@@ -309,7 +324,7 @@ pub fn is_system_dark_theme() -> bool {
         _ => match SYSTEM_THEME_DARK.load(Ordering::Relaxed) {
             1 => true,
             0 => false,
-            _ => matches!(dark_light::detect().unwrap_or(dark_light::Mode::Unspecified), dark_light::Mode::Dark),
+            _ => detected_dark(),
         },
     }
 }

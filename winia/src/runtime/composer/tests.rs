@@ -3518,6 +3518,7 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
                 leaf_key = k;
                 ctx.start_leaf(k, Modifier::new());
                 ctx.set_current_node_ime_callback(Box::new(|_text: &str, _c: Option<(usize, usize)>| {}));
+                ctx.set_current_node_ime_edit_callback(Box::new(|_edit: crate::layout::node::ImeEdit| {}));
                 ctx.set_current_node_cursor_and_callback(0, false, Box::new(|_i: usize| {}));
                 ctx.end_node();
             }
@@ -3529,6 +3530,8 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
     let leaf = composer.arena_nodes()[root].children[0];
     assert!(composer.arena_nodes()[leaf].ime_callback.borrow().is_some(),
         "帧1 应有 IME 回调（TextField 场景）");
+    assert!(composer.arena_nodes()[leaf].ime_edit_callback.borrow().is_some(),
+        "帧1 应有 IME 提交/删除回调（TextField 场景）");
 
     // 帧2：同位置变成普通 Text——无 IME/cursor 回调 → 复用节点应清理残留
     // 根容器加 size 参数强制 Enter（否则参数/结构不变 → Skip 导致 build 不执行）
@@ -3574,6 +3577,10 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
     assert!(
         composer.arena_nodes()[leaf].ime_callback.borrow().is_none(),
         "角色切换后 IME 回调应被清理（残留会污染普通 Text）"
+    );
+    assert!(
+        composer.arena_nodes()[leaf].ime_edit_callback.borrow().is_none(),
+        "角色切换后 IME 提交/删除回调应被清理"
     );
     assert!(
         composer.arena_nodes()[leaf].cursor_callback.borrow().is_none(),
@@ -3989,6 +3996,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             cursor_callback: None,
             display_focused: None,
             ime_callback: None,
+            ime_edit_callback: None,
         composing_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::runtime::materialize::DescNode {
@@ -4010,6 +4018,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             cursor_callback: None,
             display_focused: None,
             ime_callback: None,
+            ime_edit_callback: None,
             composing_range: None,
             direction: crate::layout::LayoutDirection::Ltr,
             children: vec![],

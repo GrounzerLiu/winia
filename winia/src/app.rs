@@ -291,6 +291,30 @@ fn take_pending_windows() -> Vec<PendingWindow> {
 /// path in reverse for a scroll) picks the outer node.
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
+    let event_loop = EventLoop::new().expect("event loop");
+    run_app_with_event_loop(event_loop, app);
+}
+
+/// Android entry point: the event loop must be built with the `AndroidApp` passed to
+/// `android_main`, so the desktop `EventLoop::new()` path cannot be reused here.
+#[cfg(target_os = "android")]
+pub fn run_app_android(
+    android_app: winit::platform::android::activity::AndroidApp,
+    app: impl FnOnce(&mut ComposeCtx) + 'static,
+) {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    let event_loop = EventLoop::builder()
+        .with_android_app(android_app)
+        .build()
+        .expect("event loop");
+    run_app_with_event_loop(event_loop, app);
+}
+
+fn run_app_with_event_loop(
+    event_loop: EventLoop,
+    app: impl FnOnce(&mut ComposeCtx) + 'static,
+) {
     // Own the tokio runtime: effects (LaunchedEffect, debug WS server) need
     // `Handle::try_current()` during composition. Demos must NOT create their
     // own runtime (nesting `Runtime::new()` under an entered guard is a no-op
@@ -304,13 +328,13 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     // a runtime") if called while entered; `Runtime::block_on` on a nested
     // `Runtime::new()` hits the same panic.
     let _guard = owned.as_ref().map(|rt| rt.enter());
-    let event_loop = EventLoop::new().expect("event loop");
     debug::begin_session();
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
     let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
     crate::runtime::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
+    #[cfg(not(target_os = "android"))]
     debug::start_stdin_channel();
     debug::start_ws_server();
     let state = AppState {

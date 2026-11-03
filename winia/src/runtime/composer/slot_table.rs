@@ -32,6 +32,8 @@ pub(super) struct NodeDesc {
     pub(super) display_focused: Option<bool>,
     /// IME 预输入回调（TextField——app.rs 的 Ime::Preedit 直接调用）
     pub(super) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
+    /// IME 提交/删除回调（TextField——app.rs 的 Ime::Commit / DeleteSurrounding 调用）
+    pub(super) ime_edit_callback: Option<Box<dyn Fn(crate::layout::node::ImeEdit) + Send>>,
     /// IME 组合范围（渲染画下划线用）——外层 Option 区分"未设置"与"清空"
     pub(super) composing_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
@@ -434,6 +436,7 @@ impl SlotTable {
                     cursor_callback: desc.cursor_callback,
                     display_focused: desc.display_focused,
                     ime_callback: desc.ime_callback,
+                    ime_edit_callback: desc.ime_edit_callback,
                     composing_range: desc.composing_range,
                     direction: desc.direction,
                     claimed: None,
@@ -471,6 +474,7 @@ impl SlotTable {
                     cursor_callback: None,
                     display_focused: None,
                     ime_callback: None,
+                    ime_edit_callback: None,
                     composing_range: None,
                     direction: slot.direction,
                     children: Vec::new(),

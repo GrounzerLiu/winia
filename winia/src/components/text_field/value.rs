@@ -20,6 +20,35 @@ impl TextFieldValue {
         let len = text.len();
         Self { text, selection: len..len, composing_range: None }
     }
+
+    /// Apply a committed IME edit. The caller removes any active preedit first; this method only
+    /// changes committed text and the selection.
+    pub(crate) fn apply_ime_edit(&mut self, edit: &crate::layout::node::ImeEdit) {
+        let len = self.text.len();
+        let selection_start = self.selection.start.min(self.selection.end).min(len);
+        let selection_end = self.selection.start.max(self.selection.end).min(len);
+
+        match edit {
+            crate::layout::node::ImeEdit::Commit(text) => {
+                self.text.replace_range(selection_start..selection_end, text);
+                let caret = selection_start + text.len();
+                self.selection = caret..caret;
+            }
+            crate::layout::node::ImeEdit::DeleteSurrounding { before_bytes, after_bytes } => {
+                let start = self
+                    .text
+                    .floor_char_boundary(selection_start.saturating_sub(*before_bytes));
+                let end = self
+                    .text
+                    .floor_char_boundary((selection_end + *after_bytes).min(len));
+                if start < end {
+                    self.text.replace_range(start..end, "");
+                }
+                self.selection = start..start;
+            }
+        }
+        self.composing_range = None;
+    }
 }
 
 /// 文本变更描述
@@ -140,6 +169,61 @@ pub(crate) fn end_composition(val: &mut TextFieldValue) {
         val.composing_range = None;
         let text_len = val.text.len();
         val.selection = val.selection.start.min(text_len)..val.selection.end.min(text_len);
+    }
+}
+
+#[cfg(test)]
+mod ime_edit_tests {
+    use super::*;
+    use crate::layout::node::ImeEdit;
+
+    #[test]
+    fn commit_replaces_the_selection() {
+        let mut value = TextFieldValue::new("hello world");
+        value.selection = 6..11;
+        value.apply_ime_edit(&ImeEdit::Commit("there".to_owned()));
+        assert_eq!(value.text, "hello there");
+        assert_eq!(value.selection, 11..11);
+    }
+
+    #[test]
+    fn an_empty_commit_deletes_the_selection() {
+        let mut value = TextFieldValue::new("hello world");
+        value.selection = 5..11;
+        value.apply_ime_edit(&ImeEdit::Commit(String::new()));
+        assert_eq!(value.text, "hello");
+        assert_eq!(value.selection, 5..5);
+    }
+
+    #[test]
+    fn delete_surrounding_deletes_around_the_caret() {
+        let mut value = TextFieldValue::new("hello world");
+        value.selection = 5..5;
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 2, after_bytes: 2 });
+        assert_eq!(value.text, "helorld");
+        assert_eq!(value.selection, 3..3);
+    }
+
+    #[test]
+    fn delete_surrounding_clamps_at_the_edges() {
+        let mut value = TextFieldValue::new("hello");
+        value.selection = 5..5;
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 99, after_bytes: 0 });
+        assert_eq!(value.text, "");
+
+        let mut value = TextFieldValue::new("hello");
+        value.selection = 0..0;
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 0, after_bytes: 99 });
+        assert_eq!(value.text, "");
+    }
+
+    #[test]
+    fn delete_surrounding_does_not_split_a_multibyte_character() {
+        let mut value = TextFieldValue::new("año");
+        value.selection = 3..3;
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 1, after_bytes: 0 });
+        assert_eq!(value.text, "ao");
+        assert_eq!(value.selection, 1..1);
     }
 }
 

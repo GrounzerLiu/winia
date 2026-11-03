@@ -1190,6 +1190,27 @@ impl TextField {
                 v.set(val);
             }));
         }
+        // IME committed edits (Commit and DeleteSurrounding). Preedit is handled above; this
+        // callback applies the edit to committed text and keeps the selection/registrar in sync.
+        {
+            let v = value.clone();
+            let registrar = registrar.clone();
+            let mapping = offset_mapping.clone();
+            let undo = undo.clone();
+            ctx.set_current_node_ime_edit_callback(Box::new(move |edit| {
+                let mut val = v.get();
+                undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
+                if val.composing_range.is_some() {
+                    end_composition(&mut val);
+                }
+                val.apply_ime_edit(&edit);
+                registrar.set_selection(
+                    mapping.original_to_transformed(val.selection.start),
+                    mapping.original_to_transformed(val.selection.end),
+                );
+                v.set(val);
+            }));
+        }
         // 同步 composing_range 到节点（渲染画下划线用）
         ctx.sync_composing_range(current.composing_range.clone());
         // 选区双向同步：

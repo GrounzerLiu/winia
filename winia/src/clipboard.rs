@@ -81,10 +81,18 @@ pub(crate) fn apply_pending(event_loop: &dyn winit::event_loop::ActiveEventLoop)
         match event_loop.set_clipboard(send) {
             Ok(()) => true,
             Err(err) => {
-                crate::debug_log!("[clipboard] winit set_clipboard failed ({err}); falling back to arboard");
-                if let Ok(mut cb) = arboard::Clipboard::new() {
-                    cb.set_text(text.to_owned()).is_ok()
-                } else {
+                crate::debug_log!("[clipboard] winit set_clipboard failed ({err})");
+                #[cfg(not(target_os = "android"))]
+                {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        cb.set_text(text.to_owned()).is_ok()
+                    } else {
+                        false
+                    }
+                }
+                #[cfg(target_os = "android")]
+                {
+                    let _ = err;
                     false
                 }
             }

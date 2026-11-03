@@ -920,3 +920,34 @@
             "an editable field still draws one, so the check above cannot pass by answering false always"
         );
     }
+
+    #[test]
+    fn an_ime_delete_surrounding_edit_reaches_the_field_value() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let value = State::new(TextFieldValue {
+            text: "hello world".to_owned(),
+            selection: 5..5,
+            composing_range: None,
+        });
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            TextField::new(value.clone()).build(ctx);
+        });
+        let nodes = composer.arena_nodes();
+        let index = nodes
+            .iter()
+            .position(|node| node.ime_edit_callback.borrow().is_some())
+            .expect("the TextField input leaf registers an IME edit callback");
+        let callback = nodes[index].ime_edit_callback.borrow();
+        let callback = callback.as_ref().expect("callback present");
+        callback(crate::layout::node::ImeEdit::DeleteSurrounding {
+            before_bytes: 2,
+            after_bytes: 2,
+        });
+        assert_eq!(value.get().text, "helorld");
+        assert_eq!(value.get().selection, 3..3);
+    }

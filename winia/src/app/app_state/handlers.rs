@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::node::ImeEdit;
 
 impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
@@ -633,6 +634,12 @@ impl AppState {
                         }
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    Ime::Commit(text) if text.is_empty() => {
+                        // An empty commit replaces the selection with nothing (deletes it).
+                        if dispatch_ime_edit(pw, ImeEdit::Commit(text)) {
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        }
+                    }
                     Ime::Commit(text) => {
                         // IME committed text — dispatched to the focused node's on_key_event as Characters.
                         // Focused overlay first, then main tree (same routing rule).
@@ -722,8 +729,15 @@ impl AppState {
                             }
                         }
                     }
+                    Ime::DeleteSurrounding { before_bytes, after_bytes } => {
+                        if dispatch_ime_edit(
+                            pw,
+                            ImeEdit::DeleteSurrounding { before_bytes, after_bytes },
+                        ) {
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        }
+                    }
                     Ime::Enabled | Ime::Disabled => {}
-                    _ => {}
                 }
             }
             WindowEvent::SurfaceResized(s) => {
@@ -1099,4 +1113,37 @@ pub(crate) fn try_selection_key(pw: &mut crate::app::per_window::PerWindow, ke: 
     // The state, the caller's callback and the copy path all hang off this one notification.
     reg.fire_on_change();
     true
+}
+
+/// Dispatch an IME edit to the focused text field. Overlays are searched first, matching the
+/// preedit path: an overlay has its own composer and its own focus id.
+fn dispatch_ime_edit(pw: &mut crate::app::per_window::PerWindow, edit: ImeEdit) -> bool {
+    for i in (0..pw.overlay.layers.len()).rev() {
+        let ov = &pw.overlay.layers[i];
+        if ov.closing {
+            continue;
+        }
+        let Some(fid) = ov.focused_id else { continue };
+        let Some(root) = ov.composer.layout_root_idx() else { continue };
+        let nodes = ov.composer.arena_nodes();
+        let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, fid) else { continue };
+        let Some(ime_idx) = find_descendant_ime_callback(nodes, idx) else { continue };
+        let mut callback = nodes[ime_idx].ime_edit_callback.borrow_mut();
+        if let Some(cb) = callback.as_mut() {
+            cb(edit.clone());
+            return true;
+        }
+    }
+
+    let Some(fid) = pw.focused_id else { return false };
+    let nodes = pw.composer.arena_nodes();
+    let Some(root) = pw.composer.layout_root_idx() else { return false };
+    let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, fid) else { return false };
+    let Some(ime_idx) = find_descendant_ime_callback(nodes, idx) else { return false };
+    let mut callback = nodes[ime_idx].ime_edit_callback.borrow_mut();
+    if let Some(cb) = callback.as_mut() {
+        cb(edit);
+        return true;
+    }
+    false
 }

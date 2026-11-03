@@ -47,6 +47,7 @@ pub(crate) struct DescNode {
     /// 显示聚焦标记（text-field-v2 容器化——渲染光标/选区用，回退 node.focused）
     pub(crate) display_focused: Option<bool>,
     pub(crate) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
+    pub(crate) ime_edit_callback: Option<Box<dyn Fn(crate::layout::node::ImeEdit) + Send>>,
     /// 外层 Option：None = 非 TextField 未设置；Some(r) = 渲染值（r 可为 None 清空）
     pub(crate) composing_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
@@ -229,6 +230,7 @@ pub(crate) fn prune_stale_child_links(composer: &mut Composer) {
 fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     *n.cursor_callback.borrow_mut() = None;
     *n.ime_callback.borrow_mut() = None;
+    *n.ime_edit_callback.borrow_mut() = None;
     *n.composing_range.borrow_mut() = None;
     *n.registrar.borrow_mut() = None;
     n.cursor_x.set(0.0);
@@ -248,6 +250,7 @@ fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
 fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
     *n.cursor_callback.borrow_mut() = None;
     *n.ime_callback.borrow_mut() = None;
+    *n.ime_edit_callback.borrow_mut() = None;
     *n.composing_range.borrow_mut() = None;
     n.cursor_x.set(0.0);
     n.cursor_height.set(0.0);
@@ -259,7 +262,7 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, clear_registrar, focus_color, selection_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, clear_registrar, focus_color, selection_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, ime_edit_callback, composing_range, direction, children } = desc;
     // Detached across this node's descriptor-driven child rebuild and re-attached at the end: the
     // subcomposed child has no descriptor (see `LayoutNode::subcomposed_child`).
     let mut adopted_child: Option<usize> = None;
@@ -530,7 +533,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     // 应用光标/IME/选区（组合期写入 desc——Enter 路径；Skip 恢复保留缓存值）
     // 先记录 desc 是否提供这些字段（条件式会 move 值，需提前缓存）
-    let desc_has_ime = ime_callback.is_some();
+    let desc_has_ime = ime_callback.is_some() || ime_edit_callback.is_some();
     let desc_has_cursor = cursor_callback.is_some();
     if let Some(ci) = cursor_index {
         composer.arena.nodes[index].cursor_index.set(ci);
@@ -547,6 +550,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     if let Some(icb) = ime_callback {
         *composer.arena.nodes[index].ime_callback.borrow_mut() = Some(icb);
     }
+    if let Some(icb) = ime_edit_callback {
+        *composer.arena.nodes[index].ime_edit_callback.borrow_mut() = Some(icb);
+    }
     // 组合范围：Some(r) 即应用（r=None 清空；None = 非 TextField 不碰）
     if let Some(r) = composing_range {
         *composer.arena.nodes[index].composing_range.borrow_mut() = r;
@@ -557,7 +563,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     // 误清 registrar 会丢失 SelectionContainer 内普通 Text 的选择功能（review 2026-08）。
     if !skip && !desc_has_ime && !desc_has_cursor {
         let n = &mut composer.arena.nodes[index];
-        if n.ime_callback.borrow().is_some() || n.cursor_callback.borrow().is_some() {
+        if n.ime_callback.borrow().is_some()
+            || n.ime_edit_callback.borrow().is_some()
+            || n.cursor_callback.borrow().is_some()
+        {
             clear_textfield_input_state(n);
         }
     }

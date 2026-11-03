@@ -130,6 +130,16 @@ impl AlignmentLine {
     }
 }
 
+/// An IME edit that applies to the focused text field. Preedit text is handled separately by the
+/// preedit callback; these two are the committed edits that change the text around the selection.
+#[derive(Debug, Clone)]
+pub(crate) enum ImeEdit {
+    /// Replace the current selection with the committed text (empty text deletes the selection).
+    Commit(String),
+    /// Delete bytes before and after the current selection.
+    DeleteSurrounding { before_bytes: usize, after_bytes: usize },
+}
+
 /// One node of the layout tree.
 ///
 /// Each LayoutNode is one measurable/layoutable cell of the UI tree and carries the modifier chain
@@ -272,6 +282,9 @@ pub struct LayoutNode {
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
     /// The IME preedit callback (TextField handles Preedit with it).
     pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
+    /// The IME committed-edit callback (TextField handles Commit and DeleteSurrounding with it).
+    pub(crate) ime_edit_callback:
+        std::cell::RefCell<Option<Box<dyn Fn(ImeEdit) + Send>>>,
     /// The IME composing range (the render pass underlines it).
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
     /// The focus ring's colour, captured from the theme during composition (the CompositionLocal is
@@ -472,6 +485,7 @@ impl LayoutNode {
             display_focused: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
+            ime_edit_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
             selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),
@@ -571,6 +585,7 @@ impl Default for LayoutNode {
             display_focused: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
+            ime_edit_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
             selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),

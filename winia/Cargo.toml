@@ -11,6 +11,10 @@ description = "A declarative UI framework powered by Skia — Compose-inspired, 
 default = ["vulkan", "gl"]
 vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
+# Android GameActivity backend (the only Android path with soft-keyboard text events).
+android-game-activity = ["winit/android-game-activity"]
+# NativeActivity backend: no Java/Kotlin activity, but also no InputConnection for IME text.
+android-native-activity = ["winit/android-native-activity"]
 debug-server = []
 # Windows UI Automation provider: publishes the semantics tree (`crate::semantics`) to screen
 # readers and to any UIA client, over the window's own HWND. OFF by default — it needs the `windows`
@@ -46,11 +50,20 @@ tokio-tungstenite = "0.30"
 material-colors = "0.5"
 dark-light = "3.0"
 unicode-segmentation = "1.12"
-arboard = "3"
 time = { workspace = true }
 # Saveable snapshots (runtime/saveable.rs). Already in the tree for the semantics tests; the on-disk
 # format is JSON so a corrupt file can be rejected rather than misparsed.
 serde_json = "1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# arboard has no Android backend (its platform module is empty on Android), and its synchronous
+# paste read is only needed on desktop. Android clipboard reads will go through JNI later.
+arboard = "3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Skia on Android needs text layout; the CPU/softbuffer path is enough for the first IME bring-up.
+# Add "gl"/"vulkan" here when the Android GPU backend is verified on a device.
+skia-safe = { workspace = true, features = ["textlayout", "svg"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }

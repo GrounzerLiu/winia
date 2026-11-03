@@ -73,7 +73,15 @@ pub(crate) fn line_end(text: &str, pos: usize) -> usize {
 // directions differ and how a component requests a copy.
 // ═══════════════════════════════════════════════════════════
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn clipboard_get_text() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
+/// Android has no arboard backend. A JNI ClipboardManager bridge will fill this in; until then a
+/// paste reads nothing rather than failing to build the whole framework.
+#[cfg(target_os = "android")]
+pub(crate) fn clipboard_get_text() -> Option<String> {
+    None
 }
 
