@@ -239,10 +239,14 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
         "7. Readouts",
         "the card 1 state, live.",
         |ctx| {
+            // `f32::MAX` is the "not measured yet" sentinel (Compose uses Int.MAX_VALUE for the same
+            // thing); printing it raw reads as a bug, so the card says so instead.
+            let limit = fading.max_value();
+            let limit = if limit >= f32::MAX { "not measured yet".to_string() } else { format!("{limit:.0}") };
             Text::new(format!(
-                "offset {:.0} / limit {:.0} - scrolling {} - forward {} backward {}",
+                "offset {:.0} / limit {} - scrolling {} - forward {} backward {}",
                 fading.offset.get(),
-                fading.max_value(),
+                limit,
                 fading.is_scroll_in_progress.get(),
                 fading.can_scroll_forward(),
                 fading.can_scroll_backward(),
