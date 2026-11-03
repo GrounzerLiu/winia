@@ -67,6 +67,24 @@ pub fn scrollbar_thumb_color(theme: &crate::theme::ThemeColors) -> Color {
     Color::from_argb(((o.a as f32) * 0.7) as u8, o.r, o.g, o.b)
 }
 
+/// The Compose `NonInteractiveScrollbarDefaults` equivalent: one place for every appearance default.
+pub struct ScrollbarDefaults;
+
+impl ScrollbarDefaults {
+    /// The bar's cross-axis width at rest (CMP `thickness`, 6 dp).
+    pub fn thickness() -> f32 { SCROLLBAR_THICKNESS }
+    /// The shortest thumb (M3 `minimumThumbLength`, 24 dp).
+    pub fn thumb_min_length() -> f32 { SCROLLBAR_THUMB_MIN_LENGTH }
+    /// The thumb's cross-axis size while hovered or dragged (10 dp; winia grows the bar, CMP does not).
+    pub fn hover_thickness() -> f32 { SCROLLBAR_HOVER_THICKNESS }
+    /// The thumb colour (theme outline at 70%).
+    pub fn thumb_color(theme: &crate::theme::ThemeColors) -> Color { scrollbar_thumb_color(theme) }
+    /// The thumb colour while hovered or dragged (theme outline at full alpha).
+    pub fn hover_color(theme: &crate::theme::ThemeColors) -> Color { scrollbar_thumb_hover_color(theme) }
+    /// The track colour (transparent: the content behind it shows through).
+    pub fn track_color() -> Color { Color::TRANSPARENT }
+}
+
 /// Pure geometry: given viewport/content/scroll, compute (thumb_offset, thumb_len, visible).
 /// Decoupled from drawing and the components so it can be unit tested. `track = viewport - 2*inset`.
 pub(crate) fn scrollbar_geometry(
@@ -735,13 +753,13 @@ impl LazyScrollbar {
         Self {
             state,
             modifier: Modifier::new(),
-            thickness: SCROLLBAR_THICKNESS,
+            thickness: ScrollbarDefaults::thickness(),
             thumb_color: None,
-            track_color: Color::TRANSPARENT,
-            thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
+            track_color: ScrollbarDefaults::track_color(),
+            thumb_min_length: ScrollbarDefaults::thumb_min_length(),
             always_show: false,
             hover_color: None,
-            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
+            hover_thickness: ScrollbarDefaults::hover_thickness(),
             scroll_reverse: None,
         }
     }
@@ -829,13 +847,13 @@ impl HorizontalLazyScrollbar {
         Self {
             state,
             modifier: Modifier::new(),
-            thickness: SCROLLBAR_THICKNESS,
+            thickness: ScrollbarDefaults::thickness(),
             thumb_color: None,
-            track_color: Color::TRANSPARENT,
-            thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
+            track_color: ScrollbarDefaults::track_color(),
+            thumb_min_length: ScrollbarDefaults::thumb_min_length(),
             always_show: false,
             hover_color: None,
-            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
+            hover_thickness: ScrollbarDefaults::hover_thickness(),
             scroll_reverse: None,
         }
     }
@@ -927,13 +945,13 @@ impl VerticalScrollbar {
         Self {
             scroll,
             modifier: Modifier::new(),
-            thickness: SCROLLBAR_THICKNESS,
+            thickness: ScrollbarDefaults::thickness(),
             thumb_color: None,
-            track_color: Color::TRANSPARENT,
-            thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
+            track_color: ScrollbarDefaults::track_color(),
+            thumb_min_length: ScrollbarDefaults::thumb_min_length(),
             always_show: false,
             hover_color: None,
-            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
+            hover_thickness: ScrollbarDefaults::hover_thickness(),
             scroll_reverse: None,
         }
     }
@@ -1015,13 +1033,13 @@ impl HorizontalScrollbar {
         Self {
             scroll,
             modifier: Modifier::new(),
-            thickness: SCROLLBAR_THICKNESS,
+            thickness: ScrollbarDefaults::thickness(),
             thumb_color: None,
-            track_color: Color::TRANSPARENT,
-            thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
+            track_color: ScrollbarDefaults::track_color(),
+            thumb_min_length: ScrollbarDefaults::thumb_min_length(),
             always_show: false,
             hover_color: None,
-            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
+            hover_thickness: ScrollbarDefaults::hover_thickness(),
             scroll_reverse: None,
         }
     }

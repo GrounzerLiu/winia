@@ -23,7 +23,9 @@ and the M3 `Modifier.nonInteractiveScrollbar` geometry.
 
 All four take the same appearance options: `modifier`, `thickness` (6 dp), `thumb_color` (theme outline at
 70%), `track_color` (transparent), `thumb_min_length` (24 dp), `always_show` (false), `hover_color`,
-`hover_thickness` (10 dp), and `scroll_reverse` (`None` = not reversed).
+`hover_thickness` (10 dp), and `scroll_reverse` (`None` = not reversed). The defaults live in
+`ScrollbarDefaults` (`thickness`, `thumb_min_length`, `hover_thickness`, `thumb_color(theme)`,
+`hover_color(theme)`, `track_color`) - the `SCROLLBAR_*` constants are the token values behind it.
 
 ## 3. Layout
 

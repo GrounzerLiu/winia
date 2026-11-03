@@ -805,3 +805,32 @@
         press((3.0, 70.0));
         assert!(scroll.offset.peek() < 1.0e6, "the press wrote a garbage offset: {}", scroll.offset.peek());
     }
+
+    /// Every appearance default lives in `ScrollbarDefaults` (docs/component-authoring.md section 2.2),
+    /// and a bar built with `new()` really uses them.
+    #[test]
+    fn the_defaults_type_matches_the_token_constants_and_the_builder() {
+        use crate::components::ScrollbarDefaults;
+        assert_eq!(ScrollbarDefaults::thickness(), SCROLLBAR_THICKNESS);
+        assert_eq!(ScrollbarDefaults::thumb_min_length(), SCROLLBAR_THUMB_MIN_LENGTH);
+        assert_eq!(ScrollbarDefaults::hover_thickness(), SCROLLBAR_HOVER_THICKNESS);
+        assert_eq!(ScrollbarDefaults::track_color(), crate::graphics::Color::TRANSPARENT);
+        let theme = crate::theme::ThemeColors::dark_from_seed(0x6750A4);
+        assert_eq!(ScrollbarDefaults::thumb_color(&theme), scrollbar_thumb_color(&theme));
+        assert_eq!(ScrollbarDefaults::hover_color(&theme), scrollbar_thumb_hover_color(&theme));
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        let nodes = composer.arena_nodes();
+        let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TapOnPress { .. }))).expect("the bar node");
+        assert_eq!(bar.measured_size.width, ScrollbarDefaults::thickness(), "the builder uses the default width");
+    }

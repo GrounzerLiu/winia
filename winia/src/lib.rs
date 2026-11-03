@@ -138,7 +138,7 @@ pub mod prelude {
         RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults,
         RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,
         SingleChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRow, VerticalScrollbar, HorizontalScrollbar,
-        LazyScrollbar, HorizontalLazyScrollbar, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH,
+        LazyScrollbar, HorizontalLazyScrollbar, ScrollbarDefaults, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH,
         SCROLLBAR_THUMB_MAX_FRACTION, LinearProgressIndicator, CircularProgressIndicator,
         ProgressIndicatorDefaults, ProgressIndicatorStrokeCap, LoadingIndicator, LOADING_INDICATOR_SIZE,
         LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_CONTAINER_SHAPE, LinearWavyProgressIndicator,

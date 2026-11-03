@@ -106,7 +106,7 @@ pub use segmented_button::{
 };
 pub use scrollbar::{
     VerticalScrollbar, HorizontalScrollbar, LazyScrollbar, HorizontalLazyScrollbar,
-    SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION,
+    ScrollbarDefaults, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION,
 };
 pub use progress_indicator::{
     LinearProgressIndicator, CircularProgressIndicator,
