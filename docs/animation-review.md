@@ -11,7 +11,7 @@ probe inside the crate (the probes were deleted); the numbers are from those run
 | Defects fixed | 4 (A-1..A-4) |
 | Open findings | 0 |
 | Deliberate deviations | 3 (D-1..D-3) |
-| Missing API | 1 (M-1); M-2..M-4 done |
+| Missing API | 0; M-1..M-4 done |
 
 ## Defects
 
@@ -83,7 +83,14 @@ Compose's 171 ms is the threshold, D-2). Components that need medium-low pass it
 
 ## Missing API
 
-- **M-1 `keyframesWithSpline`** (and its `ArcSpline` / `MonoSpline` machinery) - no spline keyframes.
+- **M-1 `keyframesWithSpline`** - DONE: `MonoSpline` ported from `MonoSpline.kt` (piecewise cubic
+  Hermite with the Fritsch-Carlson tangent limit `hypot(a, b) > 9`), `KeyframesWithSplineSpec` and
+  the `KeyframesWithSplineOf::between(..).at(ms, value)` builder, evaluated by both `TimedAnimation`
+  and the frame engine. Per-segment easing applies to the interval the keyframe STARTS, and the
+  implicit 0/duration anchors take the animation's start/target values, as in
+  `VectorizedMonoSplineKeyframesSpec`. Tests: `the_mono_spline_is_monotone_and_hits_its_knots`
+  (hand-computed Hermite value 0.0625 at t=0.25), `keyframes_with_spline_hits_its_keyframes_without_overshoot`,
+  `a_spline_segment_easing_changes_the_timing_not_the_values`, `a_spline_spec_compares_by_value`.
 - **M-2 `DeferredTargetAnimation`** - DONE: `animation::DeferredTargetAnimation<T>` creates the value at
   the first `update_target` (nothing moves), starts/retargets a motion on later ones, and has
   `value` / `is_running` / `reset`. Test: `a_deferred_target_animation_creates_its_value_at_the_first_target`.

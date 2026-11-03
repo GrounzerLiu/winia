@@ -2391,3 +2391,75 @@ fn a_deferred_target_animation_creates_its_value_at_the_first_target() {
     deferred.reset();
     assert_eq!(deferred.value(), None);
 }
+// -- M-1: keyframesWithSpline (MonoSpline port) --
+
+/// The ported spline passes through its knots, is monotone for a monotone band, and matches the
+/// hand-computed Hermite value for `times [0, 0.5, 1]`, `values [0, 0.2, 1]` at t = 0.25:
+/// h=0.5, x=0.5, tangents 0.4 / 1.0 / 1.6 -> 0.0625 (linear would give 0.05).
+#[test]
+fn the_mono_spline_is_monotone_and_hits_its_knots() {
+    let spline = super::spline::MonoSpline::new(vec![0.0, 0.5, 1.0], vec![0.0, 0.2, 1.0]);
+    assert_eq!(spline.value_at(0.0), 0.0);
+    assert_eq!(spline.value_at(0.5), 0.2);
+    assert_eq!(spline.value_at(1.0), 1.0);
+    assert!((spline.value_at(0.25) - 0.0625).abs() < 1e-5, "got {}", spline.value_at(0.25));
+    let mut previous = f32::NEG_INFINITY;
+    for i in 0..=100 {
+        let v = spline.value_at(i as f32 / 100.0);
+        assert!(v >= previous - 1e-4, "not monotone at {i}: {v} < {previous}");
+        previous = v;
+    }
+}
+
+/// `keyframesWithSpline { 40f at 200; 100f at 400 }` from 0 to 100: hits the keyframes, stays
+/// between its endpoints (no overshoot), and differs from a straight line.
+#[test]
+fn keyframes_with_spline_hits_its_keyframes_without_overshoot() {
+    let spec = KeyframesWithSplineOf::between(0.0, 100.0).at(200, 40.0).at(400, 100.0).build();
+    let anim = TimedAnimation::target(0.0f32, 100.0f32, AnimationSpec::KeyframesWithSpline(spec));
+    assert_eq!(anim.value_at(Duration::ZERO), 0.0);
+    assert!((anim.value_at(Duration::from_millis(200)) - 40.0).abs() < 0.01);
+    assert!((anim.value_at(Duration::from_millis(400)) - 100.0).abs() < 0.01);
+    let mut previous = f32::NEG_INFINITY;
+    for ms in 0..=400 {
+        let v = anim.value_at(Duration::from_millis(ms));
+        assert!((0.0..=100.0).contains(&v), "overshoot at {ms}: {v}");
+        assert!(v >= previous - 0.01, "not monotone at {ms}");
+        previous = v;
+    }
+    // The curve through (200, 40) is not the straight 0->100 line (which would be 20 at 100 ms).
+    assert!((anim.value_at(Duration::from_millis(100)) - 20.0).abs() > 1.0);
+}
+
+/// A segment's easing applies to the time fed into the spline, like
+/// `VectorizedMonoSplineKeyframesSpec.getEasedTimeFromIndex`.
+#[test]
+fn a_spline_segment_easing_changes_the_timing_not_the_values() {
+    let linear = KeyframesWithSplineOf::between(0.0, 100.0).at(200, 40.0).at(400, 100.0).build();
+    // The easing belongs to the keyframe that STARTS the interval (Compose reads it from
+    // `timestamps[index]`), so the explicit 0 ms anchor carries it.
+    let eased = KeyframesWithSplineOf::between(0.0, 100.0)
+        .at_with(0, 0.0, std::sync::Arc::new(interpolator::EaseInSine::new()))
+        .at(200, 40.0)
+        .at(400, 100.0)
+        .build();
+    let a = TimedAnimation::target(0.0f32, 100.0f32, AnimationSpec::KeyframesWithSpline(linear));
+    let b = TimedAnimation::target(0.0f32, 100.0f32, AnimationSpec::KeyframesWithSpline(eased));
+    assert!((a.value_at(Duration::from_millis(200)) - b.value_at(Duration::from_millis(200))).abs() < 0.01);
+    let mut max_diff = 0.0f32;
+    for ms in 0..=200 {
+        let d = (a.value_at(Duration::from_millis(ms)) - b.value_at(Duration::from_millis(ms))).abs();
+        max_diff = max_diff.max(d);
+    }
+    assert!(max_diff > 1.0, "the first segment's easing must change the timing, max diff {max_diff}");
+}
+
+/// Parameter comparison sees the spline's frames (a rebuilt spec with the same numbers is equal).
+#[test]
+fn a_spline_spec_compares_by_value() {
+    let a = KeyframesWithSplineOf::between(0.0, 1.0).at(100, 0.3).build();
+    let b = KeyframesWithSplineOf::between(0.0, 1.0).at(100, 0.3).build();
+    let c = KeyframesWithSplineOf::between(0.0, 1.0).at(100, 0.6).build();
+    assert!(AnimationSpec::KeyframesWithSpline(a.clone()).same_parameter(&AnimationSpec::KeyframesWithSpline(b)));
+    assert!(!AnimationSpec::KeyframesWithSpline(a).same_parameter(&AnimationSpec::KeyframesWithSpline(c)));
+}

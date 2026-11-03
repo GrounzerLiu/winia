@@ -79,6 +79,7 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
             AnimationSpec::Tween(spec) => spec.delay + spec.duration,
             AnimationSpec::Snap(spec) => spec.delay,
             AnimationSpec::Keyframes(spec) => spec.duration,
+            AnimationSpec::KeyframesWithSpline(spec) => spec.duration,
             AnimationSpec::Repeatable(spec) => {
                 let base = base_duration_of(&spec.base).saturating_mul(spec.iterations);
                 // `initialStartOffset` stretches (Delay) or shrinks (FastForward) the wall-clock
@@ -168,6 +169,14 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
                     return target;
                 }
                 self.from.lerp(&target, interpolate_keyframes(&spec.frames, t))
+            }
+            AnimationSpec::KeyframesWithSpline(spec) => {
+                let target = self.target_of();
+                let total = spec.duration.as_secs_f32().max(1e-6);
+                let t = (elapsed.as_secs_f32() / total).clamp(0.0, 1.0);
+                if t <= 0.0 { return self.from.clone(); }
+                if t >= 1.0 { return target; }
+                self.from.lerp(&target, spec.fraction_at(t))
             }
             AnimationSpec::Repeatable(spec) => {
                 let target = self.target_of();

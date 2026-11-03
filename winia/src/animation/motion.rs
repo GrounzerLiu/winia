@@ -480,6 +480,16 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     (value, false)
                 }
             }
+            AnimationSpec::KeyframesWithSpline(spec) => {
+                let elapsed = now.saturating_duration_since(state.start);
+                let total = spec.duration.as_secs_f32().max(1e-6);
+                let t = (elapsed.as_secs_f32() / total).clamp(0.0, 1.0);
+                if t >= 1.0 {
+                    (state.to.clone(), true)
+                } else {
+                    (state.from.lerp(&state.to, spec.fraction_at(t)), false)
+                }
+            }
             AnimationSpec::Repeatable(spec) => {
                 // The base is a `DurationSpec`, so a cycle length always exists: the impossible
                 // bases (spring, decay, a nested repeat) cannot be constructed at all.

@@ -10,6 +10,8 @@ pub enum AnimationSpec {
     Repeatable(RepeatableSpec),
     /// Instant jump to the target (cf. Compose `snap`), optionally after a delay
     Snap(SnapSpec),
+    /// A monotone cubic spline through the keyframes (cf. Compose `keyframesWithSpline`).
+    KeyframesWithSpline(KeyframesWithSplineSpec),
     /// Exponential decay (cf. Compose `exponentialDecay` — fling/inertial scrolling, no target value).
     Decay(DecaySpec),
 }
@@ -515,6 +517,10 @@ impl AnimationSpec {
             },
             AnimationSpec::Keyframes(a) => match other {
                 AnimationSpec::Keyframes(b) => a.same_parameter(b),
+                _ => false,
+            },
+            AnimationSpec::KeyframesWithSpline(a) => match other {
+                AnimationSpec::KeyframesWithSpline(b) => a.same_parameter(b),
                 _ => false,
             },
             AnimationSpec::Repeatable(a) => match other {

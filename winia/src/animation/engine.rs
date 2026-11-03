@@ -10,6 +10,9 @@ pub(super) fn spec_kind(spec: &AnimationSpec) -> String {
         AnimationSpec::Keyframes(k) => {
             format!("keyframes({}ms, {} frames)", k.duration.as_millis(), k.frames.len())
         }
+        AnimationSpec::KeyframesWithSpline(k) => {
+            format!("keyframesWithSpline({}ms, {} frames)", k.duration.as_millis(), k.frames.len())
+        }
         AnimationSpec::Repeatable(r) => format!(
             "repeatable({}x {}, base={})",
             r.iterations,

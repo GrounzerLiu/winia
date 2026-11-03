@@ -186,6 +186,9 @@ mod lifecycle_tests;
 
 mod spec;
 
+mod spline;
+pub use spline::{KeyframesWithSplineOf, KeyframesWithSplineSpec};
+
 mod deferred;
 pub use deferred::DeferredTargetAnimation;
 
