@@ -777,3 +777,31 @@
         press((3.0, 72.0));
         assert!((scroll.offset.peek() - 168.75).abs() < 0.5, "the click alone jumped, got {}", scroll.offset.peek());
     }
+    /// A fresh `ScrollState` reports `f32::MAX` as its limit. Using that as a real range turned a
+    /// press on the track into an offset of ~2.6e38 and the content vanished (measured).
+    #[test]
+    fn a_press_before_the_first_measure_does_not_write_a_garbage_offset() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        assert!(scroll.fling_limit.peek() >= f32::MAX, "the sentinel this test guards against");
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        let press = {
+            let nodes = composer.arena_nodes();
+            let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TapOnPress { .. }))).expect("bar");
+            let mut cb = None;
+            for el in bar.modifier.elements() {
+                if let crate::modifier::ModifierElement::TapOnPress { cb: f } = el { cb = Some(f.clone()); }
+            }
+            cb.expect("press")
+        };
+        press((3.0, 70.0));
+        assert!(scroll.offset.peek() < 1.0e6, "the press wrote a garbage offset: {}", scroll.offset.peek());
+    }

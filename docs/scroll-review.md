@@ -79,6 +79,19 @@ because there the measured size is the CONTENT and the field is the real viewpor
 `render_snapshot::a_padded_scroll_container_paints_to_its_own_bottom_edge` (at the limit, the child's
 row 89 must paint; it was white before the fix).
 
+### R-1 A press on the track before the first measure wrote a garbage offset — FIXED
+
+A fresh `ScrollState` reports `f32::MAX` as its limit (the "not measured yet" sentinel). The new
+press-to-jump path used it as a real range: `content = f32::MAX + viewport`, so one press on the
+track of a bar whose container had not been measured wrote an offset of **2.6e38** and the content
+disappeared (measured in a unit probe: fresh limit 3.4e38, offset after press 2.66e38). The same
+sentinel reached `scrollbar_geometry`, where it would have drawn a one-pixel thumb.
+
+`measured_limit()` now rejects a non-finite or `f32::MAX` limit, and both the press jump and the thumb
+drag return without writing. The press jump also cancels a running fling first (`scroll_to` does the
+same), so a click during a fling does not get overwritten on the next frame. Test:
+`a_press_before_the_first_measure_does_not_write_a_garbage_offset`.
+
 ## Missing API
 
 ### M-1 `verticalScroll(reverseScrolling = true)` — ADDED

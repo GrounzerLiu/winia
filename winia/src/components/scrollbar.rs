@@ -276,6 +276,20 @@ fn assemble_scrollbar(
     ctx.end_restartable_group();
 }
 
+/// The scroll limit to compute geometry against, or `None` before the container has been measured.
+///
+/// A fresh `ScrollState` reports `f32::MAX` as its limit; using that as a real range turned a press
+/// on the track into an offset of ~2.6e38 and the content vanished (measured). The same sentinel
+/// means `f32::MAX` and `infinite` must both be rejected here rather than clamped downstream.
+fn measured_limit(scroll: &crate::modifier::ScrollState) -> Option<f32> {
+    let limit = scroll.fling_limit.peek();
+    if limit.is_finite() && limit < f32::MAX {
+        Some(limit.max(0.0))
+    } else {
+        None
+    }
+}
+
 /// The scrollbar axis (every difference between the vertical and horizontal builds).
 #[derive(Clone, Copy)]
 struct ScrollbarConfig {
@@ -501,7 +515,8 @@ fn scrollbar_build_shared(
         let thumb_min = cfg.thumb_min_length;
         std::sync::Arc::new(move |pos_in_track: f32| {
             let viewport = viewport_state.peek();
-            let content = scroll_state.fling_limit.peek() + viewport;
+            let Some(limit) = measured_limit(&scroll_state) else { return; };
+            let content = limit + viewport;
             let Some((thumb_top, thumb_len)) = scrollbar_geometry(
                 viewport,
                 content,
@@ -526,6 +541,7 @@ fn scrollbar_build_shared(
             } else {
                 off_visual
             };
+            scroll_state.cancel_fling();
             scroll_state.offset.set(off);
         })
     };
@@ -538,7 +554,7 @@ fn scrollbar_build_shared(
             // the position inside the track.
             let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
             let viewport = viewport_state.peek();
-            let limit = scroll_state_src.fling_limit.peek();
+            let Some(limit) = measured_limit(&scroll_state_src) else { return; };
             let content = limit + viewport;
             // No thumb (content fits, or the track cannot hold the minimum) means nothing to drag.
             let Some((_, thumb_len)) = scrollbar_geometry(
