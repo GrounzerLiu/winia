@@ -59,8 +59,10 @@ impl Default for SpringSpec {
     fn default() -> Self {
         Self {
             damping_ratio: 1.0,
-            // Compose StiffnessLow (200): settles in ~300-400ms with a smooth, pronounced transition
-            stiffness: 200.0,
+            // Compose's `spring()` default: `Spring.StiffnessMedium` (1500). The threshold stays 0.01
+            // (the value unit is unknown here; Compose picks it per type - see docs/animation-review.md
+            // D-2).
+            stiffness: 1500.0,
             mass: 1.0,
             threshold: 0.01,
         }
@@ -75,16 +77,19 @@ impl SpringSpec {
     pub const DAMPING_RATIO_LOW_BOUNCY: f32 = 0.75;
     /// Damping ratio: medium bounce (0.5).
     pub const DAMPING_RATIO_MEDIUM_BOUNCY: f32 = 0.5;
-    /// Damping ratio: high bounce (0.4).
-    pub const DAMPING_RATIO_HIGH_BOUNCY: f32 = 0.4;
+    /// Damping ratio: high bounce (0.2, Compose `Spring.DampingRatioHighBouncy`).
+    pub const DAMPING_RATIO_HIGH_BOUNCY: f32 = 0.2;
     /// Stiffness: very low (50 — slow and soft).
     pub const STIFFNESS_VERY_LOW: f32 = 50.0;
     /// Stiffness: low (200).
     pub const STIFFNESS_LOW: f32 = 200.0;
-    /// Stiffness: medium (400).
-    pub const STIFFNESS_MEDIUM: f32 = 400.0;
-    /// Stiffness: high (1000 — fast and crisp).
-    pub const STIFFNESS_HIGH: f32 = 1000.0;
+    /// Stiffness: medium (1500) - Compose's `Spring.StiffnessMedium`, the default of `spring()`.
+    pub const STIFFNESS_MEDIUM: f32 = 1500.0;
+    /// Stiffness: medium-low (400) - Compose's `Spring.StiffnessMediumLow`, the default for enter/exit
+    /// transition springs.
+    pub const STIFFNESS_MEDIUM_LOW: f32 = 400.0;
+    /// Stiffness: high (10_000 - extremely stiff).
+    pub const STIFFNESS_HIGH: f32 = 10_000.0;
     /// M3's `StandardMotionTokens.SpringDefaultEffectsStiffness` (1600) — the spring behind
     /// `MotionSchemeKeyTokens.DefaultEffects`.
     pub const STIFFNESS_EFFECTS_DEFAULT: f32 = 1600.0;

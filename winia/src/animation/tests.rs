@@ -2326,3 +2326,17 @@ fn a_reversed_repeat_with_even_iterations_ends_at_the_start() {
     let anim = TimedAnimation::target(0.0f32, 1.0f32, spec);
     assert_eq!(anim.value_at(Duration::from_millis(200)), 0.0);
 }
+/// The public estimate matches Compose's numbers: a spring's duration depends on the distance, and
+/// the default spring is Compose's `StiffnessMedium` now, not `StiffnessLow`.
+#[test]
+fn the_public_estimate_answers_and_the_defaults_match_compose() {
+    let d = estimate_animation_duration(&AnimationSpec::Spring(SpringSpec::default()), 0.0, 100.0);
+    assert_eq!(SpringSpec::default().stiffness, SpringSpec::STIFFNESS_MEDIUM);
+    assert_eq!(SpringSpec::STIFFNESS_MEDIUM, 1500.0);
+    assert_eq!(SpringSpec::STIFFNESS_MEDIUM_LOW, 400.0);
+    assert_eq!(SpringSpec::STIFFNESS_HIGH, 10_000.0);
+    assert_eq!(SpringSpec::DAMPING_RATIO_HIGH_BOUNCY, 0.2);
+    // Compose's default (1500 / px threshold) is well under half a second for 100 px; the old 200
+    // took 831 ms.
+    assert!(d < Duration::from_millis(400), "default spring estimate {d:?}");
+}

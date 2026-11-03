@@ -15,7 +15,7 @@ item.modifier(Modifier::new().animate_item_with(spec));
 
 `Modifier::animate_item()` is Compose's default contract: **placement, fade-in and fade-out all on**,
 each a spring at `StiffnessMediumLow` (400 — winia spells that constant
-`SpringSpec::STIFFNESS_MEDIUM`, the same note `animated_size.rs` carries), damping 1.0, threshold
+`SpringSpec::STIFFNESS_MEDIUM_LOW`, the same note `animated_size.rs` carries), damping 1.0, threshold
 0.01. A channel is switched off the way Compose's `null` argument does it:
 
 ```rust

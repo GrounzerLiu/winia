@@ -65,7 +65,7 @@ LoadingIndicator::new()
 ## 3. 动画实现
 
 - **Morph 序列**：`SoftBurst → Cookie9Sided → Pentagon → Pill → Sunny → Cookie4Sided → Oval`，
-  首尾回环。每个周期用 Spring(bouncy 0.6 / stiffness 200) 将 progress 0→1，周期约 650ms。
+  首尾回环。每个周期用 Spring(bouncy 0.6 / stiffness 1500) 将 progress 0→1，周期约 650ms。
 - **步进旋转**：每个 shape 切换后额外旋转目标 +90°（quarter rotation）。
 - **全局旋转**：360° / 4666ms 线性无限循环（`InfiniteRepeatableSpec::restart_tween`）。
 - 绘制：`LoadingIndicatorNode` 具名绘制（exp/wavy-node 迁移，原 `.draw` 匿名闭包，

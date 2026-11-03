@@ -383,3 +383,14 @@ pub(super) fn compute_spring_displacement_with_step(
     displacement
 }
 
+
+/// Compose's `estimateAnimationDurationMillis` (`animation-core/SpringEstimation.kt`): how long
+/// `spec` takes to move from `from` to `to`.
+///
+/// A spring's duration depends on the DISPLACEMENT (it is the time until the value stays within the
+/// spec's threshold of the target), which is why the two values are arguments rather than the spec
+/// alone. Only finite specs exist here: an infinite repeat is `InfiniteRepeatableSpec`, which never
+/// enters an `AnimationSpec`.
+pub fn estimate_animation_duration(spec: &AnimationSpec, from: f32, to: f32) -> Duration {
+    TimedAnimation::target(from, to, spec.clone()).duration()
+}

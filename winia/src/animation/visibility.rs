@@ -433,7 +433,7 @@ impl Default for VisibilityTransition {
             scale_from: 0.8,
             transform_origin: (0.5, 0.5),
             spec: AnimationSpec::Spring(crate::animation::SpringSpec {
-                stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
+                stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM_LOW,
                 threshold: 0.01,
                 ..crate::animation::SpringSpec::default()
             }),

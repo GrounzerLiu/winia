@@ -8,10 +8,10 @@ probe inside the crate (the probes were deleted); the numbers are from those run
 
 | Kind | Count |
 | --- | --- |
-| Defects fixed | 2 (A-1, A-2) |
-| Open findings | 2 (A-3, A-4) |
+| Defects fixed | 4 (A-1..A-4) |
+| Open findings | 0 |
 | Deliberate deviations | 3 (D-1..D-3) |
-| Missing API | 4 (M-1..M-4) |
+| Missing API | 3 (M-1..M-3); M-4 done |
 
 ## Defects
 
@@ -37,7 +37,7 @@ Fixed: `duration()` adds the delay / subtracts a fast-forward, and `value_at` en
 Fixed with an explicit last-wins pass. Test:
 `animation::tests::the_last_keyframe_wins_at_a_repeated_millisecond`.
 
-### A-3 Spring constants do not match Compose's (OPEN)
+### A-3 Spring constants did not match Compose's - FIXED
 
 | winia | value | Compose | value |
 | --- | --- | --- | --- |
@@ -46,13 +46,12 @@ Fixed with an explicit last-wins pass. Test:
 | `DAMPING_RATIO_HIGH_BOUNCY` | 0.4 | `Spring.DampingRatioHighBouncy` | 0.2 |
 | (missing) | - | `Spring.StiffnessMedium` | 1500 |
 
-`VectorizedAnimationSpec.kt:794-834` is the reference. The code knows about the naming (several
-components say "winia spells StiffnessMediumLow as STIFFNESS_MEDIUM"), but anyone porting Compose
-code that says `Spring.StiffnessMedium` gets 400 instead of 1500 - a 3.75x slower spring - and
-`StiffnessHigh` is 10x off. Fixing means renaming the constant (breaking) or adding the missing
-names and deprecating the old one; a decision is needed.
+`VectorizedAnimationSpec.kt:794-834` is the reference. Fixed to the Compose values: `STIFFNESS_MEDIUM`
+is 1500, `STIFFNESS_HIGH` 10_000, `DAMPING_RATIO_HIGH_BOUNCY` 0.2, and `STIFFNESS_MEDIUM_LOW` (400) is
+a new constant. The ten call sites that meant medium-low (`item`, `animated_size`, `visibility`,
+`shared_transition`) now say `STIFFNESS_MEDIUM_LOW`.
 
-### A-4 `SpringSpec::default()` is ~5x slower than Compose's `spring()` (OPEN)
+### A-4 `SpringSpec::default()` was ~5x slower than Compose's `spring()` - FIXED
 
 Compose's `spring()` defaults to `StiffnessMedium` (1500) with the type's visibility threshold
 (px: 1.0). winia's default is stiffness 200 (`StiffnessLow`) with `threshold = 0.01`.
@@ -65,9 +64,9 @@ Measured for a 100 px move, damping 1.0:
 | Compose default (1500 / 1.0) | 171 ms |
 | 1500 / 0.01 | 304 ms |
 
-`SpringSpec::default()` is used at 53 sites; a few components (`animated_size`, `item`, ...)
-already build 1500 explicitly and say why. Making the default match Compose is a behavioural change
-across the whole component set and needs a decision.
+`SpringSpec::default()` is used at 53 sites. It now uses `STIFFNESS_MEDIUM` (1500), Compose's
+`spring()` default: the same 100 px move estimates ~304 ms instead of 831 ms (the remaining gap to
+Compose's 171 ms is the threshold, D-2). Components that need medium-low pass it explicitly.
 
 ## Deviations (deliberate, recorded)
 
@@ -88,8 +87,8 @@ across the whole component set and needs a decision.
 - **M-2 `DeferredTargetAnimation`** - Compose's lazily-created animation state.
 - **M-3 Vector converters** - winia has `AnimatableValue` for f32, i32, Dp, Sp, Offset, Size, Color
   (and two internal types); Compose also converts `Rect`, `IntOffset`, `IntSize`, `DpOffset`.
-- **M-4 Public duration estimation** - `estimate_spring_duration_seconds` is `pub(super)`; Compose
-  exposes `estimateAnimationDurationMillis` for callers sizing a layout around an animation.
+- **M-4 Public duration estimation** - DONE: `animation::estimate_animation_duration(spec, from, to)`
+  returns the duration of any finite spec (a spring's depends on the distance, hence the arguments).
 
 ## Checked and ruled out
 

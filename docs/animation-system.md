@@ -63,7 +63,7 @@ runtime check, is what rules out a spring with no cycle length.
 
 | Spec | Defaults | Ends when |
 | --- | --- | --- |
-| `Spring` | damping 1.0, stiffness 200, mass 1.0, threshold 0.01 | the analytic rest check says so, **or** the Compose-style estimated duration elapses — whichever comes first; writes the exact target |
+| `Spring` | damping 1.0, stiffness 1500, mass 1.0, threshold 0.01 | the analytic rest check says so, **or** the Compose-style estimated duration elapses — whichever comes first; writes the exact target |
 | `Tween` | 300 ms, fast-out-slow-in | its clock; `delay` holds `from` first |
 | `Keyframes` | caller's frames | its clock; the last frame writes the exact target |
 | `Repeatable` | caller's iterations/mode | `iterations × base.duration`; `initialStartOffset` in Delay or FastForward flavour (a Delay offset adds to the wall-clock length, a FastForward one is skipped into the first cycle) |

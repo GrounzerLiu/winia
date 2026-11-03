@@ -24,7 +24,7 @@ pub struct ItemAnimationSpec {
 
 impl Default for ItemAnimationSpec {
     /// Compose's `Modifier.animateItem()` defaults: ALL THREE channels on, each a spring at
-    /// `StiffnessMediumLow` (400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM`, see
+    /// `StiffnessMediumLow` (400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM_LOW`, see
     /// `animated_size.rs`), damping 1.0, threshold 0.01.
     ///
     /// A channel is switched off the way Compose's `null` argument does it: `without_placement()`,
@@ -32,7 +32,7 @@ impl Default for ItemAnimationSpec {
     fn default() -> Self {
         let spring = || {
             AnimationSpec::Spring(SpringSpec {
-                stiffness: SpringSpec::STIFFNESS_MEDIUM,
+                stiffness: SpringSpec::STIFFNESS_MEDIUM_LOW,
                 ..SpringSpec::default()
             })
         };
@@ -171,7 +171,7 @@ mod tests {
         ] {
             match channel {
                 Some(AnimationSpec::Spring(spring)) => {
-                    assert_eq!(spring.stiffness, SpringSpec::STIFFNESS_MEDIUM, "{name} uses StiffnessMediumLow (400)");
+                    assert_eq!(spring.stiffness, SpringSpec::STIFFNESS_MEDIUM_LOW, "{name} uses StiffnessMediumLow (400)");
                     assert_eq!(spring.damping_ratio, 1.0, "{name} is critically damped");
                     assert_eq!(spring.threshold, 0.01, "{name} uses the Float visibility threshold");
                 }

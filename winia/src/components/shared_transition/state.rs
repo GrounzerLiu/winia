@@ -46,7 +46,7 @@ impl Default for BoundsTransform {
         Self {
             spec: SpringSpec {
                 damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
-                stiffness: SpringSpec::STIFFNESS_MEDIUM,
+                stiffness: SpringSpec::STIFFNESS_MEDIUM_LOW,
                 mass: 1.0,
                 threshold: Self::VISIBILITY_THRESHOLD_PX,
             }

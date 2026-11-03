@@ -78,7 +78,7 @@ impl AnimatedSizeDefaults {
     /// StiffnessMediumLow, visibilityThreshold = IntSize.VisibilityThreshold)`
     /// (`AnimationModifier.kt:70-74`).
     ///
-    /// `StiffnessMediumLow` is 400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM`, and
+    /// `StiffnessMediumLow` is 400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM_LOW`, and
     /// `SpringSpec::default()` is 200 (Compose's `StiffnessLow`), which is why the default here is
     /// built explicitly rather than left to `SpringSpec::default()`. `IntSize.VisibilityThreshold`
     /// is one pixel, so the spring stops once both axes are within 1 dp instead of the 0.01 that
@@ -86,7 +86,7 @@ impl AnimatedSizeDefaults {
     pub fn size_spec() -> AnimationSpec {
         AnimationSpec::Spring(crate::animation::SpringSpec {
             damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY,
-            stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
+            stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM_LOW,
             mass: 1.0,
             threshold: 1.0,
         })
@@ -549,7 +549,7 @@ mod tests {
     fn the_default_spec_is_compeses_spring() {
         match AnimatedSizeDefaults::size_spec() {
             crate::animation::AnimationSpec::Spring(s) => {
-                assert_eq!(s.stiffness, crate::animation::SpringSpec::STIFFNESS_MEDIUM, "StiffnessMediumLow is 400");
+                assert_eq!(s.stiffness, crate::animation::SpringSpec::STIFFNESS_MEDIUM_LOW, "StiffnessMediumLow is 400");
                 assert_eq!(s.damping_ratio, crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY);
                 assert_eq!(s.threshold, 1.0, "IntSize.VisibilityThreshold is one pixel");
                 assert_ne!(

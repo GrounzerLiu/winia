@@ -250,8 +250,8 @@ mod tests {
                 assert_eq!(spec.damping_ratio, SpringSpec::DAMPING_RATIO_NO_BOUNCY);
                 assert_eq!(
                     spec.stiffness,
-                    SpringSpec::STIFFNESS_MEDIUM,
-                    "Compose's StiffnessMediumLow is 400, which winia spells STIFFNESS_MEDIUM"
+                    SpringSpec::STIFFNESS_MEDIUM_LOW,
+                    "Compose's StiffnessMediumLow is 400 (STIFFNESS_MEDIUM_LOW)"
                 );
                 assert_eq!(
                     spec.threshold,
