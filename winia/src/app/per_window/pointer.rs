@@ -573,12 +573,20 @@ pub(crate) fn handle_pointer_down(
         let drag_idx = path_drag_idx(nodes, &path);
         let scroll_idx = path_scroll_idx(nodes, &path);
         let child_drag = inner_component_drag(drag_idx, scroll_idx);
+        // A drag that DECLARES itself above the scroll axis (a scrollbar thumb: a vertical drag in a
+        // vertical list) must not leave the scroll as the fallback owner at all - the axis arbitration
+        // would hand every vertical move to the page and the thumb would never move (measured:
+        // dragging the bar scrolled the page). The drag still outranks on the other axis by matching
+        // this flag.
+        let drag_outranks = drag_idx
+            .map(|i| nodes[i].modifier.drag_preempts_scroll())
+            .unwrap_or(false);
         // An inner drag component and the scroll it sits in both want this gesture; which one gets it
         // is decided by the finger's dominant axis in `gesture_move`, so record the scroll as the
         // fallback owner here. `None` when the component stands alone (it owns every direction), and
         // `None` while a text selection is in progress: the selection keeps the pointer (it is
         // extended from every move below), so the list must not start scrolling under the finger.
-        pw.input.scroll_slot = if child_drag && !selecting {
+        pw.input.scroll_slot = if child_drag && !drag_outranks && !selecting {
             scroll_idx.map(|i| nodes[i].slot_key)
         } else {
             None

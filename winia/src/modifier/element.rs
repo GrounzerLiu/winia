@@ -658,6 +658,14 @@ pub(crate) enum ModifierElement {
     DragOnEnd { cb: Arc<dyn Fn() + Send + Sync> },
     /// Drag cancel (the gesture was interrupted).
     DragOnCancel { cb: Arc<dyn Fn() + Send + Sync> },
+    /// This node's drag OUTRANKS a surrounding scroll container on every axis.
+    ///
+    /// The default arbitration is by dominant axis (a horizontal slider inside a vertical list keeps
+    /// its horizontal drags), which is wrong for a component whose drag IS the scroll's axis: a
+    /// scrollbar thumb dragged vertically is exactly that shape, and without this marker the page
+    /// scrolled instead of the thumb. Compose has no equivalent because its scrollbar is a different
+    /// gesture pipeline; winia needs the marker to keep `detectDragGestures` components working.
+    DragPreemptsScroll,
     /// Focusable. With a `Some(interaction)` it emits Focus/Unfocus as focus changes.
     Focusable { interaction: Option<MutableInteractionSource> },
     /// Hover: pointer enter and exit emit Hover Enter/Exit (Compose's `hoverable`).

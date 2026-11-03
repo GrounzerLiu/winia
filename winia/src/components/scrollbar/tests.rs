@@ -717,3 +717,28 @@
         start((3.0, 72.0));
         assert!((scroll.offset.peek() - 168.75).abs() < 0.5, "the thumb centred on the press, got {}", scroll.offset.peek());
     }
+    /// The bar's drag IS the scroll axis, so it has to outrank a surrounding scroll container -
+    /// without the marker the dominant-axis arbitration hands every vertical move to the page and the
+    /// thumb never moves (measured in the demo: dragging the bar scrolled the page).
+    #[test]
+    fn the_bar_declares_that_its_drag_outranks_the_scroll() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("x").modifier(crate::modifier::Modifier::new().size(100.0, 300.0)).build(ctx);
+                    });
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        let nodes = composer.arena_nodes();
+        let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::DragOnStart { .. }))).expect("the bar node");
+        assert!(bar.modifier.drag_preempts_scroll(), "the bar's drag outranks the page's scroll");
+    }

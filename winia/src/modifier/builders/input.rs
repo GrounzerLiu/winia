@@ -50,6 +50,15 @@ impl Modifier {
     }
 
     /// 拖拽开始回调（首次超过 touch slop）
+    /// Make this node's drag win over a surrounding scroll container on EVERY axis.
+    ///
+    /// The default arbitration is by dominant axis, so a vertical drag inside a vertical list always
+    /// scrolls. A component whose drag IS that axis (a scrollbar thumb) needs this, or the press is
+    /// taken by the scroll and its own callbacks never fire.
+    pub fn drag_outranks_scroll(self) -> Self {
+        self.push(ModifierElement::DragPreemptsScroll)
+    }
+
     pub fn on_drag_start(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
         self.push(ModifierElement::DragOnStart { cb: Arc::new(cb) })
     }

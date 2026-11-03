@@ -53,6 +53,19 @@ now returns early, so the flag stayed set until the pointer was released - a pre
 cancelled a running fling for nothing. The take-over is now behind the same live geometry check the
 move uses. Test: `a_drag_start_without_a_thumb_leaves_the_container_alone`.
 
+### S-6 A press on the bar scrolled the page instead of the thumb — FIXED
+
+A press that lands on a draggable component inside a scroll container is arbitrated by the finger's
+dominant axis: a vertical drag belongs to the scroll (that is what keeps a horizontal slider inside a
+vertical list working). A scrollbar thumb is the opposite case - its drag IS the scroll's axis - so
+every vertical move went to the page and the thumb never moved. Measured in `scrollbar_demo`: drag the
+card-2 bar 60 px and the page offset stayed 0 while the band stayed 0 too (the gesture was swallowed);
+with the fix the band moves to 201 and the page stays at 0.
+
+The fix is a marker: `Modifier::drag_outranks_scroll()` pushes `ModifierElement::DragPreemptsScroll`, the
+scrollbar sets it, and `handle_pointer_down` leaves `scroll_slot` empty for such a target so the axis
+arbitration never runs. Test: `the_bar_declares_that_its_drag_outranks_the_scroll`.
+
 ## Missing API
 
 ### M-1 `verticalScroll(reverseScrolling = true)` — ADDED

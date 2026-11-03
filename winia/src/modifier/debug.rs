@@ -147,6 +147,7 @@ impl Debug for ModifierElement {
             Self::DragOnMove { .. } => f.write_str("DragOnMove(<fn>)"),
             Self::DragOnEnd { .. } => f.write_str("DragOnEnd(<fn>)"),
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
+            Self::DragPreemptsScroll => f.write_str("DragPreemptsScroll"),
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
             Self::AnimateItem(spec) => f

@@ -563,6 +563,8 @@ fn scrollbar_build_shared(
         has_thumb,
         fade: fade_state.clone(),
     })
+    // The bar's drag IS the scroll axis, so it must outrank the page's scroll container.
+    .drag_outranks_scroll()
     .on_drag_start({
         let hover_src = hover_src_clone.clone();
         let scroll_state = scroll_state_clone.clone();

@@ -786,6 +786,12 @@ impl Modifier {
         ))
     }
 
+    /// Whether this node's drag outranks a surrounding scroll container on every axis (a scrollbar
+    /// thumb, whose drag is vertical inside a vertical list).
+    pub fn drag_preempts_scroll(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::DragPreemptsScroll))
+    }
+
     /// 是否声明了双击回调——决定 onTap 是否延迟到双击窗口结束
     /// （Compose detectTapGestures：onDoubleTap 存在时 onTap 延迟触发，
     /// 窗口内第二次按下同节点 → 取消；超时 → 补发）
