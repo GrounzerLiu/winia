@@ -123,6 +123,7 @@
     fn scrollbar_node_key_covers_params() {
         use crate::modifier::DrawNode;
         let mk = |off: f32, len: f32| ScrollbarNode {
+            thickness_now: 6.0,
             vertical: true,
             thumb_color: Color::from_argb(255, 1, 2, 3),
             track_color: Color::TRANSPARENT,
@@ -659,6 +660,16 @@
         assert!(!scroll.is_scroll_in_progress.peek(), "no thumb, so the gesture is not taken over");
     }
 
+    /// WinUI/macOS grow the bar on hover (CMP only recolours it): the thumb's cross-axis size is
+    /// chosen per interaction state and animated, while the layout width stays put - hovering must
+    /// never reflow the content.
+    #[test]
+    fn the_thumb_thickness_follows_the_interaction() {
+        assert_eq!(scrollbar_thumb_thickness(6.0, 10.0, false), 6.0, "at rest");
+        assert_eq!(scrollbar_thumb_thickness(6.0, 10.0, true), 10.0, "hovered or dragged");
+        assert_eq!(SCROLLBAR_HOVER_THICKNESS, 10.0, "the default hover thickness");
+    }
+
     /// CMP's `ScrollbarStyle.hoverColor` / `unhoverColor`: the thumb colour is chosen per interaction
     /// state; `animate_color_as_state` smooths the change (300 ms), and the node only sees the result.
     #[test]
@@ -674,4 +685,35 @@
         let default_hover = scrollbar_thumb_hover_color(&theme);
         assert_eq!((default_base.r, default_base.g, default_base.b), (default_hover.r, default_hover.g, default_hover.b));
         assert!(default_hover.a > default_base.a, "hovering raises the alpha: {} vs {}", default_hover.a, default_base.a);
+    }
+    /// Pressing the empty track centres the thumb under the pointer (WinUI/macOS), then the drag keeps
+    /// that centre there. A press on the thumb keeps its grab offset instead, so nothing jumps.
+    #[test]
+    fn pressing_the_track_centres_the_thumb() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let scroll = crate::modifier::ScrollState::new();
+        let s = scroll.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(crate::compose!(|ctx| {
+            crate::layout::Row::new().modifier(crate::modifier::Modifier::new().size(106.0, 100.0)).build(ctx, |ctx| {
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("x").modifier(crate::modifier::Modifier::new().size(100.0, 300.0)).build(ctx);
+                    });
+                VerticalScrollbar::new(s.clone()).build(ctx);
+            });
+        }));
+        composer.layout(crate::layout::Constraints::new(0.0, 106.0, 0.0, 100.0));
+        scroll.fling_limit.set(200.0);
+        let start = {
+            let nodes = composer.arena_nodes();
+            let bar = nodes.iter().find(|n| n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::DragOnStart { .. }))).expect("the bar node");
+            drag_callbacks(bar).0.expect("start")
+        };
+        // Track is 96 px with a 32 px thumb: a press at 70 is below the thumb (0..32), so the thumb's
+        // centre (16) moves to 70, i.e. its top to 54 of the 64 px travel: 54/64 of 200 = 168.75.
+        start((3.0, 72.0));
+        assert!((scroll.offset.peek() - 168.75).abs() < 0.5, "the thumb centred on the press, got {}", scroll.offset.peek());
     }

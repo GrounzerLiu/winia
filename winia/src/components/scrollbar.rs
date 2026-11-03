@@ -38,9 +38,18 @@ use crate::theme::WiniaTheme;
 pub const SCROLLBAR_THICKNESS: f32 = 6.0;
 /// Default minimum thumb length (M3 `ThumbMinLength = 24dp`).
 pub const SCROLLBAR_THUMB_MIN_LENGTH: f32 = 24.0;
+/// The thumb's cross-axis size while hovered or dragged (the layout width stays `thickness`).
+pub const SCROLLBAR_HOVER_THICKNESS: f32 = 10.0;
 /// Maximum thumb length as a fraction of the track (M3 `ThumbMaxLengthFraction = 0.9`).
 pub const SCROLLBAR_THUMB_MAX_FRACTION: f32 = 0.9;
 /// Default thumb colour (M3 outline at 70% - `NonInteractiveScrollbarDefaults.thumbColor`).
+/// The thumb's thickness for the current interaction state (rest vs hovered/dragged).
+///
+/// Pure so the choice is testable; the animation that smooths it is `animate_float_as_state`.
+pub(crate) fn scrollbar_thumb_thickness(rest: f32, hover: f32, active: bool) -> f32 {
+    if active { hover } else { rest }
+}
+
 /// The thumb colour for the current interaction state (CMP's `unhoverColor` / `hoverColor`).
 ///
 /// Pure so the choice is testable: the animation that smooths the change is
@@ -125,6 +134,8 @@ pub(crate) struct ScrollbarNode {
     pub(crate) thumb_color: Color,
     pub(crate) track_color: Color,
     pub(crate) thickness: f32,
+    /// The live cross-axis size (animated between `thickness` and the hover thickness).
+    pub(crate) thickness_now: f32,
     pub(crate) inset: f32,
         /// Render-time geometry (computed during build from the constraints and the States; draw only paints).
     pub(crate) thumb_offset: f32,
@@ -187,21 +198,26 @@ impl crate::modifier::DrawNode for ScrollbarNode {
             self.thumb_color.g,
             self.thumb_color.b,
         ));
-        let r = self.thickness / 2.0;
+        // The live thickness: thicker while hovered/dragged, CENTRED in the slot so the growth is
+        // symmetric (the layout width does not change, so hovering never reflows the content).
+        let t = self.thickness_now.clamp(0.0, self.thickness * 2.0);
+        let r = t / 2.0;
         if self.vertical {
+            let x0 = rect.center_x() - t / 2.0;
             let thumb_rect = skia_safe::Rect::new(
-                rect.left,
+                x0,
                 rect.top + self.inset + self.thumb_offset,
-                rect.left + self.thickness,
+                x0 + t,
                 rect.top + self.inset + self.thumb_offset + self.thumb_len,
             );
             canvas.draw_round_rect(thumb_rect, r, r, &paint);
         } else {
+            let y0 = rect.center_y() - t / 2.0;
             let thumb_rect = skia_safe::Rect::new(
                 rect.left + self.inset + self.thumb_offset,
-                rect.top,
+                y0,
                 rect.left + self.inset + self.thumb_offset + self.thumb_len,
-                rect.top + self.thickness,
+                y0 + t,
             );
             canvas.draw_round_rect(thumb_rect, r, r, &paint);
         }
@@ -240,6 +256,26 @@ enum ScrollbarAxis {
     Horizontal,
 }
 
+/// The tail every component build repeats: assemble the shared modifier and open the restartable
+/// group. Kept in one place so the four public components cannot drift (they used to differ in ways
+/// only a test would notice).
+fn assemble_scrollbar(
+    ctx: &mut ComposeCtx,
+    key: u64,
+    scroll: &crate::modifier::ScrollState,
+    cfg: ScrollbarConfig,
+    axis: ScrollbarAxis,
+    reverse: Option<bool>,
+    modifier: Modifier,
+) {
+    let m = scrollbar_build_shared(ctx, scroll, cfg, axis, reverse).then(modifier);
+    match ctx.start_restartable_group(key, m, BoxLayout::new()) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => {}
+    }
+    ctx.end_restartable_group();
+}
+
 /// The scrollbar axis (every difference between the vertical and horizontal builds).
 #[derive(Clone, Copy)]
 struct ScrollbarConfig {
@@ -248,6 +284,10 @@ struct ScrollbarConfig {
     /// The thumb colour while hovered or dragged (CMP's `ScrollbarStyle.hoverColor`). `None` uses the
     /// theme default: the same outline token at full alpha, so the bar darkens rather than changes hue.
     hover_color: Option<Color>,
+    /// The thumb's cross-axis size while hovered or dragged (WinUI/macOS grow the bar; CMP does not).
+    /// The layout width stays `thickness`, so hovering never reflows the content - the thicker thumb
+    /// is centred and overhangs its slot by `(hover_thickness - thickness) / 2` on each side.
+    hover_thickness: f32,
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
@@ -299,6 +339,17 @@ fn scrollbar_build_shared(
         .hover_color
         .unwrap_or_else(|| scrollbar_thumb_hover_color(&theme));
     let thumb_target = scrollbar_thumb_tint(thumb_color, hover_color, hovered || dragged);
+    let rest_thickness = cfg.thickness;
+    let hover_thickness = cfg.hover_thickness.max(rest_thickness);
+    let thickness_now = ctx
+        .animate_float_as_state(
+            scrollbar_thumb_thickness(rest_thickness, hover_thickness, hovered || dragged),
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(150),
+                crate::animation::interpolator::Linear::new(),
+            )),
+        )
+        .get();
     let thumb_color_now = ctx
         .animate_color_as_state(
             thumb_target,
@@ -505,6 +556,7 @@ fn scrollbar_build_shared(
         thumb_color: thumb_color_now,
         track_color: cfg.track_color,
         thickness: cfg.thickness,
+        thickness_now,
         inset: cfg.inset,
         thumb_offset,
         thumb_len,
@@ -557,7 +609,28 @@ fn scrollbar_build_shared(
                 cfg.inset,
             )
             .unwrap_or((0.0, 0.0));
-            grab_offset.set((pos_in_track - thumb_top).clamp(0.0, thumb_now.max(0.0)));
+            let track_now = (viewport - 2.0 * cfg.inset).max(0.0);
+            let max_now = (content - viewport).max(0.0);
+            // Pressing the empty track JUMPS the thumb so its centre lands under the pointer, and the
+            // drag then keeps that centre there (WinUI and macOS do this; CMP has no track handling
+            // and only grabs the thumb). A press on the thumb itself keeps the grab offset, so the
+            // thumb does not jump under the cursor.
+            let on_thumb = pos_in_track >= thumb_top && pos_in_track <= thumb_top + thumb_now;
+            let grab = if on_thumb {
+                (pos_in_track - thumb_top).clamp(0.0, thumb_now.max(0.0))
+            } else {
+                let travel = (track_now - thumb_now).max(0.0);
+                let want = (pos_in_track - thumb_now / 2.0).clamp(0.0, travel);
+                let off_visual = scrollbar_offset_for_thumb_pos(want, track_now, thumb_now, max_now);
+                let off = if matches!(scroll_reverse, Some(true)) {
+                    (max_now - off_visual).clamp(0.0, max_now.max(0.0))
+                } else {
+                    off_visual
+                };
+                scroll_state.offset.set(off);
+                (pos_in_track - want).clamp(0.0, thumb_now.max(0.0))
+            };
+            grab_offset.set(grab);
         }
     })
     .on_drag_end(move || {
@@ -601,6 +674,8 @@ pub struct LazyScrollbar {
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
+    hover_color: Option<Color>,
+    hover_thickness: f32,
     scroll_reverse: Option<bool>,
 }
 
@@ -614,6 +689,8 @@ impl LazyScrollbar {
             track_color: Color::TRANSPARENT,
             thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
             always_show: false,
+            hover_color: None,
+            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
             scroll_reverse: None,
         }
     }
@@ -624,6 +701,11 @@ impl LazyScrollbar {
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
+    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
+    /// `thickness`, so the grow is centred and never reflows the content).
+    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
     /// A lazy list's vertical scrollbar (CMP `VerticalScrollbar` adapted to LazyListState).
     /// `scroll_reverse`: a reversed lazy list (`reverse_layout(true)`) - the render mirrors the offset
     /// semantics (offset 0 = the content's end) and the scrollbar geometry and drag use the same
@@ -643,7 +725,8 @@ impl LazyScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
-            hover_color: None,
+            hover_color: self.hover_color,
+            hover_thickness: self.hover_thickness,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
@@ -664,13 +747,7 @@ impl LazyScrollbar {
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             fling_behavior: None,
         };
-        let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse)
-            .then(self.modifier);
-        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
-        }
-        ctx.end_restartable_group();
+        assemble_scrollbar(ctx, key, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse, self.modifier);
     }
 }
 
@@ -688,6 +765,8 @@ pub struct HorizontalLazyScrollbar {
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
+    hover_color: Option<Color>,
+    hover_thickness: f32,
     scroll_reverse: Option<bool>,
 }
 
@@ -701,6 +780,8 @@ impl HorizontalLazyScrollbar {
             track_color: Color::TRANSPARENT,
             thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
             always_show: false,
+            hover_color: None,
+            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
             scroll_reverse: None,
         }
     }
@@ -711,6 +792,11 @@ impl HorizontalLazyScrollbar {
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
+    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
+    /// `thickness`, so the grow is centred and never reflows the content).
+    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
     /// A lazy row's horizontal scrollbar (CMP `HorizontalScrollbar` adapted to LazyListState, used by
     /// `LazyRow`). The assembly semantics are identical to `LazyScrollbar`, only the axis differs;
     /// `scroll_reverse` has the same meaning (pass `Some(true)` for a reversed horizontal lazy list).
@@ -738,7 +824,8 @@ impl HorizontalLazyScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
-            hover_color: None,
+            hover_color: self.hover_color,
+            hover_thickness: self.hover_thickness,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
@@ -758,13 +845,7 @@ impl HorizontalLazyScrollbar {
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             fling_behavior: None,
         };
-        let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
-            .then(self.modifier);
-        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
-        }
-        ctx.end_restartable_group();
+        assemble_scrollbar(ctx, key, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse, self.modifier);
     }
 }
 
@@ -780,6 +861,9 @@ pub struct VerticalScrollbar {
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
+    hover_color: Option<Color>,
+    hover_thickness: f32,
+    scroll_reverse: Option<bool>,
 }
 
 impl VerticalScrollbar {
@@ -792,6 +876,9 @@ impl VerticalScrollbar {
             track_color: Color::TRANSPARENT,
             thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
             always_show: false,
+            hover_color: None,
+            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
+            scroll_reverse: None,
         }
     }
 
@@ -800,6 +887,10 @@ impl VerticalScrollbar {
     pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
+    /// A reversed vertical container (`vertical_scroll_reverse(true)`): the render mirrors the offset
+    /// semantics (offset 0 = the content's end), and the bar's geometry and drag use the same mirrored
+    /// coordinate. `None` and `Some(false)` are equivalent.
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
     /// The vertical scrollbar (CMP `VerticalScrollbar`).
     ///
     /// Usage: level with the scroll container (inside a `Row`) and sharing its `ScrollState`.
@@ -813,6 +904,11 @@ impl VerticalScrollbar {
     /// });
     /// ```
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
+    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
+    /// `thickness`, so the grow is centred and never reflows the content).
+    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -827,19 +923,14 @@ impl VerticalScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
-            hover_color: None,
+            hover_color: self.hover_color,
+            hover_thickness: self.hover_thickness,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
             inset: 2.0,
         };
-        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Vertical, None)
-            .then(self.modifier);
-        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
-        }
-        ctx.end_restartable_group();
+        assemble_scrollbar(ctx, key, &self.scroll, cfg, ScrollbarAxis::Vertical, self.scroll_reverse, self.modifier);
     }
 }
 
@@ -856,6 +947,8 @@ pub struct HorizontalScrollbar {
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
+    hover_color: Option<Color>,
+    hover_thickness: f32,
     scroll_reverse: Option<bool>,
 }
 
@@ -869,6 +962,8 @@ impl HorizontalScrollbar {
             track_color: Color::TRANSPARENT,
             thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
             always_show: false,
+            hover_color: None,
+            hover_thickness: SCROLLBAR_HOVER_THICKNESS,
             scroll_reverse: None,
         }
     }
@@ -879,6 +974,11 @@ impl HorizontalScrollbar {
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
+    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
+    /// `thickness`, so the grow is centred and never reflows the content).
+    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
     /// A reversed horizontal scroll (RTL - the same value the container's
     /// `horizontal_scroll_reverse` has; an RTL container such as `TabRow` passes `Some(is_rtl)`).
     pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
@@ -899,19 +999,14 @@ impl HorizontalScrollbar {
         let cfg = ScrollbarConfig {
             thickness: self.thickness,
             thumb_color: self.thumb_color,
-            hover_color: None,
+            hover_color: self.hover_color,
+            hover_thickness: self.hover_thickness,
             track_color: self.track_color,
             thumb_min_length: self.thumb_min_length,
             always_show: self.always_show,
             inset: 2.0,
         };
-        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
-            .then(self.modifier);
-        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
-        }
-        ctx.end_restartable_group();
+        assemble_scrollbar(ctx, key, &self.scroll, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse, self.modifier);
     }
 }
 

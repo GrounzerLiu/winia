@@ -73,6 +73,29 @@ colour is the same theme outline token at full alpha (the bar darkens rather tha
 Test: `the_thumb_tint_follows_the_interaction`. A pixel test of the tint is not possible in the
 harness (it cannot deliver a hover), so the visual check is by hand in `scroll_demo`.
 
+### M-3 Hover thickening — ADDED
+
+WinUI and macOS grow the bar under the pointer; CMP only recolours it. The thumb's cross-axis size is
+now chosen per interaction state (`scrollbar_thumb_thickness`) and animated over 150 ms. The bar's
+LAYOUT width stays `thickness`, so the growth is centred in the slot and never reflows the content;
+the thicker thumb overhangs its slot by two pixels each side at the default settings. Setters:
+`.hover_thickness(dp)` / `.hover_color(color)` on all four components. Test:
+`the_thumb_thickness_follows_the_interaction`.
+
+### M-4 A press on the empty track jumps the thumb — ADDED
+
+CMP has no track handling at all; WinUI and macOS centre the thumb under the press and keep dragging
+from there. A press outside the thumb now jumps the offset so the thumb's centre lands under the
+pointer, and the grab offset becomes half the thumb, so the drag continues without a jump. A press on
+the thumb keeps its grab offset (nothing moves). Test: `pressing_the_track_centres_the_thumb`
+(96 px track, 32 px thumb, press at 70 -> offset 168.75 of 200).
+
+### M-5 A dedicated demo — ADDED
+
+`winia/examples/scrollbar_demo.rs` shows seven cards: the fading default bar, `always_show`, the
+horizontal bar, a lazy column with `LazyScrollbar`, a reversed vertical container, a custom style
+(thicker, warm colours, a 40 px minimum thumb) and a live readout of the card-1 state.
+
 ## Checked and ruled out
 
 - **Wheel paging gate**: a precision-touchpad stream banks travel and a page turns only after
