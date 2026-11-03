@@ -213,6 +213,11 @@ fn animatable_card(ctx: &mut ComposeCtx) {
     let velocity = anim.velocity();
     card(ctx, "7. Animatable (animateTo / sequence / decay / stop)", "The low-level handle: targets queue, a fling decays with friction, stop freezes the value.", |ctx| {
         track(ctx, 48.0, |ctx| {
+            // Read the state INSIDE the track's restartable group: a value read in the card body
+            // belongs to the outer scope, so the Row's group skips (its own parameters did not
+            // change) and the spacer keeps its old width - the readout moved while the dot stood
+            // still (reported as "card 7 does nothing").
+            let value = anim.as_state().get();
             Spacer::new().modifier(Modifier::new().width(value.max(0.0))).build(ctx);
             dot(ctx, GREEN, 20.0);
         });
