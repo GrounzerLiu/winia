@@ -2289,3 +2289,40 @@
         clear_all_animations();
     }
 
+
+// -- Review round: repeatable start offset and duplicate keyframes --
+
+/// `initialStartOffset: Delay` shifts the whole timeline: 2 x 100 ms plus a 50 ms hold is a 250 ms
+/// motion. Before the fix `duration()` said 200 ms and `value_at` snapped to the target there while
+/// the value was still at 0.4; the frame engine always ran the full 250 ms, so the two disagreed.
+#[test]
+fn a_repeat_start_offset_stretches_the_timeline() {
+    let base = TweenSpec::new(Duration::from_millis(100), interpolator::Linear::new());
+    let spec = AnimationSpec::Repeatable(
+        RepeatableSpec::new(2, RepeatMode::Restart, base)
+            .with_start_offset(Duration::from_millis(50), StartOffsetType::Delay),
+    );
+    let anim = TimedAnimation::target(0.0f32, 1.0f32, spec);
+    assert_eq!(anim.duration(), Duration::from_millis(250));
+    assert!((anim.value_at(Duration::from_millis(200)) - 0.5).abs() < 1e-3, "mid second cycle");
+    assert_eq!(anim.value_at(Duration::from_millis(250)), 1.0);
+}
+
+/// Two keyframes at the same millisecond: the last one wins (Compose's builder is a map).
+/// `dedup_by_key` kept the first, so `at(100, 0.2).at(100, 0.8)` evaluated 0.2.
+#[test]
+fn the_last_keyframe_wins_at_a_repeated_millisecond() {
+    let spec = KeyframesOf::between(0.0, 1.0).at(100, 0.2).at(100, 0.8).build();
+    assert_eq!(spec.frames.len(), 2, "the 0 ms anchor plus one keyframe");
+    assert!((spec.frames[1].1 - 0.8).abs() < 1e-4, "the last value wins, got {}", spec.frames[1].1);
+}
+
+/// A reversed repeat with an even iteration count ends back at the start value - the frame engine
+/// already did this; `TimedAnimation` returned the target.
+#[test]
+fn a_reversed_repeat_with_even_iterations_ends_at_the_start() {
+    let base = TweenSpec::new(Duration::from_millis(100), interpolator::Linear::new());
+    let spec = AnimationSpec::Repeatable(RepeatableSpec::new(2, RepeatMode::Reverse, base));
+    let anim = TimedAnimation::target(0.0f32, 1.0f32, spec);
+    assert_eq!(anim.value_at(Duration::from_millis(200)), 0.0);
+}

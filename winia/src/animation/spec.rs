@@ -269,8 +269,18 @@ impl KeyframesOf {
 
     pub fn build(mut self) -> KeyframesSpec {
         // Last keyframe wins for a repeated millisecond value; the order is otherwise the caller's.
+        // (`dedup_by_key` keeps the FIRST of a run, which made `at(100, 0.2).at(100, 0.8)` keep 0.2
+        // while Compose's builder is a map and keeps 0.8 - measured.)
         self.frames.sort_by_key(|(millis, _, _)| *millis);
-        self.frames.dedup_by_key(|(millis, _, _)| *millis);
+        let mut deduped: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)> =
+            Vec::with_capacity(self.frames.len());
+        for frame in self.frames.drain(..) {
+            match deduped.last_mut() {
+                Some(last) if last.0 == frame.0 => *last = frame,
+                _ => deduped.push(frame),
+            }
+        }
+        self.frames = deduped;
         let linear: std::sync::Arc<dyn interpolator::Interpolator> =
             std::sync::Arc::new(interpolator::Linear::new());
         let duration_ms = self.frames.last().map(|(millis, _, _)| *millis).unwrap_or(0);

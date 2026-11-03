@@ -72,7 +72,8 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Scaffold 文档](docs/scaffold.md) — top/bottom/content/FAB 页面布局与 RTL 定位
 - [Nested Scroll 文档](docs/nested-scroll.md) — pre/post scroll、TopAppBarState 与行为工厂
 - [滚动布局研究](docs/scroll-study.md) — 分层、协议、一次滚轮/一次拖拽的完整链路，以及与 Compose 的差距清单
-- [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
+- [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态（历史记录）
+- [Animation review](docs/animation-review.md) — against animation-core 1.13.0-beta01: fixed / open / missing
 - [Debug Server 指南](docs/debug-server.md) — WS/stdin 调试通道：事件注入、布局树（含 overlay）、帧抓取
 - [架构文档](docs/architecture.md) — 当前的模块分层、一帧的流程、各子系统与 Compose 对照
 - [组件编写契约](docs/component-authoring.md) — 新增组件的 MUST/SHOULD 规则，每条附上它防住的那种失败

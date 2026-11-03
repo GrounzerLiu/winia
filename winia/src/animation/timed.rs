@@ -80,7 +80,15 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
             AnimationSpec::Snap(spec) => spec.delay,
             AnimationSpec::Keyframes(spec) => spec.duration,
             AnimationSpec::Repeatable(spec) => {
-                base_duration_of(&spec.base).saturating_mul(spec.iterations)
+                let base = base_duration_of(&spec.base).saturating_mul(spec.iterations);
+                // `initialStartOffset` stretches (Delay) or shrinks (FastForward) the wall-clock
+                // length; without this the last cycle is cut short - measured: 2 x 100 ms with a
+                // 50 ms Delay ended at 200 ms while the value was still at 0.4, then jumped to the
+                // target (the motion engine, which subtracts the offset from `played`, ran 250 ms).
+                match spec.start_offset_type {
+                    StartOffsetType::Delay => base.saturating_add(spec.start_offset),
+                    StartOffsetType::FastForward => base.saturating_sub(spec.start_offset),
+                }
             }
             AnimationSpec::Decay(spec) => {
                 let friction = spec.friction.max(0.001);
@@ -165,13 +173,20 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
                 let target = self.target_of();
                 let base = base_duration_of(&spec.base);
                 let total = base.saturating_mul(spec.iterations);
-                if base.is_zero() || elapsed >= total {
-                    return target;
-                }
                 let played = match spec.start_offset_type {
                     StartOffsetType::Delay => elapsed.saturating_sub(spec.start_offset),
                     StartOffsetType::FastForward => elapsed + spec.start_offset,
                 };
+                if base.is_zero() || played >= total {
+                    // A Reverse run with an even iteration count ends back at the start value (the
+                    // same rule the frame engine applies); Restart always ends at the target.
+                    return match spec.mode {
+                        RepeatMode::Restart => target,
+                        RepeatMode::Reverse => {
+                            if spec.iterations % 2 == 0 { self.from.clone() } else { target }
+                        }
+                    };
+                }
                 let cycle = (played.as_secs_f32() / base.as_secs_f32()) as u32;
                 let phase = (played.as_secs_f32() % base.as_secs_f32()) / base.as_secs_f32();
                 let eased = loop_factor(Some(&spec.base), spec.mode, cycle, phase);
