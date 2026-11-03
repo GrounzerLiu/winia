@@ -490,6 +490,45 @@ fn scrollbar_build_shared(
     // snapshot can be stale (measured: a drag against a bar built before its viewport was known
     // wrote 200 for a 50 px move, and a pre-measure limit would have written f32::MAX).
     let grab_offset = ctx.remember_backchannel(|| 0.0f32);
+    // A press that lands on the EMPTY track jumps the thumb so its centre sits under the pointer
+    // (WinUI/macOS). It runs on PRESSURE, not on drag-start: a plain click has to jump without a
+    // drag, and `on_drag_start` only fires once the pointer passed the touch slop.
+    let jump_to: std::sync::Arc<dyn Fn(f32) + Send + Sync> = {
+        let scroll_state = scroll_state_src.clone();
+        let viewport_state = viewport_state.clone();
+        let reverse = matches!(scroll_reverse, Some(true));
+        let inset = cfg.inset;
+        let thumb_min = cfg.thumb_min_length;
+        std::sync::Arc::new(move |pos_in_track: f32| {
+            let viewport = viewport_state.peek();
+            let content = scroll_state.fling_limit.peek() + viewport;
+            let Some((thumb_top, thumb_len)) = scrollbar_geometry(
+                viewport,
+                content,
+                scroll_state.offset.peek(),
+                thumb_min,
+                SCROLLBAR_THUMB_MAX_FRACTION,
+                inset,
+            ) else {
+                return;
+            };
+            // On the thumb: the press only grabs it, nothing jumps.
+            if pos_in_track >= thumb_top && pos_in_track <= thumb_top + thumb_len {
+                return;
+            }
+            let track = (viewport - 2.0 * inset).max(0.0);
+            let max_now = (content - viewport).max(0.0);
+            let travel = (track - thumb_len).max(0.0);
+            let want = (pos_in_track - thumb_len / 2.0).clamp(0.0, travel);
+            let off_visual = scrollbar_offset_for_thumb_pos(want, track, thumb_len, max_now);
+            let off = if reverse {
+                (max_now - off_visual).clamp(0.0, max_now.max(0.0))
+            } else {
+                off_visual
+            };
+            scroll_state.offset.set(off);
+        })
+    };
     let drag_cb = {
         let scroll_state_src = scroll_state_src.clone();
         let grab_offset = grab_offset.clone();
@@ -565,11 +604,21 @@ fn scrollbar_build_shared(
     })
     // The bar's drag IS the scroll axis, so it must outrank the page's scroll container.
     .drag_outranks_scroll()
+    // A plain click on the track: the jump happens on the PRESS, so no drag is needed (the drag
+    // callbacks only fire after the touch slop).
+    .on_press({
+        let jump_to = jump_to.clone();
+        move |pos: (f32, f32)| {
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
+            jump_to(pos_in_track);
+        }
+    })
     .on_drag_start({
         let hover_src = hover_src_clone.clone();
         let scroll_state = scroll_state_clone.clone();
         let grab_offset = grab_offset.clone();
         let viewport_state = viewport_for_start.clone();
+        let jump_to = jump_to.clone();
         move |pos: (f32, f32)| {
             hover_src.emit_drag_start();
             // A bar with no thumb has nothing to drag: taking over here would cancel a fling and
@@ -600,6 +649,9 @@ fn scrollbar_build_shared(
             // frame before the viewport was known, and then the press would grab 0 and the first move
             // would jump by the grab it should have kept.
             let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
+            // The press already jumped an off-thumb click into place; calling it again is a no-op
+            // when the pointer is on the thumb, which keeps one code path for both.
+            jump_to(pos_in_track);
             let viewport = viewport_state.peek();
             let content = scroll_state.fling_limit.peek() + viewport;
             let (thumb_top, thumb_now) = scrollbar_geometry(
@@ -611,28 +663,9 @@ fn scrollbar_build_shared(
                 cfg.inset,
             )
             .unwrap_or((0.0, 0.0));
-            let track_now = (viewport - 2.0 * cfg.inset).max(0.0);
-            let max_now = (content - viewport).max(0.0);
-            // Pressing the empty track JUMPS the thumb so its centre lands under the pointer, and the
-            // drag then keeps that centre there (WinUI and macOS do this; CMP has no track handling
-            // and only grabs the thumb). A press on the thumb itself keeps the grab offset, so the
-            // thumb does not jump under the cursor.
-            let on_thumb = pos_in_track >= thumb_top && pos_in_track <= thumb_top + thumb_now;
-            let grab = if on_thumb {
-                (pos_in_track - thumb_top).clamp(0.0, thumb_now.max(0.0))
-            } else {
-                let travel = (track_now - thumb_now).max(0.0);
-                let want = (pos_in_track - thumb_now / 2.0).clamp(0.0, travel);
-                let off_visual = scrollbar_offset_for_thumb_pos(want, track_now, thumb_now, max_now);
-                let off = if matches!(scroll_reverse, Some(true)) {
-                    (max_now - off_visual).clamp(0.0, max_now.max(0.0))
-                } else {
-                    off_visual
-                };
-                scroll_state.offset.set(off);
-                (pos_in_track - want).clamp(0.0, thumb_now.max(0.0))
-            };
-            grab_offset.set(grab);
+            // Grab from the geometry the jump left behind, so the thumb keeps the point that was
+            // pressed under the pointer instead of jumping again on the first move.
+            grab_offset.set((pos_in_track - thumb_top).clamp(0.0, thumb_now.max(0.0)));
         }
     })
     .on_drag_end(move || {
