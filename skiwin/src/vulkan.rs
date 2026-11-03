@@ -3,16 +3,20 @@ mod renderer;
 
 use crate::vulkan::context::VulkanRenderContext;
 use crate::vulkan::renderer::VulkanRenderer;
-use crate::{SkiwinResult, SkiaWindowTrait};
-use skia_safe::Surface;
+use crate::{SkiwinError, SkiwinResult, SkiaWindowTrait};
+use parking_lot::Mutex;
+use skia_safe::{gpu, Surface};
 use std::ops::Deref;
 use std::sync::Arc;
+use vulkano::device::Queue;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 pub struct VulkanSkiaWindow {
     renderer: Option<VulkanRenderer>, // the window-specific skia <-> vulkan bridge
     window: Arc<Box<dyn Window>>,
+    queue: Arc<Queue>,
+    skia_ctx: Arc<Mutex<gpu::DirectContext>>,
 }
 
 impl VulkanSkiaWindow {
@@ -27,9 +31,19 @@ impl VulkanSkiaWindow {
         // context here as well was a field nothing ever read.
         let mut render_ctx = VulkanRenderContext::default();
         let renderer = render_ctx.renderer_for_window(event_loop, window.clone())?;
+        let queue = render_ctx
+            .queue
+            .clone()
+            .ok_or_else(|| SkiwinError::Vulkan("shared queue was not retained".into()))?;
+        let skia_ctx = render_ctx
+            .skia_ctx
+            .clone()
+            .ok_or_else(|| SkiwinError::Vulkan("Skia Vulkan context was not retained".into()))?;
         Ok(Self {
             renderer: Some(renderer),
             window,
+            queue,
+            skia_ctx,
         })
     }
 }
@@ -43,9 +57,19 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
     }
 
     fn recreate_surface(&mut self) {
+        if self.renderer.is_some() {
+            return;
+        }
+        match VulkanRenderer::new(self.window.clone(), self.queue.clone(), self.skia_ctx.clone()) {
+            Ok(renderer) => self.renderer = Some(renderer),
+            Err(error) => log::error!("[skiwin] could not recreate the Vulkan surface: {error}"),
+        }
     }
 
     fn resize(&mut self) {
+        if self.renderer.is_none() {
+            self.recreate_surface();
+        }
         if let Some(renderer) = self.renderer.as_mut() {
             // When the window size changes, the framebuffers need to be reallocated to match
             // before redrawing the window contents
@@ -54,6 +78,9 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
     }
 
     fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) {
+        if self.renderer.is_none() {
+            self.recreate_surface();
+        }
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.prepare_swapchain();
             renderer.draw(draw_fn)

@@ -139,6 +139,27 @@ impl ApplicationHandler for AppState {
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         AppState::process_pending_windows(self, event_loop);
+        // Android tears the native surface down on home/stop and hands us a new one on return.
+        // Rebuild any renderer that was dropped in destroy_surfaces before the first frame.
+        for pw in self.windows.values_mut() {
+            if let Some(ref mut sw) = pw.skia_window {
+                sw.recreate_surface();
+                sw.request_redraw();
+            }
+        }
+    }
+
+    fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        // The native window is about to disappear. Drop the backend surface while it is still valid;
+        // can_create_surfaces recreates it when Android has a new native window. GL keeps its
+        // renderer because its recreate_surface is still a no-op; Vulkan and CPU recreate properly.
+        for pw in self.windows.values_mut() {
+            if let Some(ref mut sw) = pw.skia_window {
+                if sw.backend() != skiwin::Backend::Gl {
+                    sw.destroy_surface();
+                }
+            }
+        }
     }
 
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
