@@ -1191,11 +1191,18 @@ pub(super) fn render_pass1(
         // `measured_size`: that is the content's full height (which `apply_scroll_delta` needs for
         // `max_offset`), and using it stretches the clip rect to the end of the content, so scrolled
         // content draws over later siblings such as a Scaffold's bottom bar.
+        // A PLAIN container's clip is its own box (padding included): the scroll range is computed
+        // against the node's height, so clipping to the padding-deducted viewport hid the last
+        // `pad_bottom` pixels the range allows into view - measured with `padding(16)`: the bottom
+        // 16 px of the last card could never be shown, no matter how far the list scrolled.
+        // A LAZY list is different: its measured size is the CONTENT, and the viewport field is the
+        // real one, so it keeps using it.
+        let plain = node.modifier.lazy_scroll_content_height().is_none();
         if node.scroll_viewport_height > 0.0 {
-            ch = node.scroll_viewport_height;
+            ch = if plain { h } else { node.scroll_viewport_height };
         }
         if node.scroll_viewport_width > 0.0 {
-            cw = node.scroll_viewport_width;
+            cw = if plain { w } else { node.scroll_viewport_width };
         }
         let mut clip_rect = Rect::new(x, y, x + cw, y + ch);
         // Compose's `clipScrollableContainer`: the main axis is clipped to the container, the cross

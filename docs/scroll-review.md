@@ -66,6 +66,19 @@ The fix is a marker: `Modifier::drag_outranks_scroll()` pushes `ModifierElement:
 scrollbar sets it, and `handle_pointer_down` leaves `scroll_slot` empty for such a target so the axis
 arbitration never runs. Test: `the_bar_declares_that_its_drag_outranks_the_scroll`.
 
+### S-7 A padded scroll container clipped the last `pad_bottom` pixels away — FIXED
+
+The scroll range is computed against the node's own height (padding included), but the paint clipped
+the content to the padding-DEDUCTED viewport. With `padding(16)` the last 16 px the range allowed
+into view were clipped away, so a page scrolled to its very end still cut the bottom of its last
+card (reported with a screenshot; reproduced in `scrollbar_demo` at 760x431: the readout card's last
+line was half cut at the clip edge).
+
+A PLAIN container now clips to its own box (`h`/`w`); a LAZY list keeps using the viewport field,
+because there the measured size is the CONTENT and the field is the real viewport. Test:
+`render_snapshot::a_padded_scroll_container_paints_to_its_own_bottom_edge` (at the limit, the child's
+row 89 must paint; it was white before the fix).
+
 ## Missing API
 
 ### M-1 `verticalScroll(reverseScrolling = true)` — ADDED

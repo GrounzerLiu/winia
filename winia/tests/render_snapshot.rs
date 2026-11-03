@@ -1350,3 +1350,32 @@ fn the_highlight_uses_the_provided_selection_colour() {
     assert!(default_blue > 0, "the default still paints a highlight ({default_blue} blue pixels)");
     assert_eq!(default_red, 0, "the default is Compose's blue, not red ({default_red} red pixels)");
 }
+
+/// A padded scroll container clips to its OWN box, not to the padding-deducted viewport: the scroll
+/// range is computed against the node's height, so the old clip hid the last `pad_bottom` pixels the
+/// range allowed into view (measured: the bottom of the last card could never be shown).
+#[test]
+fn a_padded_scroll_container_paints_to_its_own_bottom_edge() {
+    let scroll = ScrollState::new();
+    let s = scroll.clone();
+    let mut composer = Composer::new();
+    composer.compose(crate::compose!(|ctx| {
+        Column::new()
+            .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()).padding(10.0))
+            .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(Modifier::new().size(100.0, 200.0).background(Color::from_argb(255, 200, 30, 30), Shape::Rectangle))
+                    .build(ctx, |_| {});
+            });
+    }));
+    composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+    // content = 200 + 20 padding, so the limit is 220 - 100 = 120. At the limit the child paints from
+    // -110 to 90: row 89 is inside the child and must be red, while 95 is the bottom padding.
+    scroll.scroll_to(120.0, 120.0);
+    let mut surface = raster_surface(100, 100);
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    let idx = composer.layout_root_idx().unwrap();
+    render::render(composer.arena_nodes(), idx, surface.canvas());
+    let (r, g, b, _) = pixel(&mut surface, 50, 89);
+    assert!(color_close((r, g, b), (200, 30, 30), 10), "the child's last visible row must paint, got {r},{g},{b}");
+}
