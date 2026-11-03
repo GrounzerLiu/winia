@@ -63,6 +63,10 @@ nothing until the second), and `content = fling_limit + viewport`.
 - **Unmeasured state**: a fresh `ScrollState` reports `f32::MAX` as its limit; the bar treats a
   non-finite or `f32::MAX` limit as "not measured yet" and writes nothing (a press used to write
   ~2.6e38 and the content vanished).
+- **Reading the limit**: `max_value()` PEEKS (logic must not subscribe) and a readout built on it is
+  frozen at the first frame - it showed the sentinel until the reader's own state changed. A readout
+  uses `max_value_subscribed()` instead: `fling_limit` is a `State<f32>` now, so the reader re-runs
+  when the container measures a new limit.
 
 ## 5. Differences from Compose
 

@@ -64,7 +64,7 @@ pub(super) struct LayoutTransactionSnapshot {
     pub(super) free_nodes: Vec<usize>,
     pub(super) free_policies: Vec<usize>,
     pub(super) node_state: Vec<LayoutNodeTransactionState>,
-    pub(super) scroll_limits: Vec<(crate::runtime::state::Backchannel<f32>, f32)>,
+    pub(super) scroll_limits: Vec<(crate::runtime::state::State<f32>, f32)>,
 }
 
 /// The state a layout frame can change on a node that already existed.

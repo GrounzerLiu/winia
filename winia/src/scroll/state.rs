@@ -16,7 +16,7 @@ pub struct ScrollState {
     /// exactly fitted still flinged: a drag was correctly clamped by the node's own `content - viewport`,
     /// but the momentum after the release was not (measured on a three-item menu: a drag that moved
     /// nothing left the offset at 74).
-    pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
+    pub(crate) fling_limit: crate::runtime::state::State<f32>,
     /// A scroll-activity pulse (P1-3: what lights the scrollbar at a boundary - the offset stops
     /// changing there, so change detection cannot see the wheel. Dispatch bumps this counter for a
     /// wheel event that HIT but consumed nothing, and the scrollbar lights its fade on a change. u64
@@ -65,7 +65,7 @@ impl ScrollState {
         ScrollState {
             offset: crate::runtime::state::State::new(0.0),
             is_scroll_in_progress: crate::runtime::state::State::new(false),
-            fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            fling_limit: crate::runtime::state::State::new(f32::MAX),
             scroll_pulse: crate::runtime::state::State::new(0),
             overscroll_cache: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
@@ -103,6 +103,15 @@ impl ScrollState {
     /// and changes whenever the limit stops mattering - which is what `scroll_demo` does.
     pub fn max_value(&self) -> f32 {
         let limit = self.fling_limit.peek();
+        if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
+    }
+
+    /// The limit as a SUBSCRIBABLE value: reading it in composition re-runs the reader when the
+    /// container measures a new limit. `max_value()` peeks on purpose (logic must not subscribe),
+    /// but a readout built on the peek was frozen at the first frame - measured: a demo card that
+    /// read `max_value()` showed the `f32::MAX` sentinel until its own state happened to change.
+    pub fn max_value_subscribed(&self) -> f32 {
+        let limit = self.fling_limit.get();
         if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
     }
 
@@ -645,3 +654,45 @@ mod scroll_by_tests {
     }
 }
 
+
+#[cfg(test)]
+mod limit_subscription_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// `max_value()` peeks (a readout built on it was frozen at the first frame: it showed the
+    /// `f32::MAX` sentinel until the reader's own state happened to change). `max_value_subscribed()`
+    /// re-runs the reader when the container measures a limit.
+    #[test]
+    fn a_measured_limit_reaches_a_subscribed_reader() {
+        let scroll = ScrollState::new();
+        let s = scroll.clone();
+        let seen = Rc::new(Cell::new(-1.0f32));
+        let seen_in = seen.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let s = s.clone();
+            let seen_in = seen_in.clone();
+            composer.compose(crate::compose!(|ctx| {
+                crate::layout::Column::new()
+                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .build(ctx, |ctx| {
+                        let value = s.max_value_subscribed();
+                        seen_in.set(value);
+                        crate::components::Text::new(format!("{value:?}")).build(ctx);
+                        crate::layout::Column::new()
+                            .modifier(crate::modifier::Modifier::new().size(100.0, 300.0))
+                            .build(ctx, |_| {});
+                    });
+            }));
+        };
+        build(&mut composer);
+        let first = seen.get();
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        build(&mut composer);
+        let second = seen.get();
+        assert_eq!(first, f32::MAX, "before the first measure the limit is the sentinel");
+        assert!(second.is_finite() && second > 0.0, "the measured limit must reach the reader, got {second}");
+    }
+}

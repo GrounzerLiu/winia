@@ -562,7 +562,7 @@ impl<A: LazyAxis> LazyList<A> {
         let viewport = ctx.remember(|| 600.0f32);
         let is_scrolling = state.is_scrolling.clone();
         let content_height = ctx.remember_backchannel(|| 0.0f32);
-        let fling_limit = ctx.remember_backchannel(|| f32::MAX);
+        let fling_limit: crate::runtime::state::State<f32> = ctx.remember(|| f32::MAX);
         let snap_paging = self.snap_paging;
         ctx.changed(&snap_paging);
         let fill_items = self.fill_items;

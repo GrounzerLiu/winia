@@ -28,7 +28,7 @@ pub struct LazyListState {
     /// move — see `ScrollState::fling_limit`, which had the same "0 means unknown" conflation.
     ///
     /// Visible to `components::scrollbar`, which reads it as `content = limit + viewport`.
-    pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
+    pub(crate) fling_limit: crate::runtime::state::State<f32>,
     /// The viewport's main-axis size from the last measure: what a pager needs to turn a pixel offset
     /// into a page fraction. `0.0` until the first measure.
     ///
@@ -99,7 +99,7 @@ impl LazyListState {
             last_known_first_key: crate::runtime::state::State::new(None),
             known_total: crate::runtime::state::State::new(usize::MAX),
             jump_request: crate::runtime::state::State::new(None),
-            fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            fling_limit: crate::runtime::state::State::new(f32::MAX),
             viewport_main: crate::runtime::state::State::new(0.0),
             viewport_cross: crate::runtime::state::State::new(0.0),
             scroll_pulse: crate::runtime::state::State::new(0),

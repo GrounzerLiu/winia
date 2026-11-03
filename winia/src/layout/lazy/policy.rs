@@ -18,7 +18,7 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     /// Total content extent (measured + estimated + content padding) — the scroll clamp's input.
     pub content_height: crate::runtime::state::Backchannel<f32>,
     /// How far a fling may travel; `f32::MAX` until the first measure, a real `0` when the content fits.
-    pub fling_limit: crate::runtime::state::Backchannel<f32>,
+    pub fling_limit: crate::runtime::state::State<f32>,
     /// Compose's `isScrollInProgress`: the same flag the drag and fling paths write, shared with the
     /// `ScrollState` the list assembles.
     pub is_scroll_in_progress: crate::runtime::state::State<bool>,
