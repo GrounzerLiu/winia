@@ -7,8 +7,7 @@
 >
 > Motivation, all recorded elsewhere: `docs/box-with-constraints.md` (the scope reads its constraints
 > one composition late), `docs/shared-element-transition.md` §3.1 (bounds discovered without a
-> lookahead pass, "substitutable"), `docs/animation-gap-analysis.md` (`animate_item` dropped: "needs
-> lookahead or layer-shift"), `docs/tab-row.md` §7 (no SubcomposeLayout, so a custom indicator slot
+> lookahead pass, "substitutable"), `docs/tab-row.md` §7 (no SubcomposeLayout, so a custom indicator slot
 > cannot be injected from the measure-time positions), `docs/shared-element-gaps.md`
 > (`skipToLookaheadSize`, "no lookahead system exists").
 >

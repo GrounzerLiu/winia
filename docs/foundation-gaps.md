@@ -124,7 +124,7 @@ concentrated in the APIs 1.13 added, and in the grid family.
 | Navigation | `nav.rs`, modelled on Nav3, with `SaveableStateHolder` | implemented |
 | Movable content | composition-level movable placements in `runtime/composer.rs` | implemented |
 | Tooltip | `components/tooltip.rs` | implemented |
-| Animation | `Animatable`, decay, spring specs | gaps tracked in [animation-gap-analysis.md](animation-gap-analysis.md) |
+| Animation | `Animatable`, decay, spring specs | gaps tracked in [animation-review.md](animation-review.md) |
 | Shared elements | — | tracked in [shared-element-gaps.md](shared-element-gaps.md) |
 
 ## Deliberate non-goals

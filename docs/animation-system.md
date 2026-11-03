@@ -2,9 +2,10 @@
 
 > Rewritten from the code on 2026-10-20 (branch `v2`). The previous version of this file described a
 > tree that no longer exists: it claimed a colour spring was downgraded to a tween, a `dt` over 166 ms
-> was truncated, `AnimatedVisibility`/`Crossfade`/`animateContentSize` were missing, and
-> `SpringSpec::default()` was stiffness 1500. All four are wrong today. `animation-gap-analysis.md`
-> is a dated snapshot of the 2026-08-05 pass and is kept only as a historical record.
+> was truncated, and `AnimatedVisibility`/`Crossfade`/`animateContentSize` were missing. All of that
+> is wrong today, and `SpringSpec::default()` has since been aligned with Compose's `spring()`
+> (`StiffnessMedium`, 1500). The per-area review against Compose is
+> [animation-review.md](animation-review.md).
 
 ## 1. Shape
 

@@ -568,7 +568,7 @@ State:count.set(1) → notify_state_changed
 > system, the theme, the examples, the benchmark. The unchecked boxes are the plan as it was written —
 > most predate the code that closed them. Do not read an empty box here as outstanding work: the live
 > backlog is `docs/state-architecture-progress.md`, plus the per-area gap docs
-> (`docs/semantics-gap.md`, `docs/animation-gap-analysis.md`, `docs/shared-element-gaps.md`).
+> (`docs/semantics-gap.md`, `docs/animation-review.md`, `docs/shared-element-gaps.md`).
 >
 > Companions: `docs/architecture-audit.md` (current structural review) and `docs/benchmarks.md`
 > (measured state of the frame).
