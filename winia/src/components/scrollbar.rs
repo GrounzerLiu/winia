@@ -751,6 +751,7 @@ impl LazyScrollbar {
     pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
+    /// Always visible (by default only during a scroll, like `alwaysShowScrollBar`).
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
     /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
     pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
@@ -770,6 +771,8 @@ impl LazyScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        ctx.changed(&self.hover_color);
+        ctx.changed(&self.hover_thickness);
         ctx.changed(&self.scroll_reverse);
         ctx.changed(&self.state.offset.state_id());
         let key = ctx.next_key();
@@ -869,6 +872,8 @@ impl HorizontalLazyScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        ctx.changed(&self.hover_color);
+        ctx.changed(&self.hover_thickness);
         ctx.changed(&self.scroll_reverse);
         ctx.changed(&self.state.offset.state_id());
         let key = ctx.next_key();
@@ -968,7 +973,9 @@ impl VerticalScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
-            /// Always visible (by default only during a scroll, like `alwaysShowScrollBar`).
+        ctx.changed(&self.hover_color);
+        ctx.changed(&self.hover_thickness);
+        ctx.changed(&self.scroll_reverse);
         ctx.changed(&self.scroll.offset.state_id());
         let key = ctx.next_key();
         let cfg = ScrollbarConfig {
@@ -1041,6 +1048,8 @@ impl HorizontalScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        ctx.changed(&self.hover_color);
+        ctx.changed(&self.hover_thickness);
         ctx.changed(&self.scroll_reverse);
         // P2-4: the ScrollState handle is part of the identity (swapping the whole state must
         // recompose - otherwise the old offset subscription stays live and the new state has none,
