@@ -186,6 +186,9 @@ mod lifecycle_tests;
 
 mod spec;
 
+mod deferred;
+pub use deferred::DeferredTargetAnimation;
+
 pub use spec::*;
 
 mod api;

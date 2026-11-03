@@ -2340,3 +2340,54 @@ fn the_public_estimate_answers_and_the_defaults_match_compose() {
     // took 831 ms.
     assert!(d < Duration::from_millis(400), "default spring estimate {d:?}");
 }
+// -- M-3: the remaining Compose geometry converters --
+
+#[test]
+fn the_geometry_converters_interpolate_and_split_like_compose() {
+    use crate::unit::{Dp, DpOffset, IntOffset, IntSize, Rect};
+    use crate::animation::{AnimatableValue, MAX_ANIMATION_COMPONENTS};
+
+    let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+    let target = Rect::new(10.0, 20.0, 110.0, 70.0);
+    assert_eq!(rect.lerp(&target, 0.5), Rect::new(5.0, 10.0, 105.0, 60.0));
+    let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+    assert_eq!(rect.write_components(&mut components), 4);
+    assert_eq!(components, [0.0, 0.0, 100.0, 50.0]);
+    assert_eq!(Rect::from_components(&components), rect);
+
+    let io = IntOffset::new(0, 0);
+    assert_eq!(io.lerp(&IntOffset::new(10, 20), 0.5), IntOffset::new(5, 10));
+    assert_eq!(IntOffset::from_components(&[3.4, 7.6]), IntOffset::new(3, 8));
+
+    let is = IntSize::new(10, 20);
+    assert_eq!(is.lerp(&IntSize::new(20, 40), 0.5), IntSize::new(15, 30));
+    assert_eq!(IntSize::write_components(&is, &mut components), 2);
+
+    let dp = DpOffset::new(Dp(1.0), Dp(2.0));
+    assert_eq!(dp.lerp(&DpOffset::new(Dp(3.0), Dp(4.0)), 0.5), DpOffset::new(Dp(2.0), Dp(3.0)));
+    assert!(<Rect as AnimatableValue>::supports_spring());
+    assert!(<IntSize as AnimatableValue>::supports_spring());
+}
+
+// -- M-2: DeferredTargetAnimation --
+
+#[test]
+fn a_deferred_target_animation_creates_its_value_at_the_first_target() {
+    let mut deferred = DeferredTargetAnimation::<f32>::new();
+    assert_eq!(deferred.value(), None);
+    assert_eq!(
+        deferred.update_target(0.0, TweenSpec::new(Duration::from_millis(100), interpolator::Linear::new())),
+        None,
+        "the first target creates the value, nothing animates"
+    );
+    assert_eq!(deferred.value(), Some(0.0));
+    // The push starts the motion immediately (a frame's worth of it may already have run), so the
+    // value it reports is the current one - just not the new target yet.
+    let current = deferred
+        .update_target(10.0, TweenSpec::new(Duration::from_millis(100), interpolator::Linear::new()))
+        .expect("a value exists now");
+    assert!(current < 1.0, "the motion starts from the old value, got {current}");
+    assert!(deferred.is_running());
+    deferred.reset();
+    assert_eq!(deferred.value(), None);
+}

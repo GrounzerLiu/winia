@@ -11,7 +11,7 @@ probe inside the crate (the probes were deleted); the numbers are from those run
 | Defects fixed | 4 (A-1..A-4) |
 | Open findings | 0 |
 | Deliberate deviations | 3 (D-1..D-3) |
-| Missing API | 3 (M-1..M-3); M-4 done |
+| Missing API | 1 (M-1); M-2..M-4 done |
 
 ## Defects
 
@@ -84,9 +84,12 @@ Compose's 171 ms is the threshold, D-2). Components that need medium-low pass it
 ## Missing API
 
 - **M-1 `keyframesWithSpline`** (and its `ArcSpline` / `MonoSpline` machinery) - no spline keyframes.
-- **M-2 `DeferredTargetAnimation`** - Compose's lazily-created animation state.
-- **M-3 Vector converters** - winia has `AnimatableValue` for f32, i32, Dp, Sp, Offset, Size, Color
-  (and two internal types); Compose also converts `Rect`, `IntOffset`, `IntSize`, `DpOffset`.
+- **M-2 `DeferredTargetAnimation`** - DONE: `animation::DeferredTargetAnimation<T>` creates the value at
+  the first `update_target` (nothing moves), starts/retargets a motion on later ones, and has
+  `value` / `is_running` / `reset`. Test: `a_deferred_target_animation_creates_its_value_at_the_first_target`.
+- **M-3 Vector converters** - DONE: `Rect` (4 components), `IntOffset` (2, rounded), `IntSize` (2,
+  rounded) and `DpOffset` (2) were added to `unit` with `AnimatableValue` impls, matching Compose's
+  converters. Test: `the_geometry_converters_interpolate_and_split_like_compose`.
 - **M-4 Public duration estimation** - DONE: `animation::estimate_animation_duration(spec, from, to)`
   returns the duration of any finite spec (a spring's depends on the distance, hence the arguments).
 

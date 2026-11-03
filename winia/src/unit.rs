@@ -217,6 +217,65 @@ impl Sub for Size {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Rect / IntOffset / IntSize / DpOffset — Compose's remaining geometry types.
+// ═══════════════════════════════════════════════════════════
+
+/// A rectangle in `f32` (Compose's `androidx.compose.ui.geometry.Rect`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Rect {
+    pub const ZERO: Rect = Rect { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 };
+    pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Rect { left, top, right, bottom }
+    }
+    pub fn width(&self) -> f32 { self.right - self.left }
+    pub fn height(&self) -> f32 { self.bottom - self.top }
+    pub fn size(&self) -> Size { Size::new(self.width(), self.height()) }
+}
+
+/// A 2-D integer offset (Compose's `IntOffset`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct IntOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl IntOffset {
+    pub const ZERO: IntOffset = IntOffset { x: 0, y: 0 };
+    pub fn new(x: i32, y: i32) -> Self { IntOffset { x, y } }
+}
+
+/// A 2-D integer size (Compose's `IntSize`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct IntSize {
+    pub width: i32,
+    pub height: i32,
+}
+
+impl IntSize {
+    pub const ZERO: IntSize = IntSize { width: 0, height: 0 };
+    pub fn new(width: i32, height: i32) -> Self { IntSize { width, height } }
+}
+
+/// A 2-D offset in `Dp` (Compose's `DpOffset`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DpOffset {
+    pub x: Dp,
+    pub y: Dp,
+}
+
+impl DpOffset {
+    pub const ZERO: DpOffset = DpOffset { x: Dp(0.0), y: Dp(0.0) };
+    pub fn new(x: Dp, y: Dp) -> Self { DpOffset { x, y } }
+}
+
+// ═══════════════════════════════════════════════════════════
 // `AnimatableValue` impls — the animation system's entry point.
 // ═══════════════════════════════════════════════════════════
 
@@ -285,6 +344,106 @@ impl crate::animation::AnimatableValue for Size {
     }
     fn from_components(components: &[f32]) -> Size {
         Size::new(components[0], components[1])
+    }
+}
+
+impl crate::animation::AnimatableValue for Rect {
+    fn lerp(&self, to: &Rect, t: f32) -> Rect {
+        Rect::new(
+            self.left + (to.left - self.left) * t,
+            self.top + (to.top - self.top) * t,
+            self.right + (to.right - self.right) * t,
+            self.bottom + (to.bottom - self.bottom) * t,
+        )
+    }
+    fn to_f32(&self) -> f32 { self.width() }
+    fn from_f32(v: f32) -> Rect { Rect::new(0.0, 0.0, v, v) }
+    // Compose's `Rect.VectorConverter`: four components, one spring each.
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.left;
+        out[1] = self.top;
+        out[2] = self.right;
+        out[3] = self.bottom;
+        4
+    }
+    fn from_components(components: &[f32]) -> Rect {
+        Rect::new(components[0], components[1], components[2], components[3])
+    }
+}
+
+impl crate::animation::AnimatableValue for IntOffset {
+    fn lerp(&self, to: &IntOffset, t: f32) -> IntOffset {
+        let (fx, fy) = (self.x as f32, self.y as f32);
+        IntOffset::new(
+            (fx + (to.x as f32 - fx) * t).round() as i32,
+            (fy + (to.y as f32 - fy) * t).round() as i32,
+        )
+    }
+    fn to_f32(&self) -> f32 { self.x as f32 }
+    fn from_f32(v: f32) -> IntOffset { IntOffset::new(v.round() as i32, v.round() as i32) }
+    // Compose's `IntOffset.VectorConverter`: two components, rounded on the way back.
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.x as f32;
+        out[1] = self.y as f32;
+        2
+    }
+    fn from_components(components: &[f32]) -> IntOffset {
+        IntOffset::new(components[0].round() as i32, components[1].round() as i32)
+    }
+}
+
+impl crate::animation::AnimatableValue for IntSize {
+    fn lerp(&self, to: &IntSize, t: f32) -> IntSize {
+        let (fw, fh) = (self.width as f32, self.height as f32);
+        IntSize::new(
+            (fw + (to.width as f32 - fw) * t).round() as i32,
+            (fh + (to.height as f32 - fh) * t).round() as i32,
+        )
+    }
+    fn to_f32(&self) -> f32 { self.width as f32 }
+    fn from_f32(v: f32) -> IntSize { IntSize::new(v.round() as i32, v.round() as i32) }
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.width as f32;
+        out[1] = self.height as f32;
+        2
+    }
+    fn from_components(components: &[f32]) -> IntSize {
+        IntSize::new(components[0].round() as i32, components[1].round() as i32)
+    }
+}
+
+impl crate::animation::AnimatableValue for DpOffset {
+    fn lerp(&self, to: &DpOffset, t: f32) -> DpOffset {
+        DpOffset::new(
+            Dp(self.x.0 + (to.x.0 - self.x.0) * t),
+            Dp(self.y.0 + (to.y.0 - self.y.0) * t),
+        )
+    }
+    fn to_f32(&self) -> f32 { self.x.0 }
+    fn from_f32(v: f32) -> DpOffset { DpOffset::new(Dp(v), Dp(v)) }
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.x.0;
+        out[1] = self.y.0;
+        2
+    }
+    fn from_components(components: &[f32]) -> DpOffset {
+        DpOffset::new(Dp(components[0]), Dp(components[1]))
     }
 }
 

@@ -222,6 +222,7 @@ pub mod prelude {
         SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT,
     };
     pub use crate::components::animated_size::AnimatedSize;
+    pub use crate::animation::DeferredTargetAnimation;
     pub use crate::components::animated_content::AnimatedContent;
     pub use crate::components::crossfade::Crossfade;
     pub use crate::components::shared_transition::{
@@ -266,7 +267,7 @@ pub mod prelude {
         AbsoluteArrangement, Alignment, Arrangement, ContentAlignment, Constraints, LayoutDirection,
     };
     pub use crate::window::insets::{Insets, InsetsKind, WindowInsetsController};
-    pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
+    pub use crate::unit::{Dp, Sp, Offset, Size, Rect, IntOffset, IntSize, DpOffset, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::runtime::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{
         LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope,
