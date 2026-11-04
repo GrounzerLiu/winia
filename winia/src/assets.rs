@@ -3,12 +3,16 @@
 //! The bundle is initialized once at application startup: a desktop directory
 //! (development root or executable directory) or Android's AssetManager.
 
+use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub struct AssetEntry {
     pub path: String,
     pub packaged: String,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 pub struct AssetManifest {
@@ -22,12 +26,19 @@ pub trait AssetBundle: Send + Sync {
 }
 
 static BUNDLE: OnceLock<Box<dyn AssetBundle>> = OnceLock::new();
+#[cfg(not(target_os = "android"))]
+static WINDOW_ICON: OnceLock<Option<winit::icon::Icon>> = OnceLock::new();
 
+#[cfg(not(target_os = "android"))]
 pub fn init_desktop_default() {
     let root = std::env::var_os("WINIA_ASSET_ROOT")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok()?.parent().map(Path::to_path_buf));
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| desktop_root_for_exe(&exe))
+        });
     let Some(root) = root else {
         return;
     };
@@ -49,12 +60,47 @@ pub fn load(logical: &str) -> Option<Vec<u8>> {
     BUNDLE.get()?.load(logical)
 }
 
+/// Resolve a user-supplied path to the manifest's canonical logical path.
+pub fn canonical_path(logical: &str) -> String {
+    let normalized = normalize(logical);
+    if let Some(entry) = manifest().and_then(|manifest| manifest.find(&normalized)) {
+        return entry.path.clone();
+    }
+    normalized
+}
+
+#[cfg(not(target_os = "android"))]
+fn desktop_root_for_exe(exe: &Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    if let Some(resources) = macos_resources_root(exe) {
+        if resources.join("assets.manifest.json").is_file() {
+            return Some(resources);
+        }
+    }
+    Some(parent.to_path_buf())
+}
+
+#[cfg(not(target_os = "android"))]
+fn macos_resources_root(exe: &Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    if parent.file_name() == Some(OsStr::new("MacOS")) {
+        Some(parent.parent()?.join("Resources"))
+    } else {
+        None
+    }
+}
+
 pub fn manifest() -> Option<&'static AssetManifest> {
     BUNDLE.get()?.manifest()
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn window_icon() -> Option<winit::icon::Icon> {
+    WINDOW_ICON.get_or_init(load_window_icon).clone()
+}
+
+#[cfg(not(target_os = "android"))]
+fn load_window_icon() -> Option<winit::icon::Icon> {
     let manifest = manifest()?;
     let logical = manifest.window_icon.as_deref()?;
     let bytes = load(logical)?;
@@ -96,7 +142,8 @@ struct DesktopBundle {
 impl AssetBundle for DesktopBundle {
     fn load(&self, logical: &str) -> Option<Vec<u8>> {
         let entry = self.manifest.as_ref()?.find(logical)?;
-        std::fs::read(self.root.join(&entry.packaged)).ok()
+        let bytes = std::fs::read(self.root.join(&entry.packaged)).ok()?;
+        entry.verify(&bytes).then_some(bytes)
     }
 
     fn manifest(&self) -> Option<&AssetManifest> {
@@ -119,7 +166,7 @@ impl AssetBundle for AndroidBundle {
         let mut bytes = Vec::new();
         use std::io::Read;
         asset.read_to_end(&mut bytes).ok()?;
-        Some(bytes)
+        entry.verify(&bytes).then_some(bytes)
     }
 
     fn manifest(&self) -> Option<&AssetManifest> {
@@ -133,6 +180,27 @@ impl AssetManifest {
         self.entries
             .iter()
             .find(|entry| entry.path == logical || entry.packaged == logical)
+            .or_else(|| {
+                let prefixed = format!("assets/{logical}");
+                self.entries
+                    .iter()
+                    .find(|entry| entry.path == prefixed || entry.packaged == prefixed)
+            })
+    }
+}
+
+impl AssetEntry {
+    fn verify(&self, bytes: &[u8]) -> bool {
+        if self.bytes != 0 && self.bytes != bytes.len() as u64 {
+            return false;
+        }
+        if !self.sha256.is_empty() {
+            let digest = format!("{:x}", Sha256::digest(bytes));
+            if digest != self.sha256.to_ascii_lowercase() {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -152,8 +220,17 @@ fn parse_manifest(text: &str) -> Option<AssetManifest> {
         .iter()
         .filter_map(|file| {
             Some(AssetEntry {
-                path: file.get("path")?.as_str()?.to_owned(),
-                packaged: file.get("packaged")?.as_str()?.to_owned(),
+                path: normalize(file.get("path")?.as_str()?),
+                packaged: normalize(file.get("packaged")?.as_str()?),
+                bytes: file
+                    .get("bytes")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0),
+                sha256: file
+                    .get("sha256")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
             })
         })
         .collect();
@@ -174,4 +251,34 @@ fn read_android_manifest(manager: &ndk::asset::AssetManager) -> Option<AssetMani
     use std::io::Read;
     asset.read_to_end(&mut bytes).ok()?;
     parse_manifest(std::str::from_utf8(&bytes).ok()?)
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_asset_bytes_and_hash() {
+        let bytes = b"asset";
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        let entry = AssetEntry {
+            path: "assets/a.txt".to_owned(),
+            packaged: "assets/a.txt".to_owned(),
+            bytes: bytes.len() as u64,
+            sha256: digest,
+        };
+        assert!(entry.verify(bytes));
+        assert!(!entry.verify(b"other"));
+    }
+
+    #[test]
+    fn maps_macos_executable_to_resources() {
+        let root = Path::new("Demo.app/Contents");
+        let exe = root.join("MacOS/demo");
+        assert_eq!(
+            macos_resources_root(&exe).as_deref(),
+            Some(root.join("Resources").as_path())
+        );
+        assert_eq!(macos_resources_root(Path::new("other/demo")), None);
+    }
 }

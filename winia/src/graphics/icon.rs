@@ -96,7 +96,8 @@ impl IconSource {
     }
 
     pub fn asset(path: impl Into<Arc<str>>) -> Self {
-        IconSource::Asset(path.into())
+        let path: Arc<str> = path.into();
+        IconSource::Asset(Arc::from(crate::assets::canonical_path(&path)))
     }
 
     #[cfg(any(

@@ -54,6 +54,7 @@ time = { workspace = true }
 # Saveable snapshots (runtime/saveable.rs). Already in the tree for the semantics tests; the on-disk
 # format is JSON so a corrupt file can be rejected rather than misparsed.
 serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # arboard has no Android backend (its platform module is empty on Android), and its synchronous
