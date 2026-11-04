@@ -7,12 +7,15 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct AssetEntry {
+    pub id: String,
     pub path: String,
     pub packaged: String,
     pub bytes: u64,
     pub sha256: String,
+    pub density: Option<f32>,
 }
 
 pub struct AssetManifest {
@@ -21,11 +24,12 @@ pub struct AssetManifest {
 }
 
 pub trait AssetBundle: Send + Sync {
-    fn load(&self, logical: &str) -> Option<Vec<u8>>;
+    fn load(&self, logical: &str, density: f32) -> Option<Vec<u8>>;
     fn manifest(&self) -> Option<&AssetManifest>;
 }
 
 static BUNDLE: OnceLock<Box<dyn AssetBundle>> = OnceLock::new();
+static ASSET_EPOCH: AtomicU64 = AtomicU64::new(0);
 #[cfg(not(target_os = "android"))]
 static WINDOW_ICON: OnceLock<Option<winit::icon::Icon>> = OnceLock::new();
 
@@ -46,25 +50,37 @@ pub fn init_desktop_default() {
         .ok()
         .and_then(|text| parse_manifest(&text));
     let bundle = DesktopBundle { root, manifest };
-    let _ = BUNDLE.set(Box::new(bundle));
+    if BUNDLE.set(Box::new(bundle)).is_ok() {
+        ASSET_EPOCH.fetch_add(1, Ordering::Release);
+    }
 }
 
 #[cfg(target_os = "android")]
 pub fn init_android(manager: ndk::asset::AssetManager) {
     let manifest = read_android_manifest(&manager);
     let bundle = AndroidBundle { manager, manifest };
-    let _ = BUNDLE.set(Box::new(bundle));
+    if BUNDLE.set(Box::new(bundle)).is_ok() {
+        ASSET_EPOCH.fetch_add(1, Ordering::Release);
+    }
 }
 
 pub fn load(logical: &str) -> Option<Vec<u8>> {
-    BUNDLE.get()?.load(logical)
+    load_at(logical, 1.0)
+}
+
+pub fn load_at(logical: &str, density: f32) -> Option<Vec<u8>> {
+    BUNDLE.get()?.load(logical, density)
 }
 
 /// Resolve a user-supplied path to the manifest's canonical logical path.
 pub fn canonical_path(logical: &str) -> String {
     let normalized = normalize(logical);
-    if let Some(entry) = manifest().and_then(|manifest| manifest.find(&normalized)) {
-        return entry.path.clone();
+    if let Some(entry) = manifest().and_then(|manifest| {
+        manifest
+            .find(&normalized)
+            .or_else(|| manifest.resolve(&normalized, 1.0))
+    }) {
+        return entry.id.clone();
     }
     normalized
 }
@@ -92,6 +108,10 @@ fn macos_resources_root(exe: &Path) -> Option<PathBuf> {
 
 pub fn manifest() -> Option<&'static AssetManifest> {
     BUNDLE.get()?.manifest()
+}
+
+pub fn generation() -> u64 {
+    ASSET_EPOCH.load(Ordering::Acquire)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -140,8 +160,8 @@ struct DesktopBundle {
 }
 
 impl AssetBundle for DesktopBundle {
-    fn load(&self, logical: &str) -> Option<Vec<u8>> {
-        let entry = self.manifest.as_ref()?.find(logical)?;
+    fn load(&self, logical: &str, density: f32) -> Option<Vec<u8>> {
+        let entry = self.manifest.as_ref()?.resolve(logical, density)?;
         let bytes = std::fs::read(self.root.join(&entry.packaged)).ok()?;
         entry.verify(&bytes).then_some(bytes)
     }
@@ -159,8 +179,8 @@ struct AndroidBundle {
 
 #[cfg(target_os = "android")]
 impl AssetBundle for AndroidBundle {
-    fn load(&self, logical: &str) -> Option<Vec<u8>> {
-        let entry = self.manifest.as_ref()?.find(logical)?;
+    fn load(&self, logical: &str, density: f32) -> Option<Vec<u8>> {
+        let entry = self.manifest.as_ref()?.resolve(logical, density)?;
         let name = std::ffi::CString::new(entry.packaged.clone()).ok()?;
         let mut asset = self.manager.open(&name)?;
         let mut bytes = Vec::new();
@@ -180,13 +200,59 @@ impl AssetManifest {
         self.entries
             .iter()
             .find(|entry| entry.path == logical || entry.packaged == logical)
-            .or_else(|| {
-                let prefixed = format!("assets/{logical}");
-                self.entries
-                    .iter()
-                    .find(|entry| entry.path == prefixed || entry.packaged == prefixed)
-            })
     }
+
+    fn resolve(&self, logical: &str, density: f32) -> Option<&AssetEntry> {
+        let logical = normalize(logical);
+        if let Some(exact) = self.find(&logical) {
+            // A base entry (id == path, no density) is a candidate group, not an exact
+            // density choice; only an explicit variant path short-circuits the resolver.
+            if exact.density.is_some() || exact.path != exact.id {
+                return Some(exact);
+            }
+        }
+        let prefixed = format!("assets/{logical}");
+        let mut candidates: Vec<&AssetEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.id == logical
+                    || entry.id == prefixed
+                    || entry.path == prefixed
+                    || entry.packaged == prefixed
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let target = if density.is_finite() && density > 0.0 {
+            density
+        } else {
+            1.0
+        };
+        let value = |entry: &&AssetEntry| entry.density.unwrap_or(1.0);
+        if let Some(exact) = candidates
+            .iter()
+            .find(|entry| (value(entry) - target).abs() < 0.01)
+        {
+            return Some(*exact);
+        }
+        let above = candidates
+            .iter()
+            .filter(|entry| value(entry) >= target)
+            .min_by(|a, b| value(a).total_cmp(&value(b)));
+        if let Some(entry) = above {
+            return Some(*entry);
+        }
+        candidates.sort_by(|a, b| value(a).total_cmp(&value(b)));
+        candidates.pop()
+    }
+}
+
+pub fn resolved_density(logical: &str, density: f32) -> Option<f32> {
+    manifest()?
+        .resolve(logical, density)
+        .map(|entry| entry.density.unwrap_or(1.0))
 }
 
 impl AssetEntry {
@@ -219,8 +285,14 @@ fn parse_manifest(text: &str) -> Option<AssetManifest> {
         .as_array()?
         .iter()
         .filter_map(|file| {
+            let path = normalize(file.get("path")?.as_str()?);
             Some(AssetEntry {
-                path: normalize(file.get("path")?.as_str()?),
+                id: normalize(
+                    file.get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(&path),
+                ),
+                path,
                 packaged: normalize(file.get("packaged")?.as_str()?),
                 bytes: file
                     .get("bytes")
@@ -231,6 +303,10 @@ fn parse_manifest(text: &str) -> Option<AssetManifest> {
                     .and_then(|value| value.as_str())
                     .unwrap_or_default()
                     .to_owned(),
+                density: file
+                    .get("density")
+                    .and_then(|value| value.as_f64())
+                    .map(|value| value as f32),
             })
         })
         .collect();
@@ -257,15 +333,79 @@ fn read_android_manifest(manager: &ndk::asset::AssetManager) -> Option<AssetMani
 mod tests {
     use super::*;
 
+    fn entry(id: &str, density: Option<f32>) -> AssetEntry {
+        let path = match density {
+            Some(value) => format!("{id}@{value}x.png"),
+            None => id.to_owned(),
+        };
+        AssetEntry {
+            id: id.to_owned(),
+            path: path.clone(),
+            packaged: path,
+            bytes: 0,
+            sha256: String::new(),
+            density,
+        }
+    }
+
+    #[test]
+    fn resolves_asset_density_variants() {
+        let manifest = AssetManifest {
+            entries: vec![
+                entry("assets/icons/logo.png", None),
+                entry("assets/icons/logo.png", Some(2.0)),
+                entry("assets/icons/logo.png", Some(3.0)),
+            ],
+            window_icon: None,
+        };
+        assert_eq!(
+            manifest
+                .resolve("assets/icons/logo.png", 1.0)
+                .unwrap()
+                .density,
+            None
+        );
+        assert_eq!(
+            manifest
+                .resolve("assets/icons/logo.png", 2.0)
+                .unwrap()
+                .density,
+            Some(2.0)
+        );
+        assert_eq!(
+            manifest
+                .resolve("assets/icons/logo.png", 4.0)
+                .unwrap()
+                .density,
+            Some(3.0)
+        );
+        assert_eq!(
+            manifest.resolve("icons/logo.png", 2.0).unwrap().density,
+            Some(2.0)
+        );
+    }
+
+    #[test]
+    fn parses_density_manifest_entries() {
+        let manifest = parse_manifest(
+            r#"{"files":[{"id":"assets/logo.png","path":"assets/logo@2x.png","packaged":"assets/logo@2x.png","bytes":1,"sha256":"00","density":2.0}]}"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.entries[0].id, "assets/logo.png");
+        assert_eq!(manifest.entries[0].density, Some(2.0));
+    }
+
     #[test]
     fn verifies_asset_bytes_and_hash() {
         let bytes = b"asset";
         let digest = format!("{:x}", Sha256::digest(bytes));
         let entry = AssetEntry {
+            id: "assets/a.txt".to_owned(),
             path: "assets/a.txt".to_owned(),
             packaged: "assets/a.txt".to_owned(),
             bytes: bytes.len() as u64,
             sha256: digest,
+            density: None,
         };
         assert!(entry.verify(bytes));
         assert!(!entry.verify(b"other"));

@@ -2,6 +2,7 @@
 
 pub mod style;
 pub mod font;
+pub use font::{register_font, register_font_bytes, FontError};
 pub mod annotated;
 pub mod decor;
 pub mod transformation;

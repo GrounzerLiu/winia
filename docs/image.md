@@ -15,6 +15,22 @@
 | `Image::asset(path)` | `Image(ImageBitmap)` | 通过应用 AssetBundle 的逻辑路径加载 |
 | `Image::svg(data)` | `Image(ImageVector)` | SVG 文档字符串 |
 
+### 1.1.1 Density variants
+
+Asset images may be supplied at multiple densities:
+
+```text
+assets/icons/logo.png       1x
+assets/icons/logo@2x.png    2x
+assets/icons/logo@3x.png    3x
+assets/icons/2x/logo.png    2x
+```
+
+`Image::asset("assets/icons/logo.png")` selects the closest variant for the window density:
+an exact match first, then the smallest density at or above the target, then the largest
+available density. SVG assets are not density-selected. The decoded cache key includes the
+selected density.
+
 ### 1.2 链式参数
 
 | 方法 | 对标 | 说明 |

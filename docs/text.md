@@ -104,6 +104,17 @@ the plain leaf draws it now (the `TextStyle` flags used to reach only `RichText`
 **`font_family`** — a family NAME handed to Skia's font collection. `RichText` takes a list of names;
 `Text` takes one.
 
+Asset fonts are registered before the first text renders:
+
+```rust
+winia::text::register_font("Inter", "assets/fonts/Inter-Regular.ttf")?;
+```
+
+The asset path is resolved lazily, so registration may run before the application event loop
+initializes the asset bundle. The font collection is rebuilt when the font epoch changes; a
+missing or invalid font is reported through `log::warn!` and falls back to the system collection.
+`register_font_bytes` is available for tests and embedded fonts.
+
 Currency: the leaf declares its visual inputs with `ctx.changed` (21 of them, one per resolved field),
 AND every parameter rides the payload: `TextContent` carries 17 fields and `TextPaint` the six
 paint-only ones, so a

@@ -227,7 +227,7 @@ enum DecodeKey {
     SvgPath(Arc<str>, PathFillType),
     Doc(Arc<str>),
     File(Arc<str>),
-    Asset(Arc<str>),
+    Asset(Arc<str>, u32),
 }
 
 /// Decode cache TTL: refreshed every 5 seconds for success and failure alike — editing a file during
@@ -244,7 +244,11 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
         IconSource::SvgPath { data, fill_type } => DecodeKey::SvgPath(data.clone(), *fill_type),
         IconSource::Svg(data) => DecodeKey::Doc(data.clone()),
         IconSource::File(path) => DecodeKey::File(path.clone()),
-        IconSource::Asset(path) => DecodeKey::Asset(path.clone()),
+        IconSource::Asset(path) => {
+            let target = crate::runtime::density::current_density().density;
+            let selected = crate::assets::resolved_density(path, target).unwrap_or(target);
+            DecodeKey::Asset(path.clone(), (selected * 100.0).round() as u32)
+        }
         // A symbol has no bytes to decode: it is rasterised from the embedded variable font by
         // `symbol_blob`, so this cache has nothing to hold for it — and nothing to hand back.
         // Gated on the same features as the variant itself: without a symbol feature `IconSource` has no
@@ -300,7 +304,8 @@ fn decode_file(path: &str) -> Option<DecodedIcon> {
 }
 
 fn decode_asset(path: &str) -> Option<DecodedIcon> {
-    let data = crate::assets::load(path)?;
+    let density = crate::runtime::density::current_density().density;
+    let data = crate::assets::load_at(path, density)?;
     decode_bytes(&data, path)
 }
 
