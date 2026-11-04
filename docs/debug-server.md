@@ -10,7 +10,7 @@ UI 自动化测试与交互问题排查的基础设施。随 `run_app!` 自动�
 # 运行任何 example / 应用时加上 feature
 cargo run -p winia --example navigation_rail_demo --features debug-server
 
-# 端口通过环境变量隔离（并行测试/多实例必备），默认 9998
+# 起始端口（并行测试/多实例必备），默认 9998；占用时自动向后搜索
 WINIA_DEBUG_PORT=10077 cargo run --features debug-server ...
 ```
 
@@ -18,8 +18,18 @@ WINIA_DEBUG_PORT=10077 cargo run --features debug-server ...
 
 | 通道 | 地址 | 适用场景 |
 |------|------|---------|
-| WebSocket | `ws://127.0.0.1:$WINIA_DEBUG_PORT` | 脚本驱动（Python + websockets） |
+| WebSocket | `ws://127.0.0.1:<实际端口>` | 脚本驱动（Python + websockets） |
 | stdin | 进程标准输入，每行一条命令 | 手动验证：`echo 'c 190 130' \| ./app` |
+
+## 端口搜索与发现
+
+- `WINIA_DEBUG_PORT` 是起始端口，默认 9998。端口被占用时，服务端依次尝试 +1 到 +100，实际端口打印为
+  `[DevTools] WebSocket → ws://localhost:<port>`。
+- 设置 `WINIA_DEBUG_PORT_FILE=/path/to/port` 后，服务端会把实际端口以一行十进制写入该文件，方便工具
+  发现。
+- 并行实例可以设置不同的起始端口或不同的 port file，互不冲突。
+- Android 应用无法通过 `am start` 接收环境变量；主机侧工具应从 logcat 的 `RustStdoutStderr` 行解析
+  `localhost:<port>`，再做 `adb forward`。
 
 ## 命令参考
 

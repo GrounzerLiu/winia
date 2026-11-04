@@ -3,8 +3,8 @@
 //! stdin:  echo 'c 190 130' | ./app   # click
 //!         echo t | ./app              # print the UI tree
 //!         echo r | ./app              # request a screenshot
-//! WebSocket: ws://127.0.0.1:9998 (override with WINIA_DEBUG_PORT — UI tests run in
-//! parallel and need isolation)
+//! WebSocket: ws://127.0.0.1:9998 (WINIA_DEBUG_PORT is the starting port; occupied
+//! ports are skipped so parallel UI tests and dev instances can coexist)
 //!         wscat -c ws://localhost:9998 -> type c 190 130
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
@@ -852,17 +852,53 @@ pub fn start_ws_server() {
         return;
     };
     handle.spawn(async move {
-        // The port is configurable (WINIA_DEBUG_PORT) so parallel UI tests stay isolated; default 9998.
-        let port: u16 = std::env::var("WINIA_DEBUG_PORT")
+        // WINIA_DEBUG_PORT is the starting port. If it is occupied, scan forward so
+        // parallel tests and dev instances can coexist. WINIA_DEBUG_PORT_FILE, when
+        // set, receives the actual selected port for discovery by tooling.
+        let start: u16 = std::env::var("WINIA_DEBUG_PORT")
             .ok()
-            .and_then(|s| s.parse().ok())
+            .and_then(|value| value.parse().ok())
+            .filter(|port| *port != 0)
             .unwrap_or(9998);
-        let addr = format!("127.0.0.1:{port}");
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => { eprintln!("[DevTools] ws bind failed: {e}"); return; }
+        let mut listener = None;
+        let mut selected = start;
+        for offset in 0..=100u16 {
+            let port = start.saturating_add(offset);
+            if port == 0 {
+                continue;
+            }
+            match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(bound) => {
+                    selected = port;
+                    listener = Some(bound);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+                Err(error) => {
+                    eprintln!("[DevTools] ws bind failed at {port}: {error}");
+                    return;
+                }
+            }
+        }
+        let Some(listener) = listener else {
+            eprintln!(
+                "[DevTools] no free WebSocket port in {}..={}",
+                start,
+                start.saturating_add(100)
+            );
+            return;
         };
-        eprintln!("[DevTools] WebSocket → ws://localhost:{port}");
+        if let Some(path) = std::env::var_os("WINIA_DEBUG_PORT_FILE").filter(|value| !value.is_empty()) {
+            if let Err(error) =
+                std::fs::write(std::path::Path::new(&path), format!("{selected}\n"))
+            {
+                eprintln!(
+                    "[DevTools] cannot write port file {}: {error}",
+                    std::path::Path::new(&path).display()
+                );
+            }
+        }
+        eprintln!("[DevTools] WebSocket → ws://localhost:{selected}");
         while let Ok((stream, _)) = listener.accept().await {
             if is_shutdown() { break; }
             tokio::spawn(handle_ws(stream));
