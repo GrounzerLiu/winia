@@ -103,7 +103,7 @@ pub type SoftBufferSurface = softbuffer::Surface<Arc<Box<dyn Window>>, Arc<Box<d
 
 pub trait SkiaWindowTrait: Deref<Target=dyn Window> + AsRef<dyn Window> {
     fn destroy_surface(&mut self);
-    fn recreate_surface(&mut self);
+    fn recreate_surface(&mut self, event_loop: &dyn winit::event_loop::ActiveEventLoop);
     fn resize(&mut self);
     fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface));
 }
@@ -237,13 +237,13 @@ impl SkiaWindowTrait for SkiaWindow {
         }
     }
 
-    fn recreate_surface(&mut self) {
+    fn recreate_surface(&mut self, event_loop: &dyn winit::event_loop::ActiveEventLoop) {
         match self {
-            SkiaWindow::Cpu(window) => window.recreate_surface(),
+            SkiaWindow::Cpu(window) => window.recreate_surface(event_loop),
             #[cfg(feature = "gl")]
-            SkiaWindow::Gl(window) => window.recreate_surface(),
+            SkiaWindow::Gl(window) => window.recreate_surface(event_loop),
             #[cfg(feature = "vulkan")]
-            SkiaWindow::Vulkan(window) => window.recreate_surface(),
+            SkiaWindow::Vulkan(window) => window.recreate_surface(event_loop),
         }
     }
 

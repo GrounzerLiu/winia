@@ -143,7 +143,7 @@ impl ApplicationHandler for AppState {
         // Rebuild any renderer that was dropped in destroy_surfaces before the first frame.
         for pw in self.windows.values_mut() {
             if let Some(ref mut sw) = pw.skia_window {
-                sw.recreate_surface();
+                sw.recreate_surface(event_loop);
                 sw.request_redraw();
             }
         }
@@ -151,13 +151,10 @@ impl ApplicationHandler for AppState {
 
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
         // The native window is about to disappear. Drop the backend surface while it is still valid;
-        // can_create_surfaces recreates it when Android has a new native window. GL keeps its
-        // renderer because its recreate_surface is still a no-op; Vulkan and CPU recreate properly.
+        // can_create_surfaces recreates it when Android has a new native window.
         for pw in self.windows.values_mut() {
             if let Some(ref mut sw) = pw.skia_window {
-                if sw.backend() != skiwin::Backend::Gl {
-                    sw.destroy_surface();
-                }
+                sw.destroy_surface();
             }
         }
     }

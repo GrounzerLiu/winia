@@ -44,7 +44,7 @@ impl SkiaWindowTrait for SoftSkiaWindow {
         self.soft_buffer_surface = None;
     }
 
-    fn recreate_surface(&mut self) {
+    fn recreate_surface(&mut self, _event_loop: &dyn winit::event_loop::ActiveEventLoop) {
         if let Err(e) = self.ensure_surface() {
             log::error!("[skiwin] could not recreate the softbuffer surface: {e}");
         }

@@ -56,7 +56,7 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
         }
     }
 
-    fn recreate_surface(&mut self) {
+    fn recreate_surface(&mut self, _event_loop: &dyn ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
         }
@@ -67,9 +67,6 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
     }
 
     fn resize(&mut self) {
-        if self.renderer.is_none() {
-            self.recreate_surface();
-        }
         if let Some(renderer) = self.renderer.as_mut() {
             // When the window size changes, the framebuffers need to be reallocated to match
             // before redrawing the window contents
@@ -78,9 +75,6 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
     }
 
     fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) {
-        if self.renderer.is_none() {
-            self.recreate_surface();
-        }
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.prepare_swapchain();
             renderer.draw(draw_fn)

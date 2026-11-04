@@ -12,7 +12,6 @@ use crate::gl::context::GlRenderContext;
 use crate::gl::renderer::GlRenderer;
 
 pub struct GlSkiaWindow {
-    #[allow(dead_code)]
     render_ctx: GlRenderContext,
     renderer: Option<GlRenderer>,
     window: Arc<Box<dyn Window>>,
@@ -39,8 +38,14 @@ impl SkiaWindowTrait for GlSkiaWindow {
         }
     }
 
-    fn recreate_surface(&mut self) {
-        // For GL, surface recreation is handled in prepare_swapchain
+    fn recreate_surface(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.renderer.is_some() {
+            return;
+        }
+        match self.render_ctx.renderer_for_window(event_loop, self.window.clone()) {
+            Ok(renderer) => self.renderer = Some(renderer),
+            Err(error) => log::error!("[skiwin] could not recreate the GL surface: {error}"),
+        }
     }
 
     fn resize(&mut self) {
