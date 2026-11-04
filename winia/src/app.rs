@@ -304,6 +304,7 @@ pub fn run_app_android(
 ) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
+    crate::assets::init_android(android_app.asset_manager());
     let event_loop = EventLoop::builder()
         .with_android_app(android_app)
         .build()
@@ -315,6 +316,8 @@ fn run_app_with_event_loop(
     event_loop: EventLoop,
     app: impl FnOnce(&mut ComposeCtx) + 'static,
 ) {
+    #[cfg(not(target_os = "android"))]
+    crate::assets::init_desktop_default();
     // Own the tokio runtime: effects (LaunchedEffect, debug WS server) need
     // `Handle::try_current()` during composition. Demos must NOT create their
     // own runtime (nesting `Runtime::new()` under an entered guard is a no-op

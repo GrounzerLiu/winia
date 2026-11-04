@@ -12,6 +12,7 @@
 |---|---|---|
 | `Image::new(source: IconSource)` | `Image(bitmap/painter)` | 复用 `IconSource`（统一解码缓存） |
 | `Image::file(path)` | `Image(ImageBitmap)` | 图片文件（png/jpg/jpeg/webp/bmp/svg，按扩展名解码） |
+| `Image::asset(path)` | `Image(ImageBitmap)` | 通过应用 AssetBundle 的逻辑路径加载 |
 | `Image::svg(data)` | `Image(ImageVector)` | SVG 文档字符串 |
 
 ### 1.2 链式参数

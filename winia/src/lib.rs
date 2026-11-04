@@ -29,6 +29,7 @@
 //! `OverlayAnimSpec` and the four presentation helpers they need with it, which places five things
 //! worse than it fixes one. So the edge is deliberate, narrow — one type — and recorded here.
 
+pub mod assets;
 pub mod runtime;
 pub mod unit;
 /// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。

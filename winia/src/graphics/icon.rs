@@ -71,6 +71,8 @@ pub enum IconSource {
     Svg(Arc<str>),
     /// An image file path (png/jpg/jpeg/webp/bmp/svg, decoded by extension).
     File(Arc<str>),
+    /// A logical path loaded through the application's AssetBundle.
+    Asset(Arc<str>),
     /// A Material Symbols variable-font symbol.
     #[cfg(any(
         feature = "material-symbols-outlined",
@@ -93,6 +95,10 @@ impl IconSource {
         IconSource::File(path.into())
     }
 
+    pub fn asset(path: impl Into<Arc<str>>) -> Self {
+        IconSource::Asset(path.into())
+    }
+
     #[cfg(any(
         feature = "material-symbols-outlined",
         feature = "material-symbols-rounded",
@@ -104,7 +110,7 @@ impl IconSource {
 
     /// Monochrome sources (SvgPath / Svg / Symbol) are tinted with the theme colour by default; File keeps its own colours.
     pub(crate) fn default_tinted(&self) -> bool {
-        !matches!(self, IconSource::File(_))
+        !matches!(self, IconSource::File(_) | IconSource::Asset(_))
     }
 
     /// True when the source carries no colour of its own, so `Tint::None` would leave it painted in the
@@ -140,6 +146,7 @@ impl IconSource {
             IconSource::SvgPath { .. } => Some((24.0, 24.0)),
             IconSource::Svg(data) => parse_view_box(data).or(Some((24.0, 24.0))),
             IconSource::File(path) => file_intrinsic_size(path),
+            IconSource::Asset(path) => asset_intrinsic_size(path),
             #[cfg(any(
                 feature = "material-symbols-outlined",
                 feature = "material-symbols-rounded",
@@ -219,6 +226,7 @@ enum DecodeKey {
     SvgPath(Arc<str>, PathFillType),
     Doc(Arc<str>),
     File(Arc<str>),
+    Asset(Arc<str>),
 }
 
 /// Decode cache TTL: refreshed every 5 seconds for success and failure alike — editing a file during
@@ -235,6 +243,7 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
         IconSource::SvgPath { data, fill_type } => DecodeKey::SvgPath(data.clone(), *fill_type),
         IconSource::Svg(data) => DecodeKey::Doc(data.clone()),
         IconSource::File(path) => DecodeKey::File(path.clone()),
+        IconSource::Asset(path) => DecodeKey::Asset(path.clone()),
         // A symbol has no bytes to decode: it is rasterised from the embedded variable font by
         // `symbol_blob`, so this cache has nothing to hold for it — and nothing to hand back.
         // Gated on the same features as the variant itself: without a symbol feature `IconSource` has no
@@ -259,6 +268,7 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
             }
             IconSource::Svg(data) => decode_svg_str(data),
             IconSource::File(path) => decode_file(path),
+            IconSource::Asset(path) => decode_asset(path),
             // Unreachable — the match above returns early for a symbol — but written out because `match`
             // must be exhaustive, and a catch-all here would silently absorb a future variant instead.
             #[cfg(any(
@@ -285,17 +295,26 @@ fn decode_svg_str(data: &str) -> Option<DecodedIcon> {
 
 fn decode_file(path: &str) -> Option<DecodedIcon> {
     let data = std::fs::read(path).ok()?;
+    decode_bytes(&data, path)
+}
+
+fn decode_asset(path: &str) -> Option<DecodedIcon> {
+    let data = crate::assets::load(path)?;
+    decode_bytes(&data, path)
+}
+
+fn decode_bytes(data: &[u8], path: &str) -> Option<DecodedIcon> {
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     if ext == "svg" {
-        let text = String::from_utf8(data).ok()?;
+        let text = String::from_utf8(data.to_vec()).ok()?;
         return decode_svg_str(&text);
     }
     if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp") {
-        let image = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(&data))?;
+        let image = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(data))?;
         // Pre-generate the mipmap chain: FilterQuality::Medium/High's MipmapMode needs one
         // (Skia falls back to plain linear filtering for an image without mipmaps); Low is unaffected.
         // The decode cache guarantees it is generated once, not recomputed per paint.
@@ -324,6 +343,14 @@ fn file_intrinsic_size(path: &str) -> Option<(f32, f32)> {
     };
     cache.insert(path.to_string(), (Instant::now(), size));
     size
+}
+
+fn asset_intrinsic_size(path: &str) -> Option<(f32, f32)> {
+    let decoded = decoded_icon(&IconSource::Asset(Arc::from(path)))?;
+    match &*decoded {
+        DecodedIcon::Bitmap { width, height, .. } => Some((*width, *height)),
+        DecodedIcon::Svg { width, height, .. } => Some((*width, *height)),
+    }
 }
 
 /// Extract the intrinsic size from an SVG string: prefer the `width`/`height` attributes (the SVG

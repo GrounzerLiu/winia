@@ -61,6 +61,7 @@ serde_json = "1"
 arboard = "3"
 
 [target.'cfg(target_os = "android")'.dependencies]
+ndk = "0.9"
 # Skia on Android needs text layout; the CPU/softbuffer path is enough for the first IME bring-up.
 # Add "gl"/"vulkan" here when the Android GPU backend is verified on a device.
 # webp is not used by the UI itself: it selects the published prebuilt archive that also carries

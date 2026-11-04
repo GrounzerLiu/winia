@@ -522,7 +522,7 @@ pub(super) fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection,
     // same value, and a dynamic tint costs no recomposition.
     let tint = spec.tint.as_ref().map(|t| t.eval());
     match &spec.source {
-        IconSource::SvgPath { .. } | IconSource::Svg(_) | IconSource::File(_) => {
+        IconSource::SvgPath { .. } | IconSource::Svg(_) | IconSource::File(_) | IconSource::Asset(_) => {
             if let Some(decoded) = decoded_icon(&spec.source) {
                 match decoded.as_ref() {
                     DecodedIcon::Bitmap { image, width, height } => {

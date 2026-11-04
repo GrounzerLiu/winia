@@ -30,6 +30,7 @@ impl AppState {
 
     pub(crate) fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, pending: PendingWindow) {
         let mut a = winit::window::WindowAttributes::default();
+        a.window_icon = crate::assets::window_icon();
         a.title = if pending.title.is_empty() { "Winia".into() } else { pending.title.clone() };
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(pending.width as f64, pending.height as f64)));
         a.visible = false;

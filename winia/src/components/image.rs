@@ -129,6 +129,11 @@ impl Image {
         Self::new(IconSource::svg(data))
     }
 
+    /// 从应用 AssetBundle 的逻辑路径创建。
+    pub fn asset(path: impl Into<std::sync::Arc<str>>) -> Self {
+        Self::new(IconSource::asset(path))
+    }
+
     /// 修饰符链（尺寸/裁剪等——覆盖固有尺寸布局）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
