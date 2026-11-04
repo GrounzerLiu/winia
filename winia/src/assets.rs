@@ -75,12 +75,18 @@ pub fn load_at(logical: &str, density: f32) -> Option<Vec<u8>> {
 /// Resolve a user-supplied path to the manifest's canonical logical path.
 pub fn canonical_path(logical: &str) -> String {
     let normalized = normalize(logical);
-    if let Some(entry) = manifest().and_then(|manifest| {
-        manifest
-            .find(&normalized)
-            .or_else(|| manifest.resolve(&normalized, 1.0))
-    }) {
-        return entry.id.clone();
+    if let Some(manifest) = manifest() {
+        if let Some(entry) = manifest.find(&normalized) {
+            // Preserve an explicit variant path so it is not re-resolved by window density.
+            return if entry.density.is_some() {
+                entry.path.clone()
+            } else {
+                entry.id.clone()
+            };
+        }
+        if let Some(entry) = manifest.resolve(&normalized, 1.0) {
+            return entry.id.clone();
+        }
     }
     normalized
 }
