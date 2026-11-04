@@ -9,6 +9,7 @@
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
@@ -18,6 +19,7 @@ static DEBUG_STATE: Mutex<Option<DebugData>> = Mutex::new(None);
 /// WindowId used for legacy stdin/WebSocket requests with target 0.
 static LEGACY_TARGET: Mutex<Option<u64>> = Mutex::new(None);
 static SCREENSHOT_TARGET: Mutex<Option<u64>> = Mutex::new(None);
+static DEBUG_PORT: AtomicU16 = AtomicU16::new(0);
 
 struct DebugRuntime {
     wake_callback: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -660,6 +662,80 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
     parts.join("|")
 }
 
+fn debug_info_json() -> String {
+    let env = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.is_empty())
+    };
+    let mut app = env("WINIA_DEBUG_APP_NAME");
+    let mut version = env("WINIA_DEBUG_APP_VERSION");
+    let mut id = env("WINIA_DEBUG_APP_ID");
+
+    #[cfg(target_os = "android")]
+    {
+        let package = std::fs::read("/proc/self/cmdline").ok().and_then(|bytes| {
+            let candidate = String::from_utf8_lossy(&bytes)
+                .split('\0')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            (!candidate.is_empty()).then_some(candidate)
+        });
+        if let Some(package) = package.as_deref() {
+            let path = format!("/data/data/{package}/files/winia-debug-info.json");
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if app.is_none() {
+                        app = value
+                            .get("app")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned);
+                    }
+                    if version.is_none() {
+                        version = value
+                            .get("version")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned);
+                    }
+                    if id.is_none() {
+                        id = value
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned);
+                    }
+                }
+            }
+        }
+        if app.is_none() {
+            app = package.clone();
+        }
+        if id.is_none() {
+            id = package;
+        }
+    }
+
+    let app = app.or_else(|| {
+        std::env::current_exe().ok().and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+    });
+    let target = env("WINIA_DEBUG_TARGET").unwrap_or_else(|| std::env::consts::OS.to_owned());
+    serde_json::json!({
+        "app": app,
+        "version": version,
+        "id": id,
+        "target": target,
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "pid": std::process::id(),
+        "port": DEBUG_PORT.load(Ordering::Relaxed),
+    })
+    .to_string()
+}
+
 // stdin channel
 
 pub fn start_stdin_channel() {
@@ -746,6 +822,7 @@ pub fn start_stdin_channel() {
                     // apart from render timing.
                     println!("TREE:{}", all_trees_json());
                 }
+                "info" => println!("INFO:{}", debug_info_json()),
                 // sem: the SEMANTICS tree of the last rendered frame — role/name/state per element,
                 // what a screen reader would be told. Same prefix convention as TREE:.
                 "sem" => {
@@ -888,6 +965,7 @@ pub fn start_ws_server() {
             );
             return;
         };
+        DEBUG_PORT.store(selected, Ordering::Relaxed);
         if let Some(path) = std::env::var_os("WINIA_DEBUG_PORT_FILE").filter(|value| !value.is_empty()) {
             if let Err(error) =
                 std::fs::write(std::path::Path::new(&path), format!("{selected}\n"))
@@ -977,6 +1055,9 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             }
             "t" => {
                 let _ = write.send(Message::text(all_trees_json())).await;
+            }
+            "info" => {
+                let _ = write.send(Message::text(debug_info_json())).await;
             }
             "sem" => {
                 let id = legacy_target().unwrap_or(0);

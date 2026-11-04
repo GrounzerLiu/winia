@@ -30,6 +30,10 @@ WINIA_DEBUG_PORT=10077 cargo run --features debug-server ...
 - 并行实例可以设置不同的起始端口或不同的 port file，互不冲突。
 - Android 应用无法通过 `am start` 接收环境变量；主机侧工具应从 logcat 的 `RustStdoutStderr` 行解析
   `localhost:<port>`，再做 `adb forward`。
+- 连接任意调试端口后发送 `info` 即可识别对应应用。桌面端由 `winia dev` 注入
+  `WINIA_DEBUG_APP_NAME`、`WINIA_DEBUG_APP_VERSION`、`WINIA_DEBUG_APP_ID`、`WINIA_DEBUG_TARGET`；
+  Android 由 `winia dev` 把同一组信息写入应用私有 `files/winia-debug-info.json`，无文件时
+  `app`/`id` 回退为进程包名，`version` 可能为空。
 
 ## 命令参考
 
@@ -44,6 +48,8 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `r` | 请求截图：置标志 + 唤醒循环，下一帧渲染后像素可取 | `screenshot <W>x<H>` |
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |
 | `t` | 读全部窗口布局树 JSON | JSON 字符串 |
+| `info` | 返回应用识别信息 JSON：`app`、`version`、`id`、`target`、`platform`、`arch`、`pid`、`port` | JSON 字符串（stdin: `INFO:` 前缀） |
+| `info` | 返回应用识别信息 JSON：`app`、`version`、`id`、`target`、`platform`、`arch`、`pid`、`port` | JSON 字符串（stdin: `INFO:` 前缀） |
 | `px <x> <y>` | one pixel of the current frame as TEXT — `WxH:x y r g b a`, `WxH:out-of-frame` or `none`. The line form of `p`, usable over the stdin channel (a UI test) and easy for a script to parse; the frame must be captured first (`r`). Coordinates are FRAME (physical) pixels — the exception to the note below — and `WxH` comes back with the answer, so a caller that only knows logical coordinates can scale. The four color bytes are RGBA, premultiplied by alpha. The layout tree cannot replace it: a theme-derived color is resolved at build time, so every `bg(...)` prints as `<dynamic>`. | `<W>x<H>:…`（不带 `PIXEL:` 前缀） |
 | `sem` | The SEMANTICS tree of the last rendered frame — role / name / state / bounds per accessible element, once per window: `{"main":[…],"overlays":[{"id":N,"tree":[…]}]}`. Published on every rendered frame while this feature is on, so it says what the frame that just drew declared, not what a later frame will. See `docs/semantics.md`. | JSON string (stdin: `SEMANTICS:` prefix) |
 | `fp` | 每帧的 compose+layout 轮数（环形缓冲 32 条）：`frames=<n> multi=<m> passes=<csv>`。唯一能区分"一帧内跑了 2 轮收敛"与"两帧各 1 轮"的通道——树查询看不到这个差别（查询被回答时帧已经过去了）。测输入前先 `fpc` 清空。 | `FRAME_PASSES:…` |
