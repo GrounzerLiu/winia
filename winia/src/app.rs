@@ -39,10 +39,27 @@ pub(crate) fn drag_trace_enabled() -> bool {
     false
 }
 
+/// Window chrome choices the declaring app can make through the `Window` builder.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowOptions {
+    pub resizable: bool,
+    pub decorations: bool,
+}
+
+impl Default for WindowOptions {
+    fn default() -> Self {
+        Self {
+            resizable: true,
+            decorations: true,
+        }
+    }
+}
+
 pub(crate) struct PendingWindow {
     pub width: f32,
     pub height: f32,
     pub title: String,
+    pub options: WindowOptions,
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
@@ -215,7 +232,7 @@ fn take_redraw_requests() -> Vec<u64> {
 }
 
 pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
-    open_window_with_saveable_key(width, height, title, content, on_close, created_id, None, theme);
+    open_window_with_saveable_key(width, height, title, WindowOptions::default(), content, on_close, created_id, None, theme);
 }
 
 /// [`open_window_with_title`] plus a STABLE key for saveable state.
@@ -223,8 +240,8 @@ pub fn open_window_with_title(width: f32, height: f32, title: String, content: O
 /// The key has to survive a close: it is what a re-opened window is matched against. `created_id`
 /// cannot do that job (a fresh one is minted per window), so the declarative `Window` passes the
 /// salted key of its own call site.
-pub fn open_window_with_saveable_key(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, saveable_key: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
-    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, saveable_key, theme });
+pub fn open_window_with_saveable_key(width: f32, height: f32, title: String, options: WindowOptions, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, saveable_key: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
+    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, options, content, on_close, created_id, saveable_key, theme });
     wake_impl();
 }
 

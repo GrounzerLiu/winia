@@ -36,6 +36,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// The declarative window builder.
 pub struct Window {
     state: WindowState,
+    options: crate::app::WindowOptions,
     on_close: Option<Box<dyn FnMut() + Send>>,
 }
 
@@ -53,7 +54,11 @@ impl Default for WindowState {
 
 impl Window {
     pub fn new() -> Self {
-        Window { state: WindowState::default(), on_close: None }
+        Window {
+            state: WindowState::default(),
+            options: crate::app::WindowOptions::default(),
+            on_close: None,
+        }
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
@@ -64,6 +69,18 @@ impl Window {
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.state.width = width;
         self.state.height = height;
+        self
+    }
+
+    /// Whether the OS may resize the window (drag its edges).
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.options.resizable = resizable;
+        self
+    }
+
+    /// Whether the window keeps its title bar and border.
+    pub fn decorations(mut self, decorations: bool) -> Self {
+        self.options.decorations = decorations;
         self
     }
 
@@ -198,7 +215,7 @@ impl Window {
             // content in it, so this stays a plain closure.
             // The saveable key is the DECLARATION SITE's salted key, not the freshly minted window id:
             // a re-opened window has to be matched against the site that declared it.
-            app::open_window_with_saveable_key(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
+            app::open_window_with_saveable_key(w, h, self.state.title.clone(), self.options, Some(Box::new(move |ctx| {
                 sub_window_content(ctx, &content);
             })), wrapped, Some(id), Some(key), Some(theme));
         }

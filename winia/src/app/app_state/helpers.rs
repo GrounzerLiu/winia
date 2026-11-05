@@ -33,6 +33,8 @@ impl AppState {
         a.window_icon = crate::assets::window_icon();
         a.title = if pending.title.is_empty() { "Winia".into() } else { pending.title.clone() };
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(pending.width as f64, pending.height as f64)));
+        a.resizable = pending.options.resizable;
+        a.decorations = pending.options.decorations;
         a.visible = false;
         let w = Arc::new(event_loop.create_window(a).expect("window"));
         let window_id = w.id();
