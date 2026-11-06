@@ -168,6 +168,8 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             // shown instantly — but when there IS an exit spec, set progress straight to 1.0, since the exit needs 1→0).
             // Share the main window's AdaptiveContext so the overlay reads the same window_size/density as the main window.
             let mut composer = Composer::new();
+            #[cfg(target_os = "android")]
+            composer.set_android_app(pw.composer.android_app.clone());
             composer.adaptive = pw.composer.adaptive.clone();
             // The overlay is its own composer, but it belongs to the same window: frame_clock()
             // inside it has to wait on THIS window's frames rather than on window 0's.

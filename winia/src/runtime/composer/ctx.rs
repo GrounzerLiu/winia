@@ -13,6 +13,62 @@ pub struct ComposeCtx<'a> {
     composer: &'a mut Composer,
 }
 
+/// Safe Android-facing view of the activity that owns this composition.
+///
+/// The raw AndroidApp remains available through AndroidUi::app for low-level integrations.
+/// Event-loop and input-iteration methods are intentionally not wrapped here: winit owns
+/// poll_events and input_events_iter, so UI code must not compete for them.
+#[cfg(target_os = "android")]
+pub struct AndroidUi<'a> {
+    app: &'a winit::platform::android::activity::AndroidApp,
+}
+
+#[cfg(target_os = "android")]
+impl<'a> AndroidUi<'a> {
+    pub(crate) fn new(app: &'a winit::platform::android::activity::AndroidApp) -> Self {
+        Self { app }
+    }
+
+    /// The underlying activity handle for APIs not covered by this facade.
+    pub fn app(&self) -> &winit::platform::android::activity::AndroidApp {
+        self.app
+    }
+
+    /// The device's Android SDK level.
+    pub fn sdk_version(&self) -> i32 {
+        winit::platform::android::activity::AndroidApp::sdk_version()
+    }
+
+    /// Show the soft keyboard.
+    pub fn show_keyboard(&self) {
+        self.app.show_soft_input(false);
+    }
+
+    /// Hide the soft keyboard.
+    pub fn hide_keyboard(&self) {
+        self.app.hide_soft_input(false);
+    }
+
+    /// The window content rectangle as (left, top, right, bottom).
+    pub fn content_rect(&self) -> (i32, i32, i32, i32) {
+        let rect = self.app.content_rect();
+        (rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    /// Display density in dpi, when the platform reports one.
+    pub fn density(&self) -> Option<u32> {
+        self.app.config().density()
+    }
+
+    /// Run a closure on the Java main/UI thread.
+    pub fn run_on_java_main_thread<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.app.run_on_java_main_thread(Box::new(f));
+    }
+}
+
 impl<'a> ComposeCtx<'a> {
     pub(crate) fn new(composer: &'a mut Composer) -> Self {
         Self {
@@ -26,6 +82,16 @@ impl<'a> ComposeCtx<'a> {
     /// clock wakes a waiter on ANY window's frame, while this one wakes it only on its own.
     pub fn frame_clock(&self) -> crate::effect::FrameClock {
         crate::effect::FrameClock::for_window(self.composer.window_id)
+    }
+
+    /// Access the Android activity that owns this composition.
+    ///
+    /// Returns None on desktop and on composers not attached to an Android window (for example a
+    /// test composer). UI code should prefer the safe facade; raw activity methods remain available
+    /// through AndroidUi::app.
+    #[cfg(target_os = "android")]
+    pub fn android(&self) -> Option<AndroidUi<'_>> {
+        self.composer.android_app.as_ref().map(AndroidUi::new)
     }
 
     /// Return the Window lifecycle context owned by this Composer.

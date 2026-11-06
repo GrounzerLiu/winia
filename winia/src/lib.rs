@@ -90,6 +90,8 @@ pub mod debug;
 
 // 公开核心类型
 pub use runtime::composer::{ComposeCtx, Composer};
+#[cfg(target_os = "android")]
+pub use runtime::composer::AndroidUi;
 pub use runtime::movable::MovableContent;
 pub use runtime::state::{
     Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
@@ -102,6 +104,8 @@ pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_st
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
     pub use crate::runtime::composer::ComposeCtx;
+    #[cfg(target_os = "android")]
+    pub use crate::runtime::composer::AndroidUi;
     pub use crate::runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
     pub use crate::runtime::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,

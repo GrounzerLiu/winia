@@ -157,6 +157,9 @@ pub struct Composer {
     /// The winit window this composer belongs to; 0 when unwired (a test, an overlay composer).
     /// `ComposeCtx::frame_clock` hands out this window's clock.
     pub(crate) window_id: u64,
+    /// Android activity handle for UI code; set when a window is created on Android.
+    #[cfg(target_os = "android")]
+    pub(crate) android_app: Option<winit::platform::android::activity::AndroidApp>,
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
@@ -293,6 +296,8 @@ impl Composer {
             known_registrars: Vec::new(),
             lifecycle: crate::runtime::lifecycle::LifecycleState::default(),
             window_id: 0,
+            #[cfg(target_os = "android")]
+            android_app: None,
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
@@ -346,6 +351,15 @@ impl Composer {
 
     pub(crate) fn focus_window(&self, window_id: u64) -> crate::modifier::FocusWindowGuard {
         crate::modifier::focus_window(window_id)
+    }
+
+    /// Attach the Android activity handle to this window's composition context.
+    #[cfg(target_os = "android")]
+    pub(crate) fn set_android_app(
+        &mut self,
+        android_app: Option<winit::platform::android::activity::AndroidApp>,
+    ) {
+        self.android_app = android_app;
     }
 
     pub(crate) fn take_focus_requests(&self) -> Vec<u64> {

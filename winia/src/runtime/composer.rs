@@ -280,6 +280,8 @@ mod slot_table;
 mod transactions;
 
 pub use ctx::ComposeCtx;
+#[cfg(target_os = "android")]
+pub use ctx::AndroidUi;
 pub use engine::Composer;
 pub use slot_table::GroupStatus;
 pub(crate) use slot_table::{SlotStatus, SlotTable};

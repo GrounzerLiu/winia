@@ -309,7 +309,7 @@ fn take_pending_windows() -> Vec<PendingWindow> {
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
-    run_app_with_event_loop(event_loop, app);
+    run_app_with_event_loop(event_loop, app, PlatformState::default());
 }
 
 /// Android entry point: the event loop must be built with the `AndroidApp` passed to
@@ -321,17 +321,24 @@ pub fn run_app_android(
 ) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
+    // Keep a clone for UI access after the event loop takes ownership of the original.
+    let ui_android_app = android_app.clone();
     crate::assets::init_android(android_app.asset_manager());
     let event_loop = EventLoop::builder()
         .with_android_app(android_app)
         .build()
         .expect("event loop");
-    run_app_with_event_loop(event_loop, app);
+    run_app_with_event_loop(
+        event_loop,
+        app,
+        PlatformState { android_app: Some(ui_android_app) },
+    );
 }
 
 fn run_app_with_event_loop(
     event_loop: EventLoop,
     app: impl FnOnce(&mut ComposeCtx) + 'static,
+    platform: PlatformState,
 ) {
     #[cfg(not(target_os = "android"))]
     crate::assets::init_desktop_default();
@@ -358,6 +365,7 @@ fn run_app_with_event_loop(
     debug::start_stdin_channel();
     debug::start_ws_server();
     let state = AppState {
+        platform,
         init: Some(Box::new(app)),
         was_animating: false,
         saveable: HashMap::new(),

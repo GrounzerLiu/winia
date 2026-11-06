@@ -1,8 +1,23 @@
 use super::*;
 
+// -- PlatformState --
+
+/// Platform handle shared by every window in this app run.
+///
+/// AndroidApp is cloned into each composer when a window is created. It is intentionally owned by
+/// the run state instead of a process-wide static: android_main can be entered again after the
+/// Activity is recreated, and the old AndroidApp must not survive that transition.
+#[derive(Default)]
+pub(crate) struct PlatformState {
+    #[cfg(target_os = "android")]
+    pub(crate) android_app: Option<winit::platform::android::activity::AndroidApp>,
+}
+
 // -- AppState --
 
 pub(crate) struct AppState {
+    /// Platform handles, including the AndroidApp used by Android UI code.
+    pub(crate) platform: PlatformState,
     /// Windows that have been created.
     pub(crate) windows: HashMap<WindowId, PerWindow>,
     /// Saveable values of windows that have closed, keyed by `created_id`: a window recreated with

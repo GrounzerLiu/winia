@@ -7,6 +7,8 @@ impl AppState {
         if self.windows.is_empty() {
             if let Some(init) = self.init.take() {
                 let mut composer = Composer::new();
+                #[cfg(target_os = "android")]
+                composer.set_android_app(self.platform.android_app.clone());
                 composer.compose(|ctx| init(ctx));
                 // Temporary composer: `compose` already took the deps (registered in its slot_deps) —
                 // taking them again here is a defensive no-op (buffer empty) that resets DEP_MODE.
@@ -77,6 +79,9 @@ impl AppState {
                 as Box<dyn Fn(&mut ComposeCtx)>
         };
         let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
+        #[cfg(target_os = "android")]
+        pw.composer
+            .set_android_app(self.platform.android_app.clone());
         // What the window has drawn is what the cell says right now — its first frame is about to compose
         // with exactly this, and a default guess here would both re-run that frame for nothing and miss a
         // publish that changed a custom type scale back to the default.
