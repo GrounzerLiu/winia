@@ -70,6 +70,67 @@ impl Insets {
     }
 }
 
+/// Which system insets are currently visible.
+///
+/// A zero-sized inset can mean either "not visible" (the bar is hidden) or "this window has no such
+/// system area"; keeping visibility separate lets Android report the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InsetsVisibility(u8);
+
+impl InsetsVisibility {
+    const STATUS_BARS: u8 = 1 << 0;
+    const NAVIGATION_BARS: u8 = 1 << 1;
+    const IME: u8 = 1 << 2;
+    const DISPLAY_CUTOUT: u8 = 1 << 3;
+    const SYSTEM_GESTURES: u8 = 1 << 4;
+    const TAPPABLE_ELEMENTS: u8 = 1 << 5;
+
+    /// No inset is visible.
+    pub const fn none() -> Self {
+        Self(0)
+    }
+
+    /// Every known inset is visible.
+    pub const fn all() -> Self {
+        Self(0b11_1111)
+    }
+
+    pub(crate) fn set_source(&mut self, source: Source, visible: bool) {
+        let bit = match source {
+            Source::Status => Self::STATUS_BARS,
+            Source::Navigation => Self::NAVIGATION_BARS,
+            Source::Ime => Self::IME,
+            Source::Cutout => Self::DISPLAY_CUTOUT,
+            Source::Gestures => Self::SYSTEM_GESTURES,
+            Source::Tappable => Self::TAPPABLE_ELEMENTS,
+        };
+        if visible {
+            self.0 |= bit;
+        } else {
+            self.0 &= !bit;
+        }
+    }
+
+    pub(crate) fn source_visible(self, source: Source) -> bool {
+        let bit = match source {
+            Source::Status => Self::STATUS_BARS,
+            Source::Navigation => Self::NAVIGATION_BARS,
+            Source::Ime => Self::IME,
+            Source::Cutout => Self::DISPLAY_CUTOUT,
+            Source::Gestures => Self::SYSTEM_GESTURES,
+            Source::Tappable => Self::TAPPABLE_ELEMENTS,
+        };
+        self.0 & bit != 0
+    }
+
+    /// Mark one kind (including a composite kind) as visible or hidden.
+    pub fn set(&mut self, kind: InsetsKind, visible: bool) {
+        for source in kind.sources() {
+            self.set_source(*source, visible);
+        }
+    }
+}
+
 /// The window's insets, split by kind — Compose's WindowInsets object graph, as one value.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct WindowInsets {
@@ -79,6 +140,8 @@ pub struct WindowInsets {
     pub display_cutout: Insets,
     pub system_gestures: Insets,
     pub tappable_elements: Insets,
+    /// Visibility per system inset source.
+    pub visibility: InsetsVisibility,
 }
 
 impl WindowInsets {
@@ -105,6 +168,19 @@ impl WindowInsets {
     /// The part of the gesture area that the system always keeps for itself.
     pub fn mandatory_system_gestures(&self) -> Insets {
         self.display_cutout.max(self.system_gestures)
+    }
+
+    /// Whether the given inset kind is currently visible.
+    pub fn is_visible(&self, kind: InsetsKind) -> bool {
+        kind.sources()
+            .iter()
+            .any(|source| self.visibility.source_visible(*source))
+    }
+
+    /// Return a copy with the given kind marked visible or hidden.
+    pub fn with_visibility(mut self, kind: InsetsKind, visible: bool) -> Self {
+        self.visibility.set(kind, visible);
+        self
     }
 }
 
@@ -324,23 +400,53 @@ impl WindowInsetsController {
     /// The custom-decoration entry point: the height (and left/right, for a vertical bar) that the
     /// window's own status-bar replacement occupies.
     pub fn set_status_bar_insets(&self, insets: Insets) {
-        self.update(|window| window.status_bars = insets);
+        self.update(|window| {
+            window.status_bars = insets;
+            window.visibility.set_source(Source::Status, !insets.is_zero());
+        });
     }
 
     pub fn set_navigation_bar_insets(&self, insets: Insets) {
-        self.update(|window| window.navigation_bars = insets);
+        self.update(|window| {
+            window.navigation_bars = insets;
+            window
+                .visibility
+                .set_source(Source::Navigation, !insets.is_zero());
+        });
     }
 
     pub fn set_ime_insets(&self, insets: Insets) {
-        self.update(|window| window.ime = insets);
+        self.update(|window| {
+            window.ime = insets;
+            window.visibility.set_source(Source::Ime, !insets.is_zero());
+        });
     }
 
     pub fn set_display_cutout_insets(&self, insets: Insets) {
-        self.update(|window| window.display_cutout = insets);
+        self.update(|window| {
+            window.display_cutout = insets;
+            window
+                .visibility
+                .set_source(Source::Cutout, !insets.is_zero());
+        });
     }
 
     pub fn set_system_gesture_insets(&self, insets: Insets) {
-        self.update(|window| window.system_gestures = insets);
+        self.update(|window| {
+            window.system_gestures = insets;
+            window
+                .visibility
+                .set_source(Source::Gestures, !insets.is_zero());
+        });
+    }
+
+    pub fn set_tappable_element_insets(&self, insets: Insets) {
+        self.update(|window| {
+            window.tappable_elements = insets;
+            window
+                .visibility
+                .set_source(Source::Tappable, !insets.is_zero());
+        });
     }
 
     /// Whether two controllers drive the same window (element_param_eq).
@@ -434,6 +540,20 @@ mod tests {
         };
         assert_eq!(window.system_bars(), Insets::new(0.0, 24.0, 0.0, 48.0));
         assert_eq!(window.safe_drawing(), Insets::new(0.0, 24.0, 0.0, 300.0));
+    }
+
+    #[test]
+    fn visibility_is_independent_of_size() {
+        let hidden = WindowInsets::default().with_visibility(InsetsKind::StatusBars, false);
+        assert!(!hidden.is_visible(InsetsKind::StatusBars));
+        assert!(!hidden.is_visible(InsetsKind::SystemBars));
+
+        let visible = hidden
+            .with_visibility(InsetsKind::StatusBars, true)
+            .with_visibility(InsetsKind::NavigationBars, true);
+        assert!(visible.is_visible(InsetsKind::StatusBars));
+        assert!(visible.is_visible(InsetsKind::SystemBars));
+        assert!(!visible.is_visible(InsetsKind::Ime));
     }
 
     #[test]

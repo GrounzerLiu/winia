@@ -159,7 +159,12 @@ impl ApplicationHandler for AppState {
         }
     }
 
-    fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
+    fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        for pw in self.windows.values_mut() {
+            pw.sync_android_insets();
+        }
+    }
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
                 // If the debug server asked to shut down, exit the event loop.
@@ -406,6 +411,8 @@ impl AppState {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
+                #[cfg(target_os = "android")]
+                pw.sync_android_insets();
                 // Switching monitors may change the scale — refresh the frame interval too (debounced inside the method).
                 pw.refresh_frame_interval();
                 // Phase 4.1: a scale change must trigger recomposition — TextUnit::Px/Dimension::Px
@@ -755,10 +762,15 @@ impl AppState {
                             if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         }
                     }
-                    Ime::Enabled | Ime::Disabled => {}
+                    Ime::Enabled | Ime::Disabled => {
+                        #[cfg(target_os = "android")]
+                        pw.sync_android_insets();
+                    }
                 }
             }
             WindowEvent::SurfaceResized(s) => {
+                #[cfg(target_os = "android")]
+                pw.sync_android_insets();
                 // Adopt the event size directly. The old version ignored changes above 50% (to guard
                 // against stale winit #2094 events) — but maximising always changes more than 50%, so
                 // the whole maximise path was swallowed (size and layout stuck on the old values).

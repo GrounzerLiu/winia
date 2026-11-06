@@ -160,6 +160,8 @@ pub struct Composer {
     /// Android activity handle for UI code; set when a window is created on Android.
     #[cfg(target_os = "android")]
     pub(crate) android_app: Option<winit::platform::android::activity::AndroidApp>,
+    /// Insets controller owned by the window this composer belongs to.
+    pub(crate) window_insets: crate::window::insets::WindowInsetsController,
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
@@ -298,6 +300,7 @@ impl Composer {
             window_id: 0,
             #[cfg(target_os = "android")]
             android_app: None,
+            window_insets: crate::window::insets::WindowInsetsController::new(),
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
@@ -351,6 +354,19 @@ impl Composer {
 
     pub(crate) fn focus_window(&self, window_id: u64) -> crate::modifier::FocusWindowGuard {
         crate::modifier::focus_window(window_id)
+    }
+
+    /// Share the window-owned insets controller with this composer.
+    pub(crate) fn set_window_insets(
+        &mut self,
+        insets: crate::window::insets::WindowInsetsController,
+    ) {
+        self.window_insets = insets;
+    }
+
+    /// The window-owned insets controller.
+    pub(crate) fn window_insets(&self) -> crate::window::insets::WindowInsetsController {
+        self.window_insets.clone()
     }
 
     /// Attach the Android activity handle to this window's composition context.

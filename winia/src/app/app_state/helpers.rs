@@ -80,8 +80,11 @@ impl AppState {
         };
         let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
         #[cfg(target_os = "android")]
-        pw.composer
-            .set_android_app(self.platform.android_app.clone());
+        {
+            pw.composer
+                .set_android_app(self.platform.android_app.clone());
+            pw.sync_android_insets();
+        }
         // What the window has drawn is what the cell says right now — its first frame is about to compose
         // with exactly this, and a default guess here would both re-run that frame for nothing and miss a
         // publish that changed a custom type scale back to the default.

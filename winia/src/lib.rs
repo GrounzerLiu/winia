@@ -279,7 +279,9 @@ pub mod prelude {
     pub use crate::layout::{
         AbsoluteArrangement, Alignment, Arrangement, ContentAlignment, Constraints, LayoutDirection,
     };
-    pub use crate::window::insets::{Insets, InsetsKind, WindowInsetsController};
+    pub use crate::window::insets::{
+        Insets, InsetsKind, InsetsVisibility, WindowInsetsController,
+    };
     pub use crate::unit::{Dp, Sp, Offset, Size, Rect, IntOffset, IntSize, DpOffset, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::runtime::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{

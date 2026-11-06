@@ -4,6 +4,9 @@ use super::*;
 
 pub(crate) struct PerWindow {
     pub(crate) composer: Composer,
+    /// The window's insets controller: platform code writes system insets here, and the
+    /// composition reads the same controller through its composer.
+    pub(crate) insets: crate::window::insets::WindowInsetsController,
     pub(crate) skia_window: Option<SkiaWindow>,
     pub(crate) width: f32, pub(crate) height: f32,
     pub(crate) scale_factor: f64,
@@ -56,11 +59,29 @@ pub(crate) struct PerWindow {
 
 
 impl PerWindow {
+    /// Refresh this window's system insets from Android.
+    ///
+    /// The call reads the Activity's root WindowInsets over JNI. It is intentionally best-effort:
+    /// a window that is not attached yet, or a platform error, leaves the previous value untouched.
+    #[cfg(target_os = "android")]
+    pub(crate) fn sync_android_insets(&mut self) {
+        let Some(app) = self.composer.android_app.clone() else {
+            return;
+        };
+        match crate::platform::android::insets::read(&app) {
+            Ok(insets) => self.insets.set(insets),
+            Err(err) => log::warn!("failed to read Android window insets: {err:?}"),
+        }
+    }
+
     pub(crate) fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
         let theme = WindowThemeState::from_theme(theme);
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), cursor_icon: crate::input::PointerIcon::DEFAULT, pressed_interaction: None, focused_interaction_slot: None }
+        let insets = crate::window::insets::WindowInsetsController::new();
+        let mut composer = Composer::new();
+        composer.set_window_insets(insets.clone());
+        PerWindow { composer, insets, skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), cursor_icon: crate::input::PointerIcon::DEFAULT, pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 

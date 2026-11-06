@@ -17,9 +17,7 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
     // Each window owns its inset controller: the custom decoration (or the platform backend) writes
     // the window's status-bar/navigation-bar/IME insets into it, and the inset-padding modifiers read
     // them at measure time.
-    let insets = ctx
-        .remember(|| crate::window::insets::WindowInsetsController::new())
-        .get();
+    let insets = ctx.window_insets();
     crate::window::insets::LOCAL_WINDOW_INSETS.provides(insets, || {
         // The content fills the window with no default padding (full-screen pages such as Scaffold
         // need edge-to-edge).

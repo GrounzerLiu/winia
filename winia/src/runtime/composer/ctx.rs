@@ -96,6 +96,14 @@ impl<'a> ComposeCtx<'a> {
         crate::effect::FrameClock::for_window(self.composer.window_id)
     }
 
+    /// The insets controller owned by this composition's window.
+    ///
+    /// The platform backend writes system insets into this controller; UI code can read or
+    /// customize it. All composers belonging to one window share the same controller.
+    pub fn window_insets(&self) -> crate::window::insets::WindowInsetsController {
+        self.composer.window_insets()
+    }
+
     /// Access the Android activity that owns this composition.
     ///
     /// Returns None on desktop and on composers not attached to an Android window (for example a
