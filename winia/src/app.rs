@@ -323,6 +323,10 @@ pub fn run_app_android(
 
     // Keep a clone for UI access after the event loop takes ownership of the original.
     let ui_android_app = android_app.clone();
+    // Seed the system theme before the first composition. Android has no winit ThemeChanged
+    // event, and dark-light has no Android backend, so without this the first frame would always
+    // resolve to light.
+    crate::theme::note_platform_theme(crate::platform::android::theme::is_dark(&ui_android_app));
     crate::assets::init_android(android_app.asset_manager());
     let event_loop = EventLoop::builder()
         .with_android_app(android_app)

@@ -32,6 +32,12 @@ Four pieces:
    X11/Wayland never do) and winia records that as an OBSERVATION — `note_platform_theme` — not as a pin:
    pinning from the event would freeze the app on the first report and ignore every later system change.
    Resolution order is pinned mode → platform report → `dark_light::detect()`.
+
+   Android has neither a winit `ThemeChanged` event nor a `dark-light` backend. The app reads the
+   activity's resolved `uiMode` through `AndroidApp::config().ui_mode_night()`: once in `run_app_android`
+   before the first composition, then on every `ConfigChanged`/`resumed` pass. `AndroidUi` also exposes
+   `is_system_dark_theme()` for a query from UI code. No Java/JNI call is needed; android-activity keeps
+   the `ConfigurationRef` current when the activity receives a configuration change.
 2. **The window's theme cell** (`WindowTheme`): what the declaring tree provides — the INTENT to resolve
    (`ThemeSpec`: `Auto` follows, `Fixed(palette)` is an application's own choice), the TYPOGRAPHY and the
    DIRECTION — plus the palette the intent last resolved to, shared between the `Window` node that manages

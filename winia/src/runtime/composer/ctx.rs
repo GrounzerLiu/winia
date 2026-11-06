@@ -44,6 +44,11 @@ impl<'a> AndroidUi<'a> {
         self.sdk_version() >= level
     }
 
+    /// Whether Android currently resolves this app to dark mode.
+    pub fn is_system_dark_theme(&self) -> bool {
+        crate::platform::android::theme::is_dark(self.app)
+    }
+
     /// Show the soft keyboard.
     pub fn show_keyboard(&self) {
         self.app.show_soft_input(false);

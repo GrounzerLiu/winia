@@ -286,11 +286,14 @@ pub fn set_system_dark_mode(mode: Option<bool>) {
 /// would freeze the app on the first report (a later system change would then be ignored, because an
 /// explicit pin outranks detection by design). While an application has pinned a mode this only records
 /// the value — nothing the user sees can change.
-pub(crate) fn note_platform_theme(dark: bool) {
+pub(crate) fn note_platform_theme(dark: bool) -> bool {
     use std::sync::atomic::Ordering;
     let value = if dark { 1i8 } else { 0i8 };
     if SYSTEM_THEME_DARK.swap(value, Ordering::Relaxed) != value && system_theme_mode() == 0 {
         SYSTEM_THEME_EPOCH.fetch_add(1, Ordering::Relaxed);
+        true
+    } else {
+        false
     }
 }
 
@@ -303,7 +306,8 @@ fn detected_dark() -> bool {
     )
 }
 
-/// Android's dark-light fallback returns a Mode directly (it has no platform backend yet).
+/// Android has no dark-light backend. `run_app_android` records the real uiMode before the first
+/// composition; this fallback only covers a query made before that seed.
 #[cfg(target_os = "android")]
 fn detected_dark() -> bool {
     matches!(dark_light::detect(), dark_light::Mode::Dark)

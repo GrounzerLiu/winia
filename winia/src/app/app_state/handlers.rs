@@ -3,6 +3,10 @@ use crate::layout::node::ImeEdit;
 
 impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
+        // Android has no winit ThemeChanged event. ConfigChanged wakes this pass, so compare the
+        // latest uiMode here; a real move dirties every window's theme cell.
+        #[cfg(target_os = "android")]
+        self.sync_android_theme();
         // Wait + request_redraw drives the animation itself (avoids dropping frames when racing between Poll and Wait).
         event_loop.set_control_flow(ControlFlow::Wait);
         // Advance the animations on every pass (independent of windows, so multi-window and child-window animations advance correctly).
@@ -161,8 +165,11 @@ impl ApplicationHandler for AppState {
 
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
         #[cfg(target_os = "android")]
-        for pw in self.windows.values_mut() {
-            pw.sync_android_insets();
+        {
+            self.sync_android_theme();
+            for pw in self.windows.values_mut() {
+                pw.sync_android_insets();
+            }
         }
     }
 
@@ -1176,4 +1183,21 @@ fn dispatch_ime_edit(pw: &mut crate::app::per_window::PerWindow, edit: ImeEdit) 
         return true;
     }
     false
+}
+
+#[cfg(target_os = "android")]
+impl AppState {
+    /// Record the activity's current night mode and ask every window to re-resolve when it moves.
+    fn sync_android_theme(&mut self) {
+        let Some(app) = self.platform.android_app.as_ref() else { return; };
+        let dark = crate::platform::android::theme::is_dark(app);
+        if !crate::theme::note_platform_theme(dark) {
+            return;
+        }
+        for pw in self.windows.values() {
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
+        }
+    }
 }

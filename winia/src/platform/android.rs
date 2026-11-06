@@ -7,6 +7,7 @@ use crate::runtime::composer::AndroidUi;
 
 pub mod jni;
 pub(crate) mod insets;
+pub(crate) mod theme;
 pub use jni::AndroidJni;
 
 impl AndroidUi<'_> {
