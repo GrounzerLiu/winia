@@ -14,37 +14,44 @@ use crate::permissions::{
 };
 use crate::platform::android::AndroidJni;
 
-fn permission_name(capability: Capability) -> &'static str {
+fn permission_names(capability: Capability) -> &'static [&'static str] {
     match capability {
-        Capability::Camera => "android.permission.CAMERA",
-        Capability::Microphone => "android.permission.RECORD_AUDIO",
-    }
-}
-
-fn request_method(capability: Capability) -> &'static str {
-    match capability {
-        Capability::Camera => "requestCamera",
-        Capability::Microphone => "requestMicrophone",
+        Capability::Camera => &["android.permission.CAMERA"],
+        Capability::Microphone => &["android.permission.RECORD_AUDIO"],
+        Capability::Location => &[
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.ACCESS_COARSE_LOCATION",
+        ],
+        Capability::Notifications => &["android.permission.POST_NOTIFICATIONS"],
     }
 }
 
 pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStatus {
+    if matches!(capability, Capability::Notifications) && AndroidApp::sdk_version() < 33 {
+        return PermissionStatus::NotRequired;
+    }
     let jni = AndroidJni::new(app);
     let result = jni.with_env(|env| {
         let activity = app.activity_as_ptr() as jni::sys::jobject;
         let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
-        let name = env.new_string(permission_name(capability))?;
-        env.call_method(
-            &activity,
-            jni_str!("checkSelfPermission"),
-            jni_sig!("(Ljava/lang/String;)I"),
-            &[JValue::Object(&name)],
-        )?
-        .i()
+        for permission in permission_names(capability) {
+            let name = env.new_string(permission)?;
+            let state = env.call_method(
+                &activity,
+                jni_str!("checkSelfPermission"),
+                jni_sig!("(Ljava/lang/String;)I"),
+                &[JValue::Object(&name)],
+            )?
+            .i()?;
+            if state == 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     });
     match result {
-        Ok(0) => PermissionStatus::Granted,
-        Ok(_) => PermissionStatus::Denied,
+        Ok(true) => PermissionStatus::Granted,
+        Ok(false) => PermissionStatus::Denied,
         Err(_) => PermissionStatus::Unsupported,
     }
 }
@@ -65,6 +72,8 @@ pub(crate) fn request(
             match capability {
                 Capability::Camera => jni_str!("requestCamera"),
                 Capability::Microphone => jni_str!("requestMicrophone"),
+                Capability::Location => jni_str!("requestLocation"),
+                Capability::Notifications => jni_str!("requestNotifications"),
             },
             jni_sig!("(Landroid/app/Activity;J)V"),
             &[JValue::Object(&activity), JValue::Long(id as i64)],
@@ -75,6 +84,23 @@ pub(crate) fn request(
         Ok(()) => Ok(PermissionRequest::new(app.clone(), id)),
         Err(_) => Err(PermissionError::AdapterMissing),
     }
+}
+
+pub(crate) fn open_settings(app: &AndroidApp) -> Result<(), PermissionError> {
+    let jni = AndroidJni::new(app);
+    let called = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        env.call_static_method(
+            class,
+            jni_str!("openSettings"),
+            jni_sig!("(Landroid/app/Activity;)V"),
+            &[JValue::Object(&activity)],
+        )?;
+        Ok(())
+    });
+    called.map_err(|_| PermissionError::AdapterMissing)
 }
 
 pub(crate) fn poll_result(app: &AndroidApp, id: u64) -> Option<PermissionStatus> {

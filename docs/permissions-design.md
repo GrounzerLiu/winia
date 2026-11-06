@@ -24,8 +24,8 @@ Permission support is limited to GameActivity. Winia no longer exposes or suppor
 
 The experimental branch contains the following:
 
-- `winia::permissions` with `Capability` (Camera, Microphone), `PermissionStatus`,
-  `PermissionError`, `PermissionRequest`, and a `Permissions` facade.
+- `winia::permissions` with `Capability` (Camera, Microphone, Location, Notifications),
+  `PermissionStatus`, `PermissionError`, `PermissionRequest`, and a `Permissions` facade.
 - `ComposeCtx::permissions()`, whose `status()` and `request()` are Unsupported on desktop.
 - Android status via `Activity.checkSelfPermission`.
 - Android requests through the generated adapter `com.winia.permissions.WiniaPermissions`, backed by
@@ -39,12 +39,12 @@ The experimental branch contains the following:
 
 Known limits of this slice:
 
-- Only Camera and Microphone; location, notifications, special app access, and picker/scoped access are
-  not wired yet.
+- Location is foreground location (fine/coarse); background location, special app access, and
+  picker/scoped access are not wired yet.
 - `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the
   reactive status.
-- `PermanentlyDenied` is reported by the adapter, but the UI currently has no dedicated Settings
-  page action.
+- `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
+  system details page, but a richer per-capability Settings page is not implemented.
 - Declarations remain in AndroidManifest.xml; `winia.toml` still has no permission table.
 - The branch does not publish a new crate version; it is for evaluation.
 

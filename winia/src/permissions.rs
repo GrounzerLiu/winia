@@ -12,6 +12,8 @@ use std::time::Duration;
 pub enum Capability {
     Camera,
     Microphone,
+    Location,
+    Notifications,
 }
 
 /// The platform's current answer for a capability.
@@ -139,6 +141,21 @@ impl<'a> Permissions<'a> {
         }
     }
 
+    /// Open the platform page where a denied permission can be changed.
+    pub fn open_settings(&self) -> Result<(), PermissionError> {
+        #[cfg(target_os = "android")]
+        {
+            let Some(app) = self.app else {
+                return Err(PermissionError::Unsupported);
+            };
+            return crate::platform::android::permissions::open_settings(app);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(PermissionError::Unsupported)
+        }
+    }
+
     /// Start a permission request on the Android UI thread.
     pub fn request(&self, capability: Capability) -> Result<PermissionRequest, PermissionError> {
         #[cfg(target_os = "android")]
@@ -203,6 +220,10 @@ mod tests {
         );
         assert_eq!(
             permissions.request(Capability::Camera).unwrap_err(),
+            PermissionError::Unsupported
+        );
+        assert_eq!(
+            permissions.open_settings().unwrap_err(),
             PermissionError::Unsupported
         );
     }
