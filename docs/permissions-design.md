@@ -292,16 +292,29 @@ That request history is UX metadata, not the authority. The OS status is re-chec
 
 ### 6.2 Android bridge
 
-The generated GameActivity is an Activity, so the permission path can use:
+The preferred Android backend is XXPermissions (Apache-2.0), behind a Winia-owned adapter.
+
+XXPermissions creates a headless Fragment and receives the permission result through the Fragment
+lifecycle. For a plain Activity it uses android.app.Fragment; for a FragmentActivity it uses the
+AndroidX fragment manager. GameActivity is a plain Activity, so the generated MainActivity does NOT
+need to override onRequestPermissionsResult.
+
+Preferred flow:
 
 ~~~text
-Activity.requestPermissions(String[], requestCode)
-    -> onRequestPermissionsResult(...)
-    -> JNI native callback
+Rust Capability
+    -> PermissionManager (request id + pending future)
+    -> JNI
+    -> WiniaPermissions.java (thin XXPermissions adapter)
+    -> XXPermissions.with(activity).permission(...).request(...)
+    -> XXPermissions Fragment result
+    -> nativeOnPermissionResult(requestId, granted, denied, doNotAskAgain)
     -> pending Rust request
 ~~~
 
-The generated MainActivity or a small permission bridge class should override onRequestPermissionsResult. The Rust side must map request codes back to pending capabilities.
+XXPermissions is an implementation detail, not part of Winia's public API. Its types and callback
+objects must not leak into application code, so the backend can be replaced without changing the
+Capability or PermissionStatus model.
 
 Requirements:
 
@@ -310,6 +323,8 @@ Requirements:
 - Pending requests have stable IDs and are removed on completion.
 - Activity recreation clears or re-queues pending requests; a result cannot be assumed to survive process death.
 - The callback must not mutate composition from an arbitrary thread; it should resolve a future or post an event to the runtime.
+- The generated project must include the Java adapter and the pinned XXPermissions dependency; do not
+  rely on the library's default rationale or its unchecked() mode.
 - NativeActivity is not supported anywhere in Winia. It has no generated Java MainActivity subclass and therefore no supported result bridge; Winia Forge and the framework expose only GameActivity.
 
 ### 6.3 iOS bridge
@@ -399,7 +414,7 @@ Until then, native declarations are the source of truth.
 
 - Add the capability/status/action API.
 - Support Camera, Microphone, Location (When In Use), and Notifications.
-- Add GameActivity result bridging through JNI.
+- Add a Java permission adapter backed by XXPermissions; no MainActivity override.
 - Add a serialized request queue.
 - Add manifest declaration checks to winia doctor.
 - Test on a real device with both grant and deny paths.
