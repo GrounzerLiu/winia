@@ -44,13 +44,6 @@ impl<'a> AndroidUi<'a> {
         self.sdk_version() >= level
     }
 
-    /// JNI access for this activity.
-    ///
-    /// The JNI-specific code lives in crate::platform::android.
-    pub fn jni(&self) -> crate::platform::android::AndroidJni<'_> {
-        crate::platform::android::AndroidJni::new(self.app)
-    }
-
     /// Show the soft keyboard.
     pub fn show_keyboard(&self) {
         self.app.show_soft_input(false);
