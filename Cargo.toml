@@ -5,6 +5,9 @@ members = [
     "winia-macros",
     "skiwin",
     "material-shapes",
+    "winia-material-symbols-outlined",
+    "winia-material-symbols-rounded",
+    "winia-material-symbols-sharp",
 ]
 
 [workspace.metadata.orphan-gc]
@@ -26,7 +29,7 @@ debug = 1
 winit = { package = "winia-winit", version = "=0.31.0-beta.4" }
 skia-safe = "0.99.0"
 skia-bindings = "0.99.0"
-material-shapes = { path = "material-shapes", features = ["shape_util"] }
+material-shapes = { path = "material-shapes", version = "0.1.0", features = ["shape_util"] }
 parking_lot = "0.12"
 log = "0.4"
 thiserror = "2"

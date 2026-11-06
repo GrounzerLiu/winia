@@ -2,7 +2,9 @@
 name = "winia-macros"
 version = "0.2.0"
 edition = "2024"
-description = "winia 组合系统属性宏（#[composable] = 函数级组合 scope）"
+description = "Composable attribute macro for Winia"
+license = "Apache-2.0"
+repository = "https://github.com/GrounzerLiu/winia"
 
 [lib]
 proc-macro = true

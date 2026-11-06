@@ -3562,6 +3562,9 @@ dependencies = [
  "windows",
  "windows-core",
  "winia-macros",
+ "winia-material-symbols-outlined",
+ "winia-material-symbols-rounded",
+ "winia-material-symbols-sharp",
  "winia-winit",
  "winreg",
 ]
@@ -3574,6 +3577,18 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "winia-material-symbols-outlined"
+version = "0.1.0"
+
+[[package]]
+name = "winia-material-symbols-rounded"
+version = "0.1.0"
+
+[[package]]
+name = "winia-material-symbols-sharp"
+version = "0.1.0"
 
 [[package]]
 name = "winia-winit"

@@ -2,6 +2,9 @@
 name = "material-shapes"
 version = "0.1.0"
 edition = "2024"
+description = "Material 3 shape utilities used by Winia"
+license = "Apache-2.0"
+repository = "https://github.com/GrounzerLiu/winia"
 
 [features]
 shape_util = ["skia-safe"]

@@ -1,0 +1,10 @@
+[package]
+name = "winia-material-symbols-outlined"
+version = "0.1.0"
+edition = "2021"
+description = "Material Symbols Outlined variable font for Winia"
+license = "Apache-2.0"
+repository = "https://github.com/GrounzerLiu/winia"
+
+[lib]
+path = "src/lib.rs"

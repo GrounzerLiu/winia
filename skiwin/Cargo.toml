@@ -2,6 +2,9 @@
 name = "skiwin"
 version = "0.1.0"
 edition = "2021"
+description = "Skia window and GPU backend layer for Winia"
+license = "Apache-2.0"
+repository = "https://github.com/GrounzerLiu/winia"
 
 [features]
 # Backends. `SkiaWindow::new` tries the compiled ones in the order vulkan → gl → cpu unless

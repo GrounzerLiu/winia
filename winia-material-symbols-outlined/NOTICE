@@ -1,0 +1,16 @@
+Material Symbols variable fonts and codepoint tables
+====================================================
+
+Files:
+- MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf
+- MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf
+- MaterialSymbolsSharp[FILL,GRAD,opsz,wght].ttf
+- outlined.rs / rounded.rs / sharp.rs (generated codepoint constants)
+
+Source: https://github.com/google/material-design-icons
+License: Apache License 2.0
+Copyright 2022 Google LLC
+
+Variable font axis ranges (official):
+  FILL 0..1, GRAD -50..200, opsz 20..48, wght 100..700
+See https://developers.google.com/fonts/docs/material_symbols

@@ -2,10 +2,13 @@ Material Symbols variable fonts and codepoint tables
 ====================================================
 
 Files:
-- MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf
-- MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf
-- MaterialSymbolsSharp[FILL,GRAD,opsz,wght].ttf
-- outlined.rs / rounded.rs / sharp.rs (generated codepoint constants)
+- winia-material-symbols-outlined/src/font.ttf
+- winia-material-symbols-rounded/src/font.ttf
+- winia-material-symbols-sharp/src/font.ttf
+- winia/src/icon/outlined.rs / rounded.rs / sharp.rs (generated codepoint constants)
+
+The font files live in the winia-material-symbols-* crates so the main winia package
+stays below crates.io's 10 MB limit.
 
 Source: https://github.com/google/material-design-icons
 License: Apache License 2.0

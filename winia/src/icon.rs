@@ -80,11 +80,11 @@ impl MaterialSymbol {
 }
 
 #[cfg(feature = "material-symbols-outlined")]
-static FONT_OUTLINED: &[u8] = include_bytes!("icon/MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf");
+static FONT_OUTLINED: &[u8] = winia_material_symbols_outlined::FONT;
 #[cfg(feature = "material-symbols-rounded")]
-static FONT_ROUNDED: &[u8] = include_bytes!("icon/MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf");
+static FONT_ROUNDED: &[u8] = winia_material_symbols_rounded::FONT;
 #[cfg(feature = "material-symbols-sharp")]
-static FONT_SHARP: &[u8] = include_bytes!("icon/MaterialSymbolsSharp[FILL,GRAD,opsz,wght].ttf");
+static FONT_SHARP: &[u8] = winia_material_symbols_sharp::FONT;
 
 #[cfg(feature = "material-symbols-outlined")]
 fn typeface_outlined() -> &'static Typeface {
