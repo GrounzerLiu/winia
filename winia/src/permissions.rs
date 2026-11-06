@@ -14,6 +14,46 @@ pub enum Capability {
     Microphone,
     Location,
     Notifications,
+    SystemAlertWindow,
+    WriteSettings,
+    ManageExternalStorage,
+    RequestInstallPackages,
+    ScheduleExactAlarm,
+    UsageStats,
+    IgnoreBatteryOptimizations,
+}
+
+impl Capability {
+    /// Name used by the generated Java adapter. Keep these in sync with WiniaPermissions.java.
+    pub(crate) fn adapter_name(self) -> &'static str {
+        match self {
+            Capability::Camera => "camera",
+            Capability::Microphone => "microphone",
+            Capability::Location => "location",
+            Capability::Notifications => "notifications",
+            Capability::SystemAlertWindow => "systemAlertWindow",
+            Capability::WriteSettings => "writeSettings",
+            Capability::ManageExternalStorage => "manageExternalStorage",
+            Capability::RequestInstallPackages => "requestInstallPackages",
+            Capability::ScheduleExactAlarm => "scheduleExactAlarm",
+            Capability::UsageStats => "usageStats",
+            Capability::IgnoreBatteryOptimizations => "ignoreBatteryOptimizations",
+        }
+    }
+
+    /// True when Android exposes this as a special app-access page rather than a dialog.
+    pub fn is_special(self) -> bool {
+        matches!(
+            self,
+            Capability::SystemAlertWindow
+                | Capability::WriteSettings
+                | Capability::ManageExternalStorage
+                | Capability::RequestInstallPackages
+                | Capability::ScheduleExactAlarm
+                | Capability::UsageStats
+                | Capability::IgnoreBatteryOptimizations
+        )
+    }
 }
 
 /// The platform's current answer for a capability.
@@ -146,6 +186,22 @@ impl<'a> Permissions<'a> {
         }
     }
 
+    /// Open the platform page for one capability, when the app knows which permission failed.
+    pub fn open_settings_for(&self, capability: Capability) -> Result<(), PermissionError> {
+        #[cfg(target_os = "android")]
+        {
+            let Some(app) = self.app else {
+                return Err(PermissionError::Unsupported);
+            };
+            return crate::platform::android::permissions::open_settings_for(app, capability);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = capability;
+            Err(PermissionError::Unsupported)
+        }
+    }
+
     /// Open the platform page where a denied permission can be changed.
     pub fn open_settings(&self) -> Result<(), PermissionError> {
         #[cfg(target_os = "android")]
@@ -190,6 +246,13 @@ fn requested_bit(capability: Capability) -> u32 {
         Capability::Microphone => 2,
         Capability::Location => 4,
         Capability::Notifications => 8,
+        Capability::SystemAlertWindow => 16,
+        Capability::WriteSettings => 32,
+        Capability::ManageExternalStorage => 64,
+        Capability::RequestInstallPackages => 128,
+        Capability::ScheduleExactAlarm => 256,
+        Capability::UsageStats => 512,
+        Capability::IgnoreBatteryOptimizations => 1024,
     }
 }
 
@@ -227,6 +290,15 @@ pub(crate) fn reconcile_result(value: i32) -> Option<PermissionStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capabilities_are_classified_for_the_adapter() {
+        assert_eq!(Capability::Camera.adapter_name(), "camera");
+        assert!(!Capability::Camera.is_special());
+        assert!(Capability::SystemAlertWindow.is_special());
+        assert!(Capability::ManageExternalStorage.is_special());
+        assert!(!Capability::Location.is_special());
+    }
 
     #[test]
     fn result_codes_map_to_permission_states() {
