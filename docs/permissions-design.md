@@ -18,6 +18,8 @@ It should not try to be a universal cross-platform permission system. It should 
 
 The first implementation target is Android. Winia already has an Android entry point, an Activity-backed JNI layer, and a generated GameActivity project, so Android is the only platform where a complete permission path can be implemented and tested end to end today.
 
+Permission support is limited to GameActivity. NativeActivity has no generated Java MainActivity subclass in the current project, so it has no supported permission result bridge and cannot use the permission layer. This decision is about permissions only; it does not remove the existing NativeActivity rendering backend.
+
 ## 2. What Flutter Does
 
 Flutter itself has no permission system. Dart code cannot query or request OS permissions through the Flutter framework. The de facto solution is the federated plugin permission_handler:
@@ -308,7 +310,7 @@ Requirements:
 - Pending requests have stable IDs and are removed on completion.
 - Activity recreation clears or re-queues pending requests; a result cannot be assumed to survive process death.
 - The callback must not mutate composition from an arbitrary thread; it should resolve a future or post an event to the runtime.
-- NativeActivity has no generated Java MainActivity subclass in the current template. Supporting NativeActivity requires a separate result bridge and should be treated as a limitation until designed.
+- NativeActivity is not supported by the permission layer. It has no generated Java MainActivity subclass and therefore no supported result bridge; only GameActivity projects can use permission APIs. This is separate from the existing rendering-backend support.
 
 ### 6.3 iOS bridge
 
@@ -443,7 +445,7 @@ The first phase is complete when:
 - Whether permission state belongs on ComposeCtx, an application service, or a window-level context. The request API should not depend on composition for correctness.
 - Whether request() returns a status or a richer result that includes the chosen location precision or photo scope.
 - How long to retain "has requested before" UX metadata.
-- Whether NativeActivity will be supported or explicitly documented as unsupported for permissions.
+- NativeActivity is explicitly out of scope for permissions; the existing rendering backend is unchanged.
 - How much of the iOS model can be exposed before Winia has an iOS platform backend.
 - Whether winia doctor should only check declarations or also generate a recommended manifest snippet.
 
