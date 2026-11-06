@@ -457,8 +457,10 @@
         let bottom_slot = child(nodes, root, 1);
         let content = child(nodes, root, 2);
         assert_eq!(bottom_slot.measured_size.height, NAVIGATION_BAR_HEIGHT, "bottom bar 高度 80dp");
-        assert_eq!(content.position.y, 64.0);
-        assert_eq!(content.measured_size.height, 640.0 - 64.0 - NAVIGATION_BAR_HEIGHT);
+        // Compose contract: the content root is placed full-size at (0, 0) and receives the
+        // bar heights through ScaffoldContentPadding; it applies that padding itself.
+        assert_eq!(content.position.y, 0.0);
+        assert_eq!(content.measured_size.height, 640.0);
         // NavigationBar 内 item 等分（bottom slot -> bar -> items）
         let bar_idx = nodes[bottom_slot_idx(nodes, root)].children[0];
         let item_w = (360.0 - 2.0 * NAVIGATION_BAR_ITEM_SPACING) / 3.0;

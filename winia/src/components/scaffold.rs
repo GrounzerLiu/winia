@@ -1,7 +1,12 @@
 //! Compose-style page scaffold with top/bottom bars, content, snackbar host, system insets, and FAB overlay.
+//!
+//! The content slot is measured full-size and receives a [ScaffoldContentPadding] containing the
+//! resolved top/bottom bar heights (or system insets when a bar is absent); the content root applies
+//! it, matching Compose's PaddingValues contract.
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset, Size};
@@ -44,6 +49,10 @@ pub struct Scaffold {
 }
 
 impl Scaffold {
+    /// Build a scaffold whose content receives the resolved inner padding.
+    ///
+    /// Apply the padding to the content root, for example
+    /// Modifier::new().padding_sides(padding.start, padding.top, padding.end, padding.bottom).
     pub fn new(content: impl FnOnce(&mut ComposeCtx, ScaffoldContentPadding) + Send + Sync + 'static) -> Self {
         Self { content: Box::new(content), top_bar: None, bottom_bar: None, snackbar_host: None, floating_action_button: None, content_padding: ScaffoldContentPadding::default(), content_window_insets: None, fab_position: ScaffoldFabPosition::End, modifier: Modifier::new() }
     }
@@ -68,9 +77,13 @@ impl Scaffold {
         let window_insets = self
             .content_window_insets
             .unwrap_or_else(ScaffoldDefaults::content_window_insets);
+        let content_padding_state = ctx
+            .remember(|| State::new(ScaffoldContentPadding::default()))
+            .get();
         let policy = ScaffoldLayoutPolicy {
             direction,
             padding: self.content_padding,
+            content_padding_state: content_padding_state.clone(),
             window_insets,
             fab_position: self.fab_position,
             top_present: self.top_bar.is_some(),
@@ -83,13 +96,14 @@ impl Scaffold {
         let snackbar = self.snackbar_host;
         let fab = self.floating_action_button;
         let content = self.content;
+        let content_padding = content_padding_state.clone();
         let modifier = Modifier::new().fill_max_size().then(self.modifier);
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 slot(ctx, Modifier::new(), Alignment::Start, |ctx| { if let Some(top) = top { top(ctx); } });
                 slot(ctx, Modifier::new(), Alignment::Start, |ctx| { if let Some(bottom) = bottom { bottom(ctx); } });
-                slot(ctx, Modifier::new(), Alignment::Start, |ctx| content(ctx, self.content_padding));
+                slot(ctx, Modifier::new(), Alignment::Start, |ctx| content(ctx, content_padding.get()));
                 slot(ctx, Modifier::new(), Alignment::Start, |ctx| { if let Some(fab) = fab { fab(ctx); } });
                 slot(ctx, Modifier::new(), Alignment::Center, |ctx| { if let Some(snackbar) = snackbar { snackbar(ctx); } });
             }
@@ -104,10 +118,26 @@ fn slot(ctx: &mut ComposeCtx, modifier: Modifier, alignment: Alignment, content:
     ctx.end_restartable_group();
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for ScaffoldLayoutPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaffoldLayoutPolicy")
+            .field("direction", &self.direction)
+            .field("padding", &self.padding)
+            .field("window_insets", &self.window_insets)
+            .field("fab_position", &self.fab_position)
+            .field("top_present", &self.top_present)
+            .field("bottom_present", &self.bottom_present)
+            .field("snackbar_present", &self.snackbar_present)
+            .field("fab_present", &self.fab_present)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 struct ScaffoldLayoutPolicy {
     direction: LayoutDirection,
     padding: ScaffoldContentPadding,
+    content_padding_state: State<ScaffoldContentPadding>,
     window_insets: Insets,
     fab_position: ScaffoldFabPosition,
     top_present: bool,
@@ -119,44 +149,44 @@ impl MeasurePolicy for ScaffoldLayoutPolicy {
     fn measure(&self, nodes: &mut Vec<LayoutNode>, policies: &[Box<dyn MeasurePolicy>], children: &[usize], constraints: Constraints) -> (Size, Vec<Placement>) {
         let width = constraints.max_width;
         let height = constraints.max_height;
-        let left_inset = if self.direction == LayoutDirection::Ltr { self.window_insets.left } else { self.window_insets.right };
-        let right_inset = if self.direction == LayoutDirection::Ltr { self.window_insets.right } else { self.window_insets.left };
-        let inner_width = (width - left_inset - right_inset).max(0.0);
-        let inner_height = (height - self.window_insets.top - self.window_insets.bottom).max(0.0);
-
-        let (top, _) = measure_node(nodes, policies, children[0], Constraints::new(0.0, width, 0.0, inner_height));
-        let (bottom, _) = measure_node(nodes, policies, children[1], Constraints::new(0.0, width, 0.0, inner_height));
-        let content_constraints = Constraints::new(
-            0.0,
-            (inner_width - self.padding.start - self.padding.end).max(0.0),
-            0.0,
-            (inner_height - top.height - bottom.height - self.padding.top - self.padding.bottom).max(0.0),
-        );
-        let (content, _) = measure_node(nodes, policies, children[2], content_constraints);
-        let (fab, _) = measure_node(nodes, policies, children[3], Constraints::new(0.0, inner_width, 0.0, inner_height));
-        let (snackbar, _) = measure_node(nodes, policies, children[4], Constraints::new(0.0, inner_width, 0.0, inner_height));
-
-        let content_x = left_inset + if self.direction == LayoutDirection::Ltr { self.padding.start } else { self.padding.end };
-        let content_y = self.window_insets.top + top.height + self.padding.top;
-        let fab_x = match self.fab_position {
-            ScaffoldFabPosition::Center => left_inset + (inner_width - fab.width) / 2.0,
-            ScaffoldFabPosition::End if self.direction == LayoutDirection::Ltr => {
-                width - right_inset - self.padding.end - SCAFFOLD_FAB_MARGIN - fab.width
-            }
-            ScaffoldFabPosition::End => left_inset + self.padding.start + SCAFFOLD_FAB_MARGIN,
+        let (start_inset, end_inset) = if self.direction == LayoutDirection::Ltr {
+            (self.window_insets.left, self.window_insets.right)
+        } else {
+            (self.window_insets.right, self.window_insets.left)
         };
-        let fab_y = height
-            - self.window_insets.bottom
-            - bottom.height
-            - self.padding.bottom
-            - SCAFFOLD_FAB_MARGIN
-            - fab.height;
-        let snackbar_x = left_inset + (inner_width - snackbar.width) / 2.0;
+
+        let (top, _) = measure_node(nodes, policies, children[0], Constraints::new(0.0, width, 0.0, height));
+        let (bottom, _) = measure_node(nodes, policies, children[1], Constraints::new(0.0, width, 0.0, height));
+        let (content, _) = measure_node(nodes, policies, children[2], Constraints::new(0.0, width, 0.0, height));
+        let (fab, _) = measure_node(nodes, policies, children[3], Constraints::new(0.0, width, 0.0, height));
+        let (snackbar, _) = measure_node(nodes, policies, children[4], Constraints::new(0.0, width, 0.0, height));
+
+        // Compose applies the content-window insets only where a bar is absent: a top/bottom bar
+        // is expected to handle its own system inset. The content root is measured full-size and
+        // applies this padding itself, exactly like Compose's PaddingValues contract.
+        self.content_padding_state.set(ScaffoldContentPadding {
+            start: self.padding.start + start_inset,
+            top: self.padding.top + if self.top_present { top.height } else { self.window_insets.top },
+            end: self.padding.end + end_inset,
+            bottom: self.padding.bottom + if self.bottom_present { bottom.height } else { self.window_insets.bottom },
+        });
+
+        let bottom_anchor = self.padding.bottom
+            + if self.bottom_present { bottom.height } else { self.window_insets.bottom };
+        let fab_x = match self.fab_position {
+            ScaffoldFabPosition::Center => start_inset + (width - start_inset - end_inset - fab.width) / 2.0,
+            ScaffoldFabPosition::End if self.direction == LayoutDirection::Ltr => {
+                width - end_inset - self.padding.end - SCAFFOLD_FAB_MARGIN - fab.width
+            }
+            ScaffoldFabPosition::End => start_inset + self.padding.start + SCAFFOLD_FAB_MARGIN,
+        };
+        let fab_y = height - bottom_anchor - SCAFFOLD_FAB_MARGIN - fab.height;
+        let snackbar_x = start_inset + (width - start_inset - end_inset - snackbar.width) / 2.0;
+        let snackbar_fab_offset = if self.fab_present { fab.height } else { 0.0 };
         let snackbar_y = height
-            - self.window_insets.bottom
-            - bottom.height
-            - self.padding.bottom
+            - bottom_anchor
             - SCAFFOLD_FAB_MARGIN
+            - snackbar_fab_offset
             - snackbar.height;
 
         let zero = Size::ZERO;
@@ -167,9 +197,9 @@ impl MeasurePolicy for ScaffoldLayoutPolicy {
         (
             Size::new(width, height),
             vec![
-                Placement { size: top_size, position: Offset::new(0.0, self.window_insets.top) },
-                Placement { size: bottom_size, position: Offset::new(0.0, height - self.window_insets.bottom - bottom.height) },
-                Placement { size: content, position: Offset::new(content_x, content_y) },
+                Placement { size: top_size, position: Offset::new(0.0, 0.0) },
+                Placement { size: bottom_size, position: Offset::new(0.0, height - bottom.height) },
+                Placement { size: content, position: Offset::new(0.0, 0.0) },
                 Placement { size: fab_size, position: Offset::new(fab_x, fab_y) },
                 Placement { size: snackbar_size, position: Offset::new(snackbar_x, snackbar_y) },
             ],
@@ -202,7 +232,7 @@ mod tests {
     #[test]
     fn reserves_top_bottom_and_positions_fab_overlay() {
         let c=layout(Scaffold::new(|ctx,p| leaf(ctx, Modifier::new().fill_max_size().test_tag("content"))).top_bar(|ctx| leaf(ctx,Modifier::new().size(360.0,64.0).test_tag("top"))).bottom_bar(|ctx| leaf(ctx,Modifier::new().size(360.0,80.0).test_tag("bottom"))).floating_action_button(|ctx| leaf(ctx,Modifier::new().size(56.0,56.0).test_tag("fab"))).content_padding(ScaffoldContentPadding::new(0.0,0.0,0.0,0.0)),LayoutDirection::Ltr);
-        let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let r=&n[root]; let content=&n[r.children[2]]; let fab=&n[r.children[3]]; assert_eq!(content.position,Offset::new(0.0,64.0)); assert_eq!(content.measured_size.height,496.0); assert_eq!(fab.position,Offset::new(288.0,488.0));
+        let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let r=&n[root]; let content=&n[r.children[2]]; let fab=&n[r.children[3]]; assert_eq!(content.position,Offset::new(0.0,0.0)); assert_eq!(content.measured_size,Size::new(360.0,640.0)); assert_eq!(fab.position,Offset::new(288.0,488.0));
     }
 
     #[test]
@@ -222,27 +252,63 @@ mod tests {
         let bottom = &nodes[root.children[1]];
         let content = &nodes[root.children[2]];
         let fab = &nodes[root.children[3]];
-        assert_eq!(top.position, Offset::new(0.0, 20.0));
-        assert_eq!(bottom.position, Offset::new(0.0, 520.0));
-        assert_eq!(content.position, Offset::new(10.0, 84.0));
-        assert_eq!(content.measured_size.width, 320.0);
-        assert_eq!(content.measured_size.height, 436.0);
-        assert_eq!(fab.position, Offset::new(258.0, 448.0));
+        assert_eq!(top.position, Offset::new(0.0, 0.0));
+        assert_eq!(bottom.position, Offset::new(0.0, 560.0));
+        assert_eq!(content.position, Offset::new(0.0, 0.0));
+        assert_eq!(content.measured_size, Size::new(360.0, 640.0));
+        assert_eq!(fab.position, Offset::new(258.0, 488.0));
     }
 
     #[test]
-    fn snackbar_host_sits_above_the_bottom_bar() {
+    fn content_receives_bar_heights_as_inner_padding() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_for_build = seen.clone();
+        let mut c = Composer::new();
+        let mut build = move |ctx: &mut ComposeCtx| {
+            let seen = seen_for_build.clone();
+            WiniaTheme::with_theme_and_direction(
+                crate::theme::ThemeColors::default_light(),
+                LayoutDirection::Ltr,
+                ctx,
+                |ctx| {
+                    Scaffold::new(move |ctx, padding| {
+                        seen.lock().unwrap().push(padding);
+                        leaf(ctx, Modifier::new().fill_max_size());
+                    })
+                    .top_bar(|ctx| leaf(ctx, Modifier::new().fill_max_width().height(64.0)))
+                    .bottom_bar(|ctx| leaf(ctx, Modifier::new().fill_max_width().height(80.0)))
+                    .content_window_insets(Insets::new(10.0, 20.0, 30.0, 40.0))
+                    .build(ctx);
+                },
+            );
+        };
+        c.compose(&mut build);
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        c.compose(&mut build);
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.iter().any(|p| *p == ScaffoldContentPadding::new(10.0, 64.0, 30.0, 80.0)),
+            "content should receive bar heights, not system insets, when bars are present: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn snackbar_host_sits_above_the_bottom_bar_and_fab() {
         let c = layout(
             Scaffold::new(|ctx, _| leaf(ctx, Modifier::new().fill_max_size()))
                 .bottom_bar(|ctx| leaf(ctx, Modifier::new().size(360.0, 80.0)))
-                .snackbar_host(|ctx| leaf(ctx, Modifier::new().size(200.0, 48.0).test_tag("snackbar"))),
+                .snackbar_host(|ctx| leaf(ctx, Modifier::new().size(200.0, 48.0).test_tag("snackbar")))
+                .floating_action_button(|ctx| leaf(ctx, Modifier::new().size(56.0, 56.0))),
             LayoutDirection::Ltr,
         );
         let root = c.layout_root_idx().unwrap();
         let nodes = c.arena_nodes();
         let root = &nodes[root];
         let snackbar = &nodes[root.children[4]];
-        assert_eq!(snackbar.position, Offset::new(80.0, 496.0));
+        // Compose: snackbarOffsetFromBottom = snackbar height + FAB offset from bottom.
+        assert_eq!(snackbar.position, Offset::new(80.0, 440.0));
         assert_eq!(snackbar.measured_size, Size::new(200.0, 48.0));
     }
 
