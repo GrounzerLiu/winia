@@ -1,6 +1,6 @@
 [package]
 name = "winia"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 description = "A declarative UI framework powered by Skia — Compose-inspired, pure Rust"
 license = "Apache-2.0"
@@ -37,7 +37,7 @@ material-symbols-sharp = ["dep:winia-material-symbols-sharp"]
 
 [dependencies]
 skiwin = { path = "../skiwin", version = "0.1.0" }
-winia-macros = { path = "../winia-macros", version = "0.2.0" }
+winia-macros = { path = "../winia-macros", version = "0.1.0" }
 winia-material-symbols-outlined = { path = "../winia-material-symbols-outlined", version = "0.1.0", optional = true }
 winia-material-symbols-rounded = { path = "../winia-material-symbols-rounded", version = "0.1.0", optional = true }
 winia-material-symbols-sharp = { path = "../winia-material-symbols-sharp", version = "0.1.0", optional = true }

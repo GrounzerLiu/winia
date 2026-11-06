@@ -8,7 +8,7 @@ composition over a slot table, an incremental recompose loop, an immutable `Modi
 This document describes the tree as it is. For how the rewrite was planned, and for the decisions
 taken along the way, see [`v2-design-notes.md`](v2-design-notes.md) — a dated record.
 
-- crate `winia` 0.2.0, edition 2024
+- crate `winia` 0.1.0, edition 2024
 - `winit` 0.31.0-beta.3, `skia-safe` 0.99.0
 
 ## Workspace
