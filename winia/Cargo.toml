@@ -15,10 +15,9 @@ categories = ["gui"]
 default = ["vulkan", "gl"]
 vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
-# Android GameActivity backend (the only Android path with soft-keyboard text events).
+# Android GameActivity backend: the Java Activity is required for IME text events and the
+# permission-result bridge. This is the only supported Android backend.
 android-game-activity = ["winit/android-game-activity"]
-# NativeActivity backend: no Java/Kotlin activity, but also no InputConnection for IME text.
-android-native-activity = ["winit/android-native-activity"]
 debug-server = []
 # Windows UI Automation provider: publishes the semantics tree (`crate::semantics`) to screen
 # readers and to any UIA client, over the window's own HWND. OFF by default — it needs the `windows`
