@@ -20,7 +20,7 @@ pub struct ComposeCtx<'a> {
 /// poll_events and input_events_iter, so UI code must not compete for them.
 #[cfg(target_os = "android")]
 pub struct AndroidUi<'a> {
-    app: &'a winit::platform::android::activity::AndroidApp,
+    pub(crate) app: &'a winit::platform::android::activity::AndroidApp,
 }
 
 #[cfg(target_os = "android")]
@@ -37,6 +37,18 @@ impl<'a> AndroidUi<'a> {
     /// The device's Android SDK level.
     pub fn sdk_version(&self) -> i32 {
         winit::platform::android::activity::AndroidApp::sdk_version()
+    }
+
+    /// True when the device runs at least the given Android API level.
+    pub fn is_sdk_at_least(&self, level: i32) -> bool {
+        self.sdk_version() >= level
+    }
+
+    /// JNI access for this activity.
+    ///
+    /// The JNI-specific code lives in crate::platform::android.
+    pub fn jni(&self) -> crate::platform::android::AndroidJni<'_> {
+        crate::platform::android::AndroidJni::new(self.app)
     }
 
     /// Show the soft keyboard.

@@ -87,11 +87,17 @@ pub mod app;
 pub mod effect;
 pub mod input;
 pub mod debug;
+#[cfg(target_os = "android")]
+pub mod platform;
 
 // 公开核心类型
 pub use runtime::composer::{ComposeCtx, Composer};
 #[cfg(target_os = "android")]
 pub use runtime::composer::AndroidUi;
+#[cfg(target_os = "android")]
+pub use platform::android::AndroidJni;
+#[cfg(target_os = "android")]
+pub use jni;
 pub use runtime::movable::MovableContent;
 pub use runtime::state::{
     Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
@@ -106,6 +112,8 @@ pub mod prelude {
     pub use crate::runtime::composer::ComposeCtx;
     #[cfg(target_os = "android")]
     pub use crate::runtime::composer::AndroidUi;
+    #[cfg(target_os = "android")]
+    pub use crate::platform::android::AndroidJni;
     pub use crate::runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
     pub use crate::runtime::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
