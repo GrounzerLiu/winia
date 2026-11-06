@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 /// A permission capability the application can ask for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Capability {
     Camera,
     Microphone,
@@ -132,7 +132,12 @@ impl<'a> Permissions<'a> {
             let Some(app) = self.app else {
                 return PermissionStatus::Unsupported;
             };
-            return crate::platform::android::permissions::status(app, capability);
+            let status = crate::platform::android::permissions::status(app, capability);
+            return if status == PermissionStatus::Denied && !was_requested(capability) {
+                PermissionStatus::NotDetermined
+            } else {
+                status
+            };
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -163,7 +168,11 @@ impl<'a> Permissions<'a> {
             let Some(app) = self.app else {
                 return Err(PermissionError::Unsupported);
             };
-            return crate::platform::android::permissions::request(app, capability);
+            let request = crate::platform::android::permissions::request(app, capability);
+            if request.is_ok() {
+                mark_requested(capability);
+            }
+            return request;
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -171,6 +180,25 @@ impl<'a> Permissions<'a> {
             Err(PermissionError::Unsupported)
         }
     }
+}
+
+static REQUESTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn requested_bit(capability: Capability) -> u32 {
+    match capability {
+        Capability::Camera => 1,
+        Capability::Microphone => 2,
+        Capability::Location => 4,
+        Capability::Notifications => 8,
+    }
+}
+
+fn mark_requested(capability: Capability) {
+    REQUESTED.fetch_or(requested_bit(capability), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn was_requested(capability: Capability) -> bool {
+    REQUESTED.load(std::sync::atomic::Ordering::Relaxed) & requested_bit(capability) != 0
 }
 
 static REVISION: std::sync::LazyLock<crate::runtime::state::Reactive<u64>> =

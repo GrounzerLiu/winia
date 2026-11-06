@@ -34,13 +34,15 @@ The experimental branch contains the following:
 - The adapter stores results by request id and calls a small native notification. The notification
   bumps a reactive permission revision; a composition that read `Permissions::status()` then
   recomposes and re-queries the OS. This fixes the stale "Denied after grant" display.
-- A probe app on an Android 36 AVD showed the system camera dialog, granted access, and changed the
-  on-screen status from Denied to Granted without restarting the Activity.
+- A probe app on an Android 36 AVD showed the system camera, foreground location, and notification
+  dialogs; each grant changed the on-screen status without restarting the Activity.
 
 Known limits of this slice:
 
 - Location is foreground location (fine/coarse); background location, special app access, and
   picker/scoped access are not wired yet.
+- `NotDetermined` is tracked per process: a denied permission that has never been requested maps to
+  `NotDetermined`, but the history does not survive an app restart.
 - `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the
   reactive status.
 - `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
