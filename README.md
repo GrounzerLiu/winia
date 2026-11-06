@@ -75,6 +75,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Animation review](docs/animation-review.md) — against animation-core 1.13.0-beta01: fixed / open / missing
 - [Debug Server 指南](docs/debug-server.md) — WS/stdin 调试通道：事件注入、布局树（含 overlay）、帧抓取
 - [架构文档](docs/architecture.md) — 当前的模块分层、一帧的流程、各子系统与 Compose 对照
+- [Permission design](docs/permissions-design.md) — capability model, platform backends, special permissions, and request flow
 - [组件编写契约](docs/component-authoring.md) — 新增组件的 MUST/SHOULD 规则，每条附上它防住的那种失败
 - [v2 设计稿](docs/v2-design-notes.md) — v1→v2 那轮的设计意图与决策记录（历史，路径已过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
