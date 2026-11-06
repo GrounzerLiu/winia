@@ -112,6 +112,20 @@ impl<'a> ComposeCtx<'a> {
         self.composer.android_app.as_ref().map(AndroidUi::new)
     }
 
+    /// Access runtime permission state for this composition.
+    ///
+    /// Desktop returns Unsupported for every capability; Android uses the generated Java adapter.
+    pub fn permissions(&self) -> crate::permissions::Permissions<'_> {
+        #[cfg(target_os = "android")]
+        {
+            crate::permissions::Permissions::new(self.composer.android_app.as_ref())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            crate::permissions::Permissions::new()
+        }
+    }
+
     /// Return the Window lifecycle context owned by this Composer.
     pub(crate) fn window_lifecycle(&self) -> crate::runtime::lifecycle::LifecycleState {
         self.composer.lifecycle.clone()

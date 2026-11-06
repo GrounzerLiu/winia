@@ -84,6 +84,7 @@ pub mod accessibility {
     pub fn notify(_window_id: u64, _snapshot: &crate::semantics::WindowSemantics) {}
 }
 pub mod app;
+pub mod permissions;
 pub mod effect;
 pub mod input;
 pub mod debug;
@@ -109,6 +110,7 @@ pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_st
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
+    pub use crate::permissions::{Capability, PermissionError, PermissionRequest, PermissionStatus};
     pub use crate::runtime::composer::ComposeCtx;
     #[cfg(target_os = "android")]
     pub use crate::runtime::composer::AndroidUi;

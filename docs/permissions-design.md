@@ -1,8 +1,8 @@
 # Permission Design
 
-> Status: draft, not implemented.
+> Status: first Android slice implemented on branch feat/permissions.
 > Scope: Android first; iOS and desktop follow when their platform backends exist.
-> This document records the decisions from the permission-system discussion and is the reference for implementation.
+> This document records the decisions from the permission-system discussion and the current implementation.
 
 ## 1. Decision
 
@@ -19,6 +19,34 @@ It should not try to be a universal cross-platform permission system. It should 
 The first implementation target is Android. Winia already has an Android entry point, an Activity-backed JNI layer, and a generated GameActivity project, so Android is the only platform where a complete permission path can be implemented and tested end to end today.
 
 Permission support is limited to GameActivity. Winia no longer exposes or supports a NativeActivity backend: without a generated Java MainActivity subclass there is no permission result bridge, and the IME path is also unavailable. All generated and supported Android projects use GameActivity.
+
+## 1.1 Implemented first slice
+
+The experimental branch contains the following:
+
+- `winia::permissions` with `Capability` (Camera, Microphone), `PermissionStatus`,
+  `PermissionError`, `PermissionRequest`, and a `Permissions` facade.
+- `ComposeCtx::permissions()`, whose `status()` and `request()` are Unsupported on desktop.
+- Android status via `Activity.checkSelfPermission`.
+- Android requests through the generated adapter `com.winia.permissions.WiniaPermissions`, backed by
+  XXPermissions 28.3. The adapter receives results through XXPermissions' headless Fragment, so
+  MainActivity does not override `onRequestPermissionsResult`.
+- The adapter stores results by request id and calls a small native notification. The notification
+  bumps a reactive permission revision; a composition that read `Permissions::status()` then
+  recomposes and re-queries the OS. This fixes the stale "Denied after grant" display.
+- A probe app on an Android 36 AVD showed the system camera dialog, granted access, and changed the
+  on-screen status from Denied to Granted without restarting the Activity.
+
+Known limits of this slice:
+
+- Only Camera and Microphone; location, notifications, special app access, and picker/scoped access are
+  not wired yet.
+- `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the
+  reactive status.
+- `PermanentlyDenied` is reported by the adapter, but the UI currently has no dedicated Settings
+  page action.
+- Declarations remain in AndroidManifest.xml; `winia.toml` still has no permission table.
+- The branch does not publish a new crate version; it is for evaluation.
 
 ## 2. What Flutter Does
 
