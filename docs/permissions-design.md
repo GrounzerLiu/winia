@@ -465,8 +465,9 @@ Until then, native declarations are the source of truth.
 - Add the capability/status/action API.
 - Support Camera, Microphone, Location (When In Use), and Notifications.
 - Add a Java permission adapter backed by XXPermissions; no MainActivity override.
-- Add a serialized request queue.
-- Add manifest declaration checks to winia doctor.
+- Serialize requests in the generated Java adapter. (implemented)
+- Add manifest declaration checks to winia doctor. (implemented)
+- Preflight runtime and stable special-permission declarations before requests. (implemented)
 - Test on a real device with both grant and deny paths.
 
 ### Phase 2: Reactive state and UX
@@ -475,7 +476,8 @@ Until then, native declarations are the source of truth.
 - Notify the UI after requests and on resume.
 - Add a rationale component or a documented rationale pattern.
 - Handle permanent denial and specific Settings pages.
-- Cover approximate location and one-time grants.
+- Cover approximate location and one-time grants. Location requests now select only the fine
+  or coarse permission declared in the manifest; the result accepts either precision.
 
 ### Phase 3: Special and scoped access
 
