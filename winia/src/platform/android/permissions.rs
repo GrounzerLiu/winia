@@ -96,6 +96,21 @@ pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStat
     }
 }
 
+pub(crate) fn is_main_thread(app: &AndroidApp) -> bool {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        env.call_static_method(
+            class,
+            jni_str!("isMainThread"),
+            jni_sig!("()Z"),
+            &[],
+        )?
+        .z()
+    });
+    result.unwrap_or(false)
+}
+
 pub(crate) fn has_requested(app: &AndroidApp, capability: Capability) -> bool {
     let jni = AndroidJni::new(app);
     let result = jni.with_env(|env| {

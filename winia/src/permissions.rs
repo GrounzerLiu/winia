@@ -288,6 +288,10 @@ impl PermissionRequest {
     /// A timeout returns None; it is not the same as a denied permission. Do not call this from
     /// the UI thread: Android delivers the result on the main looper.
     pub fn wait(&self, timeout: Duration) -> Option<PermissionStatus> {
+        #[cfg(target_os = "android")]
+        if crate::platform::android::permissions::is_main_thread(&self.inner.app) {
+            return None;
+        }
         let start = std::time::Instant::now();
         loop {
             if let Some(status) = self.poll() {

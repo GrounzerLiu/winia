@@ -56,8 +56,8 @@ Known limits of this slice:
   remaining special pages still need device coverage.
 - Request history is persisted in Android `SharedPreferences`, so `NotDetermined` survives an app
   restart. `PermanentlyDenied` is derived from XXPermissions' do-not-ask-again check.
-- `PermissionRequest::wait` returns `None` on timeout and must not be called from the Android UI
-  thread; UI code should use `poll` or rely on the reactive status.
+- `PermissionRequest::wait` returns `None` on timeout and immediately refuses to block the
+  Android main thread; UI code should use `poll` or rely on the reactive status.
 - `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
   system details page, and `Permissions::open_settings_for(capability)` asks XXPermissions for the
   vendor-specific capability settings intent, falling back to app details. Special capabilities
