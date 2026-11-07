@@ -58,6 +58,8 @@ Known limits of this slice:
   restart. `PermanentlyDenied` is derived from XXPermissions' do-not-ask-again check.
 - `PermissionRequest::wait` returns `None` on timeout and immediately refuses to block the
   Android main thread; UI code should use `poll` or rely on the reactive status.
+- Destroying the Android Activity invalidates pending requests; polling a stale handle returns
+  `PermissionStatus::Cancelled` instead of hanging until timeout.
 - `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
   system details page, and `Permissions::open_settings_for(capability)` asks XXPermissions for the
   vendor-specific capability settings intent, falling back to app details. Special capabilities

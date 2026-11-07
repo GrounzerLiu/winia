@@ -154,6 +154,12 @@ impl ApplicationHandler for AppState {
     }
 
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        if let Some(app) = self.platform.android_app.as_ref() {
+            // A pending dialog/result cannot survive Activity destruction; invalidate handles so
+            // waiters receive Cancelled instead of hanging until timeout.
+            crate::permissions::invalidate_pending_requests(app);
+        }
         // The native window is about to disappear. Drop the backend surface while it is still valid;
         // can_create_surfaces recreates it when Android has a new native window.
         for pw in self.windows.values_mut() {

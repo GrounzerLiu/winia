@@ -168,6 +168,7 @@ pub enum PermissionStatus {
     Granted,
     Denied,
     PermanentlyDenied,
+    Cancelled,
     Restricted,
     Limited,
     Provisional,
@@ -214,6 +215,7 @@ fn action_for(status: PermissionStatus, special: bool) -> PermissionAction {
         PermissionStatus::Unsupported => PermissionAction::Unsupported,
         PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
         PermissionStatus::NotRequired => PermissionAction::NotRequired,
+        PermissionStatus::Cancelled => PermissionAction::SystemDialog,
         _ if special => PermissionAction::OpenSettings,
         _ => PermissionAction::SystemDialog,
     }
@@ -249,6 +251,7 @@ pub struct PermissionRequest {
 struct RequestInner {
     app: winit::platform::android::activity::AndroidApp,
     id: u64,
+    generation: u64,
 }
 
 #[cfg(target_os = "android")]
@@ -276,7 +279,11 @@ impl PermissionRequest {
     #[cfg(target_os = "android")]
     pub(crate) fn new(app: winit::platform::android::activity::AndroidApp, id: u64) -> Self {
         Self {
-            inner: std::sync::Arc::new(RequestInner { app, id }),
+            inner: std::sync::Arc::new(RequestInner {
+                app,
+                id,
+                generation: request_generation(),
+            }),
             id,
         }
     }
@@ -285,6 +292,9 @@ impl PermissionRequest {
     pub fn poll(&self) -> Option<PermissionStatus> {
         #[cfg(target_os = "android")]
         {
+            if self.inner.generation != request_generation() {
+                return Some(PermissionStatus::Cancelled);
+            }
             return crate::platform::android::permissions::poll_result(&self.inner.app, self.inner.id);
         }
         #[cfg(not(target_os = "android"))]
@@ -488,6 +498,21 @@ impl<'a> Permissions<'a> {
     }
 }
 
+static REQUEST_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn request_generation() -> u64 {
+    REQUEST_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn invalidate_pending_requests(
+    app: &winit::platform::android::activity::AndroidApp,
+) {
+    REQUEST_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::platform::android::permissions::cancel_all(app);
+    note_android_result();
+}
+
 static REVISION: std::sync::LazyLock<crate::runtime::state::Reactive<u64>> =
     std::sync::LazyLock::new(|| crate::runtime::state::Reactive::new(0));
 
@@ -547,6 +572,10 @@ mod tests {
         );
         assert_eq!(
             action_for(PermissionStatus::Denied, false),
+            PermissionAction::SystemDialog
+        );
+        assert_eq!(
+            action_for(PermissionStatus::Cancelled, false),
             PermissionAction::SystemDialog
         );
         assert_eq!(

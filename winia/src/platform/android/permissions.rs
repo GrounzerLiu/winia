@@ -321,6 +321,20 @@ fn is_granted(app: &AndroidApp, capability: Capability) -> Result<bool, Permissi
     .map_err(|error| adapter_error(app, error))
 }
 
+pub(crate) fn cancel_all(app: &AndroidApp) {
+    let jni = AndroidJni::new(app);
+    let _ = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        env.call_static_method(
+            class,
+            jni_str!("cancelAll"),
+            jni_sig!("()V"),
+            &[],
+        )?;
+        Ok(())
+    });
+}
+
 pub(crate) fn clear_result(app: &AndroidApp, id: u64) {
     let jni = AndroidJni::new(app);
     let _ = jni.with_env(|env| {
