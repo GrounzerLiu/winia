@@ -399,9 +399,12 @@ impl<'a> Permissions<'a> {
                 PermissionStatus::Unsupported | PermissionStatus::NotRequired
             )
             && let Some(app) = self.app
-            && !crate::platform::android::permissions::has_declared_permission(app, capability)
         {
-            return PermissionAction::ConfigureBuild;
+            match crate::platform::android::permissions::has_declared_permission(app, capability) {
+                Ok(true) => {}
+                Ok(false) => return PermissionAction::ConfigureBuild,
+                Err(_) => return PermissionAction::Unsupported,
+            }
         }
         action_for(status, capability.is_special())
     }
@@ -513,8 +516,10 @@ impl<'a> Permissions<'a> {
             let Some(app) = self.app else {
                 return Err(PermissionError::Unsupported);
             };
-            if !crate::platform::android::permissions::has_declared_permission(app, capability) {
-                return Err(PermissionError::MissingDeclaration);
+            match crate::platform::android::permissions::has_declared_permission(app, capability) {
+                Ok(true) => {}
+                Ok(false) => return Err(PermissionError::MissingDeclaration),
+                Err(error) => return Err(error),
             }
             return crate::platform::android::permissions::request(app, capability);
         }

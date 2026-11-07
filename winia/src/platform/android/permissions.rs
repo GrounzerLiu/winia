@@ -305,7 +305,10 @@ pub(crate) fn open_settings_for(app: &AndroidApp, capability: Capability) -> Res
     open_settings_call(app, "openSettingsFor", Some(capability))
 }
 
-pub(crate) fn has_declared_permission(app: &AndroidApp, capability: Capability) -> bool {
+pub(crate) fn has_declared_permission(
+    app: &AndroidApp,
+    capability: Capability,
+) -> Result<bool, PermissionError> {
     let jni = AndroidJni::new(app);
     let result = jni.with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
@@ -320,7 +323,7 @@ pub(crate) fn has_declared_permission(app: &AndroidApp, capability: Capability) 
         )?
         .z()
     });
-    result.unwrap_or(false)
+    result.map_err(|error| adapter_error(app, error))
 }
 
 fn is_granted(app: &AndroidApp, capability: Capability) -> Result<bool, PermissionError> {
