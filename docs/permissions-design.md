@@ -55,7 +55,7 @@ Known limits of this slice:
   reactive status.
 - `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
   system details page, and `Permissions::open_settings_for(capability)` asks XXPermissions for the
-  capability-specific settings intent.
+  vendor-specific capability settings intent, falling back to app details.
 - Declarations remain in AndroidManifest.xml; `winia.toml` still has no permission table.
 - The branch does not publish a new crate version; it is for evaluation.
 
