@@ -204,6 +204,8 @@ pub enum PermissionAction {
     SystemDialog,
     /// The user must enable the capability on a system settings page.
     OpenSettings,
+    /// The manifest or build configuration is missing the required declaration.
+    ConfigureBuild,
     /// No permission is required on this platform or API level.
     NotRequired,
     /// The current target has no permission backend.
@@ -249,6 +251,8 @@ pub enum PermissionError {
     SettingsRequired,
     /// Background location requires foreground location to be granted first.
     ForegroundLocationRequired,
+    /// The AndroidManifest does not declare the permission for this capability.
+    MissingDeclaration,
     /// A JNI call failed.
     Jni(String),
 }
@@ -387,7 +391,19 @@ impl<'a> Permissions<'a> {
 
     /// What kind of interaction this capability needs on the current platform.
     pub fn action(&self, capability: Capability) -> PermissionAction {
-        action_for(self.status(capability), capability.is_special())
+        let status = self.status(capability);
+        #[cfg(target_os = "android")]
+        if !capability.is_special()
+            && !matches!(
+                status,
+                PermissionStatus::Unsupported | PermissionStatus::NotRequired
+            )
+            && let Some(app) = self.app
+            && !crate::platform::android::permissions::has_declared_permission(app, capability)
+        {
+            return PermissionAction::ConfigureBuild;
+        }
+        action_for(status, capability.is_special())
     }
 
     /// Open the platform page for one capability, when the app knows which permission failed.
@@ -497,6 +513,9 @@ impl<'a> Permissions<'a> {
             let Some(app) = self.app else {
                 return Err(PermissionError::Unsupported);
             };
+            if !crate::platform::android::permissions::has_declared_permission(app, capability) {
+                return Err(PermissionError::MissingDeclaration);
+            }
             return crate::platform::android::permissions::request(app, capability);
         }
         #[cfg(not(target_os = "android"))]

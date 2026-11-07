@@ -305,6 +305,24 @@ pub(crate) fn open_settings_for(app: &AndroidApp, capability: Capability) -> Res
     open_settings_call(app, "openSettingsFor", Some(capability))
 }
 
+pub(crate) fn has_declared_permission(app: &AndroidApp, capability: Capability) -> bool {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let name = env.new_string(capability.adapter_name())?;
+        env.call_static_method(
+            class,
+            jni_str!("hasDeclaredPermission"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;)Z"),
+            &[JValue::Object(&activity), JValue::Object(&name)],
+        )?
+        .z()
+    });
+    result.unwrap_or(false)
+}
+
 fn is_granted(app: &AndroidApp, capability: Capability) -> Result<bool, PermissionError> {
     let jni = AndroidJni::new(app);
     jni.with_env(|env| {
