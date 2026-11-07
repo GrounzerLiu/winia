@@ -10,9 +10,12 @@ use jni::{JValue, jni_sig, jni_str};
 use winit::platform::android::activity::AndroidApp;
 
 use crate::permissions::{
-    Capability, PermissionError, PermissionRequest, PermissionStatus, reconcile_result,
+    Capability, PermissionError, PermissionRequest, PermissionStatus, ServicePermission,
+    reconcile_result,
 };
 use crate::platform::android::AndroidJni;
+
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn permission_names(capability: Capability) -> &'static [&'static str] {
     match capability {
@@ -76,11 +79,97 @@ pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStat
     }
 }
 
+pub(crate) fn service_status(
+    app: &AndroidApp,
+    service: ServicePermission,
+) -> PermissionStatus {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let kind = env.new_string(service.kind().adapter_name())?;
+        let class_name = env.new_string(service.class())?;
+        env.call_static_method(
+            class,
+            jni_str!("isServiceGranted"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Z"),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&kind),
+                JValue::Object(&class_name),
+            ],
+        )?
+        .z()
+    });
+    match result {
+        Ok(true) => PermissionStatus::Granted,
+        Ok(false) => PermissionStatus::Denied,
+        Err(_) => PermissionStatus::Unsupported,
+    }
+}
+
+pub(crate) fn request_service(
+    app: &AndroidApp,
+    service: ServicePermission,
+) -> Result<PermissionRequest, PermissionError> {
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let jni = AndroidJni::new(app);
+    let called = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let kind = env.new_string(service.kind().adapter_name())?;
+        let class_name = env.new_string(service.class())?;
+        env.call_static_method(
+            class,
+            jni_str!("requestService"),
+            jni_sig!("(Landroid/app/Activity;JLjava/lang/String;Ljava/lang/String;)V"),
+            &[
+                JValue::Object(&activity),
+                JValue::Long(id as i64),
+                JValue::Object(&kind),
+                JValue::Object(&class_name),
+            ],
+        )?;
+        Ok(())
+    });
+    match called {
+        Ok(()) => Ok(PermissionRequest::new(app.clone(), id)),
+        Err(_) => Err(PermissionError::AdapterMissing),
+    }
+}
+
+pub(crate) fn open_settings_for_service(
+    app: &AndroidApp,
+    service: ServicePermission,
+) -> Result<(), PermissionError> {
+    let jni = AndroidJni::new(app);
+    let called = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let kind = env.new_string(service.kind().adapter_name())?;
+        let class_name = env.new_string(service.class())?;
+        env.call_static_method(
+            class,
+            jni_str!("openSettingsForService"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V"),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&kind),
+                JValue::Object(&class_name),
+            ],
+        )?;
+        Ok(())
+    });
+    called.map_err(|_| PermissionError::AdapterMissing)
+}
+
 pub(crate) fn request(
     app: &AndroidApp,
     capability: Capability,
 ) -> Result<PermissionRequest, PermissionError> {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let jni = AndroidJni::new(app);
     let called = jni.with_env(|env| {

@@ -52,6 +52,71 @@ impl Capability {
     ];
 }
 
+/// A permission that binds an Android Service or Receiver by class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ServiceKind {
+    Accessibility,
+    NotificationListener,
+    Vpn,
+    DeviceAdmin,
+}
+
+impl ServiceKind {
+    pub(crate) fn adapter_name(self) -> &'static str {
+        match self {
+            ServiceKind::Accessibility => "accessibility",
+            ServiceKind::NotificationListener => "notificationListener",
+            ServiceKind::Vpn => "vpn",
+            ServiceKind::DeviceAdmin => "deviceAdmin",
+        }
+    }
+}
+
+/// A service-binding permission and the concrete Java class it belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ServicePermission {
+    kind: ServiceKind,
+    class: &'static str,
+}
+
+impl ServicePermission {
+    pub const fn accessibility(class: &'static str) -> Self {
+        Self {
+            kind: ServiceKind::Accessibility,
+            class,
+        }
+    }
+
+    pub const fn notification_listener(class: &'static str) -> Self {
+        Self {
+            kind: ServiceKind::NotificationListener,
+            class,
+        }
+    }
+
+    pub const fn vpn(class: &'static str) -> Self {
+        Self {
+            kind: ServiceKind::Vpn,
+            class,
+        }
+    }
+
+    pub const fn device_admin(class: &'static str) -> Self {
+        Self {
+            kind: ServiceKind::DeviceAdmin,
+            class,
+        }
+    }
+
+    pub(crate) fn kind(self) -> ServiceKind {
+        self.kind
+    }
+
+    pub(crate) fn class(self) -> &'static str {
+        self.class
+    }
+}
+
 impl Capability {
     /// Name used by the generated Java adapter. Keep these in sync with WiniaPermissions.java.
     pub(crate) fn adapter_name(self) -> &'static str {
@@ -285,6 +350,61 @@ impl<'a> Permissions<'a> {
         }
     }
 
+    /// Status of a service-binding permission.
+    pub fn service_status(&self, service: ServicePermission) -> PermissionStatus {
+        let _ = revision();
+        #[cfg(target_os = "android")]
+        {
+            let Some(app) = self.app else {
+                return PermissionStatus::Unsupported;
+            };
+            return crate::platform::android::permissions::service_status(app, service);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = service;
+            PermissionStatus::Unsupported
+        }
+    }
+
+    /// Start a service-binding permission request.
+    pub fn request_service(
+        &self,
+        service: ServicePermission,
+    ) -> Result<PermissionRequest, PermissionError> {
+        #[cfg(target_os = "android")]
+        {
+            let Some(app) = self.app else {
+                return Err(PermissionError::Unsupported);
+            };
+            return crate::platform::android::permissions::request_service(app, service);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = service;
+            Err(PermissionError::Unsupported)
+        }
+    }
+
+    /// Open the settings page for a service-binding permission.
+    pub fn open_settings_for_service(
+        &self,
+        service: ServicePermission,
+    ) -> Result<(), PermissionError> {
+        #[cfg(target_os = "android")]
+        {
+            let Some(app) = self.app else {
+                return Err(PermissionError::Unsupported);
+            };
+            return crate::platform::android::permissions::open_settings_for_service(app, service);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = service;
+            Err(PermissionError::Unsupported)
+        }
+    }
+
     /// Open the platform page where a denied permission can be changed.
     pub fn open_settings(&self) -> Result<(), PermissionError> {
         #[cfg(target_os = "android")]
@@ -424,6 +544,17 @@ mod tests {
         assert_eq!(
             permissions.action(Capability::Camera),
             PermissionAction::Unsupported
+        );
+        let service = ServicePermission::accessibility("com.example.Accessibility");
+        assert_eq!(service.kind(), ServiceKind::Accessibility);
+        assert_eq!(service.class(), "com.example.Accessibility");
+        assert_eq!(
+            permissions.service_status(service),
+            PermissionStatus::Unsupported
+        );
+        assert_eq!(
+            permissions.request_service(service).unwrap_err(),
+            PermissionError::Unsupported
         );
     }
 }

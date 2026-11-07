@@ -112,6 +112,7 @@ pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_st
 pub mod prelude {
     pub use crate::permissions::{
         Capability, PermissionAction, PermissionError, PermissionRequest, PermissionStatus,
+        ServiceKind, ServicePermission,
     };
     pub use crate::runtime::composer::ComposeCtx;
     #[cfg(target_os = "android")]
