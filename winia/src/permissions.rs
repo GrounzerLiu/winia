@@ -562,9 +562,10 @@ fn request_generation() -> u64 {
 pub(crate) fn invalidate_pending_requests(
     app: &winit::platform::android::activity::AndroidApp,
 ) {
-    REQUEST_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    crate::platform::android::permissions::cancel_all(app);
-    note_android_result();
+    if crate::platform::android::permissions::cancel_all_if_destroyed(app) {
+        REQUEST_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        note_android_result();
+    }
 }
 
 static REVISION: std::sync::LazyLock<crate::runtime::state::Reactive<u64>> =

@@ -344,18 +344,21 @@ fn is_granted(app: &AndroidApp, capability: Capability) -> Result<bool, Permissi
     .map_err(|error| adapter_error(app, error))
 }
 
-pub(crate) fn cancel_all(app: &AndroidApp) {
+pub(crate) fn cancel_all_if_destroyed(app: &AndroidApp) -> bool {
     let jni = AndroidJni::new(app);
-    let _ = jni.with_env(|env| {
+    let result = jni.with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
         env.call_static_method(
             class,
-            jni_str!("cancelAll"),
-            jni_sig!("()V"),
-            &[],
-        )?;
-        Ok(())
+            jni_str!("cancelAllIfDestroyed"),
+            jni_sig!("(Landroid/app/Activity;)Z"),
+            &[JValue::Object(&activity)],
+        )?
+        .z()
     });
+    result.unwrap_or(false)
 }
 
 pub(crate) fn clear_result(app: &AndroidApp, id: u64) {
