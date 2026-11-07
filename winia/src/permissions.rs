@@ -142,6 +142,27 @@ impl Capability {
         }
     }
 
+    /// True when the capability needs a declaration in the application manifest.
+    ///
+    /// Most special app-access permissions still require a manifest entry. Picture-in-picture and
+    /// media management are intentionally excluded because their manifest requirements vary by API
+    /// level and should not produce false ConfigureBuild results.
+    pub(crate) fn needs_manifest_declaration(self) -> bool {
+        !self.is_special()
+            || matches!(
+                self,
+                Capability::SystemAlertWindow
+                    | Capability::WriteSettings
+                    | Capability::ManageExternalStorage
+                    | Capability::RequestInstallPackages
+                    | Capability::ScheduleExactAlarm
+                    | Capability::UsageStats
+                    | Capability::IgnoreBatteryOptimizations
+                    | Capability::UseFullScreenIntent
+                    | Capability::AccessNotificationPolicy
+            )
+    }
+
     /// True when Android exposes this as a special app-access page rather than a dialog.
     pub fn is_special(self) -> bool {
         matches!(
@@ -416,7 +437,7 @@ impl<'a> Permissions<'a> {
         let status = self.status(capability);
         let mut missing_declaration = false;
         #[cfg(target_os = "android")]
-        if !capability.is_special()
+        if capability.needs_manifest_declaration()
             && !matches!(
                 status,
                 PermissionStatus::Unsupported | PermissionStatus::NotRequired
@@ -614,7 +635,10 @@ mod tests {
         assert_eq!(Capability::Camera.adapter_name(), "camera");
         assert!(!Capability::Camera.is_special());
         assert!(Capability::SystemAlertWindow.is_special());
+        assert!(Capability::SystemAlertWindow.needs_manifest_declaration());
+        assert!(!Capability::PictureInPicture.needs_manifest_declaration());
         assert!(Capability::ManageExternalStorage.is_special());
+        assert!(Capability::ManageExternalStorage.needs_manifest_declaration());
         assert!(!Capability::Location.is_special());
         assert!(!Capability::BackgroundLocation.is_special());
         assert!(!Capability::GetInstalledApps.is_special());
