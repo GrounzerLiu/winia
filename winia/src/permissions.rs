@@ -25,6 +25,24 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every capability currently exposed by this crate.
+    pub const ALL: &'static [Capability] = &[
+        Capability::Camera,
+        Capability::Microphone,
+        Capability::Location,
+        Capability::BackgroundLocation,
+        Capability::Notifications,
+        Capability::SystemAlertWindow,
+        Capability::WriteSettings,
+        Capability::ManageExternalStorage,
+        Capability::RequestInstallPackages,
+        Capability::ScheduleExactAlarm,
+        Capability::UsageStats,
+        Capability::IgnoreBatteryOptimizations,
+    ];
+}
+
+impl Capability {
     /// Name used by the generated Java adapter. Keep these in sync with WiniaPermissions.java.
     pub(crate) fn adapter_name(self) -> &'static str {
         match self {
@@ -70,6 +88,27 @@ pub enum PermissionStatus {
     Provisional,
     NotRequired,
     Unsupported,
+}
+
+impl PermissionStatus {
+    /// True when the capability can be used without another prompt.
+    pub fn is_allowed(self) -> bool {
+        matches!(
+            self,
+            PermissionStatus::Granted
+                | PermissionStatus::Limited
+                | PermissionStatus::Provisional
+                | PermissionStatus::NotRequired
+        )
+    }
+
+    /// True when the user explicitly denied the capability.
+    pub fn is_denied(self) -> bool {
+        matches!(
+            self,
+            PermissionStatus::Denied | PermissionStatus::PermanentlyDenied
+        )
+    }
 }
 
 /// The kind of user interaction a capability needs.
@@ -324,6 +363,11 @@ mod tests {
         assert!(Capability::ManageExternalStorage.is_special());
         assert!(!Capability::Location.is_special());
         assert!(!Capability::BackgroundLocation.is_special());
+        assert_eq!(Capability::ALL.len(), 12);
+        assert!(PermissionStatus::Granted.is_allowed());
+        assert!(PermissionStatus::NotRequired.is_allowed());
+        assert!(PermissionStatus::Denied.is_denied());
+        assert!(!PermissionStatus::Denied.is_allowed());
     }
 
     #[test]
