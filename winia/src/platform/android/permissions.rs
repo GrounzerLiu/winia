@@ -76,13 +76,14 @@ pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStat
         let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
         for permission in permission_names(capability) {
             let name = env.new_string(permission)?;
-            let state = env.call_method(
-                &activity,
-                jni_str!("checkSelfPermission"),
-                jni_sig!("(Ljava/lang/String;)I"),
-                &[JValue::Object(&name)],
-            )?
-            .i()?;
+            let state = env
+                .call_method(
+                    &activity,
+                    jni_str!("checkSelfPermission"),
+                    jni_sig!("(Ljava/lang/String;)I"),
+                    &[JValue::Object(&name)],
+                )?
+                .i()?;
             if state == 0 {
                 return Ok(true);
             }
@@ -100,13 +101,8 @@ pub(crate) fn is_main_thread(app: &AndroidApp) -> bool {
     let jni = AndroidJni::new(app);
     let result = jni.with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
-        env.call_static_method(
-            class,
-            jni_str!("isMainThread"),
-            jni_sig!("()Z"),
-            &[],
-        )?
-        .z()
+        env.call_static_method(class, jni_str!("isMainThread"), jni_sig!("()Z"), &[])?
+            .z()
     });
     // If the adapter cannot be queried, assume the caller may be on the main thread and refuse
     // to block; a missing adapter cannot deliver a result anyway.
@@ -149,10 +145,7 @@ pub(crate) fn is_permanently_denied(app: &AndroidApp, capability: Capability) ->
     result.unwrap_or(false)
 }
 
-pub(crate) fn service_status(
-    app: &AndroidApp,
-    service: ServicePermission,
-) -> PermissionStatus {
+pub(crate) fn service_status(app: &AndroidApp, service: ServicePermission) -> PermissionStatus {
     let jni = AndroidJni::new(app);
     let result = jni.with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
@@ -265,7 +258,11 @@ pub(crate) fn request(
     }
 }
 
-fn open_settings_call(app: &AndroidApp, method: &str, capability: Option<Capability>) -> Result<(), PermissionError> {
+fn open_settings_call(
+    app: &AndroidApp,
+    method: &str,
+    capability: Option<Capability>,
+) -> Result<(), PermissionError> {
     let jni = AndroidJni::new(app);
     let called = jni.with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
@@ -301,7 +298,10 @@ pub(crate) fn open_settings(app: &AndroidApp) -> Result<(), PermissionError> {
     open_settings_call(app, "openSettings", None)
 }
 
-pub(crate) fn open_settings_for(app: &AndroidApp, capability: Capability) -> Result<(), PermissionError> {
+pub(crate) fn open_settings_for(
+    app: &AndroidApp,
+    capability: Capability,
+) -> Result<(), PermissionError> {
     open_settings_call(app, "openSettingsFor", Some(capability))
 }
 

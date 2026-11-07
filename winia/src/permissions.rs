@@ -62,6 +62,7 @@ pub enum ServiceKind {
 }
 
 impl ServiceKind {
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn adapter_name(self) -> &'static str {
         match self {
             ServiceKind::Accessibility => "accessibility",
@@ -109,10 +110,12 @@ impl ServicePermission {
         }
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn kind(self) -> ServiceKind {
         self.kind
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn class(self) -> &'static str {
         self.class
     }
@@ -120,6 +123,7 @@ impl ServicePermission {
 
 impl Capability {
     /// Name used by the generated Java adapter. Keep these in sync with WiniaPermissions.java.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn adapter_name(self) -> &'static str {
         match self {
             Capability::Camera => "camera",
@@ -147,6 +151,7 @@ impl Capability {
     /// Most special app-access permissions still require a manifest entry. Picture-in-picture and
     /// media management are intentionally excluded because their manifest requirements vary by API
     /// level and should not produce false ConfigureBuild results.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn needs_manifest_declaration(self) -> bool {
         !self.is_special()
             || matches!(
@@ -233,6 +238,7 @@ pub enum PermissionAction {
     Unsupported,
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn normalize_status(
     status: PermissionStatus,
     requested: bool,
@@ -358,9 +364,11 @@ impl PermissionRequest {
         }
     }
 
-    /// Cancel this request and remove it from the Android request queue.
+    /// Cancel this request and discard its result.
     ///
-    /// The handle stays usable but polling returns None because the result was discarded.
+    /// A queued request is removed immediately. An active request is marked cancelled without
+    /// dismissing the system dialog; the queue advances only when XXPermissions returns. The handle
+    /// stays usable but polling returns None because the result was discarded.
     pub fn cancel(&self) {
         #[cfg(target_os = "android")]
         {
@@ -435,7 +443,10 @@ impl<'a> Permissions<'a> {
     /// What kind of interaction this capability needs on the current platform.
     pub fn action(&self, capability: Capability) -> PermissionAction {
         let status = self.status(capability);
+        #[cfg(target_os = "android")]
         let mut missing_declaration = false;
+        #[cfg(not(target_os = "android"))]
+        let missing_declaration = false;
         #[cfg(target_os = "android")]
         if capability.needs_manifest_declaration()
             && !matches!(
@@ -447,6 +458,7 @@ impl<'a> Permissions<'a> {
             match crate::platform::android::permissions::has_declared_permission(app, capability) {
                 Ok(true) => {}
                 Ok(false) => missing_declaration = true,
+                Err(PermissionError::AdapterMissing) => return PermissionAction::ConfigureBuild,
                 Err(_) => return PermissionAction::Unsupported,
             }
         }
@@ -589,8 +601,10 @@ impl<'a> Permissions<'a> {
     }
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static REQUEST_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn request_generation() -> u64 {
     REQUEST_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -612,11 +626,13 @@ fn revision() -> u64 {
     REVISION.get()
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) fn note_android_result() {
     let next = revision().wrapping_add(1);
     REVISION.set(next);
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) fn reconcile_result(value: i32) -> Option<PermissionStatus> {
     match value {
         0 => Some(PermissionStatus::Denied),
