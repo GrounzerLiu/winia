@@ -592,6 +592,9 @@ mod tests {
         assert!(!Capability::BackgroundLocation.is_special());
         assert!(!Capability::GetInstalledApps.is_special());
         assert_eq!(Capability::ALL.len(), 17);
+        let names: std::collections::HashSet<&str> =
+            Capability::ALL.iter().map(|cap| cap.adapter_name()).collect();
+        assert_eq!(names.len(), Capability::ALL.len());
         assert!(PermissionStatus::Granted.is_allowed());
         assert!(PermissionStatus::NotRequired.is_allowed());
         assert!(PermissionStatus::Denied.is_denied());
