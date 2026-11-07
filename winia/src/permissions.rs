@@ -134,11 +134,11 @@ impl Capability {
             Capability::ScheduleExactAlarm => "scheduleExactAlarm",
             Capability::UsageStats => "usageStats",
             Capability::IgnoreBatteryOptimizations => "ignoreBatteryOptimizations",
-        Capability::PictureInPicture => "pictureInPicture",
-        Capability::UseFullScreenIntent => "useFullScreenIntent",
-        Capability::AccessNotificationPolicy => "accessNotificationPolicy",
-        Capability::ManageMedia => "manageMedia",
-        Capability::GetInstalledApps => "getInstalledApps",
+            Capability::PictureInPicture => "pictureInPicture",
+            Capability::UseFullScreenIntent => "useFullScreenIntent",
+            Capability::AccessNotificationPolicy => "accessNotificationPolicy",
+            Capability::ManageMedia => "manageMedia",
+            Capability::GetInstalledApps => "getInstalledApps",
         }
     }
 
@@ -291,7 +291,9 @@ impl Drop for RequestInner {
 
 impl std::fmt::Debug for PermissionRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PermissionRequest").field("id", &self.id).finish()
+        f.debug_struct("PermissionRequest")
+            .field("id", &self.id)
+            .finish()
     }
 }
 
@@ -323,7 +325,10 @@ impl PermissionRequest {
             if self.inner.generation != request_generation() {
                 return Some(PermissionStatus::Cancelled);
             }
-            return crate::platform::android::permissions::poll_result(&self.inner.app, self.inner.id);
+            return crate::platform::android::permissions::poll_result(
+                &self.inner.app,
+                self.inner.id,
+            );
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -570,9 +575,7 @@ fn request_generation() -> u64 {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) fn invalidate_pending_requests(
-    app: &winit::platform::android::activity::AndroidApp,
-) {
+pub(crate) fn invalidate_pending_requests(app: &winit::platform::android::activity::AndroidApp) {
     if crate::platform::android::permissions::cancel_all_if_destroyed(app) {
         REQUEST_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         note_android_result();
@@ -616,8 +619,10 @@ mod tests {
         assert!(!Capability::BackgroundLocation.is_special());
         assert!(!Capability::GetInstalledApps.is_special());
         assert_eq!(Capability::ALL.len(), 17);
-        let names: std::collections::HashSet<&str> =
-            Capability::ALL.iter().map(|cap| cap.adapter_name()).collect();
+        let names: std::collections::HashSet<&str> = Capability::ALL
+            .iter()
+            .map(|cap| cap.adapter_name())
+            .collect();
         assert_eq!(names.len(), Capability::ALL.len());
         assert!(PermissionStatus::Granted.is_allowed());
         assert!(PermissionStatus::NotRequired.is_allowed());
