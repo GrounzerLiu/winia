@@ -167,8 +167,14 @@ impl ApplicationHandler for AppState {
         #[cfg(target_os = "android")]
         {
             self.sync_android_theme();
+            // Settings pages (special app access) do not produce a permission callback. Re-query
+            // every visible status when the activity comes back to the foreground.
+            crate::permissions::note_android_result();
             for pw in self.windows.values_mut() {
                 pw.sync_android_insets();
+                if let Some(ref sw) = pw.skia_window {
+                    sw.request_redraw();
+                }
             }
         }
     }

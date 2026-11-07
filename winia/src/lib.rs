@@ -110,7 +110,9 @@ pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_st
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
-    pub use crate::permissions::{Capability, PermissionError, PermissionRequest, PermissionStatus};
+    pub use crate::permissions::{
+        Capability, PermissionAction, PermissionError, PermissionRequest, PermissionStatus,
+    };
     pub use crate::runtime::composer::ComposeCtx;
     #[cfg(target_os = "android")]
     pub use crate::runtime::composer::AndroidUi;

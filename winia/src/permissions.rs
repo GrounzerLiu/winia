@@ -70,6 +70,17 @@ pub enum PermissionStatus {
     Unsupported,
 }
 
+/// The kind of user interaction a capability needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionAction {
+    /// The platform can show its normal permission dialog.
+    SystemDialog,
+    /// The user must enable the capability on a system settings page.
+    OpenSettings,
+    /// The current target has no permission backend.
+    Unsupported,
+}
+
 /// Why a request could not be started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionError {
@@ -183,6 +194,17 @@ impl<'a> Permissions<'a> {
         {
             let _ = capability;
             PermissionStatus::Unsupported
+        }
+    }
+
+    /// What kind of interaction this capability needs on the current platform.
+    pub fn action(&self, capability: Capability) -> PermissionAction {
+        if self.status(capability) == PermissionStatus::Unsupported {
+            PermissionAction::Unsupported
+        } else if capability.is_special() {
+            PermissionAction::OpenSettings
+        } else {
+            PermissionAction::SystemDialog
         }
     }
 
@@ -325,6 +347,10 @@ mod tests {
         assert_eq!(
             permissions.open_settings().unwrap_err(),
             PermissionError::Unsupported
+        );
+        assert_eq!(
+            permissions.action(Capability::Camera),
+            PermissionAction::Unsupported
         );
     }
 }

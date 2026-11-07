@@ -36,6 +36,8 @@ The experimental branch contains the following:
 - The adapter stores results by request id and calls a small native notification. The notification
   bumps a reactive permission revision; a composition that read `Permissions::status()` then
   recomposes and re-queries the OS. This fixes the stale "Denied after grant" display.
+- `PermissionAction` tells the UI whether a capability uses the normal system dialog or a settings
+  page. The app resumes from a settings page through the same permission revision refresh.
 - A probe app on an Android 36 AVD showed the system camera, foreground location, and notification
   dialogs; each grant changed the on-screen status without restarting the Activity.
 
@@ -44,8 +46,9 @@ Known limits of this slice:
 - Location is foreground location (fine/coarse); background location and picker/scoped access are
   not wired yet.
 - Special permissions use XXPermissions' settings-page flow: overlay, write settings, all-files
-  access, install packages, exact alarms, usage stats, and battery optimization. The overlay page was
-  opened on the AVD; the remaining special pages still need device coverage.
+  access, install packages, exact alarms, usage stats, and battery optimization. Overlay was granted
+  on the AVD and the status refreshed after returning; the remaining special pages still need device
+  coverage.
 - `NotDetermined` is tracked per process: a denied permission that has never been requested maps to
   `NotDetermined`, but the history does not survive an app restart.
 - `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the
