@@ -24,10 +24,11 @@ Permission support is limited to GameActivity. Winia no longer exposes or suppor
 
 The experimental branch contains the following:
 
-- `winia::permissions` with `Capability` for camera, microphone, foreground location,
+- `winia::permissions` with `Capability` for camera, microphone, foreground/background location,
   notifications, overlay, write settings, all-files access, install packages, exact alarms, usage
-  stats, and battery optimization exemptions; plus `PermissionStatus`, `PermissionError`,
-  `PermissionRequest`, and a `Permissions` facade.
+  stats, battery optimization exemptions, picture-in-picture, full-screen intents, notification
+  policy access, media management, and installed-app access; plus `PermissionStatus`,
+  `PermissionError`, `PermissionRequest`, and a `Permissions` facade.
 - `ComposeCtx::permissions()`, whose `status()` and `request()` are Unsupported on desktop.
 - Android status via `Activity.checkSelfPermission`.
 - Android requests through the generated adapter `com.winia.permissions.WiniaPermissions`, backed by
@@ -46,9 +47,10 @@ Known limits of this slice:
 - Location covers foreground (fine/coarse) and background; the background request includes the
   foreground permissions first. Picker/scoped access is not wired yet.
 - Special permissions use XXPermissions' settings-page flow: overlay, write settings, all-files
-  access, install packages, exact alarms, usage stats, and battery optimization. Overlay was granted
-  on the AVD and the status refreshed after returning; the remaining special pages still need device
-  coverage.
+  access, install packages, exact alarms, usage stats, battery optimization, picture-in-picture,
+  full-screen intents, notification policy, media management, and installed-app access. Overlay was
+  granted on the AVD and the status refreshed after returning; the remaining special pages still
+  need device coverage.
 - `NotDetermined` is tracked per process: a denied permission that has never been requested maps to
   `NotDetermined`, but the history does not survive an app restart.
 - `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the

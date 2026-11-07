@@ -22,6 +22,11 @@ pub enum Capability {
     ScheduleExactAlarm,
     UsageStats,
     IgnoreBatteryOptimizations,
+    PictureInPicture,
+    UseFullScreenIntent,
+    AccessNotificationPolicy,
+    ManageMedia,
+    GetInstalledApps,
 }
 
 impl Capability {
@@ -39,6 +44,11 @@ impl Capability {
         Capability::ScheduleExactAlarm,
         Capability::UsageStats,
         Capability::IgnoreBatteryOptimizations,
+        Capability::PictureInPicture,
+        Capability::UseFullScreenIntent,
+        Capability::AccessNotificationPolicy,
+        Capability::ManageMedia,
+        Capability::GetInstalledApps,
     ];
 }
 
@@ -58,6 +68,11 @@ impl Capability {
             Capability::ScheduleExactAlarm => "scheduleExactAlarm",
             Capability::UsageStats => "usageStats",
             Capability::IgnoreBatteryOptimizations => "ignoreBatteryOptimizations",
+        Capability::PictureInPicture => "pictureInPicture",
+        Capability::UseFullScreenIntent => "useFullScreenIntent",
+        Capability::AccessNotificationPolicy => "accessNotificationPolicy",
+        Capability::ManageMedia => "manageMedia",
+        Capability::GetInstalledApps => "getInstalledApps",
         }
     }
 
@@ -72,6 +87,11 @@ impl Capability {
                 | Capability::ScheduleExactAlarm
                 | Capability::UsageStats
                 | Capability::IgnoreBatteryOptimizations
+                | Capability::PictureInPicture
+                | Capability::UseFullScreenIntent
+                | Capability::AccessNotificationPolicy
+                | Capability::ManageMedia
+                | Capability::GetInstalledApps
         )
     }
 }
@@ -317,6 +337,11 @@ fn requested_bit(capability: Capability) -> u32 {
         Capability::ScheduleExactAlarm => 256,
         Capability::UsageStats => 512,
         Capability::IgnoreBatteryOptimizations => 1024,
+        Capability::PictureInPicture => 4096,
+        Capability::UseFullScreenIntent => 8192,
+        Capability::AccessNotificationPolicy => 16384,
+        Capability::ManageMedia => 32768,
+        Capability::GetInstalledApps => 65536,
     }
 }
 
@@ -363,7 +388,7 @@ mod tests {
         assert!(Capability::ManageExternalStorage.is_special());
         assert!(!Capability::Location.is_special());
         assert!(!Capability::BackgroundLocation.is_special());
-        assert_eq!(Capability::ALL.len(), 12);
+        assert_eq!(Capability::ALL.len(), 17);
         assert!(PermissionStatus::Granted.is_allowed());
         assert!(PermissionStatus::NotRequired.is_allowed());
         assert!(PermissionStatus::Denied.is_denied());

@@ -30,7 +30,12 @@ fn permission_names(capability: Capability) -> &'static [&'static str] {
         | Capability::RequestInstallPackages
         | Capability::ScheduleExactAlarm
         | Capability::UsageStats
-        | Capability::IgnoreBatteryOptimizations => &[],
+        | Capability::IgnoreBatteryOptimizations
+        | Capability::PictureInPicture
+        | Capability::UseFullScreenIntent
+        | Capability::AccessNotificationPolicy
+        | Capability::ManageMedia
+        | Capability::GetInstalledApps => &[],
     }
 }
 
