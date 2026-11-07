@@ -208,6 +208,16 @@ pub enum PermissionAction {
     Unsupported,
 }
 
+fn action_for(status: PermissionStatus, special: bool) -> PermissionAction {
+    match status {
+        PermissionStatus::Unsupported => PermissionAction::Unsupported,
+        PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
+        PermissionStatus::NotRequired => PermissionAction::NotRequired,
+        _ if special => PermissionAction::OpenSettings,
+        _ => PermissionAction::SystemDialog,
+    }
+}
+
 /// Why a request could not be started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionError {
@@ -357,13 +367,7 @@ impl<'a> Permissions<'a> {
 
     /// What kind of interaction this capability needs on the current platform.
     pub fn action(&self, capability: Capability) -> PermissionAction {
-        match self.status(capability) {
-            PermissionStatus::Unsupported => PermissionAction::Unsupported,
-            PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
-            PermissionStatus::NotRequired => PermissionAction::NotRequired,
-            _ if capability.is_special() => PermissionAction::OpenSettings,
-            _ => PermissionAction::SystemDialog,
-        }
+        action_for(self.status(capability), capability.is_special())
     }
 
     /// Open the platform page for one capability, when the app knows which permission failed.
@@ -524,6 +528,30 @@ mod tests {
         assert!(PermissionStatus::NotRequired.is_allowed());
         assert!(PermissionStatus::Denied.is_denied());
         assert!(!PermissionStatus::Denied.is_allowed());
+    }
+
+    #[test]
+    fn actions_follow_permission_status() {
+        assert_eq!(
+            action_for(PermissionStatus::PermanentlyDenied, false),
+            PermissionAction::OpenSettings
+        );
+        assert_eq!(
+            action_for(PermissionStatus::NotRequired, false),
+            PermissionAction::NotRequired
+        );
+        assert_eq!(
+            action_for(PermissionStatus::Denied, true),
+            PermissionAction::OpenSettings
+        );
+        assert_eq!(
+            action_for(PermissionStatus::Denied, false),
+            PermissionAction::SystemDialog
+        );
+        assert_eq!(
+            action_for(PermissionStatus::Unsupported, false),
+            PermissionAction::Unsupported
+        );
     }
 
     #[test]
