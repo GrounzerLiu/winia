@@ -332,6 +332,16 @@ impl PermissionRequest {
         }
     }
 
+    /// Cancel this request and remove it from the Android request queue.
+    ///
+    /// The handle stays usable but polling returns None because the result was discarded.
+    pub fn cancel(&self) {
+        #[cfg(target_os = "android")]
+        {
+            crate::platform::android::permissions::clear_result(&self.inner.app, self.inner.id);
+        }
+    }
+
     /// Poll until the result arrives or the timeout expires.
     ///
     /// A timeout returns None; it is not the same as a denied permission. Do not call this from
