@@ -26,7 +26,15 @@ impl<'a> AndroidJni<'a> {
     where
         F: FnOnce(&mut jni::Env<'_>) -> jni::errors::Result<T>,
     {
-        self.java_vm().attach_current_thread(f)
+        self.java_vm().attach_current_thread(|env| {
+            let result = f(env);
+            // A failed JNI call can leave a Java exception pending. Leaving it in place makes
+            // every later JNI call on this thread fail too, so clear it after reporting the error.
+            if result.is_err() && env.exception_check() {
+                env.exception_clear();
+            }
+            result
+        })
     }
 
     /// The Activity's JNI global reference.

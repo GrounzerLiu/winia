@@ -17,6 +17,23 @@ use crate::platform::android::AndroidJni;
 
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+fn adapter_present(app: &AndroidApp) -> bool {
+    AndroidJni::new(app)
+        .with_env(|env| {
+            env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+            Ok(())
+        })
+        .is_ok()
+}
+
+fn adapter_error(app: &AndroidApp, error: jni::errors::Error) -> PermissionError {
+    if adapter_present(app) {
+        PermissionError::Jni(format!("{error:?}"))
+    } else {
+        PermissionError::AdapterMissing
+    }
+}
+
 fn permission_names(capability: Capability) -> &'static [&'static str] {
     match capability {
         Capability::Camera => &["android.permission.CAMERA"],
@@ -46,7 +63,7 @@ pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStat
     if matches!(capability, Capability::Notifications) && AndroidApp::sdk_version() < 33 {
         return PermissionStatus::NotRequired;
     }
-    if capability.is_special() {
+    if capability.is_special() || matches!(capability, Capability::GetInstalledApps) {
         return match is_granted(app, capability) {
             Ok(true) => PermissionStatus::Granted,
             Ok(false) => PermissionStatus::Denied,
@@ -77,6 +94,42 @@ pub(crate) fn status(app: &AndroidApp, capability: Capability) -> PermissionStat
         Ok(false) => PermissionStatus::Denied,
         Err(_) => PermissionStatus::Unsupported,
     }
+}
+
+pub(crate) fn has_requested(app: &AndroidApp, capability: Capability) -> bool {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let name = env.new_string(capability.adapter_name())?;
+        env.call_static_method(
+            class,
+            jni_str!("hasRequested"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;)Z"),
+            &[JValue::Object(&activity), JValue::Object(&name)],
+        )?
+        .z()
+    });
+    result.unwrap_or(false)
+}
+
+pub(crate) fn is_permanently_denied(app: &AndroidApp, capability: Capability) -> bool {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let name = env.new_string(capability.adapter_name())?;
+        env.call_static_method(
+            class,
+            jni_str!("isPermanentlyDenied"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;)Z"),
+            &[JValue::Object(&activity), JValue::Object(&name)],
+        )?
+        .z()
+    });
+    result.unwrap_or(false)
 }
 
 pub(crate) fn service_status(
@@ -136,7 +189,7 @@ pub(crate) fn request_service(
     });
     match called {
         Ok(()) => Ok(PermissionRequest::new(app.clone(), id)),
-        Err(_) => Err(PermissionError::AdapterMissing),
+        Err(error) => Err(adapter_error(app, error)),
     }
 }
 
@@ -163,7 +216,7 @@ pub(crate) fn open_settings_for_service(
         )?;
         Ok(())
     });
-    called.map_err(|_| PermissionError::AdapterMissing)
+    called.map_err(|error| adapter_error(app, error))
 }
 
 pub(crate) fn request(
@@ -191,7 +244,7 @@ pub(crate) fn request(
     });
     match called {
         Ok(()) => Ok(PermissionRequest::new(app.clone(), id)),
-        Err(_) => Err(PermissionError::AdapterMissing),
+        Err(error) => Err(adapter_error(app, error)),
     }
 }
 
@@ -224,7 +277,7 @@ fn open_settings_call(app: &AndroidApp, method: &str, capability: Option<Capabil
         }
         Ok(())
     });
-    called.map_err(|_| PermissionError::AdapterMissing)
+    called.map_err(|error| adapter_error(app, error))
 }
 
 pub(crate) fn open_settings(app: &AndroidApp) -> Result<(), PermissionError> {
@@ -250,7 +303,21 @@ fn is_granted(app: &AndroidApp, capability: Capability) -> Result<bool, Permissi
         )?
         .z()
     })
-    .map_err(|_| PermissionError::AdapterMissing)
+    .map_err(|error| adapter_error(app, error))
+}
+
+pub(crate) fn clear_result(app: &AndroidApp, id: u64) {
+    let jni = AndroidJni::new(app);
+    let _ = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        env.call_static_method(
+            class,
+            jni_str!("clearResult"),
+            jni_sig!("(J)V"),
+            &[JValue::Long(id as i64)],
+        )?;
+        Ok(())
+    });
 }
 
 pub(crate) fn poll_result(app: &AndroidApp, id: u64) -> Option<PermissionStatus> {

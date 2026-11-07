@@ -156,7 +156,6 @@ impl Capability {
                 | Capability::UseFullScreenIntent
                 | Capability::AccessNotificationPolicy
                 | Capability::ManageMedia
-                | Capability::GetInstalledApps
         )
     }
 }
@@ -203,6 +202,8 @@ pub enum PermissionAction {
     SystemDialog,
     /// The user must enable the capability on a system settings page.
     OpenSettings,
+    /// No permission is required on this platform or API level.
+    NotRequired,
     /// The current target has no permission backend.
     Unsupported,
 }
@@ -214,6 +215,10 @@ pub enum PermissionError {
     Unsupported,
     /// Android is missing the generated WiniaPermissions bridge.
     AdapterMissing,
+    /// The capability is a settings-only special access; use open_settings_for.
+    SettingsRequired,
+    /// Background location requires foreground location to be granted first.
+    ForegroundLocationRequired,
     /// A JNI call failed.
     Jni(String),
 }
@@ -225,8 +230,21 @@ pub enum PermissionError {
 #[derive(Clone)]
 pub struct PermissionRequest {
     #[cfg(target_os = "android")]
+    inner: std::sync::Arc<RequestInner>,
+    id: u64,
+}
+
+#[cfg(target_os = "android")]
+struct RequestInner {
     app: winit::platform::android::activity::AndroidApp,
     id: u64,
+}
+
+#[cfg(target_os = "android")]
+impl Drop for RequestInner {
+    fn drop(&mut self) {
+        crate::platform::android::permissions::clear_result(&self.app, self.id);
+    }
 }
 
 impl std::fmt::Debug for PermissionRequest {
@@ -246,14 +264,17 @@ impl Eq for PermissionRequest {}
 impl PermissionRequest {
     #[cfg(target_os = "android")]
     pub(crate) fn new(app: winit::platform::android::activity::AndroidApp, id: u64) -> Self {
-        Self { app, id }
+        Self {
+            inner: std::sync::Arc::new(RequestInner { app, id }),
+            id,
+        }
     }
 
     /// Return the result once the platform has delivered it, without blocking.
     pub fn poll(&self) -> Option<PermissionStatus> {
         #[cfg(target_os = "android")]
         {
-            return crate::platform::android::permissions::poll_result(&self.app, self.id);
+            return crate::platform::android::permissions::poll_result(&self.inner.app, self.inner.id);
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -264,16 +285,16 @@ impl PermissionRequest {
 
     /// Poll until the result arrives or the timeout expires.
     ///
-    /// A timeout returns Denied because the request was not granted; callers that need to
-    /// distinguish a timeout should use poll and their own deadline.
-    pub fn wait(&self, timeout: Duration) -> PermissionStatus {
+    /// A timeout returns None; it is not the same as a denied permission. Do not call this from
+    /// the UI thread: Android delivers the result on the main looper.
+    pub fn wait(&self, timeout: Duration) -> Option<PermissionStatus> {
         let start = std::time::Instant::now();
         loop {
             if let Some(status) = self.poll() {
-                return status;
+                return Some(status);
             }
             if start.elapsed() >= timeout {
-                return PermissionStatus::Denied;
+                return None;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -310,7 +331,14 @@ impl<'a> Permissions<'a> {
                 return PermissionStatus::Unsupported;
             };
             let status = crate::platform::android::permissions::status(app, capability);
-            return if status == PermissionStatus::Denied && !was_requested(capability) {
+            if status == PermissionStatus::Denied
+                && crate::platform::android::permissions::is_permanently_denied(app, capability)
+            {
+                return PermissionStatus::PermanentlyDenied;
+            }
+            return if status == PermissionStatus::Denied
+                && !crate::platform::android::permissions::has_requested(app, capability)
+            {
                 PermissionStatus::NotDetermined
             } else {
                 status
@@ -325,12 +353,12 @@ impl<'a> Permissions<'a> {
 
     /// What kind of interaction this capability needs on the current platform.
     pub fn action(&self, capability: Capability) -> PermissionAction {
-        if self.status(capability) == PermissionStatus::Unsupported {
-            PermissionAction::Unsupported
-        } else if capability.is_special() {
-            PermissionAction::OpenSettings
-        } else {
-            PermissionAction::SystemDialog
+        match self.status(capability) {
+            PermissionStatus::Unsupported => PermissionAction::Unsupported,
+            PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
+            PermissionStatus::NotRequired => PermissionAction::NotRequired,
+            _ if capability.is_special() => PermissionAction::OpenSettings,
+            _ => PermissionAction::SystemDialog,
         }
     }
 
@@ -422,16 +450,26 @@ impl<'a> Permissions<'a> {
 
     /// Start a permission request on the Android UI thread.
     pub fn request(&self, capability: Capability) -> Result<PermissionRequest, PermissionError> {
+        if capability.is_special() {
+            return Err(PermissionError::SettingsRequired);
+        }
+        #[cfg(target_os = "android")]
+        if matches!(capability, Capability::BackgroundLocation) {
+            let Some(app) = self.app else {
+                return Err(PermissionError::Unsupported);
+            };
+            if crate::platform::android::permissions::status(app, Capability::Location)
+                != PermissionStatus::Granted
+            {
+                return Err(PermissionError::ForegroundLocationRequired);
+            }
+        }
         #[cfg(target_os = "android")]
         {
             let Some(app) = self.app else {
                 return Err(PermissionError::Unsupported);
             };
-            let request = crate::platform::android::permissions::request(app, capability);
-            if request.is_ok() {
-                mark_requested(capability);
-            }
-            return request;
+            return crate::platform::android::permissions::request(app, capability);
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -439,38 +477,6 @@ impl<'a> Permissions<'a> {
             Err(PermissionError::Unsupported)
         }
     }
-}
-
-static REQUESTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-fn requested_bit(capability: Capability) -> u32 {
-    match capability {
-        Capability::Camera => 1,
-        Capability::Microphone => 2,
-        Capability::Location => 4,
-        Capability::Notifications => 8,
-        Capability::BackgroundLocation => 2048,
-        Capability::SystemAlertWindow => 16,
-        Capability::WriteSettings => 32,
-        Capability::ManageExternalStorage => 64,
-        Capability::RequestInstallPackages => 128,
-        Capability::ScheduleExactAlarm => 256,
-        Capability::UsageStats => 512,
-        Capability::IgnoreBatteryOptimizations => 1024,
-        Capability::PictureInPicture => 4096,
-        Capability::UseFullScreenIntent => 8192,
-        Capability::AccessNotificationPolicy => 16384,
-        Capability::ManageMedia => 32768,
-        Capability::GetInstalledApps => 65536,
-    }
-}
-
-fn mark_requested(capability: Capability) {
-    REQUESTED.fetch_or(requested_bit(capability), std::sync::atomic::Ordering::Relaxed);
-}
-
-fn was_requested(capability: Capability) -> bool {
-    REQUESTED.load(std::sync::atomic::Ordering::Relaxed) & requested_bit(capability) != 0
 }
 
 static REVISION: std::sync::LazyLock<crate::runtime::state::Reactive<u64>> =
@@ -508,6 +514,7 @@ mod tests {
         assert!(Capability::ManageExternalStorage.is_special());
         assert!(!Capability::Location.is_special());
         assert!(!Capability::BackgroundLocation.is_special());
+        assert!(!Capability::GetInstalledApps.is_special());
         assert_eq!(Capability::ALL.len(), 17);
         assert!(PermissionStatus::Granted.is_allowed());
         assert!(PermissionStatus::NotRequired.is_allowed());
@@ -536,6 +543,12 @@ mod tests {
         assert_eq!(
             permissions.request(Capability::Camera).unwrap_err(),
             PermissionError::Unsupported
+        );
+        assert_eq!(
+            permissions
+                .request(Capability::SystemAlertWindow)
+                .unwrap_err(),
+            PermissionError::SettingsRequired
         );
         assert_eq!(
             permissions.open_settings().unwrap_err(),

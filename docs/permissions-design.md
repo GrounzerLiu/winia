@@ -31,7 +31,8 @@ The experimental branch contains the following:
   accessibility, notification-listener, VPN, and device-admin bindings; plus `PermissionStatus`,
   `PermissionError`, `PermissionRequest`, and a `Permissions` facade.
 - `ComposeCtx::permissions()`, whose `status()` and `request()` are Unsupported on desktop.
-- Android status via `Activity.checkSelfPermission`.
+- Android runtime status via `Activity.checkSelfPermission`; special and service permissions
+  query XXPermissions.
 - Android requests through the generated adapter `com.winia.permissions.WiniaPermissions`, backed by
   XXPermissions 28.3. The adapter receives results through XXPermissions' headless Fragment, so
   MainActivity does not override `onRequestPermissionsResult`.
@@ -45,20 +46,22 @@ The experimental branch contains the following:
 
 Known limits of this slice:
 
-- Location covers foreground (fine/coarse) and background; the background request includes the
-  foreground permissions first. Picker/scoped access is not wired yet.
+- Location covers foreground (fine/coarse) and background. Background location requires foreground
+  location to be granted first; `request(BackgroundLocation)` returns
+  `ForegroundLocationRequired` otherwise. Picker/scoped access is not wired yet.
 - Special permissions use XXPermissions' settings-page flow: overlay, write settings, all-files
   access, install packages, exact alarms, usage stats, battery optimization, picture-in-picture,
-  full-screen intents, notification policy, media management, and installed-app access. Overlay and
-  notification-listener access were granted on the AVD and the status refreshed after returning; the
+  full-screen intents, notification policy, and media management. Installed-app access is treated
+  as a runtime capability. Overlay and notification-listener access were granted on the AVD and the status refreshed after returning; the
   remaining special pages still need device coverage.
-- `NotDetermined` is tracked per process: a denied permission that has never been requested maps to
-  `NotDetermined`, but the history does not survive an app restart.
-- `PermissionRequest::wait` blocks the calling thread; UI code should use `poll` or rely on the
-  reactive status.
+- Request history is persisted in Android `SharedPreferences`, so `NotDetermined` survives an app
+  restart. `PermanentlyDenied` is derived from XXPermissions' do-not-ask-again check.
+- `PermissionRequest::wait` returns `None` on timeout and must not be called from the Android UI
+  thread; UI code should use `poll` or rely on the reactive status.
 - `PermanentlyDenied` is reported by the adapter; `Permissions::open_settings()` opens the app's
   system details page, and `Permissions::open_settings_for(capability)` asks XXPermissions for the
-  vendor-specific capability settings intent, falling back to app details.
+  vendor-specific capability settings intent, falling back to app details. Special capabilities
+  reject `request()` with `SettingsRequired`; use `action()` and `open_settings_for()` instead.
 - Declarations remain in AndroidManifest.xml; `winia.toml` still has no permission table.
 - The branch does not publish a new crate version; it is for evaluation.
 
