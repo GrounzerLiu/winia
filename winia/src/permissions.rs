@@ -528,6 +528,7 @@ impl<'a> Permissions<'a> {
 
     /// Start a permission request on the Android UI thread.
     pub fn request(&self, capability: Capability) -> Result<PermissionRequest, PermissionError> {
+        #[cfg(target_os = "android")]
         if capability.is_special() {
             return Err(PermissionError::SettingsRequired);
         }
@@ -702,7 +703,7 @@ mod tests {
             permissions
                 .request(Capability::SystemAlertWindow)
                 .unwrap_err(),
-            PermissionError::SettingsRequired
+            PermissionError::Unsupported
         );
         assert_eq!(
             permissions.open_settings().unwrap_err(),
