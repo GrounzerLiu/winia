@@ -229,7 +229,14 @@ fn normalize_status(
     }
 }
 
-fn action_for(status: PermissionStatus, special: bool) -> PermissionAction {
+fn action_for(
+    status: PermissionStatus,
+    special: bool,
+    missing_declaration: bool,
+) -> PermissionAction {
+    if missing_declaration {
+        return PermissionAction::ConfigureBuild;
+    }
     match status {
         PermissionStatus::Unsupported => PermissionAction::Unsupported,
         PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
@@ -392,6 +399,7 @@ impl<'a> Permissions<'a> {
     /// What kind of interaction this capability needs on the current platform.
     pub fn action(&self, capability: Capability) -> PermissionAction {
         let status = self.status(capability);
+        let mut missing_declaration = false;
         #[cfg(target_os = "android")]
         if !capability.is_special()
             && !matches!(
@@ -402,11 +410,11 @@ impl<'a> Permissions<'a> {
         {
             match crate::platform::android::permissions::has_declared_permission(app, capability) {
                 Ok(true) => {}
-                Ok(false) => return PermissionAction::ConfigureBuild,
+                Ok(false) => missing_declaration = true,
                 Err(_) => return PermissionAction::Unsupported,
             }
         }
-        action_for(status, capability.is_special())
+        action_for(status, capability.is_special(), missing_declaration)
     }
 
     /// Open the platform page for one capability, when the app knows which permission failed.
@@ -608,28 +616,32 @@ mod tests {
     #[test]
     fn actions_follow_permission_status() {
         assert_eq!(
-            action_for(PermissionStatus::PermanentlyDenied, false),
+            action_for(PermissionStatus::PermanentlyDenied, false, false),
             PermissionAction::OpenSettings
         );
         assert_eq!(
-            action_for(PermissionStatus::NotRequired, false),
+            action_for(PermissionStatus::NotRequired, false, false),
             PermissionAction::NotRequired
         );
         assert_eq!(
-            action_for(PermissionStatus::Denied, true),
+            action_for(PermissionStatus::Denied, true, false),
             PermissionAction::OpenSettings
         );
         assert_eq!(
-            action_for(PermissionStatus::Denied, false),
+            action_for(PermissionStatus::Denied, false, false),
             PermissionAction::SystemDialog
         );
         assert_eq!(
-            action_for(PermissionStatus::Cancelled, false),
+            action_for(PermissionStatus::Cancelled, false, false),
             PermissionAction::SystemDialog
         );
         assert_eq!(
-            action_for(PermissionStatus::Unsupported, false),
+            action_for(PermissionStatus::Unsupported, false, false),
             PermissionAction::Unsupported
+        );
+        assert_eq!(
+            action_for(PermissionStatus::Granted, false, true),
+            PermissionAction::ConfigureBuild
         );
     }
 
