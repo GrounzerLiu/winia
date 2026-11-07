@@ -108,7 +108,9 @@ pub(crate) fn is_main_thread(app: &AndroidApp) -> bool {
         )?
         .z()
     });
-    result.unwrap_or(false)
+    // If the adapter cannot be queried, assume the caller may be on the main thread and refuse
+    // to block; a missing adapter cannot deliver a result anyway.
+    result.unwrap_or(true)
 }
 
 pub(crate) fn has_requested(app: &AndroidApp, capability: Capability) -> bool {
