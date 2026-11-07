@@ -210,6 +210,23 @@ pub enum PermissionAction {
     Unsupported,
 }
 
+fn normalize_status(
+    status: PermissionStatus,
+    requested: bool,
+    permanently_denied: bool,
+) -> PermissionStatus {
+    if status != PermissionStatus::Denied {
+        return status;
+    }
+    if permanently_denied {
+        PermissionStatus::PermanentlyDenied
+    } else if requested {
+        PermissionStatus::Denied
+    } else {
+        PermissionStatus::NotDetermined
+    }
+}
+
 fn action_for(status: PermissionStatus, special: bool) -> PermissionAction {
     match status {
         PermissionStatus::Unsupported => PermissionAction::Unsupported,
@@ -356,18 +373,10 @@ impl<'a> Permissions<'a> {
                 return PermissionStatus::Unsupported;
             };
             let status = crate::platform::android::permissions::status(app, capability);
-            if status == PermissionStatus::Denied
-                && crate::platform::android::permissions::is_permanently_denied(app, capability)
-            {
-                return PermissionStatus::PermanentlyDenied;
-            }
-            return if status == PermissionStatus::Denied
-                && !crate::platform::android::permissions::has_requested(app, capability)
-            {
-                PermissionStatus::NotDetermined
-            } else {
-                status
-            };
+            let requested = crate::platform::android::permissions::has_requested(app, capability);
+            let permanent =
+                crate::platform::android::permissions::is_permanently_denied(app, capability);
+            return normalize_status(status, requested, permanent);
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -581,6 +590,26 @@ mod tests {
         assert_eq!(
             action_for(PermissionStatus::Unsupported, false),
             PermissionAction::Unsupported
+        );
+    }
+
+    #[test]
+    fn status_normalization_distinguishes_permission_history() {
+        assert_eq!(
+            normalize_status(PermissionStatus::Denied, false, false),
+            PermissionStatus::NotDetermined
+        );
+        assert_eq!(
+            normalize_status(PermissionStatus::Denied, true, false),
+            PermissionStatus::Denied
+        );
+        assert_eq!(
+            normalize_status(PermissionStatus::Denied, true, true),
+            PermissionStatus::PermanentlyDenied
+        );
+        assert_eq!(
+            normalize_status(PermissionStatus::Granted, false, false),
+            PermissionStatus::Granted
         );
     }
 
