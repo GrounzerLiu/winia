@@ -451,7 +451,11 @@ impl<'a> Permissions<'a> {
         }
     }
 
-    /// Start a service-binding permission request.
+    /// Start the settings-page flow for a service-binding permission.
+    ///
+    /// Service permissions do not have a normal runtime dialog; `service_action` reports
+    /// `OpenSettings` for them. `open_settings_for_service` is the explicit alternative when the
+    /// caller only wants to navigate, not observe a request result.
     pub fn request_service(
         &self,
         service: ServicePermission,
