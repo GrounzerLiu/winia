@@ -425,6 +425,15 @@ impl<'a> Permissions<'a> {
         }
     }
 
+    /// What kind of interaction a service-binding permission needs.
+    pub fn service_action(&self, service: ServicePermission) -> PermissionAction {
+        match self.service_status(service) {
+            PermissionStatus::Unsupported => PermissionAction::Unsupported,
+            PermissionStatus::NotRequired => PermissionAction::NotRequired,
+            _ => PermissionAction::OpenSettings,
+        }
+    }
+
     /// Status of a service-binding permission.
     pub fn service_status(&self, service: ServicePermission) -> PermissionStatus {
         let _ = revision();
@@ -683,6 +692,10 @@ mod tests {
         assert_eq!(
             permissions.request_service(service).unwrap_err(),
             PermissionError::Unsupported
+        );
+        assert_eq!(
+            permissions.service_action(service),
+            PermissionAction::Unsupported
         );
     }
 }
