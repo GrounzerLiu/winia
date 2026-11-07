@@ -22,6 +22,7 @@ fn permission_names(capability: Capability) -> &'static [&'static str] {
             "android.permission.ACCESS_FINE_LOCATION",
             "android.permission.ACCESS_COARSE_LOCATION",
         ],
+        Capability::BackgroundLocation => &["android.permission.ACCESS_BACKGROUND_LOCATION"],
         Capability::Notifications => &["android.permission.POST_NOTIFICATIONS"],
         Capability::SystemAlertWindow
         | Capability::WriteSettings

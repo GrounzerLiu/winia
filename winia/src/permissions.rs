@@ -13,6 +13,7 @@ pub enum Capability {
     Camera,
     Microphone,
     Location,
+    BackgroundLocation,
     Notifications,
     SystemAlertWindow,
     WriteSettings,
@@ -30,6 +31,7 @@ impl Capability {
             Capability::Camera => "camera",
             Capability::Microphone => "microphone",
             Capability::Location => "location",
+            Capability::BackgroundLocation => "backgroundLocation",
             Capability::Notifications => "notifications",
             Capability::SystemAlertWindow => "systemAlertWindow",
             Capability::WriteSettings => "writeSettings",
@@ -268,6 +270,7 @@ fn requested_bit(capability: Capability) -> u32 {
         Capability::Microphone => 2,
         Capability::Location => 4,
         Capability::Notifications => 8,
+        Capability::BackgroundLocation => 2048,
         Capability::SystemAlertWindow => 16,
         Capability::WriteSettings => 32,
         Capability::ManageExternalStorage => 64,
@@ -320,6 +323,7 @@ mod tests {
         assert!(Capability::SystemAlertWindow.is_special());
         assert!(Capability::ManageExternalStorage.is_special());
         assert!(!Capability::Location.is_special());
+        assert!(!Capability::BackgroundLocation.is_special());
     }
 
     #[test]

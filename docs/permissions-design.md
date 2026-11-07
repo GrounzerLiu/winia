@@ -43,8 +43,8 @@ The experimental branch contains the following:
 
 Known limits of this slice:
 
-- Location is foreground location (fine/coarse); background location and picker/scoped access are
-  not wired yet.
+- Location covers foreground (fine/coarse) and background; the background request includes the
+  foreground permissions first. Picker/scoped access is not wired yet.
 - Special permissions use XXPermissions' settings-page flow: overlay, write settings, all-files
   access, install packages, exact alarms, usage stats, and battery optimization. Overlay was granted
   on the AVD and the status refreshed after returning; the remaining special pages still need device
