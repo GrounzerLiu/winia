@@ -94,10 +94,11 @@ impl ServicePermission {
         }
     }
 
-    pub const fn vpn(class: &'static str) -> Self {
+    /// VPN permission is not tied to a concrete service class in XXPermissions.
+    pub const fn vpn() -> Self {
         Self {
             kind: ServiceKind::Vpn,
-            class,
+            class: "",
         }
     }
 
