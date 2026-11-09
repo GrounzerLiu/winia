@@ -570,6 +570,21 @@ impl<'a> Permissions<'a> {
 
     /// What kind of interaction a service-binding permission needs.
     pub fn service_action(&self, service: ServicePermission) -> PermissionAction {
+        #[cfg(target_os = "android")]
+        {
+            if let Some(app) = self.app {
+                match crate::platform::android::permissions::has_declared_service(app, service) {
+                    Ok(true) => {}
+                    // Without the component in the manifest the settings page itself cannot show
+                    // the service, so the fix is a build change, not navigation.
+                    Ok(false) => return PermissionAction::ConfigureBuild,
+                    Err(PermissionError::AdapterMissing) => {
+                        return PermissionAction::ConfigureBuild;
+                    }
+                    Err(_) => return PermissionAction::Unsupported,
+                }
+            }
+        }
         match self.service_status(service) {
             PermissionStatus::Unsupported => PermissionAction::Unsupported,
             PermissionStatus::NotRequired => PermissionAction::NotRequired,
@@ -599,6 +614,9 @@ impl<'a> Permissions<'a> {
     /// Service permissions do not have a normal runtime dialog; `service_action` reports
     /// `OpenSettings` for them. `open_settings_for_service` is the explicit alternative when the
     /// caller only wants to navigate, not observe a request result.
+    ///
+    /// The manifest is checked first: a missing component would otherwise surface as an exception
+    /// on the main looper instead of an error the caller can act on.
     pub fn request_service(
         &self,
         service: ServicePermission,
@@ -608,6 +626,11 @@ impl<'a> Permissions<'a> {
             let Some(app) = self.app else {
                 return Err(PermissionError::Unsupported);
             };
+            match crate::platform::android::permissions::has_declared_service(app, service) {
+                Ok(true) => {}
+                Ok(false) => return Err(PermissionError::MissingDeclaration),
+                Err(error) => return Err(error),
+            }
             return crate::platform::android::permissions::request_service(app, service);
         }
         #[cfg(not(target_os = "android"))]
@@ -929,6 +952,20 @@ mod tests {
         );
         assert_eq!(
             permissions.service_action(service),
+            PermissionAction::Unsupported
+        );
+    }
+
+    #[test]
+    fn a_service_without_a_component_is_only_checked_on_android() {
+        // VPN has no service class of its own, so it never trips the declaration check.
+        let vpn = ServicePermission::vpn();
+        assert_eq!(vpn.kind(), ServiceKind::Vpn);
+        assert_eq!(vpn.class(), "");
+        // Desktop has no backend at all: the action stays Unsupported instead of ConfigureBuild.
+        let permissions = Permissions::new();
+        assert_eq!(
+            permissions.service_action(vpn),
             PermissionAction::Unsupported
         );
     }

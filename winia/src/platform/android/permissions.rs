@@ -172,6 +172,37 @@ pub(crate) fn service_status(app: &AndroidApp, service: ServicePermission) -> Pe
     }
 }
 
+/// True when the service component a `ServicePermission` names is declared in the manifest.
+///
+/// XXPermissions throws from its compliance check when the component is missing, and that
+/// exception is raised on the main looper, so the whole process dies. Asking first turns a missing
+/// declaration into an ordinary `MissingDeclaration`.
+pub(crate) fn has_declared_service(
+    app: &AndroidApp,
+    service: ServicePermission,
+) -> Result<bool, PermissionError> {
+    let jni = AndroidJni::new(app);
+    let result = jni.with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.permissions.WiniaPermissions"))?;
+        let activity = app.activity_as_ptr() as jni::sys::jobject;
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let kind = env.new_string(service.kind().adapter_name())?;
+        let class_name = env.new_string(service.class())?;
+        env.call_static_method(
+            class,
+            jni_str!("isServiceDeclared"),
+            jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Z"),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&kind),
+                JValue::Object(&class_name),
+            ],
+        )?
+        .z()
+    });
+    result.map_err(|error| adapter_error(app, error))
+}
+
 pub(crate) fn request_service(
     app: &AndroidApp,
     service: ServicePermission,
