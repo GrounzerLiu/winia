@@ -230,6 +230,12 @@ pub enum PermissionAction {
     SystemDialog,
     /// The user must enable the capability on a system settings page.
     OpenSettings,
+    /// Another capability has to be granted first; requesting this one now would fail.
+    ///
+    /// Android only reports background location after foreground location is granted, so
+    /// `action(BackgroundLocation)` returns this until `status(Location)` is allowed. Request
+    /// `Capability::Location` first and re-check this action afterwards.
+    Prerequisite,
     /// The manifest or build configuration is missing the required declaration.
     ConfigureBuild,
     /// No permission is required on this platform or API level.
@@ -260,14 +266,18 @@ fn action_for(
     status: PermissionStatus,
     special: bool,
     missing_declaration: bool,
+    prerequisite_missing: bool,
 ) -> PermissionAction {
     if missing_declaration {
         return PermissionAction::ConfigureBuild;
     }
     match status {
         PermissionStatus::Unsupported => PermissionAction::Unsupported,
-        PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
         PermissionStatus::NotRequired => PermissionAction::NotRequired,
+        // Checked before PermanentlyDenied on purpose: request() refuses this capability while
+        // the prerequisite is missing, so pointing at the settings page would not help yet.
+        _ if prerequisite_missing => PermissionAction::Prerequisite,
+        PermissionStatus::PermanentlyDenied => PermissionAction::OpenSettings,
         PermissionStatus::Cancelled => PermissionAction::SystemDialog,
         _ if special => PermissionAction::OpenSettings,
         _ => PermissionAction::SystemDialog,
@@ -504,6 +514,22 @@ impl<'a> Permissions<'a> {
         #[cfg(not(target_os = "android"))]
         let missing_declaration = false;
         #[cfg(target_os = "android")]
+        let mut prerequisite_missing = false;
+        #[cfg(not(target_os = "android"))]
+        let prerequisite_missing = false;
+        #[cfg(target_os = "android")]
+        if matches!(capability, Capability::BackgroundLocation)
+            && !matches!(
+                status,
+                PermissionStatus::Unsupported | PermissionStatus::NotRequired
+            )
+            // Same rule request() enforces: background location is refused unless foreground
+            // location is granted, so the action has to report that instead of a dialog.
+            && self.status(Capability::Location) != PermissionStatus::Granted
+        {
+            prerequisite_missing = true;
+        }
+        #[cfg(target_os = "android")]
         if capability.needs_manifest_declaration()
             && !matches!(
                 status,
@@ -518,7 +544,12 @@ impl<'a> Permissions<'a> {
                 Err(_) => return PermissionAction::Unsupported,
             }
         }
-        action_for(status, capability.is_special(), missing_declaration)
+        action_for(
+            status,
+            capability.is_special(),
+            missing_declaration,
+            prerequisite_missing,
+        )
     }
 
     /// Open the platform page for one capability, when the app knows which permission failed.
@@ -729,32 +760,60 @@ mod tests {
     #[test]
     fn actions_follow_permission_status() {
         assert_eq!(
-            action_for(PermissionStatus::PermanentlyDenied, false, false),
+            action_for(PermissionStatus::PermanentlyDenied, false, false, false),
             PermissionAction::OpenSettings
         );
         assert_eq!(
-            action_for(PermissionStatus::NotRequired, false, false),
+            action_for(PermissionStatus::NotRequired, false, false, false),
             PermissionAction::NotRequired
         );
         assert_eq!(
-            action_for(PermissionStatus::Denied, true, false),
+            action_for(PermissionStatus::Denied, true, false, false),
             PermissionAction::OpenSettings
         );
         assert_eq!(
-            action_for(PermissionStatus::Denied, false, false),
+            action_for(PermissionStatus::Denied, false, false, false),
             PermissionAction::SystemDialog
         );
         assert_eq!(
-            action_for(PermissionStatus::Cancelled, false, false),
+            action_for(PermissionStatus::Cancelled, false, false, false),
             PermissionAction::SystemDialog
         );
         assert_eq!(
-            action_for(PermissionStatus::Unsupported, false, false),
+            action_for(PermissionStatus::Unsupported, false, false, false),
             PermissionAction::Unsupported
         );
         assert_eq!(
-            action_for(PermissionStatus::Granted, false, true),
+            action_for(PermissionStatus::Granted, false, true, false),
             PermissionAction::ConfigureBuild
+        );
+    }
+
+    #[test]
+    fn a_missing_prerequisite_wins_over_the_remaining_actions() {
+        // request(BackgroundLocation) refuses while foreground location is not allowed, so the
+        // action must not point at a dialog or the settings page.
+        assert_eq!(
+            action_for(PermissionStatus::Denied, false, false, true),
+            PermissionAction::Prerequisite
+        );
+        assert_eq!(
+            action_for(PermissionStatus::PermanentlyDenied, false, false, true),
+            PermissionAction::Prerequisite
+        );
+        // A missing manifest declaration is still the more actionable answer.
+        assert_eq!(
+            action_for(PermissionStatus::Denied, false, true, true),
+            PermissionAction::ConfigureBuild
+        );
+        // Capabilities without a backend or without a need stay as they are.
+        assert_eq!(
+            action_for(PermissionStatus::Unsupported, false, false, true),
+            PermissionAction::Unsupported
+        );
+        assert_eq!(
+            action_for(PermissionStatus::NotRequired, false, false, true),
+            PermissionAction::NotRequired
         );
     }
 

@@ -40,10 +40,12 @@ The experimental branch contains the following:
   bumps a reactive permission revision; a composition that read `Permissions::status()` then
   recomposes and re-queries the OS. This fixes the stale "Denied after grant" display.
 - `PermissionAction` tells the UI whether a capability uses the normal system dialog, a settings
-  page, or a build-configuration fix. The adapter also checks the packed manifest before a runtime
-  request, so a missing declaration reports `ConfigureBuild` / `MissingDeclaration` instead of
-  throwing inside XXPermissions. The app resumes from a settings page through the same revision
-  refresh.
+  page, or a build-configuration fix. It also reports `Prerequisite` when another capability has to
+  be granted first: `action(BackgroundLocation)` returns it until foreground location is granted,
+  matching the rule `request(BackgroundLocation)` enforces. The adapter also checks the packed
+  manifest before a runtime request, so a missing declaration reports `ConfigureBuild` /
+  `MissingDeclaration` instead of throwing inside XXPermissions. The app resumes from a settings
+  page through the same revision refresh.
 - A probe app on an Android 36 AVD showed the system camera, foreground location, and notification
   dialogs; each grant changed the on-screen status without restarting the Activity.
 
