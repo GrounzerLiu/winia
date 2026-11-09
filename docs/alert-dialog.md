@@ -1,9 +1,33 @@
 # AlertDialog
 
-M3 alert dialogs: `winia/src/components/alert_dialog.rs`. Demo:
-`cargo run -p winia --example alert_dialog_demo`.
+M3 alert dialogs: `winia/src/components/alert_dialog.rs`.
 
-## API
+## Sources
+
+Compose paths are relative to
+`reference/compose/material3-1.5.0-beta01/commonMain/androidx/compose/material3/` unless stated
+otherwise.
+
+| Compose | Settles |
+| --- | --- |
+| `AlertDialog.kt` | the two public overloads (`AlertDialog`, `BasicAlertDialog`), `AlertDialogContent`'s slot order and paddings, `AlertDialogDefaults`, `AlertDialogFlowRow`'s direction flip, `DialogMinWidth`/`DialogMaxWidth` |
+| `androidMain/androidx/compose/material3/AndroidAlertDialog.android.kt` (under `reference/compose/material3-1.5.0-beta01/`) | the `expect`/`actual` pair behind `AlertDialog`; nothing platform-specific is mirrored here |
+| `tokens/DialogTokens.kt` | `ContainerShape` (`CornerExtraLarge`), `ContainerColor` (`SurfaceContainerHigh`), `IconColor` (`Secondary`), `HeadlineColor` (`OnSurface`), `SupportingTextColor` (`OnSurfaceVariant`), `ActionLabelTextColor` (`Primary`), and the three `TypographyKeyTokens` (`HeadlineSmall` / `BodyMedium` / `LabelLarge`) |
+| `InteractiveComponentSize.kt` | `LocalMinimumInteractiveComponentSize`, which Compose subtracts from `ButtonsCrossAxisSpacing`; see the button-spacing bullet under Differences |
+| `ColorScheme.kt` | the tonal-overlay gate and formula (`applyTonalElevation`, `:1540-1543`, `:1125-1129`), which is why no `tonalElevation` parameter exists here |
+
+`DialogProperties` itself lives in `androidx.compose.ui.window` and is **not** in the reference tree; its
+fields are listed from the call sites in `AlertDialog.kt` (the table under Behaviour).
+
+## Variants
+
+| Constructor | Content | When |
+| --- | --- | --- |
+| `AlertDialog::new(visible)` | fixed slots: icon, title, text, confirm/dismiss buttons | the M3 alert dialog; Compose's two-action `AlertDialog` |
+| `BasicAlertDialog::new(visible)` | an arbitrary closure, plus shape / container colour / content padding | a dialog that brings its own surface; Compose's `BasicAlertDialog` and its `content` overload. The date picker's dialog uses it |
+
+`AlertDialog` delegates to `BasicAlertDialog`, as Compose's `AlertDialogImpl` delegates to its content
+composable. There are no height variants — Compose ships none for dialogs.
 
 ```rust
 AlertDialog::new(visible)
@@ -16,110 +40,13 @@ AlertDialog::new(visible)
     .build(ctx);
 ```
 
-`BasicAlertDialog` is the same dialog with arbitrary content instead of the slots (Compose's
-`BasicAlertDialog`); `AlertDialog` delegates to it, as `AlertDialogImpl` does.
-
 **The action row is a TEXT BUTTON, never a filled one.** The specs page's basic-dialog anatomy calls the
 element "Button label text" and the full-screen variant's "Text button"; its colour role is Primary.
 `AlertDialogImpl` says the same in code — it provides `DialogTokens.ActionLabelTextColor` to the row and
 notes that a TextButton "will not consume this provided content color value, and will use their own
 defined or default colors" (`AlertDialog.kt:283-288`). So both the confirm and the dismiss slot want
 `Button::new().style(ButtonStyle::Text)`; the dialog supplies the layout and its two default colours, not
-the button style.
-
-### Composing it: pass `visible`, do not wrap it in `if`
-
-An overlay is released by its owner recording `active = false`, and an owner that simply **stops composing
-it** counts as "skipped" and is KEPT — `composer.rs::record_overlay_active` and `app.rs::sync_overlays` both
-say so, and the map is cleared every frame (`composer.rs:2817`) so a frame with no record reads as "keep, as
-last frame". So the shape is:
-
-```rust
-AlertDialog::new(is_open)   // composed EVERY frame; `visible` carries open/closed
-```
-
-and **not**
-
-```rust
-if is_open { AlertDialog::new(true).build(ctx) }   // pins the overlay on screen
-```
-
-The failure is quiet and asymmetric, which is what makes it worth writing down: with the `if`, Escape still
-closes the dialog — that path calls `begin_overlay_close` directly and never consults the registrar — while
-every button inside it runs its handler, flips the caller's state, and leaves the dialog sitting there.
-Measured on this demo with probe prints in the confirm slot: the click FIRED and the overlay count stayed
-at 1. The date-picker fixtures and demo compose their dialog unconditionally for the same reason.
-
-Slots are `Fn`, not `FnOnce`: an overlay composes its content on every frame the dialog is up
-(the same bound `ModalBottomSheet`'s content uses), so a callback that moves out of a slot needs
-a fresh clone per call — `clone!` inside the slot body.
-
-## Tokens (`DialogTokens`, `AlertDialogDefaults`)
-
-| token | value | used for |
-|---|---|---|
-| `ContainerShape` (`CornerExtraLarge`) | 28dp | container corners (the same radius the bottom sheet's expanded shape uses) |
-| `ContainerColor` | `SurfaceContainerHigh` | container |
-| `TonalElevation` | 0dp | flat by default — see the deviations and "Tonal overlay" below |
-| `IconColor` / `IconSize` | `Secondary` / 24dp | the icon slot |
-| `HeadlineColor` / `HeadlineFont` | `OnSurface` / `HeadlineSmall` | the title |
-| `SupportingTextColor` / `SupportingTextFont` | `OnSurfaceVariant` / `BodyMedium` | the text |
-| `ActionLabelTextColor` / `ActionLabelTextFont` | `Primary` / `LabelLarge` | provided to the buttons, which set their own colours (as in Compose) |
-| `dialogPadding` | 24dp (20dp for a precision pointer) | the content column's padding, all sides — winia hard-codes the touch value |
-| icon / title padding | 16dp each | below the icon, below the title |
-| `textPadding` | 24dp | below the text |
-| `DialogMinWidth` / `DialogMaxWidth` | 280dp / 560dp | the width clamp |
-| button spacing | 8dp | both axes of the action row |
-
-## Tonal overlay (on `Surface`, not on the dialog)
-
-**Tonal overlay** is how Material 3 gives a raised surface its colour shift: instead of (or alongside) a
-shadow, a `Surface` with a `tonalElevation` has `surfaceTint` blended over its own colour, more the higher the
-elevation. M3 dialogs look "raised" this way.
-
-`Surface::tonal_elevation` used to be a placeholder that did nothing. It now works, with Compose's rule
-(`ColorScheme.kt:1540-1543`, `:1125-1129`):
-
-- The tint applies **only when the surface's colour is exactly `theme.surface`** and tonal elevation is on.
-  A surface with any other colour is left untouched — that is Compose's gate, verbatim.
-- The blend is Compose's formula, character for character: `alpha = ((4.5 · ln(elev + 1)) + 2) / 100`, then
-  `surfaceTint(alpha)` over `surface`. winia composites it with the existing `Color::overlay` (the same
-  alpha lerp the state layers use).
-- `WiniaTheme::with_tonal_elevation_enabled(false, …)` suppresses it for a subtree — winia's
-  `LocalTonalElevationEnabled` (`ColorScheme.kt:1556`).
-
-Over the published `ElevationTokens` levels that is `1dp → 5.1%`, `3dp → 8.2%`, `6dp → 10.8%`.
-
-**It accumulates.** The elevation that decides the alpha is the ABSOLUTE one: each `Surface` adds its own
-`tonal_elevation` to whatever its ancestors provided and tints from the sum, then provides that sum downward
-(`Surface.kt:106,109` and the same pair in the other three overloads at `:211`、`:317`、`:424`; the reason is
-at `Surface.kt:146-150` — *a Surface never appears to have a lower elevation overlay than its ancestors*).
-So a 3 dp surface inside a 3 dp one reads 6 dp, not 3. winia previously tinted from the local number alone,
-which made every surface in a stack read as flat as its parent.
-
-**This does not change any dialog.** Every M3 dialog's container is `surfaceContainerHigh`/`surfaceVariant`,
-never `surface`, so the gate excludes them all — which is also why Compose's own `AlertDialog` gets nothing
-from its `tonalElevation` parameter, whose default is `0.dp` anyway (`AlertDialogDefaults.TonalElevation`,
-`AlertDialog.kt:241`). Note that gate holds only for the DEFAULT container colour: `containerColor` is a
-parameter, and a caller who passes `ColorScheme.surface` would get the tint. That is why `AlertDialog` does
-not expose `tonalElevation` here — see "Deviations from Compose".
-
-`Card` is not one of the tonal surfaces: Compose's `Card` passes no `tonalElevation` at all — the word does
-not occur anywhere in `material3/Card.kt`, and only `shadowElevation` reaches its `Surface`
-(`Card.kt:88-94`, `:149-157`). Its container depends on the variant: the default filled card is
-`surfaceContainerHighest` (`FilledCardTokens.kt:24`), `ElevatedCard` is `surfaceContainerLow`, and
-`OutlinedCard` is plain `surface` — so the last one *satisfies* the colour half of the gate and still shows
-no tint, because it never passes `tonalElevation`: the absolute elevation stays `0.dp`, and
-`surfaceColorAtElevation` (`ColorScheme.kt:1126`, `if (elevation == 0.dp) return surface`) is a no-op.
-Its per-state numbers (`OutlinedCardTokens.kt:30,34`) are `shadowElevation` only, which does not feed
-`applyTonalElevation`. `Menu` does pass one (`Menu.kt:403`), but its default
-is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
-`Surface` because that is where Compose puts it, not because a stock caller uses it.
-
-Six tests in `components::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
-colours staying untouched, zero elevation and the switch each doing nothing, the content colour still
-following the UNTINTED base colour, the tint reaching the rendered pixels, and the accumulation across two
-and three nested surfaces.
+the button style. That colour is fixed rather than a parameter — see Differences.
 
 ## Layout
 
@@ -159,30 +86,57 @@ both of which are the M3 arrangement. Reproduced with `WiniaTheme::with_theme_an
 rather than a bespoke layout: with two buttons in LTR the row reads `[Cancel] [Discard]`,
 end-aligned against the 24dp padding, which is what the real-window dump shows.
 
-## Structure and behaviour
+**RTL.** Every alignment above is a start/end or a centre, never a left/right: the icon centres, the
+title starts (or centres), the text starts, and the row ends. The buttons' own direction is restored
+inside the flipped flow, so their content mirrors with the window rather than with the flip.
 
-The caller's `modifier` is a WRAPPER around the surface — as in Compose's
-`Box(modifier.sizeIn(...))` — so a caller's padding sits outside the dialog's background instead
-of eating into it alongside the 24dp content padding.
+## Behaviour
 
-A slot is laid out inside the content box with its own bottom padding and cross-axis alignment.
-A slot that demands more than the box (`.size(w, h)` larger than the dialog) is COERCED into it:
-a `Size` is clamped into the incoming range, which is Compose's `size()` (`enforceIncoming = true`
-— a request only overrides the range through `required_size`, Compose's `requiredSize`), so such a
-slot comes out at the width it is offered and still starts at the padding. winia used to write the
-request over the constraints and let the surface's `clip` hide the spill; the alignment with Compose
-removed that, and `required_size` is what a caller reaches for if the spill is wanted.
+### Tokens (`DialogTokens`, `AlertDialogDefaults`)
 
-`confirm_button` is a slot like the rest, so the builder still accepts a dialog without one — but a
-VISIBLE dialog with neither action trips a `debug_assert!`: Compose's two-action overload requires
-`confirmButton` positionally, and a dialog the user can only dismiss has no way to say what it was
-for. Hidden dialogs are exempt, since keeping one built-but-not-shown is normal. (Compose's
-arbitrary-content overload is `BasicAlertDialog` here.)
+| token | value | used for |
+|---|---|---|
+| `ContainerShape` (`CornerExtraLarge`) | 28dp | container corners (the same radius the bottom sheet's expanded shape uses) |
+| `ContainerColor` | `SurfaceContainerHigh` | container |
+| `TonalElevation` | 0dp | flat by default — see "Tonal overlay" below |
+| `IconColor` / `IconSize` | `Secondary` / 24dp | the icon slot |
+| `HeadlineColor` / `HeadlineFont` | `OnSurface` / `HeadlineSmall` | the title |
+| `SupportingTextColor` / `SupportingTextFont` | `OnSurfaceVariant` / `BodyMedium` | the text |
+| `ActionLabelTextColor` / `ActionLabelTextFont` | `Primary` / `LabelLarge` | provided to the buttons, which set their own colours (as in Compose) |
+| `dialogPadding` | 24dp (20dp for a precision pointer) | the content column's padding, all sides — winia hard-codes the touch value |
+| icon / title padding | 16dp each | below the icon, below the title |
+| `textPadding` | 24dp | below the text |
+| `DialogMinWidth` / `DialogMaxWidth` | 280dp / 560dp | the width clamp |
+| button spacing | 8dp | both axes of the action row |
 
-The surface publishes `role = Dialog`, which is winia's landing for Compose's
-`Modifier.semantics { paneTitle = dialogPaneDescription }` on the dialog Box (`AlertDialog.kt:171`) and
-what `accessibility.rs` maps to the Pane UIA control type. A caller's own modifier still wins — it is
-applied after ours.
+### Composing it: pass `visible`, do not wrap it in `if`
+
+An overlay is released by its owner recording `active = false`, and an owner that simply **stops composing
+it** counts as "skipped" and is KEPT — `composer.rs::record_overlay_active` and `app.rs::sync_overlays` both
+say so, and the map is cleared every frame (`composer.rs:2817`) so a frame with no record reads as "keep, as
+last frame". So the shape is:
+
+```rust
+AlertDialog::new(is_open)   // composed EVERY frame; `visible` carries open/closed
+```
+
+and **not**
+
+```rust
+if is_open { AlertDialog::new(true).build(ctx) }   // pins the overlay on screen
+```
+
+The failure is quiet and asymmetric, which is what makes it worth writing down: with the `if`, Escape still
+closes the dialog — that path calls `begin_overlay_close` directly and never consults the registrar — while
+every button inside it runs its handler, flips the caller's state, and leaves the dialog sitting there.
+Measured on the demo with probe prints in the confirm slot: the click FIRED and the overlay count stayed
+at 1. The date-picker fixtures compose their dialog unconditionally for the same reason.
+
+Slots are `Fn`, not `FnOnce`: an overlay composes its content on every frame the dialog is up
+(the same bound `ModalBottomSheet`'s content uses), so a callback that moves out of a slot needs
+a fresh clone per call — `clone!` inside the slot body.
+
+### Dialog properties
 
 `DialogProperties` is exposed as its three cross-platform parts, each flat on the builder (Compose groups
 them, but the group holds nothing winia acts on differently):
@@ -209,6 +163,32 @@ key is left to the page.
 Pinned by `app::overlay_close_tests::escape_respects_dismiss_on_back_press`, which drives `escape_key`
 itself rather than only reading the flag.
 
+### Surface, slots and semantics
+
+The caller's `modifier` is a WRAPPER around the surface — as in Compose's
+`Box(modifier.sizeIn(...))` — so a caller's padding sits outside the dialog's background instead
+of eating into it alongside the 24dp content padding.
+
+A slot is laid out inside the content box with its own bottom padding and cross-axis alignment.
+A slot that demands more than the box (`.size(w, h)` larger than the dialog) is COERCED into it:
+a `Size` is clamped into the incoming range, which is Compose's `size()` (`enforceIncoming = true`
+— a request only overrides the range through `required_size`, Compose's `requiredSize`), so such a
+slot comes out at the width it is offered and still starts at the padding. winia used to write the
+request over the constraints and let the surface's `clip` hide the spill; the alignment with Compose
+removed that, and `required_size` is what a caller reaches for if the spill is wanted.
+
+`confirm_button` is a slot like the rest, so the builder still accepts a dialog without one — but a
+VISIBLE dialog with neither action trips a `debug_assert!`: Compose's two-action overload requires
+`confirmButton` positionally, and a dialog the user can only dismiss has no way to say what it was
+for. Hidden dialogs are exempt, since keeping one built-but-not-shown is normal.
+
+The surface publishes `role = Dialog`, which is winia's landing for Compose's
+`Modifier.semantics { paneTitle = dialogPaneDescription }` on the dialog Box (`AlertDialog.kt:171`) and
+what `accessibility.rs` maps to the Pane UIA control type. A caller's own modifier still wins — it is
+applied after ours.
+
+### Overlay lifetime and motion
+
 Built on the existing `Dialog` overlay, so modality, the scrim, outside-click dismissal and
 Escape come from the overlay path (`app.rs`), and the enter/exit motion is
 `OverlayAnimSpec::default_enter()/default_exit()` (scale 0.8 + fade, 200ms) — the same motion
@@ -218,25 +198,13 @@ state is needed on top of that, because the enter animation runs on registration
 an edge for is its own sheet slide, which a dialog has none of) — and see "Composing it" above for why
 `visible` has to be an argument rather than a surrounding `if`.
 
-Tests (12) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
-`dismiss_on_outside`, `dismiss_on_back_press` and `focusable` flags reaching the overlay, each with
-Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap BY
-DEFAULT — and, with `platform_default_width(false)`, a body wider than the cap escaping it while the
-window still bounds it; a text slot taller than the window leaving the action row its own height; the
-slot order with its 16/16/24 paddings; the title centring with an icon and start-alignment without
-one; the button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
-above the dismiss; and the over-sized-slot overflow above.
+The overlay composer is long-lived — `sync_overlays` calls `mark_content_dirty()` and composes the
+same closure again — so the slot tree survives across frames and a changed slot set shifts the keys
+of everything after it. `alert_dialog_content` therefore carries `#[composable]`
+(`docs/component-authoring.md` section 1.2), which keeps that shift inside the slot builder instead
+of letting it move the caller's siblings.
 
-The `fill = false` in the text slot's weight is pinned by `slots_stack_in_order_with_their_paddings`,
-NOT by the tall-text test: with `fill = true` the box is stretched to its share whether it needs it
-or not, which that test catches through its fixed 40-tall text (swapping the call for
-`layout_weight(1.0)` measures 11 passed / 1 failed), while the tall-text test passes on both.
-
-The escape gate itself is tested at the key path, not just on the flag:
-`app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
-consumed and closes the first, and is consumed but closes neither when `dismiss_on_back_press` is false.
-
-## Deviations from Compose
+## Differences from Compose
 
 - **No `tonalElevation` parameter.** Compose exposes one (`AlertDialog.kt:108`, default
   `AlertDialogDefaults.TonalElevation = 0.dp`, `:241`) and forwards it to its `Surface`. With the default
@@ -246,6 +214,23 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   It is not a no-op for a caller who also passes `container_color` equal to `theme.surface`, which is why
   this is listed rather than dismissed. (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere
   in the alert-dialog implementations — what it belongs to is not demonstrable, so nothing here claims it.)
+  The tint itself is implemented on `Surface` (`winia/src/components/surface.rs`), not here: its module
+  comment has the gate and the blend formula, and the accumulation rule (a nested surface tints from the
+  absolute sum, not its own number) lives in the crate-internal absolute-elevation local under
+  `winia/src/theme/provider.rs`.
+- **No `buttonContentColor` parameter.** Compose offers none either: `AlertDialogImpl` hard-codes
+  `DialogTokens.ActionLabelTextColor` for the row (`AlertDialog.kt:285`). winia previously exposed a
+  `button_content_color` builder method; it is removed so the two agree, and
+  `AlertDialogDefaults::button_color` (which the date picker dialog also uses) is what supplies the value.
+- **No `precision pointer` sizing.** Compose reads `shouldUsePrecisionPointerComponentSizing` and shrinks
+  the geometry for a precise pointer: dialog padding 24 → 20dp, text padding 24 → 16dp, title
+  `headlineSmall` at 20sp/26sp (`AlertDialog.kt:229-233`, `:318-326`). That flag is an Android
+  input-modality signal and winia has no equivalent notion of "the user is on a mouse right now", so the
+  touch-sized values are used unconditionally.
+- **No minimum height.** Compose's KDoc for `BasicAlertDialog` says the dialog gets "the minimum height
+  and width that the Material Design spec defines" (`AlertDialog.kt:122`, `:168`), but the code applies
+  only `sizeIn(minWidth, maxWidth)` (`:147`) — there is no height constraint anywhere in the file. winia
+  follows the code rather than the prose: a dialog with one short line is shorter than 280dp tall.
 - **Tab goes nowhere when `focusable(false)`.** Compose's non-focusable dialog is a window that never took
   focus, so Tab belongs to whatever is behind it. winia draws the dialog over the live page, but the key
   path consumes Tab unconditionally (`app.rs:1360-1362`) and `keyboard_scope` finds no arena to move
@@ -260,7 +245,47 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`, `platform_default_width`) rather than
   grouped. `decorFitsSystemWindows` and the rest of the Android-window fields have no desktop
   meaning; `usePlatformDefaultWidth` does, and is `platform_default_width`. See the table under
-  "Structure and behaviour" for which is which.
-- The tests find the dialog's nodes through `Modifier::test_tag` and a real overlay layout (the
-  registered overlay's content is composed in its own `Composer`, as the app does), so they
-  check the geometry the user sees rather than the builder's fields.
+  Behaviour for which is which.
+- **Button spacing ignores `MinimumInteractiveComponentSize`.** Compose computes
+  `ButtonsCrossAxisSpacing - (LocalMinimumInteractiveComponentSize - ButtonDefaults.MinHeight)`,
+  coerced to `0..8dp` (`AlertDialog.kt:264-269`), so a platform that inflates the touch target shrinks
+  the vertical gap to compensate. winia has no such local, so both axes are a flat 8dp.
+
+## Tests
+
+```bash
+cargo test -p winia --lib components::alert_dialog
+```
+
+15 unit tests, all over the arena (`Modifier::test_tag` + a real overlay layout — the registered
+overlay's content is composed in its own `Composer`, as the app does), so they check the geometry the
+user sees rather than the builder's fields:
+
+- no overlay when hidden; exactly one modal, centred overlay when shown
+- `dismiss_on_outside`, `dismiss_on_back_press` and `focusable` reaching the overlay, each with Compose's
+  default
+- the `role = Dialog` the surface publishes
+- the 280 floor and the 560 cap by default, and with `platform_default_width(false)` a body wider than the
+  cap escaping it while the window still bounds it
+- a text slot taller than the window leaving the action row its own height
+- the slot order with its 16/16/24 paddings
+- the title centring with an icon and start-alignment without one
+- the button row's end alignment with the confirm action last
+- the wrapped row putting the confirm above the dismiss
+- an over-sized slot being coerced into the dialog
+- a visible dialog with neither action tripping the debug assertion, and a hidden one not
+- changing the slot set across frames on one long-lived composer keeping the tree valid
+
+The `fill = false` in the text slot's weight is pinned by `slots_stack_in_order_with_their_paddings`,
+NOT by the tall-text test: with `fill = true` the box is stretched to its share whether it needs it
+or not, which that test catches through its fixed 40-tall text (swapping the call for
+`layout_weight(1.0)` measures 11 passed / 1 failed), while the tall-text test passes on both.
+
+The escape gate is tested at the key path, not just on the flag:
+`app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
+consumed and closes the first, and is consumed but closes neither when `dismiss_on_back_press` is false.
+
+**No fixture scenario, and no demo.** `winia/tests/ui_fixtures/fixture_all.rs` has no alert-dialog
+scenario, and `winia/examples/alert_dialog_demo.rs` does not exist — `docs/rendering-backends.md` and
+`docs/semantics.md` still reference it, so those two lines are stale. The unit suite above is what
+runs today.
