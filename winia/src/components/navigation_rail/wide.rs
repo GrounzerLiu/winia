@@ -509,7 +509,7 @@ impl WideNavigationRailItem {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
 
         let indicator_color = colors.indicator;
         let indicator_alpha = size_progress.clone();

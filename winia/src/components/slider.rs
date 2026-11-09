@@ -293,7 +293,7 @@ impl Slider {
             .unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let (min, max) = self.value_range;
         let (min, max) = if max > min {
             (min, max)

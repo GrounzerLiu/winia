@@ -716,7 +716,7 @@ impl SplitButtonPart {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         // Reading the interaction state registers the dependency, so a press re-composes the button
         // and the shape it picks (material3 gets the same recomposition from
         // `collectIsPressedAsState`).

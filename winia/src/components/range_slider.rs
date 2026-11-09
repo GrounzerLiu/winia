@@ -238,10 +238,10 @@ impl RangeSlider {
             .unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
         let start_source = self
             .start_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let end_source = self
             .end_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let (min, max) = self.value_range;
         let (min, max) = if max > min {
             (min, max)

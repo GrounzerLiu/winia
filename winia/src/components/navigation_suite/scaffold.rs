@@ -288,7 +288,7 @@ impl NavigationSuiteScaffold {
         //
         // 载荷每帧都是新闭包，句柄却必须跨帧稳定 —— 所以句柄在**循环位置**上 remember（同序同位置
         // = 同一个句柄），内容闭包通过 backchannel 读当帧载荷。
-        let payloads = ctx.remember_backchannel(|| Vec::<NavigationSuiteItem>::new());
+        let payloads = ctx.remember_backchannel(Vec::<NavigationSuiteItem>::new);
         payloads.set(self.items.clone());
         // This build receives fresh callbacks; their values cannot be compared through Arc<dyn Fn>.
         // Enter the actual shape hosts so the latest payloads reach their stored child scopes. Merely

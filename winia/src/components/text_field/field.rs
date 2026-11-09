@@ -301,7 +301,7 @@ impl TextField {
         // 读到 None 而 focused 恒 false：外部注入或内部 remember）
         let interaction = if self.enabled {
             Some(self.interaction_source.clone().unwrap_or_else(|| {
-                ctx.remember(|| crate::input::interaction::MutableInteractionSource::new())
+                ctx.remember(crate::input::interaction::MutableInteractionSource::new)
                     .get()
             }))
         } else {
@@ -424,7 +424,7 @@ impl TextField {
         // registrar；TextField 此前不注册 → 拖动被跳过）。选区经
         // set_on_change 同步回 value（拖动结束 fire_on_change）
         let registrar = ctx
-            .remember(|| crate::text::selection::SelectionRegistrar::new())
+            .remember(crate::text::selection::SelectionRegistrar::new)
             .get();
         {
             let v = value.clone();
@@ -1078,9 +1078,7 @@ impl TextField {
         // ⚠ 焦点/键盘在**容器**（焦点语义：点击容器任意处聚焦——padding/
         // 图标区也命中，对标 Compose 全容器可交互）；输入子节点 on_press
         // 定位光标（点击文本区域）
-        let fr = ctx
-            .remember(|| crate::modifier::FocusRequester::new())
-            .get();
+        let fr = ctx.remember(crate::modifier::FocusRequester::new).get();
         let input_modifier = Modifier::new()
             .text_field_slot(TextFieldSlotRole::Input)
             .text_content_full(

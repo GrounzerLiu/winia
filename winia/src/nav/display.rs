@@ -983,7 +983,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         let entry_pool = entry_pool.get();
         // 结果总线（跨帧稳定——对标 Nav3 rememberResultEventBus；每个 NavDisplay
         // 实例一个总线，entry 内容经 RESULT_EVENT_BUS_SCOPE 读取）
-        let result_bus: State<ResultEventBus> = ctx.remember(|| ResultEventBus::new());
+        let result_bus: State<ResultEventBus> = ctx.remember(ResultEventBus::new);
         let result_bus = result_bus.get();
         // 为整栈构建 entries（对标 Nav3 rememberDecoratedNavEntries——全量构建，
         // route 元信息映射需要非渲染位 entry 的 contentKey/过渡覆盖；导航栈短，
@@ -994,7 +994,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             .collect();
         // route hash → entry 元信息映射（跨帧 remember——被移除 key 不在当前
         // entries 里：on_pop 的 contentKey、pop 方向的过渡覆盖均取上一帧映射）
-        let route_meta = ctx.remember_backchannel(|| HashMap::new());
+        let route_meta = ctx.remember_backchannel(HashMap::new);
         let old_meta: HashMap<u64, EntryRouteMeta> = route_meta.peek().clone();
         // on_pop：对比上一帧栈——被移除的 entry 触发装饰器回调 + 清理状态池
         // （对标 Nav3 onPop(contentKey)：pop 时 removeState 清理）

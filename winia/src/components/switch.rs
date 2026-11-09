@@ -280,7 +280,7 @@ impl Switch {
             .unwrap_or_else(|| SwitchDefaults::switch_colors(&theme));
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let state = interaction.state(self.enabled);
         let checked = self.checked;
         let track_color = colors.track_color(self.enabled, checked);

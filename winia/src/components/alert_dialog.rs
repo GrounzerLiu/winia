@@ -244,7 +244,7 @@ impl BasicAlertDialog {
         // `sync_overlays` then composes this frame's content closure — the piece
         // `ModalBottomSheet` needs an edge for is its own sheet slide, which the dialog has none
         // of.
-        let id = ctx.remember(|| next_overlay_id());
+        let id = ctx.remember(next_overlay_id);
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
             return;

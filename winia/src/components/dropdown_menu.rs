@@ -350,7 +350,7 @@ impl DropdownMenu {
         // is anchored to its position).
         let anchor_key = ctx.next_key();
         let modifier = crate::modifier::Modifier::new();
-        let id = ctx.remember(|| next_overlay_id());
+        let id = ctx.remember(next_overlay_id);
         match ctx.start_restartable_group(
             anchor_key,
             modifier,
@@ -374,7 +374,7 @@ impl DropdownMenu {
         // not the menu is open — a conditional `remember` is what shifts the slots after it.
         let scroll_state = match self.scroll_state.clone() {
             Some(s) => s,
-            None => ctx.remember(|| crate::modifier::ScrollState::new()).get(),
+            None => ctx.remember(crate::modifier::ScrollState::new).get(),
         };
 
         // `build` always executes (parameterized by `expanded`) — records active
@@ -1019,7 +1019,7 @@ impl DropdownMenuItem {
         // menu's own Surface clips the corners (`surface.rs` applies `clip(shape)`), and the 8dp vertical
         // padding already keeps the top and bottom items clear of them.
         let interaction = self.interaction_source.unwrap_or_else(|| {
-            ctx.remember(|| crate::input::interaction::MutableInteractionSource::new())
+            ctx.remember(crate::input::interaction::MutableInteractionSource::new)
                 .get()
         });
         let modifier = if self.enabled {

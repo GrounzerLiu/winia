@@ -103,7 +103,7 @@ impl FlexBox {
         // every pass and stayed invisible. remember() keys the slot by the call site, which IS the
         // container instance.
         let item_animations = ctx
-            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
+            .remember(crate::layout::item_animation::ItemAnimationHost::default)
             .peek();
         let modifier = self
             .modifier

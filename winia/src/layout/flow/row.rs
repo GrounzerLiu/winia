@@ -372,7 +372,7 @@ impl FlowRow {
         // shared a host and each begin_frame invalidated the other's items (they re-entered as "new"
         // with alpha 0 every pass and stayed invisible). remember() keys the slot by the call site.
         let item_animations = ctx
-            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
+            .remember(crate::layout::item_animation::ItemAnimationHost::default)
             .peek();
         let modifier = self
             .modifier

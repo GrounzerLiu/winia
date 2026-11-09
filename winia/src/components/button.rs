@@ -744,7 +744,7 @@ impl Button {
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
         let state = interaction.state(self.enabled);
         let container = colors.container_color_for(&state);

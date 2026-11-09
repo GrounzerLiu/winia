@@ -549,7 +549,7 @@ impl SegmentedButton {
 
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let st = interaction.state(enabled);
         // Compose raises a checked item by 5 and each interaction by 1, so a pressed or focused segment
         // covers its neighbours; winia's pressed/focused are booleans, which is the same z for one

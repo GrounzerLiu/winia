@@ -373,8 +373,7 @@ fn scrollbar_build_shared(
     // P2-3: with reverse the offset semantics are mirrored - the scrollbar works in visual
     // coordinates (visual 0 = the content's end = the bar at the start; visual = max - scroll).
     // Vertical has no reverse notion, so None uses the raw offset.
-    let hover_src: MutableInteractionSource =
-        ctx.remember(|| MutableInteractionSource::new()).get();
+    let hover_src: MutableInteractionSource = ctx.remember(MutableInteractionSource::new).get();
     let hovered = hover_src.is_hovered();
     let dragged = hover_src.is_dragged();
     // Hover/drag tint (CMP's `ScrollbarStyle.hoverColor`, 300 ms there): the thumb colour itself

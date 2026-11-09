@@ -521,7 +521,7 @@ impl NavigationDrawerItem {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let ripple_color = colors.icon(selected);
 
         let mut modifier = Modifier::new()

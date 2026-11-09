@@ -156,7 +156,7 @@ impl ScrollableTabRow {
         let scroll_state = self
             .scroll_state
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| crate::modifier::ScrollState::new()).get());
+            .unwrap_or_else(|| ctx.remember(crate::modifier::ScrollState::new).get());
 
         let container_color = self
             .container_color

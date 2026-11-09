@@ -290,7 +290,7 @@ impl IconToggleButton {
             .unwrap_or_else(|| IconToggleButtonDefaults::colors_for(&theme, self.style));
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let container = colors.container_color(self.enabled, self.checked);
         let content_color = colors.content_color(self.enabled, self.checked);
         let size = self.size_variant.container_size();

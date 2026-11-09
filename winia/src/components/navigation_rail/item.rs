@@ -91,7 +91,7 @@ impl NavigationRailItem {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
 
         // 彩色胶囊背景：颜色 x alphaProgress——绘制期 peek 不注册依赖
         let indicator_color = colors.indicator;

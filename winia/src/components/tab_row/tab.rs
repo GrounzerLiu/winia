@@ -143,7 +143,7 @@ impl Tab {
         let interaction = match self.interaction_source.clone() {
             Some(src) => src,
             None => ctx
-                .remember(|| crate::input::interaction::MutableInteractionSource::new())
+                .remember(crate::input::interaction::MutableInteractionSource::new)
                 .get(),
         };
         let callback = self.on_click.clone();

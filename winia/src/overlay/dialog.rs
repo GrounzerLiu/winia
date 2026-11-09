@@ -108,7 +108,7 @@ impl Dialog {
         ctx: &mut crate::runtime::composer::ComposeCtx,
         content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
     ) {
-        let id = ctx.remember(|| next_overlay_id());
+        let id = ctx.remember(next_overlay_id);
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
             return; // Closed: do not register an overlay — `sync` deletes on `active=false`.

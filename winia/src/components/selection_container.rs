@@ -56,7 +56,7 @@ impl SelectionContainer {
         let key = ctx.next_key();
         // One persistent registrar: a rebuild must not create a new one, because the segments have
         // to survive recomposition.
-        let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
+        let registrar = ctx.remember_at_key(key, SelectionRegistrar::new).get();
         // Whether the context menu is open, plus the relay the pointer path calls to open it.
         let menu_open = ctx
             .remember(|| crate::runtime::state::State::new(false))

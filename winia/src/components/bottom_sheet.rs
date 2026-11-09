@@ -161,7 +161,7 @@ impl ModalBottomSheet {
     /// `sync_overlays` 按 active=false 删除 overlay（主动关闭），无记录保留（Skip）
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + 'static) {
-        let id = ctx.remember(|| next_overlay_id());
+        let id = ctx.remember(next_overlay_id);
         // ⚠ 这两个 remember 必须在 `if !visible {return}` 之前——否则 visible=false
         // 时不执行，`prev_visible` 永远卡在 true，第二次 visible=true 时边沿检测
         // `!prev_visible` 为 false → 不再 show() → 面板停在 Hidden(560) 不显示。

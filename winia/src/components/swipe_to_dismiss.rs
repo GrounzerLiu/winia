@@ -403,7 +403,7 @@ impl SwipeToDismissBox {
         ctx.changed(&allow_start);
         ctx.changed(&allow_end);
         ctx.changed(&gestures_enabled);
-        let holder = ctx.remember(|| SwipeToDismissBoxState::default());
+        let holder = ctx.remember(SwipeToDismissBoxState::default);
         let state = state.unwrap_or_else(|| holder.get());
         // A state that has not been measured yet has NO offset (`AnchoredDraggableState` starts at
         // NaN and the first layout seeds it from the measured width). The content's placement reads

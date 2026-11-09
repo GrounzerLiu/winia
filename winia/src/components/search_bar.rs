@@ -805,7 +805,7 @@ impl SearchBar {
                                         // it the keyboard has no target and typing does nothing (measured:
                                         // typing "ap" left the results at their unfiltered 18 rows).
                                         let focus = ctx
-                                            .remember(|| crate::modifier::FocusRequester::new())
+                                            .remember(crate::modifier::FocusRequester::new)
                                             .get();
                                         let asked = ctx.remember(|| false);
                                         if !asked.get() {

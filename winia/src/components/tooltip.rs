@@ -92,10 +92,10 @@ impl Tooltip {
     pub fn build(self, ctx: &mut ComposeCtx, anchor: impl FnOnce(&mut ComposeCtx)) {
         // 锚点容器（普通组合——挂主树；tooltip 锚定其位置，对齐 DropdownMenu）
         let anchor_key = ctx.next_key();
-        let id = ctx.remember(|| crate::overlay::next_overlay_id());
+        let id = ctx.remember(crate::overlay::next_overlay_id);
         // hover 交互源：锚点挂 hoverable，进入/离开自动发射 hover 事件
         let interaction = ctx
-            .remember(|| crate::input::interaction::MutableInteractionSource::new())
+            .remember(crate::input::interaction::MutableInteractionSource::new)
             .get();
         let mut anchor_modifier = Modifier::new();
         if self.hover_trigger {

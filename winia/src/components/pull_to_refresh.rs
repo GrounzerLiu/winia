@@ -229,7 +229,7 @@ impl PullToRefreshBox {
         // Skips when the caller flips is_refreshing, and the determinate spinner never gives way to
         // the rotating one.
         ctx.changed(&self.is_refreshing);
-        let state = ctx.remember(|| PullToRefreshState::new()).get();
+        let state = ctx.remember(PullToRefreshState::new).get();
         let was_refreshing = state.refreshing.load(Ordering::Relaxed);
         if self.is_refreshing && !was_refreshing {
             state.begin_refresh();

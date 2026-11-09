@@ -549,7 +549,7 @@ pub mod persist {
             }
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
-                Err(e) => {
+                Err(_e) => {
                     debug_log!("[saveable] unreadable {}: {e}", path.display());
                     return HashMap::new();
                 }
@@ -566,7 +566,7 @@ pub mod persist {
         /// Write the snapshot for `key`. Errors are logged, never propagated: losing a restore point is
         /// not worth taking a window down.
         pub fn save(&self, key: u64, values: &HashMap<String, SavedValue>) {
-            if let Err(e) = std::fs::create_dir_all(&self.dir) {
+            if let Err(_e) = std::fs::create_dir_all(&self.dir) {
                 debug_log!("[saveable] cannot create {}: {e}", self.dir.display());
                 return;
             }
@@ -586,14 +586,14 @@ pub mod persist {
             // Atomic replace: a crash mid-write must not leave a half file that the next run then
             // refuses - the previous snapshot stays valid instead.
             let tmp = path.with_extension("json.tmp");
-            if let Err(e) = std::fs::write(&tmp, body) {
+            if let Err(_e) = std::fs::write(&tmp, body) {
                 debug_log!("[saveable] cannot write {}: {e}", tmp.display());
                 return;
             }
-            if let Err(e) = std::fs::rename(&tmp, &path) {
+            if let Err(_e) = std::fs::rename(&tmp, &path) {
                 // Windows refuses to rename onto an existing file; drop the old one and retry once.
                 let _ = std::fs::remove_file(&path);
-                if let Err(e2) = std::fs::rename(&tmp, &path) {
+                if let Err(_e2) = std::fs::rename(&tmp, &path) {
                     debug_log!("[saveable] cannot replace {}: {e} / {e2}", path.display());
                     let _ = std::fs::remove_file(&tmp);
                 }

@@ -5,7 +5,7 @@ use super::*;
 // ═══════════════════════════════════════════════════════════
 
 pub(crate) static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> =
-    LazyLock::new(|| CompositionLocal::new(|| ThemeColors::default_light()));
+    LazyLock::new(|| CompositionLocal::new(ThemeColors::default_light));
 
 pub(crate) static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> =
     LazyLock::new(|| CompositionLocal::new(Typography::default));

@@ -456,7 +456,7 @@ impl NavigationBarItem {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
 
         // 指示器背景：颜色 x alphaProgress——绘制期每帧求值（peek 不注册依赖）
         let indicator_color = colors.indicator;

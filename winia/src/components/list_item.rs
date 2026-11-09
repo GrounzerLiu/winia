@@ -231,7 +231,7 @@ impl ListItem {
         let shape = ListItemDefaults::shape();
         let interaction = (self.enabled && self.on_click.is_some()).then(|| {
             self.interaction_source
-                .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get())
+                .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get())
         });
         let mut modifier = Modifier::new()
             .fill_max_width()

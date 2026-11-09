@@ -735,7 +735,7 @@ impl Chip {
             )),
         );
         let interaction = self.interaction_source.clone().unwrap_or_else(|| {
-            ctx.remember(|| crate::input::interaction::MutableInteractionSource::new())
+            ctx.remember(crate::input::interaction::MutableInteractionSource::new)
                 .get()
         });
         let state = interaction.state(self.enabled);

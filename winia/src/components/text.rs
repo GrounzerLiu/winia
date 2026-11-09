@@ -21,7 +21,7 @@ use std::sync::{Arc, LazyLock};
 // ═══════════════════════════════════════════════════════════
 
 pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> =
-    LazyLock::new(|| CompositionLocal::new(|| TextStyle::default()));
+    LazyLock::new(|| CompositionLocal::new(TextStyle::default));
 
 /// Provide a default text style to a subtree, MERGED with the inherited one rather than replacing
 /// it — Compose's `ProvideTextStyle`.
@@ -460,7 +460,7 @@ impl Text {
         let final_color = self
             .color
             .or(style.color)
-            .unwrap_or_else(|| crate::theme::WiniaTheme::content_color());
+            .unwrap_or_else(crate::theme::WiniaTheme::content_color);
 
         let content_len = self.content.len();
         let selection_disabled = crate::text::selection::LOCAL_SELECTION_DISABLED.current();

@@ -883,7 +883,7 @@ impl Default for SelectionRegistrar {
 // ═══════════════════════════════════════════════════════════
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
-    std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
+    std::sync::LazyLock::new(|| CompositionLocal::new(SelectionRegistrar::new));
 
 /// Whether selectable children are disabled in this subtree (Compose's `DisableSelection`).
 pub static LOCAL_SELECTION_DISABLED: std::sync::LazyLock<CompositionLocal<bool>> =

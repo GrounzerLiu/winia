@@ -380,7 +380,7 @@ impl FloatingActionButton {
             .unwrap_or_else(|| FloatingActionButtonDefaults::colors(&theme));
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let state = interaction.state(self.enabled);
         // Compose paints the FAB through a `Surface(onClick = ...)`, so its container goes through
         // the tonal overlay: `Surface(tonalElevation = elevation.tonalElevation())`
@@ -829,7 +829,7 @@ impl ExtendedFloatingActionButton {
         });
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
         let state = interaction.state(self.enabled);
         let tonal_elevation = self.elevation.map(|e| e.tonal_elevation()).unwrap_or(0.0);
         let container = crate::components::surface::tonal_background(

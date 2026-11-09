@@ -286,7 +286,7 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     let selected = state.selected_date_millis();
 
     let text: State<TextFieldValue> = ctx.remember(|| TextFieldValue::new(""));
-    let error: State<String> = ctx.remember(|| String::new());
+    let error: State<String> = ctx.remember(String::new);
 
     // A selection made outside the field — the calendar, the initial value — rewrites the digits,
     // exactly as `LaunchedEffect(initialDateMillis)` does (`DateInput.kt:238-258`).
@@ -313,9 +313,7 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     // animated in, and a caret that arrives mid-motion is a caret the user never chose. Compose
     // waits `MotionTokens.DurationMedium2` for the same reason
     // (`LaunchedEffect(Unit) { delay(...); focusRequester?.requestFocus() }`, `DateInput.kt:259-266`).
-    let focus = ctx
-        .remember(|| crate::modifier::FocusRequester::new())
-        .get();
+    let focus = ctx.remember(crate::modifier::FocusRequester::new).get();
     let effect_focus = focus.clone();
     LaunchedEffect::new(()).build(ctx, move |_scope| async move {
         tokio::time::sleep(std::time::Duration::from_millis(

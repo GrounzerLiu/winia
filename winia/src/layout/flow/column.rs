@@ -367,7 +367,7 @@ impl FlowColumn {
         // The host is cheap and always present; item state is only allocated for markers.
         // Per INSTANCE, as in FlowRow: position_key() is the enclosing group, not this container.
         let item_animations = ctx
-            .remember(|| crate::layout::item_animation::ItemAnimationHost::default())
+            .remember(crate::layout::item_animation::ItemAnimationHost::default)
             .peek();
         let modifier = self
             .modifier

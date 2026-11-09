@@ -308,8 +308,8 @@ fn checkbox_impl(
     ctx.changed(&state);
     ctx.changed(&enabled);
     ctx.changed(&colors);
-    let interaction = interaction_source
-        .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+    let interaction =
+        interaction_source.unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
     let box_color = colors.box_color(enabled, state);
     let border_color = colors.border_color(enabled, state);
     // 勾号保持选中色常量：Off 静止态由 scale=0 隐藏；取消选中过渡期（1→0）

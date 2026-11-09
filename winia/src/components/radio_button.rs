@@ -172,8 +172,8 @@ fn radio_button_impl(
     let key = ctx.next_key();
     let theme = WiniaTheme::colors();
     let colors = colors.unwrap_or_else(|| RadioButtonDefaults::radio_button_colors(&theme));
-    let interaction = interaction_source
-        .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+    let interaction =
+        interaction_source.unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
     let color = colors.radio_color(enabled, selected);
 
     // The radio's colour, per M3 — see `radio_colour_spec`. A DISABLED radio snaps instead:

@@ -272,7 +272,7 @@ impl Surface {
         // 纯展示 Surface 也 remember 一个空源，开销极小）。
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
 
         // Compose `Modifier.surface`（核心可复用链）：shadow → border → background → clip。
         // - shadow：仅 shadow_elevation > 0 时用 graphics_layer 阴影（对齐 Compose `graphicsLayer{shadowElevation, clip=false}`）

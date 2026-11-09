@@ -575,7 +575,7 @@ impl<A: LazyAxis> LazyList<A> {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let state = match self.state {
             Some(s) => s,
-            None => ctx.remember(|| LazyListState::new()).get(),
+            None => ctx.remember(LazyListState::new).get(),
         };
         ctx.changed(&state.offset);
         // The derived anchor is a dependency: the policy writes the exact value after measuring, which
