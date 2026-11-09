@@ -233,13 +233,14 @@ impl Surface {
         let key = ctx.next_key();
         let theme = crate::theme::WiniaTheme::colors();
         let shape = self.shape;
-        // 默认背景 = theme.surface（Compose 默认 `colorScheme.surface`）
+        // Default background = theme.surface (Compose's default `colorScheme.surface`).
         let base_color = self.color.unwrap_or(theme.surface);
-        // tonal overlay（对标 Compose `ColorScheme.applyTonalElevation` / `surfaceColorAtElevation`）：
-        // **仅当底色恰好等于 theme.surface 且 tonal 开关打开时**才把 `surface_tint` 按 elevation 叠上去
-        // （`ColorScheme.kt:1540-1543`, `:1125-1129`）。底色不是 surface（如对话框的
-        // surfaceContainerHigh）则不上色——这正是 Compose 的行为，也是 AlertDialog 传了
-        // `tonalElevation` 也是空转的原因。
+        // Tonal overlay (Compose's `ColorScheme.applyTonalElevation` / `surfaceColorAtElevation`):
+        // `surface_tint` is blended over the background by elevation **only when the background is
+        // exactly `theme.surface` and the tonal switch is on** (`ColorScheme.kt:1540-1543`,
+        // `:1125-1129`). A background that is not `surface` — a dialog's `surfaceContainerHigh`,
+        // say — is left untinted: that is Compose's behaviour, and it is also why `AlertDialog`
+        // passing `tonalElevation` is a no-op.
         //
         // The elevation that decides the alpha is the ABSOLUTE one, not this surface's own: Compose
         // sums the ancestors first (`LocalAbsoluteTonalElevation.current + tonalElevation`, then
