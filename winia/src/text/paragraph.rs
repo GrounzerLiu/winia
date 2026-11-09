@@ -606,6 +606,10 @@ mod paragraph_tests {
     /// the naive difference, which is why this is not an exact match.
     #[test]
     fn a_line_height_centres_the_leading() {
+        // The font collection and the measure cache are process-global state that other tests in
+        // this suite write to; start from a clean measurement so the baseline is this test's own.
+        let _serial = crate::text::font::test_lock::lock();
+        crate::text::measure_text::clear_measure_cache();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             crate::components::Text::new("IIII")

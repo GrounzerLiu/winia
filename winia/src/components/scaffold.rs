@@ -155,9 +155,7 @@ impl Scaffold {
         let window_insets = self
             .content_window_insets
             .unwrap_or_else(ScaffoldDefaults::content_window_insets);
-        let content_padding_state = ctx
-            .remember(|| State::new(ScaffoldContentPadding::default()))
-            .get();
+        let content_padding_state = ctx.remember(|| ScaffoldContentPadding::default());
         let policy = ScaffoldLayoutPolicy {
             direction,
             padding: self.content_padding,

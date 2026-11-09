@@ -82,6 +82,21 @@ pub fn register_font_bytes(family: &str, bytes: Vec<u8>) -> Result<(), FontError
     Ok(())
 }
 
+/// Drop every registered asset font and refresh the epoch.
+///
+/// Test-only: `ASSET_FONTS` is process-global, so a test that registers a fixture leaves it
+/// visible to every test that runs afterwards in the same process. A suite that measures text and
+/// another that registers fonts then disagree about the fallback chain, which is a property of the
+/// test order rather than of the code. Callers pair it with `test_lock::lock`.
+#[cfg(test)]
+pub(crate) fn clear_registered_fonts() {
+    ASSET_FONTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
+    FONT_EPOCH.fetch_add(1, Ordering::Release);
+}
+
 /// A CLONE of the collection: Skia wants its own handle at every use site.
 pub fn get_font_collection() -> FontCollection {
     let epoch = FONT_EPOCH.load(Ordering::Acquire);
@@ -133,11 +148,30 @@ pub fn get_font_collection() -> FontCollection {
 }
 
 #[cfg(test)]
+pub(crate) mod test_lock {
+    //! Tests that register asset fonts or measure text against them share the process-global
+    //! `ASSET_FONTS` list and its epoch-keyed collection cache. Run them one at a time: a
+    //! registration landing between another test's measure and its assertion changes the font
+    //! fallback it resolves, which showed up as an intermittent baseline shift in
+    //! `paragraph::tests::a_line_height_centres_the_leading`.
+
+    pub(crate) static FONT_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Bind for the whole test; dropping it releases the lock.
+    pub(crate) fn lock() -> std::sync::MutexGuard<'static, ()> {
+        FONT_SERIAL
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn rejects_invalid_font_bytes() {
+        let _serial = test_lock::lock();
         assert!(matches!(
             register_font_bytes("WiniaBroken", vec![0, 1, 2, 3]),
             Err(FontError::InvalidFont)
@@ -147,6 +181,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn registers_a_system_font_fixture() {
+        let _serial = test_lock::lock();
         let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\consola.ttf") else {
             return;
         };
@@ -159,5 +194,8 @@ mod tests {
             !system_faces.is_empty(),
             "system fonts remain available as fallback"
         );
+        // Leave the process as this test found it: `ASSET_FONTS` outlives the test, and a fixture
+        // left behind changes the fallback chain every later measurement resolves.
+        clear_registered_fonts();
     }
 }
