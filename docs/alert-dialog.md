@@ -285,7 +285,10 @@ The escape gate is tested at the key path, not just on the flag:
 `app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
 consumed and closes the first, and is consumed but closes neither when `dismiss_on_back_press` is false.
 
-**No fixture scenario, and no demo.** `winia/tests/ui_fixtures/fixture_all.rs` has no alert-dialog
-scenario, and `winia/examples/alert_dialog_demo.rs` does not exist — `docs/rendering-backends.md` and
-`docs/semantics.md` still reference it, so those two lines are stale. The unit suite above is what
-runs today.
+`cargo run -p winia --example alert_dialog_demo` opens both dialogs behind a control panel: the two
+action buttons, plus the three `DialogProperties` switches (`dismiss_on_outside`,
+`dismiss_on_back_press`, `focusable`). It is also the demo `docs/rendering-backends.md` and
+`docs/semantics.md` already point at.
+
+There is no fixture scenario: `winia/tests/ui_fixtures/fixture_all.rs` has no alert-dialog entry, so
+the unit suite above is what runs in CI.
