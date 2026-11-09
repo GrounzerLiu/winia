@@ -5,6 +5,8 @@
 //! Asset fonts are registered lazily: the collection is rebuilt when the font epoch changes.
 
 use skia_safe::textlayout::{FontCollection, TypefaceFontProvider};
+// `FontStyle` is used by the tests below; the module itself only needs `FontMgr`.
+#[allow(unused_imports)]
 use skia_safe::{FontMgr, FontStyle};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};

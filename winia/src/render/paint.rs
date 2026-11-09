@@ -632,7 +632,7 @@ pub(super) fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection,
                         canvas.draw_image_rect_with_sampling_options(
                             image,
                             Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
-                            &dst,
+                            dst,
                             SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
                             &paint,
                         );
@@ -800,7 +800,7 @@ pub(super) fn draw_image_content(
             canvas.draw_image_rect_with_sampling_options(
                 image,
                 Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
-                &dst,
+                dst,
                 sampling_options_for(filter_quality),
                 &paint,
             );

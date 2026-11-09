@@ -21,9 +21,10 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Button 变体风格
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonStyle {
     /// 实心填充按钮（主要操作）
+    #[default]
     Filled,
     /// 悬浮按钮（对标 `ElevatedButton`）——SurfaceContainerLow 容器 + primary 内容
     Elevated,
@@ -296,12 +297,6 @@ impl ButtonElevation {
 impl Default for ButtonElevation {
     fn default() -> Self {
         Self::default_elevation()
-    }
-}
-
-impl Default for ButtonStyle {
-    fn default() -> Self {
-        ButtonStyle::Filled
     }
 }
 

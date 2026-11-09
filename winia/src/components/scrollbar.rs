@@ -616,7 +616,8 @@ fn scrollbar_build_shared(
     // P1-2: `drag_cancel` runs exactly the same cleanup as `end` (a lost window or a system
     // interruption never sends `end`) - otherwise is_scroll_in_progress/dragged stay set and the
     // fade never hides.
-    let m = if vertical {
+
+    if vertical {
         Modifier::new().width(cfg.thickness).fill_max_height()
     } else {
         Modifier::new().height(cfg.thickness).fill_max_width()
@@ -720,8 +721,7 @@ fn scrollbar_build_shared(
             scroll_state_src.is_scroll_in_progress.set(false);
         }
     })
-    .on_drag(move |pos, _delta| drag_cb(pos));
-    m
+    .on_drag(move |pos, _delta| drag_cb(pos))
 }
 
 // -- Lazy scrollbar adaptation --

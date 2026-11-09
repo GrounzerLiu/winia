@@ -68,7 +68,7 @@ impl InlineDrawable for ImageDrawable {
         canvas.draw_image_rect(
             &self.image,
             Some((&src, SrcRectConstraint::Fast)),
-            &dst,
+            dst,
             &Paint::default(),
         );
     }

@@ -76,7 +76,7 @@ pub(super) fn shape_rrect(rect: Rect, shape: &crate::graphics::Shape) -> RRect {
 }
 
 pub(super) fn shape_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_safe::Path {
-    skia_safe::Path::rrect(&shape_rrect(rect, shape), skia_safe::PathDirection::CW)
+    skia_safe::Path::rrect(shape_rrect(rect, shape), skia_safe::PathDirection::CW)
 }
 
 /// Compose's inner shadow: a rim INSIDE the shape, made from the box minus the offset shape.

@@ -627,7 +627,7 @@ impl crate::modifier::DrawNode for SheetPanelNode {
             self.color.g,
             self.color.b,
         ));
-        canvas.draw_rrect(&rrect, &paint);
+        canvas.draw_rrect(rrect, &paint);
     }
 
     /// Static visual parameters only: the colour, the token radius and the window height. The radius it is

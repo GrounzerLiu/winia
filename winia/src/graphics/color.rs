@@ -190,22 +190,17 @@ pub enum ColorFilter {
 }
 
 /// Sampling quality (mirrors Compose's `FilterQuality`) — the filtering strategy when scaling a bitmap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterQuality {
     /// Nearest neighbour (no filtering — pixel art / exact sampling).
     None,
     /// Bilinear (the default — smooth when scaling down and up).
+    #[default]
     Low,
     /// Bilinear + nearest mipmap (smoother when scaling down).
     Medium,
     /// Trilinear (bilinear + linear mipmap — the highest quality).
     High,
-}
-
-impl Default for FilterQuality {
-    fn default() -> Self {
-        Self::Low
-    }
 }
 
 /// This crate's `Color` as skia's — the one place the two meet, so that a module holding a colour

@@ -212,7 +212,8 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
         return false;
     };
     use winit::keyboard::NamedKey;
-    let changed = if shift {
+
+    if shift {
         match named {
             NamedKey::ArrowLeft => {
                 if ctrl {
@@ -240,8 +241,7 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
         had
     } else {
         false
-    };
-    changed
+    }
 }
 
 /// Ctrl+C (and Cmd+C, which arrives as `meta`) copies the container's selection.

@@ -951,7 +951,7 @@ fn draw_track_path(
     let mut paint = skia_safe::Paint::default();
     paint.set_anti_alias(true);
     paint.set_color(skia_color(*color));
-    canvas.draw_rrect(&rrect, &paint);
+    canvas.draw_rrect(rrect, &paint);
 }
 
 fn skia_color(c: Color) -> skia_safe::Color {

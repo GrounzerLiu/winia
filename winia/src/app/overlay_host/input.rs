@@ -103,8 +103,8 @@ pub(crate) fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     let nodes = ov.composer.arena_nodes();
     let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
     // Find the clickable along the path (innermost first).
-    let r = fire_click_along_path(nodes, &path);
-    r
+
+    fire_click_along_path(nodes, &path)
 }
 /// Pointer down: test the overlays first (topmost) — a hit records the click target; outside → dismiss.
 pub(crate) fn overlay_down(
@@ -317,7 +317,7 @@ pub(crate) fn overlay_down(
                 event_type: crate::input::PointerEventType::Down,
                 position: (0.0, 0.0),
                 scene_position: local,
-                kind: kind,
+                kind,
                 is_alt_pressed: pw.modifiers.alt_key(),
                 is_ctrl_pressed: pw.modifiers.control_key(),
                 is_shift_pressed: pw.modifiers.shift_key(),

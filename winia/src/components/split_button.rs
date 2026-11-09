@@ -833,7 +833,7 @@ impl SplitButtonPart {
             );
             button = button.modifier(Modifier::new().draw_wrap_node(StateLayer {
                 color: layer,
-                shape: shape,
+                shape,
             }));
         }
         let click = self.click_action();

@@ -579,7 +579,7 @@ impl Composer {
                     bounds_fx,
                     peer_cid: peer.composer_id,
                     target_in_overlay,
-                    resize: resize,
+                    resize,
                     placeholder,
                     target_size: peer.arena.nodes[tidx].measured_size,
                     radius_to_auto: shared_shape_radius_is_auto(&peer.arena.nodes[tidx].modifier),

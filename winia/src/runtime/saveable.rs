@@ -476,6 +476,8 @@ mod tests {
 pub mod persist {
     use crate::debug_log;
     use std::collections::HashMap;
+    // `Path` is used by the tests below; the module itself only needs `PathBuf`.
+    #[allow(unused_imports)]
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 

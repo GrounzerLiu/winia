@@ -978,7 +978,7 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                 }
 
                 // Text with no span
-                builder.add_text(&chars[ci].to_string());
+                builder.add_text(chars[ci].to_string());
                 ci += 1;
             }
 

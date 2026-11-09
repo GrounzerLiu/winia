@@ -29,6 +29,23 @@
 //! `OverlayAnimSpec` and the four presentation helpers they need with it, which places five things
 //! worse than it fixes one. So the edge is deliberate, narrow — one type — and recorded here.
 
+// Two lints are allowed crate-wide rather than fixed, because clearing them would mean reshaping
+// public API for lint tidiness alone:
+//
+// - `type_complexity`: the complex types are callback signatures and map-of-collection fields
+//   (`Box<dyn Fn(&str, Option<(usize, usize)>) + Send>`, `HashMap<u64, HashSet<StateId>>`). Naming
+//   them would spread one-use aliases across every module and hide the actual shape at the use site.
+// - `too_many_arguments`: the wide functions are composable builders and layout/measure passes whose
+//   parameters are all distinct inputs; bundling them into a struct adds indirection without making
+//   any call site clearer.
+//
+// `doc_lazy_continuation`: the Chinese doc comments use two-space continuation alignment under
+// list markers, which the lint reads as a lazy continuation. The rendering is correct.
+// Remove the allows if a future refactor genuinely improves those signatures.
+#![allow(clippy::type_complexity)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::doc_lazy_continuation)]
+
 pub mod assets;
 pub mod runtime;
 pub mod unit;

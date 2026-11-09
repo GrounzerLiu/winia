@@ -81,6 +81,8 @@ mod pass;
 mod selection_handles;
 mod selection_menu;
 pub(crate) use selection_handles::HANDLE_RADIUS as HANDLE_GRAB_RADIUS;
+// Re-exported for the selection-drag tests; the lib build itself only uses `row_at`.
+#[allow(unused_imports)]
 pub(crate) use selection_menu::{
     ITEMS as SELECTION_MENU_ITEMS, PADDING as SELECTION_MENU_PADDING,
     ROW_HEIGHT as SELECTION_MENU_ROW_HEIGHT, menu_rect as selection_menu_rect,

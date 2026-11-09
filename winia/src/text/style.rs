@@ -44,16 +44,12 @@ impl Default for FontWeight {
 }
 
 /// How a face leans.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FontSlant {
+    #[default]
     Upright,
     Italic,
     Oblique,
-}
-impl Default for FontSlant {
-    fn default() -> Self {
-        FontSlant::Upright
-    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -65,19 +61,15 @@ impl Default for FontSlant {
 /// Compose's `TextAlign`. `Start`/`End` are resolved against the layout direction when a leaf is
 /// built (`Text::build`), so the payload and the paint path only ever see the physical four — which
 /// is what makes them safe under RTL without every call site having to ask for the direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
+    #[default]
     Left,
     Center,
     Right,
     Justify,
     Start,
     End,
-}
-impl Default for TextAlign {
-    fn default() -> Self {
-        TextAlign::Left
-    }
 }
 
 /// Compose's `TextDecoration`: a set of line decorations, combinable with `|` (`+` in Kotlin).
@@ -118,9 +110,10 @@ impl std::ops::BitOr for TextDecoration {
 }
 
 /// What happens when the text does not fit (Compose's `TextOverflow`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextOverflow {
     /// Cut off at the node's own box.
+    #[default]
     Clip,
     /// Cut off, with an ellipsis at the END of the line (Compose's `TextOverflow.Ellipsis`).
     Ellipsis,
@@ -141,11 +134,6 @@ pub enum TextOverflow {
     /// (`ButtonGroup.kt:1118-1124`) so that a press narrowing an item cannot cut the word it shows.
     Visible,
 }
-impl Default for TextOverflow {
-    fn default() -> Self {
-        TextOverflow::Clip
-    }
-}
 
 impl TextOverflow {
     /// Whether this overflow truncates with an ellipsis (Compose's `isEllipsis`).
@@ -158,17 +146,13 @@ impl TextOverflow {
 }
 
 /// How the glyphs are filled — Compose's `TextStyle.drawStyle`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TextDrawStyle {
     /// Filled glyphs (the default).
+    #[default]
     Fill,
     /// Outlined glyphs: only the outline is painted, `width` logical pixels thick.
     Stroke { width: f32 },
-}
-impl Default for TextDrawStyle {
-    fn default() -> Self {
-        TextDrawStyle::Fill
-    }
 }
 
 /// A paint for the glyphs that a plain colour cannot express — Compose's `TextStyle.brush`.

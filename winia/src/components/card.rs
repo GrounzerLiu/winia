@@ -21,20 +21,15 @@ use std::sync::Arc;
 // ═══════════════════════════════════════════════════════════
 
 /// Card 风格变体（对标 M3 Card / ElevatedCard / OutlinedCard）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CardStyle {
     /// 实心卡片（对标 `Card`）——SurfaceContainerHighest 容器
+    #[default]
     Filled,
     /// 悬浮卡片（对标 `ElevatedCard`）——SurfaceContainerLow + 默认阴影
     Elevated,
     /// 轮廓卡片（对标 `OutlinedCard`）——Surface 容器 + 1dp outline 边框
     Outlined,
-}
-
-impl Default for CardStyle {
-    fn default() -> Self {
-        Self::Filled
-    }
 }
 
 /// 卡片颜色集（对标 material3 `CardColors`）——container/content 各含
