@@ -96,17 +96,18 @@ pub(crate) fn build_plain_paragraph(
     // Line height (Compose's TextStyle.lineHeight, a fixed pixel value; skia speaks in multipliers,
     // so set_height(multiplier) plus set_height_override(true) — only the override makes it stick,
     // matching the RichText path, otherwise the font's default height wins)
-    if let Some(lh) = line_height {
-        if lh > 0.0 && font_size > 0.0 {
-            text_style.set_height(lh / font_size);
-            text_style.set_height_override(true);
-            // Compose's default `LineHeightStyle(alignment = Center, trim = None)` splits the extra
-            // leading evenly above and below the glyphs (M3's `TypographyTokens.kt:329-330`).
-            // Skia's plain `set_height` puts ALL of it above the text — measured at 16 sp with a
-            // 24 dp line height, the baseline landed at 19.47 in a 24 dp box; `half_leading`
-            // centres it (see D-2 in docs/text-review.md).
-            text_style.set_half_leading(true);
-        }
+    if let Some(lh) = line_height
+        && lh > 0.0
+        && font_size > 0.0
+    {
+        text_style.set_height(lh / font_size);
+        text_style.set_height_override(true);
+        // Compose's default `LineHeightStyle(alignment = Center, trim = None)` splits the extra
+        // leading evenly above and below the glyphs (M3's `TypographyTokens.kt:329-330`).
+        // Skia's plain `set_height` puts ALL of it above the text — measured at 16 sp with a
+        // 24 dp line height, the baseline landed at 19.47 in a 24 dp box; `half_leading`
+        // centres it (see D-2 in docs/text-review.md).
+        text_style.set_half_leading(true);
     }
     // A font family, when the caller named one (Compose's `fontFamily`).
     if let Some(family) = font_family {
@@ -1020,13 +1021,15 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
 /// that set its own height keeps it.
 fn styled_for_span(s: &RichSpanStyle, line_height: Option<f32>) -> SkTextStyle {
     let mut ts = to_sktextstyle(s);
-    if let Some(lh) = line_height {
-        if lh > 0.0 && s.height_multiple == 0.0 && s.font_size > 0.0 {
-            ts.set_height(lh / s.font_size);
-            ts.set_height_override(true);
-            // Centred leading, the same rule the plain leaf uses (D-2).
-            ts.set_half_leading(true);
-        }
+    if let Some(lh) = line_height
+        && lh > 0.0
+        && s.height_multiple == 0.0
+        && s.font_size > 0.0
+    {
+        ts.set_height(lh / s.font_size);
+        ts.set_height_override(true);
+        // Centred leading, the same rule the plain leaf uses (D-2).
+        ts.set_half_leading(true);
     }
     ts
 }

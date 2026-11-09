@@ -416,8 +416,8 @@ impl<A: LazyAxis> Pager<A> {
             Some(size) => size,
             None => (viewport - self.content_padding - self.content_padding).max(0.0),
         };
-        let page_spacing = self.page_spacing;
-        let content_padding = self.content_padding;
+        let _page_spacing = self.page_spacing;
+        let _content_padding = self.content_padding;
         if state.page_size.peek() != page_size {
             state.page_size.set(page_size);
         }

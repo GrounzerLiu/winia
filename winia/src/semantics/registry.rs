@@ -231,9 +231,9 @@ pub fn published(window_id: u64) -> Option<std::sync::Arc<WindowSemantics>> {
 
 /// Drop a window's snapshot (its window closed — a stale tree would answer for a window that is gone).
 pub fn forget(window_id: u64) {
-    if let Ok(mut store) = PUBLISHED.lock() {
-        if let Some(store) = store.as_mut() {
-            store.remove(&window_id);
-        }
+    if let Ok(mut store) = PUBLISHED.lock()
+        && let Some(store) = store.as_mut()
+    {
+        store.remove(&window_id);
     }
 }

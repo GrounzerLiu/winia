@@ -196,20 +196,18 @@ pub(crate) fn overlay_down(
                 if let Some(&idx) = path.iter().rev().find(|&&i| {
                     nodes[i].modifier.clickable_interaction().is_some()
                         || nodes[i].modifier.node_click_interaction().is_some()
-                }) {
-                    if let Some(src) = nodes[idx]
-                        .modifier
-                        .clickable_interaction()
-                        .cloned()
-                        .or_else(|| nodes[idx].modifier.node_click_interaction())
-                    {
-                        // Ripple centre = node-local coordinates (no scroll/transform inside the overlay — convert directly).
-                        let local_press = crate::layout::node::scene_to_node_local(
-                            nodes, &path, idx, local.0, local.1,
-                        );
-                        src.emit_press_at(local_press);
-                        ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
-                    }
+                }) && let Some(src) = nodes[idx]
+                    .modifier
+                    .clickable_interaction()
+                    .cloned()
+                    .or_else(|| nodes[idx].modifier.node_click_interaction())
+                {
+                    // Ripple centre = node-local coordinates (no scroll/transform inside the overlay — convert directly).
+                    let local_press = crate::layout::node::scene_to_node_local(
+                        nodes, &path, idx, local.0, local.1,
+                    );
+                    src.emit_press_at(local_press);
+                    ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
                 }
             }
         }
@@ -507,11 +505,10 @@ pub(crate) fn overlay_exit_hover_at(ov: &mut OverlayWindow, slot: u64) {
     let Some(r) = ov.composer.layout_root_idx() else {
         return;
     };
-    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-            if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
-                src.emit_hover_exit();
-            }
-        }
+    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+        && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+        && let Some(src) = nodes[idx].modifier.hoverable_interaction()
+    {
+        src.emit_hover_exit();
     }
 }

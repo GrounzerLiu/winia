@@ -199,23 +199,23 @@ impl Composer {
         let Some(a) = all[0].shared_flights.remove(&id) else {
             return;
         };
-        if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
-            if let Some(owner) = all.iter_mut().find(|c| c.composer_id == a.source_cid) {
-                if owner
-                    .arena
-                    .nodes
-                    .get(idx)
-                    .is_some_and(|n| n.slot_key == slot)
-                {
-                    let mut visited = crate::layout::node::NodeMarks::default();
-                    owner.arena.free_node_skip(
-                        idx,
-                        &crate::layout::node::NodeMarks::default(),
-                        &mut visited,
-                    );
-                }
-                owner.transition_layer.retain(|&x| x != idx);
+        if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx)
+            && let Some(owner) = all.iter_mut().find(|c| c.composer_id == a.source_cid)
+        {
+            if owner
+                .arena
+                .nodes
+                .get(idx)
+                .is_some_and(|n| n.slot_key == slot)
+            {
+                let mut visited = crate::layout::node::NodeMarks::default();
+                owner.arena.free_node_skip(
+                    idx,
+                    &crate::layout::node::NodeMarks::default(),
+                    &mut visited,
+                );
             }
+            owner.transition_layer.retain(|&x| x != idx);
         }
         if let Some(slot) = a.flight.target_slot {
             // Same as the completion path: the peer's layout override must go
@@ -358,71 +358,71 @@ impl Composer {
             // MAIN map, so its composer id is what namespaces the override.
             let owner_cid = all[0].composer_id;
             let peer = &mut all[peer_idx];
-            if let Some(root) = peer.arena.root {
-                if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
-                    // Layout contract for the peer end, identical to Tier 0.
-                    let remeasure = matches!(resize, ResizeMode::RemeasureToBounds);
-                    let frame = placeholder_frame(
-                        remeasure,
-                        animated_size(&start, &end, pr, path),
-                        placeholder,
-                        target_size,
-                    );
-                    measure_state.set(frame);
-                    let key = peer.arena.nodes[tidx].slot_key;
-                    let mine = FlightKey { cid: owner_cid, id };
-                    // Same guard as the Tier-0 writer: a different flight's
-                    // override on this node must survive (ids are per-composer).
-                    let foreign = peer.arena.nodes[tidx]
-                        .flight_measure
-                        .as_ref()
-                        .is_some_and(|f| f.owner != mine);
-                    let had_override = !foreign && peer.arena.nodes[tidx].flight_measure.is_some();
-                    if !foreign {
-                        peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
-                            None
-                        } else {
-                            Some(FlightMeasure {
-                                frame: measure_state,
-                                owner: mine,
-                            })
-                        };
-                    }
-                    if !frame.is_idle() || had_override {
-                        peer.layout_dirty_keys.insert(key);
-                    }
-                    // Same first-attach signal as the Tier-0 writer, but on the PEER: the
-                    // peer's own parent is the one that saw the natural size this frame, so
-                    // the peer composer is the one that needs the extra pass.
-                    if !frame.is_idle() && !had_override {
-                        peer.layout_override_fresh = true;
-                    }
-                    peer.arena.nodes[tidx].transition = Some(TransitionVisual {
-                        start: off_origin(start, to),
-                        end: off_origin(end, to),
-                        progress: pr,
-                        flown: flown_target,
-                        // See the Tier 1 source comment above: no scene id across composers yet.
-                        scene_alpha: None,
-                        role: TransitionRole::Target,
-                        radius_from: rf,
-                        radius_to: rt,
-                        clip,
-                        link_slot: None,
-                        // Rootless in the peer's layer — no ancestor translate.
-                        scroll: if in_overlay { (0.0, 0.0) } else { escroll },
-                        flight: id,
-                        path,
-                        bounds_fx: fx,
-                        elevated: in_overlay,
-                        remeasure,
-                        scale_parts: resize.scale_to_bounds_parts(),
-                        radius_from_auto,
-                        radius_to_auto,
-                    });
-                    if in_overlay {
-                        peer.elevated_roots.push(tidx);
-                    }
+            if let Some(root) = peer.arena.root
+                && let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot)
+            {
+                // Layout contract for the peer end, identical to Tier 0.
+                let remeasure = matches!(resize, ResizeMode::RemeasureToBounds);
+                let frame = placeholder_frame(
+                    remeasure,
+                    animated_size(&start, &end, pr, path),
+                    placeholder,
+                    target_size,
+                );
+                measure_state.set(frame);
+                let key = peer.arena.nodes[tidx].slot_key;
+                let mine = FlightKey { cid: owner_cid, id };
+                // Same guard as the Tier-0 writer: a different flight's
+                // override on this node must survive (ids are per-composer).
+                let foreign = peer.arena.nodes[tidx]
+                    .flight_measure
+                    .as_ref()
+                    .is_some_and(|f| f.owner != mine);
+                let had_override = !foreign && peer.arena.nodes[tidx].flight_measure.is_some();
+                if !foreign {
+                    peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
+                        None
+                    } else {
+                        Some(FlightMeasure {
+                            frame: measure_state,
+                            owner: mine,
+                        })
+                    };
+                }
+                if !frame.is_idle() || had_override {
+                    peer.layout_dirty_keys.insert(key);
+                }
+                // Same first-attach signal as the Tier-0 writer, but on the PEER: the
+                // peer's own parent is the one that saw the natural size this frame, so
+                // the peer composer is the one that needs the extra pass.
+                if !frame.is_idle() && !had_override {
+                    peer.layout_override_fresh = true;
+                }
+                peer.arena.nodes[tidx].transition = Some(TransitionVisual {
+                    start: off_origin(start, to),
+                    end: off_origin(end, to),
+                    progress: pr,
+                    flown: flown_target,
+                    // See the Tier 1 source comment above: no scene id across composers yet.
+                    scene_alpha: None,
+                    role: TransitionRole::Target,
+                    radius_from: rf,
+                    radius_to: rt,
+                    clip,
+                    link_slot: None,
+                    // Rootless in the peer's layer — no ancestor translate.
+                    scroll: if in_overlay { (0.0, 0.0) } else { escroll },
+                    flight: id,
+                    path,
+                    bounds_fx: fx,
+                    elevated: in_overlay,
+                    remeasure,
+                    scale_parts: resize.scale_to_bounds_parts(),
+                    radius_from_auto,
+                    radius_to_auto,
+                });
+                if in_overlay {
+                    peer.elevated_roots.push(tidx);
                 }
             }
         }

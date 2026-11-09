@@ -494,16 +494,16 @@ impl Card {
         // 追加用户 modifier（在外层，可覆盖默认样式）
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_click) = &self.on_click {
-                let cb = on_click.clone();
-                // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
-                // clickable 默认 indication=ripple；颜色用内容色）
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb())
-                    // 显式传容器 shape——波纹按容器形状裁剪
-                    .ripple_with_shape(&interaction, content_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_click) = &self.on_click
+        {
+            let cb = on_click.clone();
+            // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
+            // clickable 默认 indication=ripple；颜色用内容色）
+            modifier = modifier
+                .clickable_with_source(&interaction, move || cb())
+                // 显式传容器 shape——波纹按容器形状裁剪
+                .ripple_with_shape(&interaction, content_color, true, shape);
         }
 
         // content 闭包自动成为组合 scope（与 Column 一致）；

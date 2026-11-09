@@ -5,7 +5,6 @@ use crate::effect::scope::CoroutineScope;
 use crate::runtime::composer::ComposeCtx;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tokio::task::JoinHandle;
 
 /// Internal state.
 struct LaunchedEffectState<T: PartialEq> {

@@ -129,27 +129,23 @@ impl PerWindow {
         }
         if let Some(old) = self.focused_interaction_slot.take() {
             let nodes = self.composer.arena_nodes();
-            if let Some(r) = self.composer.layout_root_idx() {
-                if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old) {
-                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-                        if let Some(src) = nodes[idx].modifier.focusable_interaction() {
-                            src.emit_unfocus();
-                        }
-                    }
-                }
+            if let Some(r) = self.composer.layout_root_idx()
+                && let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old)
+                && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                && let Some(src) = nodes[idx].modifier.focusable_interaction()
+            {
+                src.emit_unfocus();
             }
         }
         if let Some(new) = new_slot {
             let nodes = self.composer.arena_nodes();
-            if let Some(r) = self.composer.layout_root_idx() {
-                if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, new) {
-                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-                        if let Some(src) = nodes[idx].modifier.focusable_interaction() {
-                            src.emit_focus();
-                            self.focused_interaction_slot = Some(new);
-                        }
-                    }
-                }
+            if let Some(r) = self.composer.layout_root_idx()
+                && let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, new)
+                && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                && let Some(src) = nodes[idx].modifier.focusable_interaction()
+            {
+                src.emit_focus();
+                self.focused_interaction_slot = Some(new);
             }
         }
     }
@@ -181,36 +177,29 @@ impl PerWindow {
         if cur == self.overlay.focused_interaction {
             return;
         }
-        if let Some((old_id, old_slot)) = self.overlay.focused_interaction.take() {
-            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == old_id) {
-                let nodes = ov.composer.arena_nodes();
-                if let Some(r) = ov.composer.layout_root_idx() {
-                    if let Some(nid) =
-                        crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot)
-                    {
-                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-                            if let Some(src) = nodes[idx].modifier.focusable_interaction() {
-                                src.emit_unfocus();
-                            }
-                        }
-                    }
-                }
+        if let Some((old_id, old_slot)) = self.overlay.focused_interaction.take()
+            && let Some(ov) = self.overlay.layers.iter().find(|o| o.id == old_id)
+        {
+            let nodes = ov.composer.arena_nodes();
+            if let Some(r) = ov.composer.layout_root_idx()
+                && let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot)
+                && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                && let Some(src) = nodes[idx].modifier.focusable_interaction()
+            {
+                src.emit_unfocus();
             }
         }
-        if let Some((id, slot)) = cur {
-            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == id) {
-                let nodes = ov.composer.arena_nodes();
-                if let Some(r) = ov.composer.layout_root_idx() {
-                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
-                    {
-                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-                            if let Some(src) = nodes[idx].modifier.focusable_interaction() {
-                                src.emit_focus();
-                                self.overlay.focused_interaction = Some((id, slot));
-                            }
-                        }
-                    }
-                }
+        if let Some((id, slot)) = cur
+            && let Some(ov) = self.overlay.layers.iter().find(|o| o.id == id)
+        {
+            let nodes = ov.composer.arena_nodes();
+            if let Some(r) = ov.composer.layout_root_idx()
+                && let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+                && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                && let Some(src) = nodes[idx].modifier.focusable_interaction()
+            {
+                src.emit_focus();
+                self.overlay.focused_interaction = Some((id, slot));
             }
         }
     }
@@ -495,7 +484,7 @@ impl PerWindow {
             }
             return;
         }
-        let (Some(root), Some(fid)) = (self.composer.layout_root_idx(), self.focused_id) else {
+        let (Some(_root), Some(_fid)) = (self.composer.layout_root_idx(), self.focused_id) else {
             return;
         };
     }
@@ -771,10 +760,10 @@ impl PerWindow {
         if let Some(pos) = self.input.last_pos {
             crate::app::per_window::pointer::apply_text_selection_drag(self, pos);
         }
-        if moved || self.input.selection_autoscroll.is_some() {
-            if let Some(ref sw) = self.skia_window {
-                sw.request_redraw();
-            }
+        if (moved || self.input.selection_autoscroll.is_some())
+            && let Some(ref sw) = self.skia_window
+        {
+            sw.request_redraw();
         }
     }
 
@@ -999,10 +988,8 @@ impl PerWindow {
             let finished = menu.closing.is_some() && !animating;
             if finished {
                 self.input.selection_menu = None;
-            } else if animating {
-                if let Some(ref sw) = self.skia_window {
-                    sw.request_redraw();
-                }
+            } else if animating && let Some(ref sw) = self.skia_window {
+                sw.request_redraw();
             }
         }
     }

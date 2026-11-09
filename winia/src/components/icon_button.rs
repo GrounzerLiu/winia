@@ -566,14 +566,14 @@ impl IconButton {
         );
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_click) = &self.on_click {
-                let cb = on_click.clone();
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb())
-                    // 波纹裁剪到容器形状（圆形）
-                    .ripple_with_shape(&interaction, content_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_click) = &self.on_click
+        {
+            let cb = on_click.clone();
+            modifier = modifier
+                .clickable_with_source(&interaction, move || cb())
+                // 波纹裁剪到容器形状（圆形）
+                .ripple_with_shape(&interaction, content_color, true, shape);
         }
 
         match ctx.start_restartable_group(

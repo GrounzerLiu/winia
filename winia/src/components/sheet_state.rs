@@ -249,14 +249,12 @@ impl SheetState {
         let max = new_anchors.max_position();
         self.anchored.update_anchors(new_anchors);
         let off = self.anchored.offset();
-        if !off.is_nan() {
-            if !min.is_nan() && !max.is_nan() {
-                let lo = min.min(max);
-                let hi = min.max(max);
-                let clamped = off.clamp(lo, hi);
-                if (clamped - off).abs() > 0.5 {
-                    self.anchored.offset_state().set(clamped);
-                }
+        if !off.is_nan() && !min.is_nan() && !max.is_nan() {
+            let lo = min.min(max);
+            let hi = min.max(max);
+            let clamped = off.clamp(lo, hi);
+            if (clamped - off).abs() > 0.5 {
+                self.anchored.offset_state().set(clamped);
             }
         }
         // Compose's `draggableAnchors` block returns the new anchors AND the new target together

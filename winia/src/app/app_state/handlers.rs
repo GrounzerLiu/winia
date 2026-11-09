@@ -124,10 +124,8 @@ impl ApplicationHandler for AppState {
                 let (slot, arena) = (pw.input.slot, pw.input.arena);
                 if let Some(slot) = slot {
                     let fired_callback = fire_in_gesture_arena(pw, arena, slot, action);
-                    if fired_callback {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if fired_callback && let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
                     }
                 }
             }
@@ -232,10 +230,10 @@ impl ApplicationHandler for AppState {
         // pending — without this its frame would never be scheduled and the new theme would sit unseen.
         for created_id in take_redraw_requests() {
             for pw in self.windows.values() {
-                if pw.created_id == Some(created_id) {
-                    if let Some(ref sw) = pw.skia_window {
-                        sw.request_redraw();
-                    }
+                if pw.created_id == Some(created_id)
+                    && let Some(ref sw) = pw.skia_window
+                {
+                    sw.request_redraw();
                 }
             }
         }
@@ -446,13 +444,13 @@ impl AppState {
                     cb();
                 }
                 // Snapshot saveable state while the composition is still alive to provide it.
-                if let Some(key) = pw.saveable_key {
-                    if let Some(registry) = pw.composer.saveable_registry() {
-                        let saved = registry.perform_save();
-                        if !saved.is_empty() {
-                            crate::runtime::saveable::persist::save_saved(key, &saved);
-                            self.saveable.insert(key, saved);
-                        }
+                if let Some(key) = pw.saveable_key
+                    && let Some(registry) = pw.composer.saveable_registry()
+                {
+                    let saved = registry.perform_save();
+                    if !saved.is_empty() {
+                        crate::runtime::saveable::persist::save_saved(key, &saved);
+                        self.saveable.insert(key, saved);
                     }
                 }
                 if let Some(ref sw) = pw.skia_window {
@@ -552,29 +550,29 @@ impl AppState {
                 if !state.is_pressed() {
                     // Request a redraw explicitly: a State set inside on_click goes through the async
                     // wake_up chain, and without the pending check as a fallback the refresh was missed.
-                    if detect_click(pw, scene_pos) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if detect_click(pw, scene_pos)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // Execute the overlay click (recorded when down hit an overlay — fired on up; the
                     // main-tree detect_click short-circuits on down, records no pointer_down_state and idles).
-                    if exec_overlay_click(pw) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if exec_overlay_click(pw)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // End the overlay drag (up).
-                    if overlay_drag_up(pw) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if overlay_drag_up(pw)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // Gesture up detection (tap/double-tap/long-press/drag-end).
-                    if gesture_up(pw, scene_pos) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if gesture_up(pw, scene_pos)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // End the drag scroll: fast enough → fling (inertial scrolling).
                     drag_scroll_up(pw);
@@ -609,18 +607,13 @@ impl AppState {
                     // The Compose way: take the registrar by the dragged node's slot_key and fire directly.
                     if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(nid) =
+                        if let Some(r) = pw.composer.layout_root_idx()
+                            && let Some(nid) =
                                 crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
-                            {
-                                if let Some(idx) =
-                                    crate::layout::node::find_node_by_id(nodes, r, nid)
-                                {
-                                    if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
-                                        reg.fire_on_change();
-                                    }
-                                }
-                            }
+                            && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                            && let Some(reg) = nodes[idx].registrar.borrow().as_ref()
+                        {
+                            reg.fire_on_change();
                         }
                     }
                     pw.input.down_slot = None;
@@ -658,10 +651,10 @@ impl AppState {
                     handle_pointer_move(pw, scene_pos, pw.input.last_kind.clone(), &modifiers);
                 // Request a redraw when the move was consumed (on_pointer_event may update State) or a
                 // drag selection is in progress; an unconsumed hover move does not wake the event loop.
-                if consumed || pw.input.down.is_some() {
-                    if let Some(ref sw) = pw.skia_window {
-                        sw.request_redraw();
-                    }
+                if (consumed || pw.input.down.is_some())
+                    && let Some(ref sw) = pw.skia_window
+                {
+                    sw.request_redraw();
                 }
             }
             // Pointer left the window: clear every hover (send Exit to each hoverable) and clear the
@@ -743,12 +736,12 @@ impl AppState {
                         Key::Named(NamedKey::ArrowUp) => Some(FocusDir::Up),
                         _ => None,
                     };
-                    if let Some(dir) = dir {
-                        if pw.focus_move_directional(dir) {
-                            // The row that just took focus may be outside the viewport.
-                            pw.reveal_focused();
-                            consumed = true;
-                        }
+                    if let Some(dir) = dir
+                        && pw.focus_move_directional(dir)
+                    {
+                        // The row that just took focus may be outside the viewport.
+                        pw.reveal_focused();
+                        consumed = true;
                     }
                 }
                 if consumed {
@@ -788,19 +781,13 @@ impl AppState {
                             }
                         } else if let Some(fid) = pw.focused_id {
                             let nodes = pw.composer.arena_nodes();
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                if let Some(idx) =
+                            if let Some(r) = pw.composer.layout_root_idx()
+                                && let Some(idx) =
                                     crate::layout::node::find_node_by_id(nodes, r, fid)
-                                {
-                                    if let Some(ime_idx) = find_descendant_ime_callback(nodes, idx)
-                                    {
-                                        if let Some(cb) =
-                                            nodes[ime_idx].ime_callback.borrow_mut().as_mut()
-                                        {
-                                            cb(&text, cursor);
-                                        }
-                                    }
-                                }
+                                && let Some(ime_idx) = find_descendant_ime_callback(nodes, idx)
+                                && let Some(cb) = nodes[ime_idx].ime_callback.borrow_mut().as_mut()
+                            {
+                                cb(&text, cursor);
                             }
                         }
                         if let Some(ref sw) = pw.skia_window {
@@ -809,10 +796,10 @@ impl AppState {
                     }
                     Ime::Commit(text) if text.is_empty() => {
                         // An empty commit replaces the selection with nothing (deletes it).
-                        if dispatch_ime_edit(pw, ImeEdit::Commit(text)) {
-                            if let Some(ref sw) = pw.skia_window {
-                                sw.request_redraw();
-                            }
+                        if dispatch_ime_edit(pw, ImeEdit::Commit(text))
+                            && let Some(ref sw) = pw.skia_window
+                        {
+                            sw.request_redraw();
                         }
                     }
                     Ime::Commit(text) => {
@@ -880,11 +867,10 @@ impl AppState {
                                                     on_key: Some(handler),
                                                     ..
                                                 } = el
+                                                    && handler(&ke)
                                                 {
-                                                    if handler(&ke) {
-                                                        consumed = true;
-                                                        break;
-                                                    }
+                                                    consumed = true;
+                                                    break;
                                                 }
                                             }
                                             if consumed {
@@ -937,11 +923,10 @@ impl AppState {
                                                 on_key: Some(handler),
                                                 ..
                                             } = el
+                                                && handler(&ke)
                                             {
-                                                if handler(&ke) {
-                                                    consumed = true;
-                                                    break;
-                                                }
+                                                consumed = true;
+                                                break;
                                             }
                                         }
                                         if consumed {
@@ -965,10 +950,9 @@ impl AppState {
                                 before_bytes,
                                 after_bytes,
                             },
-                        ) {
-                            if let Some(ref sw) = pw.skia_window {
-                                sw.request_redraw();
-                            }
+                        ) && let Some(ref sw) = pw.skia_window
+                        {
+                            sw.request_redraw();
                         }
                     }
                     Ime::Enabled | Ime::Disabled => {
@@ -1041,13 +1025,13 @@ impl AppState {
                     // While a focus scope owns the keyboard the page is out of reach, and that has to
                     // hold for a focus REQUEST too — not only for keys. A component asking for focus
                     // behind a scrim would take it (and turn its IME back on) while the modal is up.
-                    if !focus_scope_is_open(pw) {
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            let nodes = pw.composer.arena_nodes_mut();
-                            if crate::layout::node::focus_by_id(nodes, r, id) {
-                                pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                                main_hit = true;
-                            }
+                    if !focus_scope_is_open(pw)
+                        && let Some(r) = pw.composer.layout_root_idx()
+                    {
+                        let nodes = pw.composer.arena_nodes_mut();
+                        if crate::layout::node::focus_by_id(nodes, r, id) {
+                            pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
+                            main_hit = true;
                         }
                     }
                     if main_hit {
@@ -1141,22 +1125,21 @@ impl AppState {
                     // Look up slot_key separately (avoids a borrow conflict with root).
                     if let Some(fid) = pw.focused_id {
                         let nodes = pw.composer.arena_nodes();
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(found) = crate::layout::node::find_node_by_id(nodes, r, fid)
-                            {
-                                pw.focused_slot_key = Some(nodes[found].slot_key);
-                                // IME is switched per component declaration: text components (TextField)
-                                // declare the IME requirement during composition via
-                                // set_current_node_ime_callback; the framework only forwards mechanically
-                                // and does not inspect component types. A focusable such as Button that
-                                // declares no ime_callback does not turn the IME on when focused.
-                                // NOTE TextField containerisation: focus is on the container and
-                                // ime_callback on the input leaf — so search the subtree downwards
-                                // (node_or_descendant_wants_ime).
-                                let wants_ime = node_or_descendant_wants_ime(nodes, found);
-                                if let Some(ref sw) = pw.skia_window {
-                                    set_ime_enabled(&sw, wants_ime);
-                                }
+                        if let Some(r) = pw.composer.layout_root_idx()
+                            && let Some(found) = crate::layout::node::find_node_by_id(nodes, r, fid)
+                        {
+                            pw.focused_slot_key = Some(nodes[found].slot_key);
+                            // IME is switched per component declaration: text components (TextField)
+                            // declare the IME requirement during composition via
+                            // set_current_node_ime_callback; the framework only forwards mechanically
+                            // and does not inspect component types. A focusable such as Button that
+                            // declares no ime_callback does not turn the IME on when focused.
+                            // NOTE TextField containerisation: focus is on the container and
+                            // ime_callback on the input leaf — so search the subtree downwards
+                            // (node_or_descendant_wants_ime).
+                            let wants_ime = node_or_descendant_wants_ime(nodes, found);
+                            if let Some(ref sw) = pw.skia_window {
+                                set_ime_enabled(&sw, wants_ime);
                             }
                         }
                     }
@@ -1278,10 +1261,10 @@ impl AppState {
                             // freezes at its start value until the next external event (a mouse move) converges
                             // it in one large dt. An explicit request_redraw keeps animation frames coming
                             // without depending on that possibly-lost wake-up.
-                            if crate::animation::is_animating() {
-                                if let Some(ref sw) = pw.skia_window {
-                                    sw.request_redraw();
-                                }
+                            if crate::animation::is_animating()
+                                && let Some(ref sw) = pw.skia_window
+                            {
+                                sw.request_redraw();
                             }
                         }
                         Err(e) => {
@@ -1307,131 +1290,117 @@ impl AppState {
                         }
                     }
                     // Update the IME caret area (so the candidate window follows the caret).
-                    if let Some(ref sw) = pw.skia_window {
-                        if let Some(fid) = pw.focused_id {
-                            let nodes = pw.composer.arena_nodes();
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                // NOTE TextField containerisation: focus is on the container and
-                                // paragraph/cursor on the input leaf — so search downwards for the
-                                // ime_callback node (find_descendant_ime_callback); looking only at the
-                                // focused node leaves the container without a paragraph, so the candidate
-                                // area never updates.
-                                let pidx = crate::layout::node::find_node_by_id(nodes, r, fid)
-                                    .and_then(|idx| find_descendant_ime_callback(nodes, idx));
-                                if let Some(pidx) = pidx {
-                                    if let Ok(borrow) = nodes[pidx].cached_paragraph.try_borrow() {
-                                        if let Some(p) = borrow.as_ref() {
-                                            let abs = node_abs_position(nodes, r, nodes[pidx].id);
-                                            // Content-box offset (on the render side content_x = node origin +
-                                            // padding — the IME area must match, otherwise the candidate
-                                            // window is shifted by the whole padding).
-                                            let (pad_s, pad_t, pad_e, _) =
-                                                nodes[pidx].modifier.get_padding_sides();
-                                            let pad_x = if nodes[pidx].layout_direction
-                                                == crate::layout::LayoutDirection::Rtl
-                                            {
-                                                pad_e
-                                            } else {
-                                                pad_s
-                                            };
-                                            // Empty text: no glyph to locate — put the IME area at the content
-                                            // origin (line height approximated; matches the render side's empty cursor).
-                                            let empty = nodes[pidx].modifier.content_len() == 0;
-                                            // The caret index is the edit offset — map it to the display offset
-                                            // (TextFieldVisual sits on the container — search upwards).
-                                            let caret_idx =
-                                                crate::text::field::offset_mapping_for_node(
-                                                    nodes, r, pidx,
-                                                )
-                                                .map(|m| {
-                                                    m.original_to_transformed(
-                                                        nodes[pidx].cursor_index.get(),
-                                                    )
-                                                })
-                                                .unwrap_or_else(|| nodes[pidx].cursor_index.get());
-                                            let (mut cx, cy, ch) = if empty {
-                                                (0.0, 0.0, 20.0)
-                                            } else {
-                                                let tl = crate::text::TextLayout::new(p);
-                                                match tl.get_cursor_position(caret_idx) {
-                                                    Some(v) => v,
-                                                    None => (0.0, 0.0, 20.0),
-                                                }
-                                            };
-                                            // The IME window follows the same horizontal mapping the
-                                            // renderer uses for the caret (a geometric transform widens
-                                            // the drawn run, not the laid-out one).
-                                            if let Some(t) =
-                                                crate::layout::node::text_transform(&nodes[pidx])
-                                            {
-                                                cx = t.map_x(cx, cy);
-                                            }
-                                            // A line-height style moves the glyphs inside their box.
-                                            let line_dy =
-                                                crate::layout::node::line_geometry(&nodes[pidx], p)
-                                                    .paint_dy;
-                                            let align = nodes[pidx]
-                                                .modifier
-                                                .align()
-                                                .unwrap_or(crate::text::TextAlign::Left);
-                                            // CONTENT box: the painter uses it, so the IME
-                                            // candidate window must too — under a flight layout
-                                            // override `measured_size` is the size the PARENT was
-                                            // told (review R3-F6).
-                                            let node_w = nodes[pidx].content_box().width;
-                                            let intrinsic_w = p.max_intrinsic_width();
-                                            // NOTE Empty text: the render side draws the caret at the content
-                                            // origin (left-aligned, not offset by align) — the IME area must
-                                            // match, otherwise with Center/Right alignment the candidate window
-                                            // for empty input sits in the middle of the container instead of at the caret.
-                                            let x = if empty {
-                                                (abs.0 + pad_x) as f64
-                                            } else {
-                                                let x_off = match align {
-                                                    crate::text::TextAlign::Left
-                                                    | crate::text::TextAlign::Justify
-                                                    | crate::text::TextAlign::Start
-                                                    | crate::text::TextAlign::End => abs.0,
-                                                    crate::text::TextAlign::Center => {
-                                                        abs.0
-                                                            + (node_w - intrinsic_w).max(0.0) / 2.0
-                                                    }
-                                                    crate::text::TextAlign::Right => {
-                                                        abs.0 + (node_w - intrinsic_w).max(0.0)
-                                                    }
-                                                };
-                                                (x_off + pad_x + cx) as f64
-                                            };
-                                            let y = (abs.1 + pad_t + cy + line_dy) as f64;
-                                            let _ = sw.request_ime_update(
-                                                winit::window::ImeRequest::Update(
-                                                    winit::window::ImeRequestData::default()
-                                                        .with_cursor_area(
-                                                            winit::dpi::Position::Logical(
-                                                                winit::dpi::LogicalPosition::new(
-                                                                    x, y,
-                                                                ),
-                                                            ),
-                                                            winit::dpi::Size::Logical(
-                                                                winit::dpi::LogicalSize::new(
-                                                                    2.0, ch as f64,
-                                                                ),
-                                                            ),
-                                                        ),
-                                                ),
-                                            );
-                                        }
+                    if let Some(ref sw) = pw.skia_window
+                        && let Some(fid) = pw.focused_id
+                    {
+                        let nodes = pw.composer.arena_nodes();
+                        if let Some(r) = pw.composer.layout_root_idx() {
+                            // NOTE TextField containerisation: focus is on the container and
+                            // paragraph/cursor on the input leaf — so search downwards for the
+                            // ime_callback node (find_descendant_ime_callback); looking only at the
+                            // focused node leaves the container without a paragraph, so the candidate
+                            // area never updates.
+                            let pidx = crate::layout::node::find_node_by_id(nodes, r, fid)
+                                .and_then(|idx| find_descendant_ime_callback(nodes, idx));
+                            if let Some(pidx) = pidx
+                                && let Ok(borrow) = nodes[pidx].cached_paragraph.try_borrow()
+                                && let Some(p) = borrow.as_ref()
+                            {
+                                let abs = node_abs_position(nodes, r, nodes[pidx].id);
+                                // Content-box offset (on the render side content_x = node origin +
+                                // padding — the IME area must match, otherwise the candidate
+                                // window is shifted by the whole padding).
+                                let (pad_s, pad_t, pad_e, _) =
+                                    nodes[pidx].modifier.get_padding_sides();
+                                let pad_x = if nodes[pidx].layout_direction
+                                    == crate::layout::LayoutDirection::Rtl
+                                {
+                                    pad_e
+                                } else {
+                                    pad_s
+                                };
+                                // Empty text: no glyph to locate — put the IME area at the content
+                                // origin (line height approximated; matches the render side's empty cursor).
+                                let empty = nodes[pidx].modifier.content_len() == 0;
+                                // The caret index is the edit offset — map it to the display offset
+                                // (TextFieldVisual sits on the container — search upwards).
+                                let caret_idx =
+                                    crate::text::field::offset_mapping_for_node(nodes, r, pidx)
+                                        .map(|m| {
+                                            m.original_to_transformed(
+                                                nodes[pidx].cursor_index.get(),
+                                            )
+                                        })
+                                        .unwrap_or_else(|| nodes[pidx].cursor_index.get());
+                                let (mut cx, cy, ch) = if empty {
+                                    (0.0, 0.0, 20.0)
+                                } else {
+                                    let tl = crate::text::TextLayout::new(p);
+                                    match tl.get_cursor_position(caret_idx) {
+                                        Some(v) => v,
+                                        None => (0.0, 0.0, 20.0),
                                     }
+                                };
+                                // The IME window follows the same horizontal mapping the
+                                // renderer uses for the caret (a geometric transform widens
+                                // the drawn run, not the laid-out one).
+                                if let Some(t) = crate::layout::node::text_transform(&nodes[pidx]) {
+                                    cx = t.map_x(cx, cy);
                                 }
+                                // A line-height style moves the glyphs inside their box.
+                                let line_dy =
+                                    crate::layout::node::line_geometry(&nodes[pidx], p).paint_dy;
+                                let align = nodes[pidx]
+                                    .modifier
+                                    .align()
+                                    .unwrap_or(crate::text::TextAlign::Left);
+                                // CONTENT box: the painter uses it, so the IME
+                                // candidate window must too — under a flight layout
+                                // override `measured_size` is the size the PARENT was
+                                // told (review R3-F6).
+                                let node_w = nodes[pidx].content_box().width;
+                                let intrinsic_w = p.max_intrinsic_width();
+                                // NOTE Empty text: the render side draws the caret at the content
+                                // origin (left-aligned, not offset by align) — the IME area must
+                                // match, otherwise with Center/Right alignment the candidate window
+                                // for empty input sits in the middle of the container instead of at the caret.
+                                let x = if empty {
+                                    (abs.0 + pad_x) as f64
+                                } else {
+                                    let x_off = match align {
+                                        crate::text::TextAlign::Left
+                                        | crate::text::TextAlign::Justify
+                                        | crate::text::TextAlign::Start
+                                        | crate::text::TextAlign::End => abs.0,
+                                        crate::text::TextAlign::Center => {
+                                            abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0
+                                        }
+                                        crate::text::TextAlign::Right => {
+                                            abs.0 + (node_w - intrinsic_w).max(0.0)
+                                        }
+                                    };
+                                    (x_off + pad_x + cx) as f64
+                                };
+                                let y = (abs.1 + pad_t + cy + line_dy) as f64;
+                                let _ = sw.request_ime_update(winit::window::ImeRequest::Update(
+                                    winit::window::ImeRequestData::default().with_cursor_area(
+                                        winit::dpi::Position::Logical(
+                                            winit::dpi::LogicalPosition::new(x, y),
+                                        ),
+                                        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+                                            2.0, ch as f64,
+                                        )),
+                                    ),
+                                ));
                             }
                         }
                     }
                 } // end frame-rate limit else (render + IME sync)
                 // Check whether compose left a window pending close.
-                if pw.composer.pending_window_close_id().is_some() {
-                    if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
-                        let _ = proxy.wake_up();
-                    }
+                if pw.composer.pending_window_close_id().is_some()
+                    && let Some(ref proxy) = *APP_PROXY.lock().unwrap()
+                {
+                    let _ = proxy.wake_up();
                 }
                 // Consume DevTools events (parent window only) — new_events calls this as a fallback too (see below).
                 if is_parent {

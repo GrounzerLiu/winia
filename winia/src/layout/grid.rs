@@ -448,7 +448,7 @@ fn place_cells(
     // and every child keeps filling the current column. A row flow grows rows freely either way, so
     // the bound there only caps the defensive scan.
     let declared = declared_rows.map(|rows| rows.max(1));
-    let row_bound = match declared {
+    let _row_bound = match declared {
         Some(rows) if flow.by_column() => rows,
         _ => spans.len() + 1,
     };

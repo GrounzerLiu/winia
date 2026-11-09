@@ -231,7 +231,7 @@ fn subcompose_sized(
         (Some(uid), Some(n)) => SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&(uid, n))),
         _ => None,
     };
-    let mut inner: Box<Composer> = match (cached, remembered) {
+    let inner: Box<Composer> = match (cached, remembered) {
         // Same constraints as the parked composition: arrange the EXISTING tree again rather than
         // composing the content a second time this frame.
         (Some(mut composer), _) if composer_ran_under(&composer, constraints) => {

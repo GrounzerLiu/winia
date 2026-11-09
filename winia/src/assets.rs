@@ -94,10 +94,10 @@ pub fn canonical_path(logical: &str) -> String {
 #[cfg(not(target_os = "android"))]
 fn desktop_root_for_exe(exe: &Path) -> Option<PathBuf> {
     let parent = exe.parent()?;
-    if let Some(resources) = macos_resources_root(exe) {
-        if resources.join("assets.manifest.json").is_file() {
-            return Some(resources);
-        }
+    if let Some(resources) = macos_resources_root(exe)
+        && resources.join("assets.manifest.json").is_file()
+    {
+        return Some(resources);
     }
     Some(parent.to_path_buf())
 }

@@ -4,7 +4,7 @@
 
 use super::config::{
     FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBoxConfig, FlexBoxConfigInput,
-    FlexDirection, FlexJustifyContent, FlexWrap,
+    FlexJustifyContent,
 };
 use super::intrinsic;
 use crate::layout::Constraints;

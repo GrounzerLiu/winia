@@ -197,50 +197,50 @@ fn reveal_in(
     let (vw, vh) = ((w - pad_s - pad_e).max(0.0), (h - pad_t - pad_b).max(0.0));
 
     let mut rect = rect;
-    if let Some(state) = nodes[ancestor].modifier.vertical_scroll_state() {
-        if !nodes[ancestor].scroll_reverse {
-            let offset = state.offset.peek();
-            let content_top = rect.1 - vy + offset;
-            let content_bottom = content_top + rect.3;
-            let target = if content_top < offset {
-                content_top
-            } else if content_bottom > offset + vh {
-                content_bottom - vh
-            } else {
-                offset
-            };
-            let target = target.clamp(0.0, scroll_limit(nodes, ancestor, vh, false));
-            if (target - offset).abs() > 0.5 {
-                state.animate_scroll_to(
-                    target,
-                    scroll_limit(nodes, ancestor, vh, false),
-                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
-                );
-                rect.1 += offset - target;
-            }
+    if let Some(state) = nodes[ancestor].modifier.vertical_scroll_state()
+        && !nodes[ancestor].scroll_reverse
+    {
+        let offset = state.offset.peek();
+        let content_top = rect.1 - vy + offset;
+        let content_bottom = content_top + rect.3;
+        let target = if content_top < offset {
+            content_top
+        } else if content_bottom > offset + vh {
+            content_bottom - vh
+        } else {
+            offset
+        };
+        let target = target.clamp(0.0, scroll_limit(nodes, ancestor, vh, false));
+        if (target - offset).abs() > 0.5 {
+            state.animate_scroll_to(
+                target,
+                scroll_limit(nodes, ancestor, vh, false),
+                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+            );
+            rect.1 += offset - target;
         }
     }
-    if let Some(state) = nodes[ancestor].modifier.horizontal_scroll_state() {
-        if !nodes[ancestor].scroll_reverse {
-            let offset = state.offset.peek();
-            let content_left = rect.0 - vx + offset;
-            let content_right = content_left + rect.2;
-            let target = if content_left < offset {
-                content_left
-            } else if content_right > offset + vw {
-                content_right - vw
-            } else {
-                offset
-            };
-            let target = target.clamp(0.0, scroll_limit(nodes, ancestor, vw, true));
-            if (target - offset).abs() > 0.5 {
-                state.animate_scroll_to(
-                    target,
-                    scroll_limit(nodes, ancestor, vw, true),
-                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
-                );
-                rect.0 += offset - target;
-            }
+    if let Some(state) = nodes[ancestor].modifier.horizontal_scroll_state()
+        && !nodes[ancestor].scroll_reverse
+    {
+        let offset = state.offset.peek();
+        let content_left = rect.0 - vx + offset;
+        let content_right = content_left + rect.2;
+        let target = if content_left < offset {
+            content_left
+        } else if content_right > offset + vw {
+            content_right - vw
+        } else {
+            offset
+        };
+        let target = target.clamp(0.0, scroll_limit(nodes, ancestor, vw, true));
+        if (target - offset).abs() > 0.5 {
+            state.animate_scroll_to(
+                target,
+                scroll_limit(nodes, ancestor, vw, true),
+                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+            );
+            rect.0 += offset - target;
         }
     }
     rect

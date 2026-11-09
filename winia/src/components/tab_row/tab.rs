@@ -149,10 +149,8 @@ impl Tab {
         let callback = self.on_click.clone();
 
         let mut item_modifier = Modifier::new();
-        if enabled {
-            if let Some(cb) = callback {
-                item_modifier = item_modifier.clickable_with_source(&interaction, move || cb());
-            }
+        if enabled && let Some(cb) = callback {
+            item_modifier = item_modifier.clickable_with_source(&interaction, move || cb());
         }
         // 全节点 ripple（bounded，使用选中色）
         let ripple_modifier = if enabled {

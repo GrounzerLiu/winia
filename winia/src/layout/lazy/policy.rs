@@ -242,12 +242,12 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 content_h += self.spacing;
             }
         }
-        if self.snap_paging {
-            if let Some(page_size) = uniform_page_size.filter(|size| *size > 0.0) {
-                let trailing_snap_room =
-                    (vh - (pad_before + pad_after + snap_shift + page_size)).max(0.0);
-                content_h += trailing_snap_room;
-            }
+        if self.snap_paging
+            && let Some(page_size) = uniform_page_size.filter(|size| *size > 0.0)
+        {
+            let trailing_snap_room =
+                (vh - (pad_before + pad_after + snap_shift + page_size)).max(0.0);
+            content_h += trailing_snap_room;
         }
         self.content_height.set(content_h);
         // Out-of-range clamp: `scroll_to_item` carries no `total`, so a programmatic scroll past
@@ -534,27 +534,27 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             *shift = 0.0;
             taken
         };
-        if let Some(anchor_key) = anchor {
-            if let Some(i) = children.iter().enumerate().find_map(|(i, _c)| {
+        if let Some(anchor_key) = anchor
+            && let Some(i) = children.iter().enumerate().find_map(|(i, _c)| {
                 let global = self.globals.get(i).copied().unwrap_or(i);
                 (self.keys.get(global).copied().unwrap_or(global as u64) == anchor_key).then_some(i)
-            }) {
-                let position = placements[i].position;
-                let delta = match self.state.item_animations.remembered_position(anchor_key) {
-                    // Exact: the anchor's own movement, applied per item to the rows that moved with it.
-                    Some(last) => position - last,
-                    // The anchor carries no marker, so there is no memory to compare against: fall back
-                    // to the correction's own delta, which is what the layout moved up to the estimate.
-                    None => {
-                        if A::VERTICAL {
-                            crate::unit::Offset::new(0.0, anchor_shift)
-                        } else {
-                            crate::unit::Offset::new(anchor_shift, 0.0)
-                        }
+            })
+        {
+            let position = placements[i].position;
+            let delta = match self.state.item_animations.remembered_position(anchor_key) {
+                // Exact: the anchor's own movement, applied per item to the rows that moved with it.
+                Some(last) => position - last,
+                // The anchor carries no marker, so there is no memory to compare against: fall back
+                // to the correction's own delta, which is what the layout moved up to the estimate.
+                None => {
+                    if A::VERTICAL {
+                        crate::unit::Offset::new(0.0, anchor_shift)
+                    } else {
+                        crate::unit::Offset::new(anchor_shift, 0.0)
                     }
-                };
-                self.state.item_animations.set_anchor_delta(delta);
-            }
+                }
+            };
+            self.state.item_animations.set_anchor_delta(delta);
         }
         for (i, &c) in children.iter().enumerate() {
             nodes[c].position = placements[i].position;

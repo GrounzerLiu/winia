@@ -444,13 +444,13 @@ impl FloatingActionButton {
         );
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_click) = &self.on_click {
-                let callback = on_click.clone();
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || callback())
-                    .ripple_with_shape(&interaction, ripple_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_click) = &self.on_click
+        {
+            let callback = on_click.clone();
+            modifier = modifier
+                .clickable_with_source(&interaction, move || callback())
+                .ripple_with_shape(&interaction, ripple_color, true, shape);
         }
 
         match ctx.start_restartable_group(
@@ -905,13 +905,13 @@ impl ExtendedFloatingActionButton {
         );
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_click) = &self.on_click {
-                let callback = on_click.clone();
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || callback())
-                    .ripple_with_shape(&interaction, ripple_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_click) = &self.on_click
+        {
+            let callback = on_click.clone();
+            modifier = modifier
+                .clickable_with_source(&interaction, move || callback())
+                .ripple_with_shape(&interaction, ripple_color, true, shape);
         }
 
         match self.content {

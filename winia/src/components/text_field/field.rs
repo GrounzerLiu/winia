@@ -839,15 +839,15 @@ impl TextField {
                                 .grapheme_indices(true)
                                 .map(|(i, _)| i)
                                 .find(|&pos| pos > val.selection.start);
-                            if let Some(next) = next {
-                                if next <= val.text.len() {
-                                    if shift {
-                                        val.selection = val.selection.start.min(next)..next;
-                                    } else {
-                                        val.selection = next..next;
-                                    }
-                                    commit!(val);
+                            if let Some(next) = next
+                                && next <= val.text.len()
+                            {
+                                if shift {
+                                    val.selection = val.selection.start.min(next)..next;
+                                } else {
+                                    val.selection = next..next;
                                 }
+                                commit!(val);
                             }
                             return true;
                         }

@@ -138,7 +138,6 @@ mod policy;
 pub mod staggered;
 mod state;
 
-pub(crate) use info::*;
 pub(crate) use interval::*;
 pub(crate) use list::*;
 pub(crate) use policy::*;

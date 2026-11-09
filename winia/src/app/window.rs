@@ -143,13 +143,13 @@ impl Window {
             if let Some(mut pw) = windows.remove(&w) {
                 // A programmatic close (the declarer stopped declaring the window) is the usual way a
                 // window goes away, so it has to snapshot saveable state too.
-                if let Some(key) = pw.saveable_key {
-                    if let Some(registry) = pw.composer.saveable_registry() {
-                        let saved = registry.perform_save();
-                        if !saved.is_empty() {
-                            crate::runtime::saveable::persist::save_saved(key, &saved);
-                            saveable.insert(key, saved);
-                        }
+                if let Some(key) = pw.saveable_key
+                    && let Some(registry) = pw.composer.saveable_registry()
+                {
+                    let saved = registry.perform_save();
+                    if !saved.is_empty() {
+                        crate::runtime::saveable::persist::save_saved(key, &saved);
+                        saveable.insert(key, saved);
                     }
                 }
                 // Drop the debug tree entry: a logical close never goes through winit's Destroyed, and a

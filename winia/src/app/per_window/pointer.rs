@@ -263,12 +263,11 @@ pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
     let Some(r) = pw.composer.layout_root_idx() else {
         return;
     };
-    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-            if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
-                src.emit_hover_exit();
-            }
-        }
+    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+        && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+        && let Some(src) = nodes[idx].modifier.hoverable_interaction()
+    {
+        src.emit_hover_exit();
     }
 }
 
@@ -362,26 +361,26 @@ pub(crate) fn handle_pointer_down(
     // the press, or the press dismisses it and carries on as an ordinary press.
     if let Some(menu) = pw.input.selection_menu.clone() {
         let window = (pw.width, pw.height);
-        if menu.is_open() {
-            if let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos) {
-                if row == 0 {
-                    if let Some(selection) = menu.registrar.build_selection() {
-                        crate::clipboard::request_text(selection.text());
-                    }
-                } else if menu.registrar.select_all() {
-                    menu.registrar.fire_on_change();
+        if menu.is_open()
+            && let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos)
+        {
+            if row == 0 {
+                if let Some(selection) = menu.registrar.build_selection() {
+                    crate::clipboard::request_text(selection.text());
                 }
-                // A chosen row fades out like any other dismissal (the menu stops taking input
-                // immediately, because a closing menu is no longer open).
-                begin_closing_selection_menu(pw);
-                return true;
+            } else if menu.registrar.select_all() {
+                menu.registrar.fire_on_change();
             }
+            // A chosen row fades out like any other dismissal (the menu stops taking input
+            // immediately, because a closing menu is no longer open).
+            begin_closing_selection_menu(pw);
+            return true;
         }
         // Anything else starts the close animation; a closing menu no longer takes input.
-        if let Some(open) = pw.input.selection_menu.as_mut() {
-            if open.closing.is_none() {
-                open.closing = Some(std::time::Instant::now());
-            }
+        if let Some(open) = pw.input.selection_menu.as_mut()
+            && open.closing.is_none()
+        {
+            open.closing = Some(std::time::Instant::now());
         }
     }
 
@@ -551,15 +550,15 @@ pub(crate) fn handle_pointer_down(
     // `SelectionAdjustment.Word` / `Paragraph`. It runs AFTER the press cleared the old selection and
     // before the down state is stored, so the click position stays the drag anchor and a following
     // drag extends from it by characters (Compose re-adjusts by word there; recorded as a deviation).
-    if click_count >= 2 {
-        if let (Some(reg), Some(anchored)) = (own_reg.as_ref(), anchor_global) {
-            let adjustment = if click_count >= 3 {
-                crate::text::SelectionAdjustment::Paragraph
-            } else {
-                crate::text::SelectionAdjustment::Word
-            };
-            reg.set_selection_by_adjustment(anchored, adjustment);
-        }
+    if click_count >= 2
+        && let (Some(reg), Some(anchored)) = (own_reg.as_ref(), anchor_global)
+    {
+        let adjustment = if click_count >= 3 {
+            crate::text::SelectionAdjustment::Paragraph
+        } else {
+            crate::text::SelectionAdjustment::Word
+        };
+        reg.set_selection_by_adjustment(anchored, adjustment);
     }
 
     // The nearest scroll container above the press: a drag selection scrolls it once the pointer
@@ -735,10 +734,10 @@ pub(crate) fn handle_pointer_move(
         // A hover-only change dirties nothing, so ask for the frame explicitly — without it the
         // row fill only appeared when something else happened to repaint (measured: no frame at all
         // while the menu sits settled).
-        if menu.hovered != hovered {
-            if let Some(ref sw) = pw.skia_window {
-                sw.request_redraw();
-            }
+        if menu.hovered != hovered
+            && let Some(ref sw) = pw.skia_window
+        {
+            sw.request_redraw();
         }
         if let Some(open) = pw.input.selection_menu.as_mut() {
             open.hovered = hovered;
@@ -868,22 +867,22 @@ pub(crate) fn handle_pointer_move(
             };
             if ax != 0.0 || ay != 0.0 {
                 let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
-                if let Some(ov) = pw.overlay.layers.get_mut(ov_idx) {
-                    if let Some(root) = ov.composer.layout_root_idx() {
-                        let density = crate::runtime::density::density_with_system_font_scale(
-                            pw.scale_factor as f32,
-                        );
-                        let consumed = dispatch_nested_scroll_delta(
-                            ov.composer.arena_nodes_mut(),
-                            root,
-                            idx,
-                            crate::nested_scroll::ScrollDelta::new(ax, ay),
-                            crate::nested_scroll::NestedScrollSource::Drag,
-                            density,
-                        );
-                        if consumed.x != 0.0 || consumed.y != 0.0 {
-                            handled = true;
-                        }
+                if let Some(ov) = pw.overlay.layers.get_mut(ov_idx)
+                    && let Some(root) = ov.composer.layout_root_idx()
+                {
+                    let density = crate::runtime::density::density_with_system_font_scale(
+                        pw.scale_factor as f32,
+                    );
+                    let consumed = dispatch_nested_scroll_delta(
+                        ov.composer.arena_nodes_mut(),
+                        root,
+                        idx,
+                        crate::nested_scroll::ScrollDelta::new(ax, ay),
+                        crate::nested_scroll::NestedScrollSource::Drag,
+                        density,
+                    );
+                    if consumed.x != 0.0 || consumed.y != 0.0 {
+                        handled = true;
                     }
                 }
             }
@@ -1091,108 +1090,109 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
             };
             if text_selection || (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[sel_node].id);
-                if let Ok(borrow) = nodes[sel_node].cached_paragraph.try_borrow() {
-                    if let Some(para) = borrow.as_ref() {
-                        // Alignment shift (matching the renderer's `x_off`) — drawing uses the content
-                        // box, and the selection highlight has to agree (mid-flight `measured_size` is
-                        // the size the parent was told, review R3-F6).
-                        let node_w = nodes[sel_node].content_box().width;
-                        let align = nodes[sel_node]
-                            .modifier
-                            .align()
-                            .unwrap_or(crate::text::TextAlign::Left);
-                        // The slack rule has to be the PAINT paths' rule, not a copy of the old
-                        // one: a WRAPPED paragraph was laid out inside its box, so a negative
-                        // slack would push it out of it — but an UNWRAPPED one
-                        // (`soft_wrap(false)`, laid out at its intrinsic width) can be WIDER than
-                        // the box, and then centring or right-aligning has to shift it the other
-                        // way. With the clamped form here, a selection on an overflowing label
-                        // was skewed by half the overflow (`render.rs` uses the conditional one
-                        // at both of its sites).
-                        let soft_wrap = nodes[sel_node]
-                            .modifier
-                            .elements()
-                            .iter()
-                            .find_map(|el| match el {
-                                crate::modifier::ModifierElement::TextContent {
-                                    soft_wrap, ..
-                                } => Some(*soft_wrap),
-                                _ => None,
-                            })
-                            .unwrap_or(true);
-                        let slack = if soft_wrap {
-                            (node_w - para.max_intrinsic_width()).max(0.0)
-                        } else {
-                            node_w - para.max_intrinsic_width()
-                        };
-                        let x_off = match align {
-                            crate::text::TextAlign::Center => abs_x + slack / 2.0,
-                            crate::text::TextAlign::Right => abs_x + slack,
-                            _ => abs_x,
-                        };
-                        // Paragraph-local coordinate: subtract the node's padding (consistent with the
-                        // renderer's content area — otherwise the dragged selection is off by the
-                        // padding).
-                        let (pad_s, pad_t, pad_e, _) = nodes[sel_node].modifier.get_padding_sides();
-                        let pad_x = if nodes[sel_node].layout_direction
-                            == crate::layout::LayoutDirection::Rtl
-                        {
-                            pad_e
-                        } else {
-                            pad_s
-                        };
-                        let tl = crate::text::TextLayout::new(para);
-                        {
-                            let down = pw.input.down.as_ref().unwrap();
-                            // A non-selectable node (not registered with any SelectionContainer) → do not
-                            // update the selection (wrapped in `if let` rather than `else return`, because a
-                            // return would skip `dispatch_ptr_event`/`request_redraw`).
-                            if let Some(reg) = nodes[sel_node].registrar.borrow().as_ref().cloned()
+                if let Ok(borrow) = nodes[sel_node].cached_paragraph.try_borrow()
+                    && let Some(para) = borrow.as_ref()
+                {
+                    // Alignment shift (matching the renderer's `x_off`) — drawing uses the content
+                    // box, and the selection highlight has to agree (mid-flight `measured_size` is
+                    // the size the parent was told, review R3-F6).
+                    let node_w = nodes[sel_node].content_box().width;
+                    let align = nodes[sel_node]
+                        .modifier
+                        .align()
+                        .unwrap_or(crate::text::TextAlign::Left);
+                    // The slack rule has to be the PAINT paths' rule, not a copy of the old
+                    // one: a WRAPPED paragraph was laid out inside its box, so a negative
+                    // slack would push it out of it — but an UNWRAPPED one
+                    // (`soft_wrap(false)`, laid out at its intrinsic width) can be WIDER than
+                    // the box, and then centring or right-aligning has to shift it the other
+                    // way. With the clamped form here, a selection on an overflowing label
+                    // was skewed by half the overflow (`render.rs` uses the conditional one
+                    // at both of its sites).
+                    let soft_wrap = nodes[sel_node]
+                        .modifier
+                        .elements()
+                        .iter()
+                        .find_map(|el| match el {
+                            crate::modifier::ModifierElement::TextContent { soft_wrap, .. } => {
+                                Some(*soft_wrap)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(true);
+                    let slack = if soft_wrap {
+                        (node_w - para.max_intrinsic_width()).max(0.0)
+                    } else {
+                        node_w - para.max_intrinsic_width()
+                    };
+                    let x_off = match align {
+                        crate::text::TextAlign::Center => abs_x + slack / 2.0,
+                        crate::text::TextAlign::Right => abs_x + slack,
+                        _ => abs_x,
+                    };
+                    // Paragraph-local coordinate: subtract the node's padding (consistent with the
+                    // renderer's content area — otherwise the dragged selection is off by the
+                    // padding).
+                    let (pad_s, pad_t, pad_e, _) = nodes[sel_node].modifier.get_padding_sides();
+                    let pad_x = if nodes[sel_node].layout_direction
+                        == crate::layout::LayoutDirection::Rtl
+                    {
+                        pad_e
+                    } else {
+                        pad_s
+                    };
+                    let tl = crate::text::TextLayout::new(para);
+                    {
+                        let down = pw.input.down.as_ref().unwrap();
+                        // A non-selectable node (not registered with any SelectionContainer) → do not
+                        // update the selection (wrapped in `if let` rather than `else return`, because a
+                        // return would skip `dispatch_ptr_event`/`request_redraw`).
+                        if let Some(reg) = nodes[sel_node].registrar.borrow().as_ref().cloned() {
+                            let current_index =
+                                tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(
+                                    scene_pos.0 - x_off - pad_x,
+                                    scene_pos.1 - abs_y - pad_t,
+                                ));
+                            // A truncated paragraph answers in display bytes (see `DisplaySpan`).
+                            let current_index = para.content_offset(current_index);
+                            // Display offset → editing offset (password masking / formatted input;
+                            // `TextFieldVisual` is on the container, so look upward).
+                            let current_index =
+                                crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
+                                    .map(|m| m.transformed_to_original(current_index))
+                                    .unwrap_or(current_index);
+                            let cur_off = reg
+                                .segment_info(nodes[sel_node].slot_key)
+                                .map(|(off, _)| off);
+                            if let Some((target, s, e)) =
+                                crate::components::selection_container::compute_selection(
+                                    down.anchor_registrar.as_ref(),
+                                    down.selection_anchor,
+                                    &reg,
+                                    cur_off,
+                                    current_index,
+                                    scene_pos.0,
+                                    scene_pos.1,
+                                    down.position.0,
+                                    down.position.1,
+                                )
                             {
-                                let current_index =
-                                    tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(
-                                        scene_pos.0 - x_off - pad_x,
-                                        scene_pos.1 - abs_y - pad_t,
-                                    ));
-                                // A truncated paragraph answers in display bytes (see `DisplaySpan`).
-                                let current_index = para.content_offset(current_index);
-                                // Display offset → editing offset (password masking / formatted input;
-                                // `TextFieldVisual` is on the container, so look upward).
-                                let current_index =
+                                // The range is in editing offsets (anchor/current were converted back);
+                                // the registrar's space is display offsets, so convert before writing the
+                                // selection.
+                                let (ts, te) =
                                     crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
-                                        .map(|m| m.transformed_to_original(current_index))
-                                        .unwrap_or(current_index);
-                                let cur_off = reg
-                                    .segment_info(nodes[sel_node].slot_key)
-                                    .map(|(off, _)| off);
-                                if let Some((target, s, e)) =
-                                    crate::components::selection_container::compute_selection(
-                                        down.anchor_registrar.as_ref(),
-                                        down.selection_anchor,
-                                        &reg,
-                                        cur_off,
-                                        current_index,
-                                        scene_pos.0,
-                                        scene_pos.1,
-                                        down.position.0,
-                                        down.position.1,
-                                    )
-                                {
-                                    // The range is in editing offsets (anchor/current were converted back);
-                                    // the registrar's space is display offsets, so convert before writing the
-                                    // selection.
-                                    let (ts, te) = crate::text::field::offset_mapping_for_node(
-                                        nodes, r, sel_node,
-                                    )
-                                    .map(|m| {
-                                        (m.original_to_transformed(s), m.original_to_transformed(e))
-                                    })
-                                    .unwrap_or((s, e));
-                                    target.set_selection(ts, te);
-                                    handled = true;
-                                }
-                            } // end if let Some(reg)
-                        }
+                                        .map(|m| {
+                                            (
+                                                m.original_to_transformed(s),
+                                                m.original_to_transformed(e),
+                                            )
+                                        })
+                                        .unwrap_or((s, e));
+                                target.set_selection(ts, te);
+                                handled = true;
+                            }
+                        } // end if let Some(reg)
                     }
                 }
             }

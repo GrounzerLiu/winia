@@ -168,20 +168,17 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
             .layers
             .iter()
             .any(|o| !o.closing && o.focused_id.is_some())
+        && let Some(ref sw) = pw.skia_window
     {
-        if let Some(ref sw) = pw.skia_window {
-            set_ime_enabled(&sw, false);
-        }
+        set_ime_enabled(&sw, false);
     }
     cleanup_overlay_interactions(&mut pw.overlay.layers[idx]);
     // Start the exit animation (progress 1→0); with no exit spec → remove at once (do not push a
     // useless animation — that wastes a 200 ms tween on an orphan State about to be dropped).
     let has_exit = pw.overlay.layers[idx].exit_anim.is_some();
-    if has_exit {
-        if let Some(p) = pw.overlay.layers[idx].progress.clone() {
-            let spec = pw.overlay.layers[idx].exit_anim.as_ref().unwrap();
-            crate::animation::push_animatable_handle(p, 0.0, spec.animation_spec());
-        }
+    if has_exit && let Some(p) = pw.overlay.layers[idx].progress.clone() {
+        let spec = pw.overlay.layers[idx].exit_anim.as_ref().unwrap();
+        crate::animation::push_animatable_handle(p, 0.0, spec.animation_spec());
     }
     // An overlay the caller STILL declares is not removed here. `ModalBottomSheet` is the case that
     // proved it: it fades out on its own 200 ms exit spec AND slides out through its `SheetState`,

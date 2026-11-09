@@ -133,10 +133,10 @@ pub(crate) fn restore_focus_group_memory(
         if !at_boundary {
             continue;
         }
-        if let Some(memory) = nodes[group].focus_group_memory {
-            if ids.contains(&memory) {
-                return memory;
-            }
+        if let Some(memory) = nodes[group].focus_group_memory
+            && ids.contains(&memory)
+        {
+            return memory;
         }
     }
     candidate

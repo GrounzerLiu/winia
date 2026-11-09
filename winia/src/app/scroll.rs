@@ -371,125 +371,127 @@ fn apply_scroll_delta_inner(
                 node.modifier.vertical_scroll_state().is_some()
             );
         }
-        if dy != 0.0 {
-            if let Some(state) = node.modifier.vertical_scroll_state() {
-                // Manual input takes over: cancel the running fling and clear the in-progress flag (the drag path sets it again).
-                crate::animation::cancel_animation(&state.offset);
-                state.is_scroll_in_progress.set(false);
-                let current = state.offset.get();
-                #[cfg(debug_assertions)]
-                if drag_trace_enabled() {
-                    eprintln!("[apply-scroll] -> state.offset before apply = {}", current);
-                }
-                // Scroll limit = total content height - visible height.
-                // The visible size is the node's OWN measured height — what the user sees. It used to prefer
-                // `scroll_viewport_height`, which is the padding-DEDUCTED measure constraint: for a menu
-                // (a 112x424 container holding 20 items with 8dp of padding) that gave a range of
-                // 976 - 408 = 568 where the end is 976 - 424 = 552, so the content scrolled 16px past its end
-                // and the last item sat in dead space (24px with its own padding). Falls back to the viewport
-                // while the node has not been measured yet, and to 0 (no movement) when neither is known.
-                let visible_h = if node.measured_size.height > 0.0 {
-                    node.measured_size.height
-                } else if node.scroll_viewport_height > 0.0 {
-                    node.scroll_viewport_height
-                } else {
-                    node.modifier
-                        .fixed_size()
-                        .and_then(|(_, h)| {
-                            use crate::layout::Dimension;
-                            match h {
-                                Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
-                                Dimension::Px(p) => Some(p.to_logical(density)),
-                                _ => None,
-                            }
-                        })
-                        .unwrap_or(0.0)
-                };
-                // Total content height: a lazy list (scroll_content_height > 0) uses its real content
-                // height; otherwise the node's own height (an ordinary scroll container).
-                let content_h = if node.scroll_content_height > 0.0 {
-                    node.scroll_content_height
-                } else {
-                    node.measured_size.height
-                };
-                let max_offset = (content_h - visible_h).max(0.0);
-                // `reverseScrolling` / `reverseLayout`: the render translate is mirrored (offset 0 is
-                // the content's end), so the gesture delta is mirrored with it - a drag must still
-                // follow the finger. The horizontal branch below has always done this; the vertical one
-                // did not, which left plain reversed containers (and any reversed list) scrolling
-                // against the drag.
-                let raw = if node.scroll_reverse {
-                    current + dy
-                } else {
-                    current - dy
-                };
-                let new = raw.clamp(0.0, max_offset);
-                state.offset.set(new);
-                consumed.y = current - new;
-                // Overscroll: the delta past the edge is absorbed by the effect instead of falling
-                // through to an ancestor. `reverse` mirrors the offset, so a signed pull would point
-                // the wrong way — those containers skip it.
-                let leftover = raw - new;
-                if leftover != 0.0 && !node.scroll_reverse {
-                    if let Some(effect) = node.modifier.overscroll_effect() {
-                        // `pull` returns the absorbed amount in OFFSET space; `consumed` is in DELTA
-                        // space, and the two point opposite ways (`consumed = current - new`,
-                        // `leftover = raw - new`). Adding it would tell the nested-scroll ancestors the
-                        // gesture went the other way, twice as far.
-                        consumed.y -= effect.pull(leftover);
-                    }
-                }
+        if dy != 0.0
+            && let Some(state) = node.modifier.vertical_scroll_state()
+        {
+            // Manual input takes over: cancel the running fling and clear the in-progress flag (the drag path sets it again).
+            crate::animation::cancel_animation(&state.offset);
+            state.is_scroll_in_progress.set(false);
+            let current = state.offset.get();
+            #[cfg(debug_assertions)]
+            if drag_trace_enabled() {
+                eprintln!("[apply-scroll] -> state.offset before apply = {}", current);
+            }
+            // Scroll limit = total content height - visible height.
+            // The visible size is the node's OWN measured height — what the user sees. It used to prefer
+            // `scroll_viewport_height`, which is the padding-DEDUCTED measure constraint: for a menu
+            // (a 112x424 container holding 20 items with 8dp of padding) that gave a range of
+            // 976 - 408 = 568 where the end is 976 - 424 = 552, so the content scrolled 16px past its end
+            // and the last item sat in dead space (24px with its own padding). Falls back to the viewport
+            // while the node has not been measured yet, and to 0 (no movement) when neither is known.
+            let visible_h = if node.measured_size.height > 0.0 {
+                node.measured_size.height
+            } else if node.scroll_viewport_height > 0.0 {
+                node.scroll_viewport_height
+            } else {
+                node.modifier
+                    .fixed_size()
+                    .and_then(|(_, h)| {
+                        use crate::layout::Dimension;
+                        match h {
+                            Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
+                            Dimension::Px(p) => Some(p.to_logical(density)),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or(0.0)
+            };
+            // Total content height: a lazy list (scroll_content_height > 0) uses its real content
+            // height; otherwise the node's own height (an ordinary scroll container).
+            let content_h = if node.scroll_content_height > 0.0 {
+                node.scroll_content_height
+            } else {
+                node.measured_size.height
+            };
+            let max_offset = (content_h - visible_h).max(0.0);
+            // `reverseScrolling` / `reverseLayout`: the render translate is mirrored (offset 0 is
+            // the content's end), so the gesture delta is mirrored with it - a drag must still
+            // follow the finger. The horizontal branch below has always done this; the vertical one
+            // did not, which left plain reversed containers (and any reversed list) scrolling
+            // against the drag.
+            let raw = if node.scroll_reverse {
+                current + dy
+            } else {
+                current - dy
+            };
+            let new = raw.clamp(0.0, max_offset);
+            state.offset.set(new);
+            consumed.y = current - new;
+            // Overscroll: the delta past the edge is absorbed by the effect instead of falling
+            // through to an ancestor. `reverse` mirrors the offset, so a signed pull would point
+            // the wrong way — those containers skip it.
+            let leftover = raw - new;
+            if leftover != 0.0
+                && !node.scroll_reverse
+                && let Some(effect) = node.modifier.overscroll_effect()
+            {
+                // `pull` returns the absorbed amount in OFFSET space; `consumed` is in DELTA
+                // space, and the two point opposite ways (`consumed = current - new`,
+                // `leftover = raw - new`). Adding it would tell the nested-scroll ancestors the
+                // gesture went the other way, twice as far.
+                consumed.y -= effect.pull(leftover);
             }
         }
         // Horizontal scrolling (LazyRow / horizontal scroll container), symmetric to vertical:
         // a positive dx moves the content left.
-        if dx != 0.0 {
-            if let Some(state) = node.modifier.horizontal_scroll_state() {
-                crate::animation::cancel_animation(&state.offset);
-                state.is_scroll_in_progress.set(false);
-                let current = state.offset.get();
-                // Same as the vertical case above: the container's own measured width is what the range ends
-                // against, with the viewport only as a not-measured-yet fallback.
-                let visible_w = if node.measured_size.width > 0.0 {
-                    node.measured_size.width
-                } else if node.scroll_viewport_width > 0.0 {
-                    node.scroll_viewport_width
-                } else {
-                    node.modifier
-                        .fixed_size()
-                        .and_then(|(w, _)| {
-                            use crate::layout::Dimension;
-                            match w {
-                                Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) => Some(w),
-                                Dimension::Px(p) => Some(p.to_logical(density)),
-                                _ => None,
-                            }
-                        })
-                        .unwrap_or(0.0)
-                };
-                let content_w = if node.scroll_content_width > 0.0 {
-                    node.scroll_content_width
-                } else {
-                    node.measured_size.width
-                };
-                let max_offset = (content_w - visible_w).max(0.0);
-                // Note reverse (RTL) scrolling: the render-side offset semantics are mirrored (offset 0
-                // is the end of the content), so the gesture delta must be mirrored too, or dragging goes
-                // the wrong way (a user-measured bug). The vertical case above is the same.
-                let raw = if node.scroll_reverse {
-                    current + dx
-                } else {
-                    current - dx
-                };
-                let new = raw.clamp(0.0, max_offset);
-                state.offset.set(new);
-                consumed.x = current - new;
-                let leftover = raw - new;
-                if leftover != 0.0 && !node.scroll_reverse {
-                    if let Some(effect) = node.modifier.overscroll_effect() {
-                        consumed.x -= effect.pull(leftover);
-                    }
-                }
+        if dx != 0.0
+            && let Some(state) = node.modifier.horizontal_scroll_state()
+        {
+            crate::animation::cancel_animation(&state.offset);
+            state.is_scroll_in_progress.set(false);
+            let current = state.offset.get();
+            // Same as the vertical case above: the container's own measured width is what the range ends
+            // against, with the viewport only as a not-measured-yet fallback.
+            let visible_w = if node.measured_size.width > 0.0 {
+                node.measured_size.width
+            } else if node.scroll_viewport_width > 0.0 {
+                node.scroll_viewport_width
+            } else {
+                node.modifier
+                    .fixed_size()
+                    .and_then(|(w, _)| {
+                        use crate::layout::Dimension;
+                        match w {
+                            Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) => Some(w),
+                            Dimension::Px(p) => Some(p.to_logical(density)),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or(0.0)
+            };
+            let content_w = if node.scroll_content_width > 0.0 {
+                node.scroll_content_width
+            } else {
+                node.measured_size.width
+            };
+            let max_offset = (content_w - visible_w).max(0.0);
+            // Note reverse (RTL) scrolling: the render-side offset semantics are mirrored (offset 0
+            // is the end of the content), so the gesture delta must be mirrored too, or dragging goes
+            // the wrong way (a user-measured bug). The vertical case above is the same.
+            let raw = if node.scroll_reverse {
+                current + dx
+            } else {
+                current - dx
+            };
+            let new = raw.clamp(0.0, max_offset);
+            state.offset.set(new);
+            consumed.x = current - new;
+            let leftover = raw - new;
+            if leftover != 0.0
+                && !node.scroll_reverse
+                && let Some(effect) = node.modifier.overscroll_effect()
+            {
+                consumed.x -= effect.pull(leftover);
             }
         }
     }

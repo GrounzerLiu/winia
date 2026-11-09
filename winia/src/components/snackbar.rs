@@ -414,18 +414,18 @@ impl Snackbar {
                         });
                 }
                 // dismiss 按钮（×）——需要 host 引用（由 Host 注入）
-                if data.with_dismiss_action {
-                    if let Some(on_dismiss) = &on_dismiss {
-                        let cb = on_dismiss.clone();
-                        crate::components::Button::text()
-                            .on_click(move || (cb)())
-                            .build(ctx, |ctx| {
-                                crate::components::Text::new("✕")
-                                    .font_size(14.0)
-                                    .color(fg)
-                                    .build(ctx);
-                            });
-                    }
+                if data.with_dismiss_action
+                    && let Some(on_dismiss) = &on_dismiss
+                {
+                    let cb = on_dismiss.clone();
+                    crate::components::Button::text()
+                        .on_click(move || (cb)())
+                        .build(ctx, |ctx| {
+                            crate::components::Text::new("✕")
+                                .font_size(14.0)
+                                .color(fg)
+                                .build(ctx);
+                        });
                 }
             });
     }

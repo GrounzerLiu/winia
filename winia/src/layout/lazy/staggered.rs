@@ -186,17 +186,17 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             let mut anchors = vec![None; lanes];
             for (slot, placement) in placements.iter().enumerate() {
                 let lane = self.lanes_of.get(slot).copied().unwrap_or(0).min(lanes - 1);
-                if anchors[lane].is_none() {
-                    if let Some(&index) = self.window.get(slot) {
-                        // CONTENT coordinates: the placement carries the main content padding, and the
-                        // anchor is fed back into a build that adds it again.
-                        let main = if A::VERTICAL {
-                            placement.position.y
-                        } else {
-                            placement.position.x
-                        };
-                        anchors[lane] = Some((index, (main - self.main_before).max(0.0)));
-                    }
+                if anchors[lane].is_none()
+                    && let Some(&index) = self.window.get(slot)
+                {
+                    // CONTENT coordinates: the placement carries the main content padding, and the
+                    // anchor is fed back into a build that adds it again.
+                    let main = if A::VERTICAL {
+                        placement.position.y
+                    } else {
+                        placement.position.x
+                    };
+                    anchors[lane] = Some((index, (main - self.main_before).max(0.0)));
                 }
             }
             let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -509,16 +509,15 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             .enumerate()
             .filter_map(|(lane, anchor)| anchor.map(|anchor| (lane, anchor)))
             .min_by_key(|(_, anchor)| anchor.0)
+            && let Some(slot) = slots.get(index)
         {
-            if let Some(slot) = slots.get(index) {
-                // Compensate only while the anchor still sits in the SAME lane. A data change (an insert
-                // at the head) or a height-pattern change can re-assign it, and the lane difference was
-                // being folded into the shift: the whole waterfall moved DOWN by that much and left a
-                // blank strip above the first tile (reported from a screenshot: ~240 dp of nothing
-                // between the controls and the grid).
-                if slot.lane == lane {
-                    shift = top - slot.main_start;
-                }
+            // Compensate only while the anchor still sits in the SAME lane. A data change (an insert
+            // at the head) or a height-pattern change can re-assign it, and the lane difference was
+            // being folded into the shift: the whole waterfall moved DOWN by that much and left a
+            // blank strip above the first tile (reported from a screenshot: ~240 dp of nothing
+            // between the controls and the grid).
+            if slot.lane == lane {
+                shift = top - slot.main_start;
             }
         }
         let tops: Vec<f32> = slots

@@ -201,56 +201,54 @@ impl Composer {
             // dropped — the landed hero then replayed a whole animation. So this
             // skips the morph DECISION only; the insert below still runs.
             let overridden = self.arena.nodes[idx].flight_measure.is_some();
-            if !overridden {
-                if let Some(prev) = self.shared_last_bounds.get(&bkey) {
-                    if size_delta(prev, &cur) > MORPH_EPS {
-                        match self.flight_for_key(k.0, &k.1) {
-                            Some(fid) => {
-                                // Active flight: only morphs reopen (switch flights
-                                // own their ends — documented v1).
-                                let morph = self.shared_flights.get(&fid).is_some_and(|a| {
-                                    a.source_idx.is_none()
-                                        && a.flight.source_slot == a.flight.target_slot
-                                });
-                                if morph {
-                                    let a = &self.shared_flights[&fid];
-                                    // Unclamped + path-aware like the render path:
-                                    // reopen continuity includes spring overshoot
-                                    // and any arc bend.
-                                    let p = a.progress_value();
-                                    let end_prev = a.flight.end.unwrap_or(a.start);
-                                    let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
-                                    let (rf, rt) = (a.radius_from, a.radius_to);
-                                    pending.push(Pending::Reopen {
-                                        id: fid,
-                                        start: s,
-                                        radii: [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p),
-                                        end: cur,
-                                    });
-                                }
-                            }
-                            None => {
-                                // Compose ties a shared element's morph to a TRANSITION: the element
-                                // animates when the transition animating it changes its bounds, not merely
-                                // because a layout pass changed them. Without this gate a window resize
-                                // opened a morph on every marked node whose rect changed (measured:
-                                // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
-                                // resize), i.e. dragging the window animated the UI.
-                                //
-                                // The gate skips only the DECISION — the baseline insert below still runs, as
-                                // the older `overridden` guard does. `continue`-ing here left the baseline
-                                // stale, so an idle resize was replayed as a morph on the first transitioning
-                                // frame instead: the same artefact, one navigation later.
-                                if self.scope_is_transitioning(k.0) {
-                                    pending.push(Pending::Fresh {
-                                        scope_id: k.0,
-                                        key: k.1.clone(),
-                                        slot: *slot,
-                                        start: *prev,
-                                        end: cur,
-                                    });
-                                }
-                            }
+            if !overridden
+                && let Some(prev) = self.shared_last_bounds.get(&bkey)
+                && size_delta(prev, &cur) > MORPH_EPS
+            {
+                match self.flight_for_key(k.0, &k.1) {
+                    Some(fid) => {
+                        // Active flight: only morphs reopen (switch flights
+                        // own their ends — documented v1).
+                        let morph = self.shared_flights.get(&fid).is_some_and(|a| {
+                            a.source_idx.is_none() && a.flight.source_slot == a.flight.target_slot
+                        });
+                        if morph {
+                            let a = &self.shared_flights[&fid];
+                            // Unclamped + path-aware like the render path:
+                            // reopen continuity includes spring overshoot
+                            // and any arc bend.
+                            let p = a.progress_value();
+                            let end_prev = a.flight.end.unwrap_or(a.start);
+                            let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
+                            let (rf, rt) = (a.radius_from, a.radius_to);
+                            pending.push(Pending::Reopen {
+                                id: fid,
+                                start: s,
+                                radii: [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p),
+                                end: cur,
+                            });
+                        }
+                    }
+                    None => {
+                        // Compose ties a shared element's morph to a TRANSITION: the element
+                        // animates when the transition animating it changes its bounds, not merely
+                        // because a layout pass changed them. Without this gate a window resize
+                        // opened a morph on every marked node whose rect changed (measured:
+                        // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
+                        // resize), i.e. dragging the window animated the UI.
+                        //
+                        // The gate skips only the DECISION — the baseline insert below still runs, as
+                        // the older `overridden` guard does. `continue`-ing here left the baseline
+                        // stale, so an idle resize was replayed as a morph on the first transitioning
+                        // frame instead: the same artefact, one navigation later.
+                        if self.scope_is_transitioning(k.0) {
+                            pending.push(Pending::Fresh {
+                                scope_id: k.0,
+                                key: k.1.clone(),
+                                slot: *slot,
+                                start: *prev,
+                                end: cur,
+                            });
                         }
                     }
                 }

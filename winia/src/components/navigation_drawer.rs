@@ -588,16 +588,10 @@ impl NavigationDrawerItem {
                                     label(ctx);
                                 });
                             });
-                        if has_badge {
-                            if let Some(badge) = badge {
-                                WiniaTheme::with_content_color(
-                                    colors.badge(selected),
-                                    ctx,
-                                    |ctx| {
-                                        badge(ctx);
-                                    },
-                                );
-                            }
+                        if has_badge && let Some(badge) = badge {
+                            WiniaTheme::with_content_color(colors.badge(selected), ctx, |ctx| {
+                                badge(ctx);
+                            });
                         }
                     });
             }

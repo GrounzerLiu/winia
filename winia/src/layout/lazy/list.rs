@@ -733,45 +733,45 @@ impl<A: LazyAxis> LazyList<A> {
             // like a data change and re-run the correction once the list is scrolled.
             known_total.set(total);
         }
-        if total_changed && !at_start {
-            if let Some(last_key) = state.last_known_first_key.get() {
-                let cache_ref = cache.get();
-                if let Some(new_index) = intervals.index_of_key(last_key) {
-                    // Preserve the anchor's position INSIDE the viewport: the correction moves the
-                    // offset to where that key now starts, so the pixel offset it had must be added
-                    // back. Without it the anchor snaps to the top of the viewport, and mid-scroll that
-                    // is a jump of up to a full row (measured: 20 dp into a row, the offset snapped from
-                    // 192 to a row boundary). At the very top this branch does not run at all.
-                    let (_, item_offset) = anchor_from_offset(
-                        &cache_ref,
-                        state.offset.get(),
-                        self.spacing,
-                        self.content_padding.0,
-                    );
-                    // NOT clamped here: `fling_limit` still holds the PREVIOUS pass's limit, and at the
-                    // bottom of the list the insert has just grown it by a row. Clamping to the stale
-                    // value pinned the offset at the old end and shifted the whole content down by one
-                    // row (measured: 764 stayed 764 instead of 820). The measure clamps to the new
-                    // limit, and the rebase below uses the anchor's post-clamp delta, so the rows stay
-                    // still either way.
-                    let new_offset = self.content_padding.0
-                        + prefix_height(&cache_ref, new_index, self.spacing)
-                        + item_offset;
-                    let previous = state.offset.get();
-                    state.offset.set(new_offset);
-                    // The placement animation compares CONTENT positions, so this correction has to be
-                    // handed over too — otherwise the rows animate for a move the viewport already
-                    // made. The policy rebases by the anchor's ACTUAL delta (a build-time estimate of
-                    // the new row's height is off by a few pixels and would leave a residual flash).
-                    {
-                        let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
-                        *anchor = Some(last_key);
-                    }
-                    {
-                        let mut shift =
-                            state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
-                        *shift = new_offset - previous;
-                    }
+        if total_changed
+            && !at_start
+            && let Some(last_key) = state.last_known_first_key.get()
+        {
+            let cache_ref = cache.get();
+            if let Some(new_index) = intervals.index_of_key(last_key) {
+                // Preserve the anchor's position INSIDE the viewport: the correction moves the
+                // offset to where that key now starts, so the pixel offset it had must be added
+                // back. Without it the anchor snaps to the top of the viewport, and mid-scroll that
+                // is a jump of up to a full row (measured: 20 dp into a row, the offset snapped from
+                // 192 to a row boundary). At the very top this branch does not run at all.
+                let (_, item_offset) = anchor_from_offset(
+                    &cache_ref,
+                    state.offset.get(),
+                    self.spacing,
+                    self.content_padding.0,
+                );
+                // NOT clamped here: `fling_limit` still holds the PREVIOUS pass's limit, and at the
+                // bottom of the list the insert has just grown it by a row. Clamping to the stale
+                // value pinned the offset at the old end and shifted the whole content down by one
+                // row (measured: 764 stayed 764 instead of 820). The measure clamps to the new
+                // limit, and the rebase below uses the anchor's post-clamp delta, so the rows stay
+                // still either way.
+                let new_offset = self.content_padding.0
+                    + prefix_height(&cache_ref, new_index, self.spacing)
+                    + item_offset;
+                let previous = state.offset.get();
+                state.offset.set(new_offset);
+                // The placement animation compares CONTENT positions, so this correction has to be
+                // handed over too — otherwise the rows animate for a move the viewport already
+                // made. The policy rebases by the anchor's ACTUAL delta (a build-time estimate of
+                // the new row's height is off by a few pixels and would leave a residual flash).
+                {
+                    let mut anchor = state.anchor_key.lock().unwrap_or_else(|e| e.into_inner());
+                    *anchor = Some(last_key);
+                }
+                {
+                    let mut shift = state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
+                    *shift = new_offset - previous;
                 }
             }
         }

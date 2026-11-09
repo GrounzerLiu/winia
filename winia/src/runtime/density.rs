@@ -55,10 +55,10 @@ const QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250
 pub fn refresh_system_font_scale() -> bool {
     let mut last = LAST_QUERY.lock().unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
-    if let Some(previous) = *last {
-        if now.duration_since(previous) < QUERY_INTERVAL {
-            return false;
-        }
+    if let Some(previous) = *last
+        && now.duration_since(previous) < QUERY_INTERVAL
+    {
+        return false;
     }
     *last = Some(now);
     drop(last);

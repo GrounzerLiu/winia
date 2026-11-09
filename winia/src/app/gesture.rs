@@ -505,35 +505,34 @@ pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         return false;
     };
     let mut axis_undecided = false;
-    if pw.input.axis.is_none() {
-        if let Some((scroll_slot, down)) = pw
+    if pw.input.axis.is_none()
+        && let Some((scroll_slot, down)) = pw
             .input
             .scroll_slot
             .zip(pw.input.tracker.as_ref().map(|t| t.down_position()))
-        {
-            // The scroll is armed whenever the press passed over an inner drag component — the
-            // target of the press may still be a plain tap node inside it (a `TextField` inside a
-            // `Slider`, say), and that case needs the arbitration just as much: without it a vertical
-            // drag over such a press scrolls nothing and reaches nothing.
-            use crate::input::gesture::ScrollAxis;
-            match ScrollAxis::classify(local.0 - down.0, local.1 - down.1) {
-                // Undecided (below the slop, or an exact diagonal): neither owner starts YET. The move
-                // still reaches the tracker with the drag withheld, so crossing the touch slop keeps
-                // cancelling the tap family exactly as it did before the arbitration existed.
-                None => axis_undecided = true,
-                Some(axis) => {
-                    pw.input.axis = Some(axis);
-                    if axis == ScrollAxis::Vertical {
-                        // The scroll ancestor owns it: cancel the component's drag, so no
-                        // `on_drag_*` callback fires for a gesture it did not get, and open a
-                        // scroll session on the ancestor node — the rest of the gesture (and its
-                        // fling) is the ordinary drag-scroll path from here on. A target with no drag
-                        // of its own has nothing to cancel; the call is then a no-op.
-                        if let Some(t) = pw.input.tracker.as_mut() {
-                            t.cancel_drag_for_arbitration();
-                        }
-                        pw.input.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
+    {
+        // The scroll is armed whenever the press passed over an inner drag component — the
+        // target of the press may still be a plain tap node inside it (a `TextField` inside a
+        // `Slider`, say), and that case needs the arbitration just as much: without it a vertical
+        // drag over such a press scrolls nothing and reaches nothing.
+        use crate::input::gesture::ScrollAxis;
+        match ScrollAxis::classify(local.0 - down.0, local.1 - down.1) {
+            // Undecided (below the slop, or an exact diagonal): neither owner starts YET. The move
+            // still reaches the tracker with the drag withheld, so crossing the touch slop keeps
+            // cancelling the tap family exactly as it did before the arbitration existed.
+            None => axis_undecided = true,
+            Some(axis) => {
+                pw.input.axis = Some(axis);
+                if axis == ScrollAxis::Vertical {
+                    // The scroll ancestor owns it: cancel the component's drag, so no
+                    // `on_drag_*` callback fires for a gesture it did not get, and open a
+                    // scroll session on the ancestor node — the rest of the gesture (and its
+                    // fling) is the ordinary drag-scroll path from here on. A target with no drag
+                    // of its own has nothing to cancel; the call is then a no-op.
+                    if let Some(t) = pw.input.tracker.as_mut() {
+                        t.cancel_drag_for_arbitration();
                     }
+                    pw.input.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
                 }
             }
         }

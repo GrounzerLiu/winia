@@ -398,10 +398,10 @@ pub(crate) fn materialize_node(
                     node.restore_layout(prev);
                     // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
                     // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
-                    if let Some(snap) = &prev.last_text {
-                        if !crate::layout::node::text_content_matches(&node.modifier, snap) {
-                            node.dirty = true;
-                        }
+                    if let Some(snap) = &prev.last_text
+                        && !crate::layout::node::text_content_matches(&node.modifier, snap)
+                    {
+                        node.dirty = true;
                     }
                 } else {
                     node.dirty = true;

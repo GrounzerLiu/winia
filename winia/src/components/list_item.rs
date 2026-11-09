@@ -244,14 +244,14 @@ impl ListItem {
             )
             .background(colors.container, shape)
             .then(self.modifier);
-        if self.enabled {
-            if let Some(callback) = self.on_click {
-                let interaction =
-                    interaction.expect("clickable ListItem requires an interaction source");
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || callback())
-                    .ripple_with_shape(&interaction, content_color, true, shape);
-            }
+        if self.enabled
+            && let Some(callback) = self.on_click
+        {
+            let interaction =
+                interaction.expect("clickable ListItem requires an interaction source");
+            modifier = modifier
+                .clickable_with_source(&interaction, move || callback())
+                .ripple_with_shape(&interaction, content_color, true, shape);
         }
 
         match ctx.start_restartable_group(

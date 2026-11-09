@@ -156,7 +156,7 @@ pub trait AnimationInstance: Send {
     /// Keep this motion's value inside `[min, max]`, or clear the range with `None` — Compose's
     /// `Animatable.updateBounds`. Applied at the write point for every spec: a value that would leave the
     /// range is written exactly at the bound and the motion ends there.
-    fn set_value_bounds(&mut self, bounds: Option<(f32, f32)>) {}
+    fn set_value_bounds(&mut self, _bounds: Option<(f32, f32)>) {}
     /// One line describing this motion, for [`active_animations_report`]. Compose has no equivalent —
     /// it is here because a value that is moving looks the same whoever moves it, and nothing else can
     /// answer "who is animating this".

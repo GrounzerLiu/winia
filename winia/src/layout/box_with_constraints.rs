@@ -274,10 +274,10 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         // Already measured in THIS frame: report the same answer instead of composing again (see the
         // `first_measure` field).
         let generation = crate::layout::subcompose::compose_generation().unwrap_or(0);
-        if let Some((cached_generation, size)) = self.first_measure.get() {
-            if cached_generation == generation {
-                return (size, Vec::new());
-            }
+        if let Some((cached_generation, size)) = self.first_measure.get()
+            && cached_generation == generation
+        {
+            return (size, Vec::new());
         }
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = &self.content;

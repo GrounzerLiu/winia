@@ -80,7 +80,7 @@ pub(crate) fn apply_pending(event_loop: &dyn winit::event_loop::ActiveEventLoop)
             .build();
         match event_loop.set_clipboard(send) {
             Ok(()) => true,
-            Err(err) => {
+            Err(_err) => {
                 crate::debug_log!("[clipboard] winit set_clipboard failed ({err})");
                 #[cfg(not(target_os = "android"))]
                 {

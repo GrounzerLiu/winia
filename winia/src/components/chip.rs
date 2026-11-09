@@ -881,13 +881,11 @@ fn build_chip(
             ..Default::default()
         });
     }
-    if enabled {
-        if let Some(cb) = on_click {
-            let cb2 = cb.clone();
-            m = m
-                .clickable_with_source(&interaction, move || cb2())
-                .ripple_with_shape(&interaction, content_color, true, shape);
-        }
+    if enabled && let Some(cb) = on_click {
+        let cb2 = cb.clone();
+        m = m
+            .clickable_with_source(&interaction, move || cb2())
+            .ripple_with_shape(&interaction, content_color, true, shape);
     }
     // Accessibility: one element per chip (its label and icons are inside it), with the role the variant
     // carries and the state a reader needs — `selected` for a selectable chip, `enabled` for all of them.

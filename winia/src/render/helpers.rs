@@ -105,11 +105,10 @@ pub(super) fn draw_inner_shadow(
     let mut erase = Paint::default();
     erase.set_anti_alias(true);
     erase.set_blend_mode(BlendMode::DstOut);
-    if blur > 0.0 {
-        if let Some(filter) = skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur, None)
-        {
-            erase.set_mask_filter(filter);
-        }
+    if blur > 0.0
+        && let Some(filter) = skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur, None)
+    {
+        erase.set_mask_filter(filter);
     }
     canvas.draw_path(&cut, &erase);
     canvas.restore();

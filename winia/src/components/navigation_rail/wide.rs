@@ -536,11 +536,8 @@ impl WideNavigationRailItem {
         };
 
         let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
-        if enabled {
-            if let Some(callback) = self.on_click.clone() {
-                item_modifier =
-                    item_modifier.clickable_with_source(&interaction, move || callback());
-            }
+        if enabled && let Some(callback) = self.on_click.clone() {
+            item_modifier = item_modifier.clickable_with_source(&interaction, move || callback());
         }
         let item_modifier = item_modifier.then(self.modifier);
 

@@ -383,14 +383,14 @@ impl IconToggleButton {
         }
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_checked_change) = &self.on_checked_change {
-                let cb = on_checked_change.clone();
-                let checked = self.checked;
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb(!checked))
-                    .ripple_with_shape(&interaction, &ripple_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_checked_change) = &self.on_checked_change
+        {
+            let cb = on_checked_change.clone();
+            let checked = self.checked;
+            modifier = modifier
+                .clickable_with_source(&interaction, move || cb(!checked))
+                .ripple_with_shape(&interaction, &ripple_color, true, shape);
         }
 
         match ctx.start_restartable_group(

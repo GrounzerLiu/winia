@@ -925,17 +925,17 @@ impl Button {
         // 追加用户 modifier（在外层，可覆盖默认样式）
         modifier = modifier.then(self.modifier);
 
-        if self.enabled {
-            if let Some(on_click) = &self.on_click {
-                let cb = on_click.clone();
-                // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
-                // clickable 默认 indication=ripple；颜色用内容色）
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb())
-                    // 显式传容器 shape——Outlined/Text 无 Background 元素，
-                    // 若让波纹自行推断会回退成矩形裁剪（超出胶囊范围）
-                    .ripple_with_shape(&interaction, text_color, true, shape);
-            }
+        if self.enabled
+            && let Some(on_click) = &self.on_click
+        {
+            let cb = on_click.clone();
+            // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
+            // clickable 默认 indication=ripple；颜色用内容色）
+            modifier = modifier
+                .clickable_with_source(&interaction, move || cb())
+                // 显式传容器 shape——Outlined/Text 无 Background 元素，
+                // 若让波纹自行推断会回退成矩形裁剪（超出胶囊范围）
+                .ripple_with_shape(&interaction, text_color, true, shape);
         }
 
         // The touch target, as its OWN node around the visual box: Compose gets it from the clickable

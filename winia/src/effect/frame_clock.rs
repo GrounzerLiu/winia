@@ -89,7 +89,7 @@ fn with_clock<R>(window: u64, f: impl FnOnce(&WindowClock) -> R) -> R {
 /// clock `forget_window` removed: a re-created entry is never ticked again, and the registry would
 /// grow one dead clock per call.
 fn with_existing_clock<R>(window: u64, f: impl FnOnce(&WindowClock) -> R) -> Option<R> {
-    let mut clocks = WINDOW_CLOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    let clocks = WINDOW_CLOCKS.lock().unwrap_or_else(|e| e.into_inner());
     clocks.get(&window).map(f)
 }
 

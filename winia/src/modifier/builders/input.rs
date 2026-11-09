@@ -643,7 +643,7 @@ impl Modifier {
     }
 
     /// Vertical scrolling, bound to a `ScrollState`.
-    pub fn vertical_scroll(self, mut state: ScrollState) -> Self {
+    pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // No builder-time `get` side effect (State Phase 4): the dependencies are registered against
         // the real node slot by `register_modifier_deps_recursive` during materialisation (end of
         // compose, before take_deps), and a builder-time get would register them on the CALLING scope
@@ -656,10 +656,10 @@ impl Modifier {
             state: state.clone(),
             reverse: false,
         });
-        if !out.has_overscroll() {
-            if let Some(effect) = crate::overscroll::ambient_effect(&state) {
-                out = out.overscroll(&effect);
-            }
+        if !out.has_overscroll()
+            && let Some(effect) = crate::overscroll::ambient_effect(&state)
+        {
+            out = out.overscroll(&effect);
         }
         out
     }
@@ -682,10 +682,10 @@ impl Modifier {
 
     /// The reverse-layout marker for a lazy list (`reverseLayout`: the render mirrors the scroll translate).
     pub fn lazy_scroll_reverse(mut self, reverse: bool) -> Self {
-        if let Some(el) = self.elements.last_mut() {
-            if let ModifierElement::LazyScroll { reverse: r, .. } = el {
-                *r = reverse;
-            }
+        if let Some(el) = self.elements.last_mut()
+            && let ModifierElement::LazyScroll { reverse: r, .. } = el
+        {
+            *r = reverse;
         }
         self
     }
@@ -782,10 +782,10 @@ impl Modifier {
             state: state.clone(),
             reverse: false,
         });
-        if !out.has_overscroll() {
-            if let Some(effect) = crate::overscroll::ambient_effect(&state) {
-                out = out.overscroll(&effect);
-            }
+        if !out.has_overscroll()
+            && let Some(effect) = crate::overscroll::ambient_effect(&state)
+        {
+            out = out.overscroll(&effect);
         }
         out
     }

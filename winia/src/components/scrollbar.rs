@@ -500,7 +500,7 @@ fn scrollbar_build_shared(
     // The viewport is not known yet (first frame, constraints not settled) -> fall back to the
     // remembered previous value; nothing is drawn on the first frame.
     let viewport = viewport_state.get();
-    let viewport_for_size = viewport_state.clone();
+    let _viewport_for_size = viewport_state.clone();
     let viewport_for_start = viewport_state.clone();
     let content = limit + viewport;
 

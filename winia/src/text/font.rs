@@ -85,10 +85,11 @@ pub fn get_font_collection() -> FontCollection {
     let epoch = FONT_EPOCH.load(Ordering::Acquire);
     let asset_epoch = crate::assets::generation();
     FONT_COLLECTION.with(|cache| {
-        if let Some((cached_epoch, cached_assets, collection)) = cache.borrow().as_ref() {
-            if *cached_epoch == epoch && *cached_assets == asset_epoch {
-                return collection.clone();
-            }
+        if let Some((cached_epoch, cached_assets, collection)) = cache.borrow().as_ref()
+            && *cached_epoch == epoch
+            && *cached_assets == asset_epoch
+        {
+            return collection.clone();
         }
 
         let mut collection = FontCollection::new();

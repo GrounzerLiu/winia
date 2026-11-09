@@ -112,10 +112,10 @@ impl OverlayWindow {
             // animation, keep it fully visible (Backchannel-equivalent direct
             // write on the Animating handle — same stored value); otherwise the
             // caller will push the 0->1 enter animation.
-            if let Some(p) = self.progress.as_ref() {
-                if self.enter_anim.is_none() {
-                    p.as_raw().set_backchannel(1.0);
-                }
+            if let Some(p) = self.progress.as_ref()
+                && self.enter_anim.is_none()
+            {
+                p.as_raw().set_backchannel(1.0);
             }
         }
         // The caller brought back an overlay that was fading out (open, close, open inside the exit):
@@ -156,11 +156,12 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             // overlay is not re-registered at all.
             ov.composer.mark_content_dirty();
             let now_has_enter = ov.enter_anim.is_some();
-            if !had_enter && now_has_enter {
-                if let Some(p) = ov.progress.clone() {
-                    let spec = ov.enter_anim.as_ref().unwrap();
-                    crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
-                }
+            if !had_enter
+                && now_has_enter
+                && let Some(p) = ov.progress.clone()
+            {
+                let spec = ov.enter_anim.as_ref().unwrap();
+                crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
             }
         } else {
             // New overlay: create it + start the enter animation (progress 0→1; no enter spec =

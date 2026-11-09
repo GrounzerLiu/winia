@@ -341,70 +341,70 @@ impl Switch {
                 move || border_color_anim.peek(),
                 track_shape,
             );
-        if self.enabled {
-            if let Some(on_checked_change) = &self.on_checked_change {
-                let cb = on_checked_change.clone();
-                // 拖拽回调：位置是轨道本地坐标，增量不用于偏移（防双倍位移）
-                let d_active = drag_active.clone();
-                let d_offset = drag_offset.clone();
-                let d_base = drag_base.clone();
-                let d_start_x = drag_start_x.clone();
-                let anim_offset = container_offset.clone();
-                let on_drag_start = move |pos: (f32, f32)| {
-                    let base = anim_offset.peek();
-                    d_base.set(base);
-                    d_offset.set(base);
-                    d_start_x.set(pos.0);
-                    d_active.set(true);
-                };
-                let d_active2 = drag_active.clone();
-                let d_offset2 = drag_offset.clone();
-                let d_base2 = drag_base.clone();
-                let d_start_x2 = drag_start_x.clone();
-                let on_drag = move |pos: (f32, f32), _delta: (f32, f32)| {
-                    if !d_active2.get() {
-                        return;
-                    }
-                    let offset = (d_base2.get() + (pos.0 - d_start_x2.get()))
-                        .clamp(SWITCH_DRAG_MIN_OFFSET, SWITCH_DRAG_MAX_OFFSET);
-                    d_offset2.set(offset);
-                };
-                let d_active3 = drag_active.clone();
-                let d_offset3 = drag_offset.clone();
-                let anim_offset3 = container_offset.clone();
-                let checked_end = checked;
-                let cb_end = on_checked_change.clone();
-                let on_drag_end = move || {
-                    if !d_active3.get() {
-                        return;
-                    }
-                    let release = d_offset3.get();
-                    // 从释放位置开始动画归位（Animating 写：重组但不唤醒，
-                    // 避免先弹回旧目标；帧由 request_redraw 驱动）
-                    anim_offset3.as_raw().set_animating(release);
-                    d_active3.set(false);
-                    let target = release > SWITCH_DRAG_THRESHOLD;
-                    if target != checked_end {
-                        cb_end(target);
-                    }
-                };
-                let d_active4 = drag_active.clone();
-                let d_offset4 = drag_offset.clone();
-                let anim_offset4 = container_offset.clone();
-                let on_drag_cancel = move || {
-                    if !d_active4.get() {
-                        return;
-                    }
-                    anim_offset4.as_raw().set_animating(d_offset4.get());
-                    d_active4.set(false);
-                };
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb(!checked))
-                    .on_drag_start(on_drag_start)
-                    .on_drag(on_drag)
-                    .on_drag_end(on_drag_end)
-                    .on_drag_cancel(on_drag_cancel);
-            }
+        if self.enabled
+            && let Some(on_checked_change) = &self.on_checked_change
+        {
+            let cb = on_checked_change.clone();
+            // 拖拽回调：位置是轨道本地坐标，增量不用于偏移（防双倍位移）
+            let d_active = drag_active.clone();
+            let d_offset = drag_offset.clone();
+            let d_base = drag_base.clone();
+            let d_start_x = drag_start_x.clone();
+            let anim_offset = container_offset.clone();
+            let on_drag_start = move |pos: (f32, f32)| {
+                let base = anim_offset.peek();
+                d_base.set(base);
+                d_offset.set(base);
+                d_start_x.set(pos.0);
+                d_active.set(true);
+            };
+            let d_active2 = drag_active.clone();
+            let d_offset2 = drag_offset.clone();
+            let d_base2 = drag_base.clone();
+            let d_start_x2 = drag_start_x.clone();
+            let on_drag = move |pos: (f32, f32), _delta: (f32, f32)| {
+                if !d_active2.get() {
+                    return;
+                }
+                let offset = (d_base2.get() + (pos.0 - d_start_x2.get()))
+                    .clamp(SWITCH_DRAG_MIN_OFFSET, SWITCH_DRAG_MAX_OFFSET);
+                d_offset2.set(offset);
+            };
+            let d_active3 = drag_active.clone();
+            let d_offset3 = drag_offset.clone();
+            let anim_offset3 = container_offset.clone();
+            let checked_end = checked;
+            let cb_end = on_checked_change.clone();
+            let on_drag_end = move || {
+                if !d_active3.get() {
+                    return;
+                }
+                let release = d_offset3.get();
+                // 从释放位置开始动画归位（Animating 写：重组但不唤醒，
+                // 避免先弹回旧目标；帧由 request_redraw 驱动）
+                anim_offset3.as_raw().set_animating(release);
+                d_active3.set(false);
+                let target = release > SWITCH_DRAG_THRESHOLD;
+                if target != checked_end {
+                    cb_end(target);
+                }
+            };
+            let d_active4 = drag_active.clone();
+            let d_offset4 = drag_offset.clone();
+            let anim_offset4 = container_offset.clone();
+            let on_drag_cancel = move || {
+                if !d_active4.get() {
+                    return;
+                }
+                anim_offset4.as_raw().set_animating(d_offset4.get());
+                d_active4.set(false);
+            };
+            modifier = modifier
+                .clickable_with_source(&interaction, move || cb(!checked))
+                .on_drag_start(on_drag_start)
+                .on_drag(on_drag)
+                .on_drag_end(on_drag_end)
+                .on_drag_cancel(on_drag_cancel);
         }
         modifier = modifier.semantics(
             crate::semantics::SemanticsConfig::new()

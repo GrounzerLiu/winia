@@ -263,10 +263,10 @@ impl Paragraph {
         // Otherwise walk back to the nearest mapped start byte, which is what an offset inside a
         // multi-byte character asks for.
         for left_byte in self.paragraph_byte_to_real_indices.left_keys().iter().rev() {
-            if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(left_byte) {
-                if *mapped <= index {
-                    return self.byte_to_utf16_indices.get_by_left(left_byte).copied();
-                }
+            if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(left_byte)
+                && *mapped <= index
+            {
+                return self.byte_to_utf16_indices.get_by_left(left_byte).copied();
             }
         }
         None

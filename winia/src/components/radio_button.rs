@@ -223,20 +223,18 @@ fn radio_button_impl(
             crate::graphics::Color::from_argb(0, 0, 0, 0),
             RadioButtonDefaults::shape(),
         );
-    if enabled {
-        if let Some(on_click) = on_click {
-            m = m
-                .clickable_with_source(&interaction, move || on_click())
-                // `RadioButton.kt:97`: `ripple(bounded = false, radius = RadioButtonTokens.StateLayerSize / 2)`
-                // — the halo is `StateLayerSize` (40 dp), SMALLER than the 48 dp node, so it has to be named
-                // rather than derived from the node. The spreading layer still grows to the node's diagonal.
-                .ripple_with_state_layer_size(
-                    &interaction,
-                    theme.on_surface,
-                    false,
-                    RADIO_STATE_LAYER_SIZE,
-                );
-        }
+    if enabled && let Some(on_click) = on_click {
+        m = m
+            .clickable_with_source(&interaction, move || on_click())
+            // `RadioButton.kt:97`: `ripple(bounded = false, radius = RadioButtonTokens.StateLayerSize / 2)`
+            // — the halo is `StateLayerSize` (40 dp), SMALLER than the 48 dp node, so it has to be named
+            // rather than derived from the node. The spreading layer still grows to the node's diagonal.
+            .ripple_with_state_layer_size(
+                &interaction,
+                theme.on_surface,
+                false,
+                RADIO_STATE_LAYER_SIZE,
+            );
     }
     // Accessibility: a radio is SELECTED, not checked (Compose's `selectable` → `Selected`).
     m = m.semantics(

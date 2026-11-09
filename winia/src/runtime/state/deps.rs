@@ -116,10 +116,11 @@ impl Drop for DependencyFrameGuard {
         if !self.active {
             return;
         }
-        if restore_dependency_frame(self.id) && !self.committed {
-            if let Some(subscription) = &self.subscription {
-                subscription.retain_signals(&self.baseline_signals);
-            }
+        if restore_dependency_frame(self.id)
+            && !self.committed
+            && let Some(subscription) = &self.subscription
+        {
+            subscription.retain_signals(&self.baseline_signals);
         }
         self.active = false;
     }

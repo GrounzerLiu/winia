@@ -32,16 +32,15 @@ fn capture_item(
     let captured_position = crate::unit::Offset::new(x + visual.x, y + visual.y);
     {
         let mut store = paint.exit_store.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(old) = store.pictures.get_mut(&paint.key) {
-            if old.size == crate::unit::Size::new(content.width, content.height)
-                && old.content_epoch == paint.content_epoch
-                && old.paint_epoch == paint.paint_epoch
-            {
-                // The picture excludes the item paint (offset/alpha), so a moving or fading item can
-                // reuse it; only its visual position needs updating.
-                old.position = captured_position;
-                return;
-            }
+        if let Some(old) = store.pictures.get_mut(&paint.key)
+            && old.size == crate::unit::Size::new(content.width, content.height)
+            && old.content_epoch == paint.content_epoch
+            && old.paint_epoch == paint.paint_epoch
+        {
+            // The picture excludes the item paint (offset/alpha), so a moving or fading item can
+            // reuse it; only its visual position needs updating.
+            old.position = captured_position;
+            return;
         }
     }
     CAPTURING_ITEM.with(|c| c.set(true));
@@ -509,55 +508,47 @@ pub(super) fn render_pass1(
     // Render-time trace (node level): the alpha a `graphics_layer` contributed exists only here — it is read
     // from the modifier chain at paint time and never stored. A `Modifier::alpha` or an animated layer alpha
     // (a fade) was therefore invisible to every other channel.
-    if crate::debug::animation::enabled() {
-        if let Some(gl) = gl_params.as_ref() {
-            if gl.alpha < 1.0
-                || gl.scale_x != 1.0
-                || gl.scale_y != 1.0
-                || gl.translation_x != 0.0
-                || gl.translation_y != 0.0
-                || gl.rotation_z != 0.0
-            {
-                let mut r = crate::debug::animation::TraceRecord::render(node.slot_key);
-                r.phase = Some("graphics_layer");
-                r.alpha = Some(gl.alpha);
-                r.layout = Some(crate::debug::animation::TraceRect { x, y, w, h });
-                r.detail = Some(format!(
-                    "scale=({:.4},{:.4}) translate=({:.2},{:.2}) rot_z={:.2} clip={}",
-                    gl.scale_x,
-                    gl.scale_y,
-                    gl.translation_x,
-                    gl.translation_y,
-                    gl.rotation_z,
-                    gl.clip
-                ));
-                crate::debug::animation::record(r);
-            }
-        }
+    if crate::debug::animation::enabled()
+        && let Some(gl) = gl_params.as_ref()
+        && (gl.alpha < 1.0
+            || gl.scale_x != 1.0
+            || gl.scale_y != 1.0
+            || gl.translation_x != 0.0
+            || gl.translation_y != 0.0
+            || gl.rotation_z != 0.0)
+    {
+        let mut r = crate::debug::animation::TraceRecord::render(node.slot_key);
+        r.phase = Some("graphics_layer");
+        r.alpha = Some(gl.alpha);
+        r.layout = Some(crate::debug::animation::TraceRect { x, y, w, h });
+        r.detail = Some(format!(
+            "scale=({:.4},{:.4}) translate=({:.2},{:.2}) rot_z={:.2} clip={}",
+            gl.scale_x, gl.scale_y, gl.translation_x, gl.translation_y, gl.rotation_z, gl.clip
+        ));
+        crate::debug::animation::record(r);
     }
     let gl_saved = if let Some(gl) = gl_params {
         let has_alpha = gl.alpha < 1.0;
         if graphics_layer_needs_layer(&gl) {
             let mut paint = skia_safe::Paint::default();
-            if let Some(cf) = &gl.color_filter {
-                if let Some(filter) = to_skia_color_filter(cf) {
-                    paint.set_color_filter(filter);
-                }
+            if let Some(cf) = &gl.color_filter
+                && let Some(filter) = to_skia_color_filter(cf)
+            {
+                paint.set_color_filter(filter);
             }
             if has_alpha {
                 paint.set_alpha_f(gl.alpha.clamp(0.0, 1.0));
             }
-            if let Some(crate::graphics::RenderEffect::Blur { radius }) = &gl.render_effect {
-                if *radius > 0.0 {
-                    if let Some(filter) = skia_safe::image_filters::blur(
-                        (*radius, *radius),
-                        skia_safe::TileMode::Clamp,
-                        None,
-                        None,
-                    ) {
-                        paint.set_image_filter(filter);
-                    }
-                }
+            if let Some(crate::graphics::RenderEffect::Blur { radius }) = &gl.render_effect
+                && *radius > 0.0
+                && let Some(filter) = skia_safe::image_filters::blur(
+                    (*radius, *radius),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                )
+            {
+                paint.set_image_filter(filter);
             }
             canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
         } else {
@@ -1061,7 +1052,7 @@ pub(super) fn render_pass1(
             };
             // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
             // trimmed at measure time, so the origin moves by the same amount.
-            let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
+            let _rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
             // The selection highlight.
             if let Some(range) = node
                 .registrar
@@ -1208,45 +1199,43 @@ pub(super) fn render_pass1(
                 }
             }
             // The IME composition underline: editing offset to display offset.
-            if let Some(comp_range) = node.composing_range.borrow().as_ref() {
-                if comp_range.start < comp_range.end {
-                    let offset_mapping =
-                        crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
-                    let (cs, ce) = offset_mapping
-                        .as_ref()
-                        .map(|m| {
-                            (
-                                m.original_to_transformed(comp_range.start),
-                                m.original_to_transformed(comp_range.end),
-                            )
-                        })
-                        .unwrap_or((comp_range.start, comp_range.end));
-                    let rects = para.get_rects_for_range(
-                        cs..ce,
-                        skia_safe::textlayout::RectHeightStyle::Max,
-                        skia_safe::textlayout::RectWidthStyle::Max,
+            if let Some(comp_range) = node.composing_range.borrow().as_ref()
+                && comp_range.start < comp_range.end
+            {
+                let offset_mapping =
+                    crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
+                let (cs, ce) = offset_mapping
+                    .as_ref()
+                    .map(|m| {
+                        (
+                            m.original_to_transformed(comp_range.start),
+                            m.original_to_transformed(comp_range.end),
+                        )
+                    })
+                    .unwrap_or((comp_range.start, comp_range.end));
+                let rects = para.get_rects_for_range(
+                    cs..ce,
+                    skia_safe::textlayout::RectHeightStyle::Max,
+                    skia_safe::textlayout::RectWidthStyle::Max,
+                );
+                let mut und_paint = skia_safe::Paint::default();
+                // The primary captured at compose time. Reading `WiniaTheme::colors()` here would
+                // answer the DEFAULT theme, because the CompositionLocal is gone by render time.
+                let c = node.composing_color.get();
+                und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
+                und_paint.set_stroke_width(1.0);
+                for tb in &rects {
+                    let r = tb.rect;
+                    // The underline follows the glyphs' horizontal mapping.
+                    let (left, right) = match transform {
+                        Some(t) => (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0)),
+                        None => (x_off + r.left, x_off + r.right),
+                    };
+                    canvas.draw_line(
+                        skia_safe::Point::new(left, text_y + r.bottom),
+                        skia_safe::Point::new(right, text_y + r.bottom),
+                        &und_paint,
                     );
-                    let mut und_paint = skia_safe::Paint::default();
-                    // The primary captured at compose time. Reading `WiniaTheme::colors()` here would
-                    // answer the DEFAULT theme, because the CompositionLocal is gone by render time.
-                    let c = node.composing_color.get();
-                    und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
-                    und_paint.set_stroke_width(1.0);
-                    for tb in &rects {
-                        let r = tb.rect;
-                        // The underline follows the glyphs' horizontal mapping.
-                        let (left, right) = match transform {
-                            Some(t) => {
-                                (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0))
-                            }
-                            None => (x_off + r.left, x_off + r.right),
-                        };
-                        canvas.draw_line(
-                            skia_safe::Point::new(left, text_y + r.bottom),
-                            skia_safe::Point::new(right, text_y + r.bottom),
-                            &und_paint,
-                        );
-                    }
                 }
             }
             if text_clipped {
@@ -1280,113 +1269,113 @@ pub(super) fn render_pass1(
     }
 
     // ═══ Rich text ═══
-    if node.has_richtext_content {
-        if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-            // The paragraph parameters travel with the payload now, so the paint side has to make
-            // the same decisions the measure side did: a nowrap paragraph keeps its infinite-width
-            // layout (re-laying it out at the box width would truncate it), and Center/Right are a
-            // paint-origin shift, not a paragraph style (see D-3 in docs/text-review.md).
-            let (rich_align, rich_overflow, rich_soft_wrap) = node
-                .modifier
-                .elements()
-                .iter()
-                .find_map(|el| match el {
-                    ModifierElement::RichTextContent {
-                        align,
-                        overflow,
-                        soft_wrap,
-                        ..
-                    } => Some((*align, *overflow, *soft_wrap)),
-                    _ => None,
-                })
-                .unwrap_or((
-                    crate::text::TextAlign::Left,
-                    crate::text::TextOverflow::Clip,
-                    true,
-                ));
-            if rich_soft_wrap {
-                para.layout(content_w);
-            }
-            let drawn_width = if rich_soft_wrap {
-                para.max_intrinsic_width()
+    if node.has_richtext_content
+        && let Some(para) = node.cached_paragraph.borrow_mut().as_mut()
+    {
+        // The paragraph parameters travel with the payload now, so the paint side has to make
+        // the same decisions the measure side did: a nowrap paragraph keeps its infinite-width
+        // layout (re-laying it out at the box width would truncate it), and Center/Right are a
+        // paint-origin shift, not a paragraph style (see D-3 in docs/text-review.md).
+        let (rich_align, rich_overflow, rich_soft_wrap) = node
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                ModifierElement::RichTextContent {
+                    align,
+                    overflow,
+                    soft_wrap,
+                    ..
+                } => Some((*align, *overflow, *soft_wrap)),
+                _ => None,
+            })
+            .unwrap_or((
+                crate::text::TextAlign::Left,
+                crate::text::TextOverflow::Clip,
+                true,
+            ));
+        if rich_soft_wrap {
+            para.layout(content_w);
+        }
+        let drawn_width = if rich_soft_wrap {
+            para.max_intrinsic_width()
+        } else {
+            para.max_width().min(para.max_intrinsic_width())
+        };
+        let slack = if width_matters_for(rich_soft_wrap, rich_overflow) {
+            0.0
+        } else {
+            content_w - drawn_width
+        };
+        // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
+        // trimmed at measure time, so the origin moves by the same amount.
+        let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
+        let rich_x = match rich_align {
+            crate::text::TextAlign::Left
+            | crate::text::TextAlign::Justify
+            | crate::text::TextAlign::Start
+            | crate::text::TextAlign::End => content_x,
+            crate::text::TextAlign::Center => content_x + slack / 2.0,
+            crate::text::TextAlign::Right => content_x + slack,
+        };
+        // The selection highlight.
+        if let Some(range) = node
+            .registrar
+            .borrow()
+            .as_ref()
+            .cloned()
+            .and_then(|reg| reg.selected_range(node.slot_key))
+        {
+            let rects: Vec<_> = if range.start < range.end {
+                para.get_rects_for_range(
+                    para.display_offset(range.start)..para.display_offset(range.end),
+                    skia_safe::textlayout::RectHeightStyle::Max,
+                    skia_safe::textlayout::RectWidthStyle::Max,
+                )
             } else {
-                para.max_width().min(para.max_intrinsic_width())
+                Vec::new()
             };
-            let slack = if width_matters_for(rich_soft_wrap, rich_overflow) {
-                0.0
-            } else {
-                content_w - drawn_width
-            };
-            // Compose's `lineHeightStyle`: the same paint offset the plain leaf uses. The box was
-            // trimmed at measure time, so the origin moves by the same amount.
-            let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
-            let rich_x = match rich_align {
-                crate::text::TextAlign::Left
-                | crate::text::TextAlign::Justify
-                | crate::text::TextAlign::Start
-                | crate::text::TextAlign::End => content_x,
-                crate::text::TextAlign::Center => content_x + slack / 2.0,
-                crate::text::TextAlign::Right => content_x + slack,
-            };
-            // The selection highlight.
-            if let Some(range) = node
-                .registrar
-                .borrow()
-                .as_ref()
-                .cloned()
-                .and_then(|reg| reg.selected_range(node.slot_key))
-            {
-                let rects: Vec<_> = if range.start < range.end {
-                    para.get_rects_for_range(
-                        para.display_offset(range.start)..para.display_offset(range.end),
-                        skia_safe::textlayout::RectHeightStyle::Max,
-                        skia_safe::textlayout::RectWidthStyle::Max,
-                    )
-                } else {
-                    Vec::new()
-                };
-                let mut paint = skia_safe::Paint::default();
-                // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
-                // (a render pass has no CompositionLocal left to read).
-                let sel_bg = node.selection_color.get();
-                paint.set_color(skia_safe::Color::from_argb(
-                    sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b,
-                ));
-                for tb in &rects {
-                    canvas.draw_rect(
-                        skia_safe::Rect::new(
-                            rich_x + tb.rect.left,
-                            content_y + rich_paint_dy + tb.rect.top,
-                            rich_x + tb.rect.right,
-                            content_y + rich_paint_dy + tb.rect.bottom,
-                        ),
-                        &paint,
-                    );
-                }
-            }
-            // Same clip rule as the plain leaf (T-8): an overflowing rich layout is cut to its
-            // content box unless the caller asked for `Visible`.
-            let rich_clips = rich_overflow != crate::text::TextOverflow::Visible
-                && (para.did_exceed_max_lines()
-                    || para.longest_line() > content_w + 0.5
-                    || para.height() > content_h + 0.5);
-            if rich_clips {
-                canvas.save();
-                canvas.clip_rect(
-                    Rect::new(
-                        content_x,
-                        content_y,
-                        content_x + content_w,
-                        content_y + content_h,
+            let mut paint = skia_safe::Paint::default();
+            // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
+            // (a render pass has no CompositionLocal left to read).
+            let sel_bg = node.selection_color.get();
+            paint.set_color(skia_safe::Color::from_argb(
+                sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b,
+            ));
+            for tb in &rects {
+                canvas.draw_rect(
+                    skia_safe::Rect::new(
+                        rich_x + tb.rect.left,
+                        content_y + rich_paint_dy + tb.rect.top,
+                        rich_x + tb.rect.right,
+                        content_y + rich_paint_dy + tb.rect.bottom,
                     ),
-                    None,
-                    Some(false),
+                    &paint,
                 );
             }
-            para.paint(canvas, rich_x, content_y + rich_paint_dy);
-            if rich_clips {
-                canvas.restore();
-            }
+        }
+        // Same clip rule as the plain leaf (T-8): an overflowing rich layout is cut to its
+        // content box unless the caller asked for `Visible`.
+        let rich_clips = rich_overflow != crate::text::TextOverflow::Visible
+            && (para.did_exceed_max_lines()
+                || para.longest_line() > content_w + 0.5
+                || para.height() > content_h + 0.5);
+        if rich_clips {
+            canvas.save();
+            canvas.clip_rect(
+                Rect::new(
+                    content_x,
+                    content_y,
+                    content_x + content_w,
+                    content_y + content_h,
+                ),
+                None,
+                Some(false),
+            );
+        }
+        para.paint(canvas, rich_x, content_y + rich_paint_dy);
+        if rich_clips {
+            canvas.restore();
         }
     }
 
@@ -1458,15 +1447,15 @@ pub(super) fn render_pass1(
         for el in node.modifier.elements() {
             match el {
                 ModifierElement::Size { width, height } => {
-                    if let crate::layout::SizeValue::Length(dw) = width {
-                        if dw.is_fixed() {
-                            cw = dw.to_logical_px();
-                        }
+                    if let crate::layout::SizeValue::Length(dw) = width
+                        && dw.is_fixed()
+                    {
+                        cw = dw.to_logical_px();
                     }
-                    if let crate::layout::SizeValue::Length(dh) = height {
-                        if dh.is_fixed() {
-                            ch = dh.to_logical_px();
-                        }
+                    if let crate::layout::SizeValue::Length(dh) = height
+                        && dh.is_fixed()
+                    {
+                        ch = dh.to_logical_px();
                     }
                 }
                 ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. } => {
@@ -1514,15 +1503,15 @@ pub(super) fn render_pass1(
         let mut dy = -scroll_offset_v.unwrap_or(0.0);
         // Overscroll pulls the content past the edge; the clip above keeps it inside the viewport,
         // so the pull reads as the content shifting and the gap it is pulled from.
-        if let Some(effect) = node.modifier.overscroll_effect() {
-            if !node.scroll_reverse {
-                let pull = effect.stretch();
-                if scroll_offset_v.is_some() {
-                    dy -= pull;
-                }
-                if scroll_offset_h.is_some() {
-                    dx -= pull;
-                }
+        if let Some(effect) = node.modifier.overscroll_effect()
+            && !node.scroll_reverse
+        {
+            let pull = effect.stretch();
+            if scroll_offset_v.is_some() {
+                dy -= pull;
+            }
+            if scroll_offset_h.is_some() {
+                dx -= pull;
             }
         }
         canvas.save();
@@ -1550,10 +1539,10 @@ pub(super) fn render_pass1(
 
     // Item exit ghosts belong to this container: drawing them here keeps the container's scroll
     // clip and translate (Lazy) and avoids the process-global store painting into other windows.
-    if let Some(host) = &item_host {
-        if !CAPTURING_ITEM.with(|c| c.get()) {
-            draw_host_exits(canvas, host);
-        }
+    if let Some(host) = &item_host
+        && !CAPTURING_ITEM.with(|c| c.get())
+    {
+        draw_host_exits(canvas, host);
     }
 
     // Inner shadow: painted ABOVE the content (Compose's appearance draws it after the shape fill

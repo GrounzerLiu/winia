@@ -106,10 +106,9 @@ pub(crate) fn dispatch_ptr_event(
                 on_pre_ptr: Some(handler),
                 ..
             } = el
+                && handler(&ev)
             {
-                if handler(&ev) {
-                    return true;
-                }
+                return true;
             }
         }
         for p in nodes[ni].modifier.pointer_nodes() {
@@ -130,10 +129,9 @@ pub(crate) fn dispatch_ptr_event(
                 on_ptr: Some(handler),
                 ..
             } = el
+                && handler(&ev)
             {
-                if handler(&ev) {
-                    return true;
-                }
+                return true;
             }
         }
         for p in nodes[ni].modifier.pointer_nodes() {

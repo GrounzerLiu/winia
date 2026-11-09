@@ -621,12 +621,11 @@ pub(super) fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection,
                         let src = Rect::new(0.0, 0.0, *width, *height);
                         let mut paint = Paint::default();
                         paint.set_anti_alias(true);
-                        if let Some(tint) = tint {
-                            if let Some(filter) =
+                        if let Some(tint) = tint
+                            && let Some(filter) =
                                 skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn)
-                            {
-                                paint.set_color_filter(filter);
-                            }
+                        {
+                            paint.set_color_filter(filter);
                         }
                         // 位图缩放用线性 + 线性 mipmap（三线性）与 Strict 约束：
                         // 避免放大锯齿/缩小摩尔纹（默认 Fast + 低质量采样）
@@ -793,10 +792,10 @@ pub(super) fn draw_image_content(
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             paint.set_alpha_f(alpha.clamp(0.0, 1.0));
-            if let Some(cf) = color_filter {
-                if let Some(filter) = to_skia_color_filter(cf) {
-                    paint.set_color_filter(filter);
-                }
+            if let Some(cf) = color_filter
+                && let Some(filter) = to_skia_color_filter(cf)
+            {
+                paint.set_color_filter(filter);
             }
             canvas.draw_image_rect_with_sampling_options(
                 image,
@@ -871,10 +870,10 @@ pub(super) fn draw_svg_dom(
     let need_layer = color_filter.is_some() || alpha < 1.0;
     let layer = if need_layer {
         let mut paint = Paint::default();
-        if let Some(cf) = color_filter {
-            if let Some(filter) = to_skia_color_filter(cf) {
-                paint.set_color_filter(filter);
-            }
+        if let Some(cf) = color_filter
+            && let Some(filter) = to_skia_color_filter(cf)
+        {
+            paint.set_color_filter(filter);
         }
         if alpha < 1.0 {
             paint.set_alpha_f(alpha.clamp(0.0, 1.0));

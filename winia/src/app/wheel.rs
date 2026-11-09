@@ -310,14 +310,16 @@ pub(crate) fn pulse_refused_wheel(
     dy: f32,
     consumed: crate::nested_scroll::ScrollDelta,
 ) {
-    if dy != 0.0 && consumed.y == 0.0 {
-        if let Some(ss) = node.modifier.vertical_scroll_state() {
-            ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-        }
+    if dy != 0.0
+        && consumed.y == 0.0
+        && let Some(ss) = node.modifier.vertical_scroll_state()
+    {
+        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
     }
-    if dx != 0.0 && consumed.x == 0.0 {
-        if let Some(ss) = node.modifier.horizontal_scroll_state() {
-            ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-        }
+    if dx != 0.0
+        && consumed.x == 0.0
+        && let Some(ss) = node.modifier.horizontal_scroll_state()
+    {
+        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
     }
 }

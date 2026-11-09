@@ -373,21 +373,19 @@ fn checkbox_impl(
             crate::graphics::Color::from_argb(0, 0, 0, 0),
             Shape::Circle,
         );
-    if enabled {
-        if let Some(on_click) = on_click {
-            m = m
-                .clickable_with_source(&interaction, move || on_click())
-                // `Checkbox.kt:285`: `ripple(bounded = false, radius = CheckboxTokens.StateLayerSize / 2)` —
-                // the halo is `StateLayerSize` (40 dp), which is SMALLER than the 48 dp node, so it has to be
-                // named rather than derived from the node. The spreading layer still grows to the node's
-                // diagonal.
-                .ripple_with_state_layer_size(
-                    &interaction,
-                    theme.on_surface,
-                    false,
-                    CHECKBOX_STATE_LAYER_SIZE,
-                );
-        }
+    if enabled && let Some(on_click) = on_click {
+        m = m
+            .clickable_with_source(&interaction, move || on_click())
+            // `Checkbox.kt:285`: `ripple(bounded = false, radius = CheckboxTokens.StateLayerSize / 2)` —
+            // the halo is `StateLayerSize` (40 dp), which is SMALLER than the 48 dp node, so it has to be
+            // named rather than derived from the node. The spreading layer still grows to the node's
+            // diagonal.
+            .ripple_with_state_layer_size(
+                &interaction,
+                theme.on_surface,
+                false,
+                CHECKBOX_STATE_LAYER_SIZE,
+            );
     }
     // Accessibility: role plus the tri-state value — Off and Indeterminate are different answers,
     // which is why this is not a bool.

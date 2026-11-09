@@ -134,15 +134,15 @@ pub(crate) fn detect_switch(
 ) -> Vec<SwitchCandidate> {
     let mut out = Vec::new();
     for (k, old_slot) in prev {
-        if let Some(new_slot) = live.get(k) {
-            if *new_slot != *old_slot {
-                out.push(SwitchCandidate {
-                    scope_id: k.0,
-                    key: k.1.clone(),
-                    old_slot: *old_slot,
-                    new_slot: *new_slot,
-                });
-            }
+        if let Some(new_slot) = live.get(k)
+            && *new_slot != *old_slot
+        {
+            out.push(SwitchCandidate {
+                scope_id: k.0,
+                key: k.1.clone(),
+                old_slot: *old_slot,
+                new_slot: *new_slot,
+            });
         }
     }
     out.sort_by(|a, b| (a.scope_id, &a.key).cmp(&(b.scope_id, &b.key)));

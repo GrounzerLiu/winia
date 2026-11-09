@@ -391,28 +391,28 @@ impl AppState {
                     // chain). As on the real path (the PointerButton Up arm), a State set inside
                     // on_click must request_redraw — otherwise it relies on the asynchronous wake_up
                     // chain (occasionally lost → the user sees the count not refresh).
-                    if detect_click(pw, (x, y)) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if detect_click(pw, (x, y))
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // Execute the overlay click (same as the real path).
-                    if exec_overlay_click(pw) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if exec_overlay_click(pw)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // End the overlay drag (same as the real path).
-                    if overlay_drag_up(pw) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if overlay_drag_up(pw)
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // Gesture up detection (same as the real path).
-                    if gesture_up(pw, (x, y)) {
-                        if let Some(ref sw) = pw.skia_window {
-                            sw.request_redraw();
-                        }
+                    if gesture_up(pw, (x, y))
+                        && let Some(ref sw) = pw.skia_window
+                    {
+                        sw.request_redraw();
                     }
                     // End the drag scroll: fast enough → fling (same as the real path).
                     drag_scroll_up(pw);
@@ -421,18 +421,13 @@ impl AppState {
                     // Notify a selection change, then clean up.
                     if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(nid) =
+                        if let Some(r) = pw.composer.layout_root_idx()
+                            && let Some(nid) =
                                 crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
-                            {
-                                if let Some(idx) =
-                                    crate::layout::node::find_node_by_id(nodes, r, nid)
-                                {
-                                    if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
-                                        reg.fire_on_change();
-                                    }
-                                }
-                            }
+                            && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid)
+                            && let Some(reg) = nodes[idx].registrar.borrow().as_ref()
+                        {
+                            reg.fire_on_change();
                         }
                     }
                     pw.input.down_slot = None;
@@ -526,15 +521,13 @@ impl AppState {
                 }
             }
         }
-        if handled {
-            if let Some(ref sw) = pw.skia_window {
-                sw.request_redraw();
-            }
+        if handled && let Some(ref sw) = pw.skia_window {
+            sw.request_redraw();
         }
-        if debug::has_pending() {
-            if let Some(ref sw) = pw.skia_window {
-                sw.request_redraw();
-            }
+        if debug::has_pending()
+            && let Some(ref sw) = pw.skia_window
+        {
+            sw.request_redraw();
         }
     }
 }

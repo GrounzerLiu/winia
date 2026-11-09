@@ -4,18 +4,18 @@ impl AppState {
     /// Drain the window requests queued by `app::open_window`, plus the first-time initialisation.
     pub(crate) fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         // First pass: run the init callback to collect the main window's creation request.
-        if self.windows.is_empty() {
-            if let Some(init) = self.init.take() {
-                let mut composer = Composer::new();
-                #[cfg(target_os = "android")]
-                composer.set_android_app(self.platform.android_app.clone());
-                composer.compose(|ctx| init(ctx));
-                // Temporary composer: `compose` already took the deps (registered in its slot_deps) —
-                // taking them again here is a defensive no-op (buffer empty) that resets DEP_MODE.
-                crate::runtime::state::take_deps();
-                // The temporary initialization Composer is not an active
-                // window owner; its lifecycle state is dropped with it.
-            }
+        if self.windows.is_empty()
+            && let Some(init) = self.init.take()
+        {
+            let mut composer = Composer::new();
+            #[cfg(target_os = "android")]
+            composer.set_android_app(self.platform.android_app.clone());
+            composer.compose(|ctx| init(ctx));
+            // Temporary composer: `compose` already took the deps (registered in its slot_deps) —
+            // taking them again here is a defensive no-op (buffer empty) that resets DEP_MODE.
+            crate::runtime::state::take_deps();
+            // The temporary initialization Composer is not an active
+            // window owner; its lifecycle state is dropped with it.
         }
 
         for item in take_pending_windows() {

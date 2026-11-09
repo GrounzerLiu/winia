@@ -11,7 +11,7 @@
 //! 裸 path 数据会被包成最小 `<svg viewBox="0 0 24 24">` 文档后交给 Dom。
 
 use crate::composable;
-use crate::graphics::{AxisValue, Color};
+use crate::graphics::Color;
 use crate::graphics::{IconSource, IconSpec, SymbolAxes};
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;

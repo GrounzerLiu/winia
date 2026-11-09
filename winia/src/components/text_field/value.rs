@@ -140,13 +140,13 @@ impl UndoManager {
         selection: &Range<usize>,
         composing: Option<Range<usize>>,
     ) {
-        if let Some(last) = self.undo_stack.last_mut() {
-            if last.0 == text {
-                // 同文本：只更新 selection 与 composing（光标移动/组合态变化不产生新条目）
-                last.1 = selection.clone();
-                last.2 = composing;
-                return;
-            }
+        if let Some(last) = self.undo_stack.last_mut()
+            && last.0 == text
+        {
+            // 同文本：只更新 selection 与 composing（光标移动/组合态变化不产生新条目）
+            last.1 = selection.clone();
+            last.2 = composing;
+            return;
         }
         self.undo_stack
             .push((text.to_string(), selection.clone(), composing));

@@ -358,10 +358,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 };
                 self.state.set(final_val);
                 self.anim_state = None;
-                if bound_hit {
-                    if let Some(f) = self.on_boundary.take() {
-                        f(velocity);
-                    }
+                if bound_hit && let Some(f) = self.on_boundary.take() {
+                    f(velocity);
                 }
                 if let Some(f) = self.on_finish.take() {
                     f(MotionEnd {
@@ -652,10 +650,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             None => (value, done),
         };
         self.state.set(value);
-        if let Some(velocity) = boundary_velocity {
-            if let Some(f) = self.on_boundary.take() {
-                f(velocity);
-            }
+        if let Some(velocity) = boundary_velocity
+            && let Some(f) = self.on_boundary.take()
+        {
+            f(velocity);
         }
         if done {
             let velocity = state.last_velocity;

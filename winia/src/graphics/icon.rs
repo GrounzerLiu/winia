@@ -273,10 +273,10 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
     };
     DECODED_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
-        if let Some((at, v)) = cache.get(&key) {
-            if at.elapsed() < CACHE_TTL {
-                return v.clone();
-            }
+        if let Some((at, v)) = cache.get(&key)
+            && at.elapsed() < CACHE_TTL
+        {
+            return v.clone();
         }
         let decoded = match source {
             IconSource::SvgPath { data, fill_type } => {
@@ -355,10 +355,10 @@ fn file_intrinsic_size(path: &str) -> Option<(f32, f32)> {
         parking_lot::Mutex<HashMap<String, (Instant, Option<(f32, f32)>)>>,
     > = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
     let mut cache = FILE_SIZE_CACHE.lock();
-    if let Some((at, v)) = cache.get(path) {
-        if at.elapsed() < CACHE_TTL {
-            return *v;
-        }
+    if let Some((at, v)) = cache.get(path)
+        && at.elapsed() < CACHE_TTL
+    {
+        return *v;
     }
     let size = match decoded_icon(&IconSource::File(Arc::from(path))) {
         Some(d) => match d.as_ref() {

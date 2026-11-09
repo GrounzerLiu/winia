@@ -489,10 +489,8 @@ pub(crate) fn handle_key(
                         | NamedKey::PageDown
                 )
             );
-            if consumed {
-                if let Some(cb) = on_value_change_finished {
-                    cb();
-                }
+            if consumed && let Some(cb) = on_value_change_finished {
+                cb();
             }
             consumed
         }

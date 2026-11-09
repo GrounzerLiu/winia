@@ -885,16 +885,16 @@ impl Drop for BatchCommit {
         for (signal, wake) in merged {
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.notify(wake)));
-            if let Err(payload) = outcome {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                }
+            if let Err(payload) = outcome
+                && first_panic.is_none()
+            {
+                first_panic = Some(payload);
             }
         }
-        if let Some(payload) = first_panic {
-            if !std::thread::panicking() {
-                std::panic::resume_unwind(payload);
-            }
+        if let Some(payload) = first_panic
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(payload);
         }
     }
 }

@@ -1172,14 +1172,14 @@ impl Composer {
         // it. Refilling costs one tree walk, and only on those frames — materialize's own repair
         // (`materialize`) does exactly this walk and would do it anyway, so this moves the same work
         // earlier rather than adding it.
-        if self.prev_node_by_key.is_empty() {
-            if let Some(root_idx) = self.arena.root {
-                crate::runtime::materialize::collect_node_keys(
-                    &self.arena,
-                    root_idx,
-                    &mut self.prev_node_by_key,
-                );
-            }
+        if self.prev_node_by_key.is_empty()
+            && let Some(root_idx) = self.arena.root
+        {
+            crate::runtime::materialize::collect_node_keys(
+                &self.arena,
+                root_idx,
+                &mut self.prev_node_by_key,
+            );
         }
 
         // Begin an isolated dependency frame. State::get() writes to its active

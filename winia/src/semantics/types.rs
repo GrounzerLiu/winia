@@ -680,10 +680,10 @@ impl SemanticsNode {
     /// The name a consumer should announce: the element's own name, or the names of its children
     /// joined — what makes a label-only container still readable.
     pub fn effective_name(&self) -> Option<String> {
-        if let Some(name) = self.name.as_deref() {
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
+        if let Some(name) = self.name.as_deref()
+            && !name.is_empty()
+        {
+            return Some(name.to_string());
         }
         let joined = self
             .children

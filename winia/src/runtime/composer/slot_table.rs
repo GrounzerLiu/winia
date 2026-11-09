@@ -130,10 +130,10 @@ impl Slot {
         slot_key: u64,
         init: impl FnOnce() -> State<T>,
     ) -> State<T> {
-        if let Some(existing) = self.remembered.get(&slot_key) {
-            if let Some(state) = existing.downcast_ref::<State<T>>() {
-                return state.clone();
-            }
+        if let Some(existing) = self.remembered.get(&slot_key)
+            && let Some(state) = existing.downcast_ref::<State<T>>()
+        {
+            return state.clone();
         }
         let state = init();
         self.remembered.insert(slot_key, Box::new(state.clone()));
@@ -145,10 +145,10 @@ impl Slot {
         slot_key: u64,
         init: impl FnOnce() -> H,
     ) -> H {
-        if let Some(existing) = self.remembered.get(&slot_key) {
-            if let Some(handle) = existing.downcast_ref::<H>() {
-                return handle.clone();
-            }
+        if let Some(existing) = self.remembered.get(&slot_key)
+            && let Some(handle) = existing.downcast_ref::<H>()
+        {
+            return handle.clone();
         }
         let handle = init();
         self.remembered.insert(slot_key, Box::new(handle.clone()));
@@ -697,13 +697,12 @@ impl SlotTable {
         // The search only fires when the index does not already match (below), and only among this
         // parent's direct children, so the unkeyed path is untouched: two unkeyed siblings have
         // different statement keys and neither is ever found elsewhere.
-        if !(idx < parent.children.len() && (parent.children[idx].key == key || same_position)) {
-            if let Some(found) = parent.children.iter().position(|c| c.key == key) {
-                if found > idx {
-                    let moved = parent.children.remove(found);
-                    parent.children.insert(idx, moved);
-                }
-            }
+        if !(idx < parent.children.len() && (parent.children[idx].key == key || same_position))
+            && let Some(found) = parent.children.iter().position(|c| c.key == key)
+            && found > idx
+        {
+            let moved = parent.children.remove(found);
+            parent.children.insert(idx, moved);
         }
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）

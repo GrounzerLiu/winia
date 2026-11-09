@@ -66,10 +66,9 @@ pub(crate) fn dispatch_key_in_arena(
                 on_pre_key: Some(handler),
                 ..
             } = el
+                && handler(ke)
             {
-                if handler(ke) {
-                    return true;
-                }
+                return true;
             }
         }
         for k in nodes[ni].modifier.key_nodes() {
@@ -85,10 +84,9 @@ pub(crate) fn dispatch_key_in_arena(
                 on_key: Some(handler),
                 ..
             } = el
+                && handler(ke)
             {
-                if handler(ke) {
-                    return true;
-                }
+                return true;
             }
         }
         for k in nodes[ni].modifier.key_nodes() {
@@ -104,17 +102,19 @@ pub(crate) fn dispatch_key_in_arena(
         &ke.key,
         winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)
     ) || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
-    if ke.event_type == crate::input::KbEventType::KeyDown && !ke.repeat && is_activate {
-        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
-            if let Some(on_click) = nodes[idx].modifier.on_click() {
-                on_click();
-                return true;
-            }
-            // Dual track: a node click handler responds to keyboard activation too.
-            if let Some(node_cb) = nodes[idx].modifier.node_click() {
-                node_cb.on_click();
-                return true;
-            }
+    if ke.event_type == crate::input::KbEventType::KeyDown
+        && !ke.repeat
+        && is_activate
+        && let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid)
+    {
+        if let Some(on_click) = nodes[idx].modifier.on_click() {
+            on_click();
+            return true;
+        }
+        // Dual track: a node click handler responds to keyboard activation too.
+        if let Some(node_cb) = nodes[idx].modifier.node_click() {
+            node_cb.on_click();
+            return true;
         }
     }
     false

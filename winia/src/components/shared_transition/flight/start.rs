@@ -106,17 +106,17 @@ impl Composer {
             let mut stack = vec![root];
             while let Some(idx) = stack.pop() {
                 let node = &nodes[idx];
-                if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier) {
-                    if active.contains(&sid) {
-                        marked.push(idx);
-                        // Keep descending: a chrome marker nested inside another one gets its OWN layer entry
-                        // (`rebuild_layer_order` includes every entry of this list, and `render_layer` draws
-                        // each one with `layer_root = true`), which is what keeps its own `zIndexInOverlay`
-                        // in the sort and lets it escape its ancestor's clip. An earlier version skipped it
-                        // on the theory that it would be skipped twice and paint nowhere; that was wrong (it
-                        // was painted exactly once, as its own entry) and suppressing it silently downgraded
-                        // the nested bar to an ordinary child of its ancestor's draw.
-                    }
+                if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier)
+                    && active.contains(&sid)
+                {
+                    marked.push(idx);
+                    // Keep descending: a chrome marker nested inside another one gets its OWN layer entry
+                    // (`rebuild_layer_order` includes every entry of this list, and `render_layer` draws
+                    // each one with `layer_root = true`), which is what keeps its own `zIndexInOverlay`
+                    // in the sort and lets it escape its ancestor's clip. An earlier version skipped it
+                    // on the theory that it would be skipped twice and paint nowhere; that was wrong (it
+                    // was painted exactly once, as its own entry) and suppressing it silently downgraded
+                    // the nested bar to an ordinary child of its ancestor's draw.
                 }
                 stack.extend(node.children.iter().copied());
             }
@@ -1239,114 +1239,113 @@ impl Composer {
                 });
             }
         }
-        if let Some(slot) = tslot {
-            if let Some(root) = self.arena.root {
-                if let Some(tidx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
-                    // IDENTITY RE-CHECK (review 2, R2-F5): slots are positional, so a
-                    // recomposition that shifts the target's position can hand this
-                    // frozen key to an unrelated element — which would then take the
-                    // flight's visual AND its layout override (measured: an unrelated
-                    // 20x20 leaf laid out at the flight's reported size for one pass).
-                    // Tier 1 has the equivalent guard (its staleness check); Tier 0
-                    // re-checks the marker instead.
-                    let still_ours = find_shared_marker(&self.arena.nodes[tidx].modifier)
-                        .is_some_and(|m| m.scope_id == flight_key.0 && m.key == flight_key.1);
-                    if !still_ours {
-                        return;
-                    }
-                    let role = if sslot == tslot {
-                        // Same-screen size morph: opacity untouched.
-                        TransitionRole::Morph
-                    } else {
-                        TransitionRole::Target
-                    };
-                    // Same-screen morphs are layout-driven resizes, not
-                    // cross-composable flights — they stay in-tree like
-                    // Compose's animateBounds (never escape their container).
-                    let elevated = target_in_overlay && role == TransitionRole::Target;
-                    // Layout contract (Compose `ResizeMode` / `PlaceHolderSize`).
-                    // Only written when it overrides something, so the default
-                    // path (ScaleToBounds + JumpCut/ContentSize) never touches
-                    // the layout.
-                    let remeasure = role == TransitionRole::Target
-                        && matches!(resize, ResizeMode::RemeasureToBounds);
-                    let frame = placeholder_frame(
-                        remeasure,
-                        animated_size(&start, &end, p, path),
-                        placeholder,
-                        target_size,
-                    );
-                    measure_state.set(frame);
-                    let key = self.arena.nodes[tidx].slot_key;
-                    let mine = FlightKey {
-                        cid: self.composer_id,
-                        id,
-                    };
-                    // Never clobber (or clear) a DIFFERENT flight's override:
-                    // ids are per-composer, so another flight can legitimately
-                    // own this node's override while this one is being torn down.
-                    let foreign = self.arena.nodes[tidx]
-                        .flight_measure
-                        .as_ref()
-                        .is_some_and(|f| f.owner != mine);
-                    let had_override = !foreign && self.arena.nodes[tidx].flight_measure.is_some();
-                    if !foreign {
-                        self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
-                            None
-                        } else {
-                            Some(FlightMeasure {
-                                frame: measure_state,
-                                owner: mine,
-                            })
-                        };
-                    }
-                    // `layout()` resets `layout_dirty` on the whole tree at the
-                    // start of every pass, so an override has to be re-seeded
-                    // EVERY frame — otherwise the folded parent never descends
-                    // into it. The seed is skipped when nothing changed: the
-                    // default contract (no override attached, none to drop)
-                    // must not force a re-measure of the ancestor chain.
-                    if !frame.is_idle() || had_override {
-                        self.layout_dirty_keys.insert(key);
-                    }
-                    // FIRST attach (nothing was there before): the layout that just ran
-                    // reported the target's NATURAL size to its parent, because the override
-                    // can only be attached here — after layout — since resolving the flight
-                    // needs the target's measured rect. The parent is therefore stale WITHIN
-                    // this frame, which is what made the rows below a starting flight dip
-                    // and snap back. The app loop consumes this flag and re-lays out once, so
-                    // the frame renders coherent (see `take_layout_override_fresh`).
-                    if !frame.is_idle() && !had_override {
-                        self.layout_override_fresh = true;
-                    }
-                    self.arena.nodes[tidx].transition = Some(TransitionVisual {
-                        start,
-                        end,
-                        progress: p,
-                        flown,
-                        scene_alpha: scene_alpha_for_end(&self.arena.nodes, tidx, false),
-                        role,
-                        radius_from: rf,
-                        radius_to: rt,
-                        clip,
-                        link_slot: None,
-                        // Elevated targets render rootless in the layer, whose
-                        // canvas carries no ancestor translate — the frozen
-                        // ancestor sum must not be added back there.
-                        scroll: if elevated { (0.0, 0.0) } else { escroll },
-                        flight: id,
-                        path,
-                        bounds_fx: fx,
-                        elevated,
-                        remeasure,
-                        scale_parts: resize.scale_to_bounds_parts(),
-                        radius_from_auto,
-                        radius_to_auto,
-                    });
-                    if elevated {
-                        self.elevated_roots.push(tidx);
-                    }
-                }
+        if let Some(slot) = tslot
+            && let Some(root) = self.arena.root
+            && let Some(tidx) = find_idx_by_slot(&self.arena.nodes, root, slot)
+        {
+            // IDENTITY RE-CHECK (review 2, R2-F5): slots are positional, so a
+            // recomposition that shifts the target's position can hand this
+            // frozen key to an unrelated element — which would then take the
+            // flight's visual AND its layout override (measured: an unrelated
+            // 20x20 leaf laid out at the flight's reported size for one pass).
+            // Tier 1 has the equivalent guard (its staleness check); Tier 0
+            // re-checks the marker instead.
+            let still_ours = find_shared_marker(&self.arena.nodes[tidx].modifier)
+                .is_some_and(|m| m.scope_id == flight_key.0 && m.key == flight_key.1);
+            if !still_ours {
+                return;
+            }
+            let role = if sslot == tslot {
+                // Same-screen size morph: opacity untouched.
+                TransitionRole::Morph
+            } else {
+                TransitionRole::Target
+            };
+            // Same-screen morphs are layout-driven resizes, not
+            // cross-composable flights — they stay in-tree like
+            // Compose's animateBounds (never escape their container).
+            let elevated = target_in_overlay && role == TransitionRole::Target;
+            // Layout contract (Compose `ResizeMode` / `PlaceHolderSize`).
+            // Only written when it overrides something, so the default
+            // path (ScaleToBounds + JumpCut/ContentSize) never touches
+            // the layout.
+            let remeasure =
+                role == TransitionRole::Target && matches!(resize, ResizeMode::RemeasureToBounds);
+            let frame = placeholder_frame(
+                remeasure,
+                animated_size(&start, &end, p, path),
+                placeholder,
+                target_size,
+            );
+            measure_state.set(frame);
+            let key = self.arena.nodes[tidx].slot_key;
+            let mine = FlightKey {
+                cid: self.composer_id,
+                id,
+            };
+            // Never clobber (or clear) a DIFFERENT flight's override:
+            // ids are per-composer, so another flight can legitimately
+            // own this node's override while this one is being torn down.
+            let foreign = self.arena.nodes[tidx]
+                .flight_measure
+                .as_ref()
+                .is_some_and(|f| f.owner != mine);
+            let had_override = !foreign && self.arena.nodes[tidx].flight_measure.is_some();
+            if !foreign {
+                self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
+                    None
+                } else {
+                    Some(FlightMeasure {
+                        frame: measure_state,
+                        owner: mine,
+                    })
+                };
+            }
+            // `layout()` resets `layout_dirty` on the whole tree at the
+            // start of every pass, so an override has to be re-seeded
+            // EVERY frame — otherwise the folded parent never descends
+            // into it. The seed is skipped when nothing changed: the
+            // default contract (no override attached, none to drop)
+            // must not force a re-measure of the ancestor chain.
+            if !frame.is_idle() || had_override {
+                self.layout_dirty_keys.insert(key);
+            }
+            // FIRST attach (nothing was there before): the layout that just ran
+            // reported the target's NATURAL size to its parent, because the override
+            // can only be attached here — after layout — since resolving the flight
+            // needs the target's measured rect. The parent is therefore stale WITHIN
+            // this frame, which is what made the rows below a starting flight dip
+            // and snap back. The app loop consumes this flag and re-lays out once, so
+            // the frame renders coherent (see `take_layout_override_fresh`).
+            if !frame.is_idle() && !had_override {
+                self.layout_override_fresh = true;
+            }
+            self.arena.nodes[tidx].transition = Some(TransitionVisual {
+                start,
+                end,
+                progress: p,
+                flown,
+                scene_alpha: scene_alpha_for_end(&self.arena.nodes, tidx, false),
+                role,
+                radius_from: rf,
+                radius_to: rt,
+                clip,
+                link_slot: None,
+                // Elevated targets render rootless in the layer, whose
+                // canvas carries no ancestor translate — the frozen
+                // ancestor sum must not be added back there.
+                scroll: if elevated { (0.0, 0.0) } else { escroll },
+                flight: id,
+                path,
+                bounds_fx: fx,
+                elevated,
+                remeasure,
+                scale_parts: resize.scale_to_bounds_parts(),
+                radius_from_auto,
+                radius_to_auto,
+            });
+            if elevated {
+                self.elevated_roots.push(tidx);
             }
         }
         // anim-trace: one record per end per frame — `layout` is the node's measured rect, `painted`

@@ -447,10 +447,8 @@ impl ScrollState {
                     velocity,
                     move || {
                         settle.set(false);
-                        if clamped {
-                            if let Some(report) = boundary.take() {
-                                report(0.0);
-                            }
+                        if clamped && let Some(report) = boundary.take() {
+                            report(0.0);
                         }
                     },
                 );

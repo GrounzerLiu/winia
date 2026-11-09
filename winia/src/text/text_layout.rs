@@ -239,10 +239,11 @@ impl<'a> TextLayout<'a> {
     /// start-ellipsized run answered `14..14`, an empty range pinned to the marker).
     pub fn get_word_boundary(&self, offset: usize) -> Range<usize> {
         let content = offset.min(self.paragraph.content_len());
-        if let Some(span) = self.paragraph.display_span() {
-            if content < span.tail_start_byte && content >= span.head_bytes {
-                return content..content;
-            }
+        if let Some(span) = self.paragraph.display_span()
+            && content < span.tail_start_byte
+            && content >= span.head_bytes
+        {
+            return content..content;
         }
         let display = self.paragraph.display_offset(content);
         let word = self.paragraph.get_word_boundary(display);

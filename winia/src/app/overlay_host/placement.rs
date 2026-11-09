@@ -125,7 +125,7 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             });
             from_node.unwrap_or(crate::layout::direction::current())
         };
-        use crate::overlay::PopupPosition as P;
+
         // `fit_around_anchor` candidate walk (material3's `MenuPosition.kt` lists, in
         // `dropdown_menu::dropdown_menu_position`) when there is an anchor, plain anchored placement
         // otherwise, and window alignment when there is no anchor at all — the three cases the arithmetic

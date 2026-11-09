@@ -361,23 +361,23 @@ pub(crate) fn measure_node_inner(
             SizeStep::Fill { width, height } => {
                 // Compose FillNode: a bounded maximum becomes a fixed size at max * fraction; an
                 // unbounded maximum leaves the content alone.
-                if let Some(fraction) = width {
-                    if inner_constraints.max_width < f32::MAX {
-                        let w = (inner_constraints.max_width * fraction)
-                            .round()
-                            .clamp(inner_constraints.min_width, inner_constraints.max_width);
-                        inner_constraints.min_width = w;
-                        inner_constraints.max_width = w;
-                    }
+                if let Some(fraction) = width
+                    && inner_constraints.max_width < f32::MAX
+                {
+                    let w = (inner_constraints.max_width * fraction)
+                        .round()
+                        .clamp(inner_constraints.min_width, inner_constraints.max_width);
+                    inner_constraints.min_width = w;
+                    inner_constraints.max_width = w;
                 }
-                if let Some(fraction) = height {
-                    if inner_constraints.max_height < f32::MAX {
-                        let h = (inner_constraints.max_height * fraction)
-                            .round()
-                            .clamp(inner_constraints.min_height, inner_constraints.max_height);
-                        inner_constraints.min_height = h;
-                        inner_constraints.max_height = h;
-                    }
+                if let Some(fraction) = height
+                    && inner_constraints.max_height < f32::MAX
+                {
+                    let h = (inner_constraints.max_height * fraction)
+                        .round()
+                        .clamp(inner_constraints.min_height, inner_constraints.max_height);
+                    inner_constraints.min_height = h;
+                    inner_constraints.max_height = h;
                 }
             }
             SizeStep::Intrinsic { width, height } => {
@@ -573,15 +573,15 @@ pub(crate) fn measure_node_inner(
                 min_width,
                 min_height,
             } => {
-                if let Some(v) = min_width {
-                    if inner_constraints.min_width == 0.0 {
-                        inner_constraints.min_width = v.clamp(0.0, inner_constraints.max_width);
-                    }
+                if let Some(v) = min_width
+                    && inner_constraints.min_width == 0.0
+                {
+                    inner_constraints.min_width = v.clamp(0.0, inner_constraints.max_width);
                 }
-                if let Some(v) = min_height {
-                    if inner_constraints.min_height == 0.0 {
-                        inner_constraints.min_height = v.clamp(0.0, inner_constraints.max_height);
-                    }
+                if let Some(v) = min_height
+                    && inner_constraints.min_height == 0.0
+                {
+                    inner_constraints.min_height = v.clamp(0.0, inner_constraints.max_height);
                 }
             }
             SizeStep::Wrap {
@@ -812,19 +812,19 @@ pub(crate) fn measure_node_inner(
     // of the animated bounds, so content reflows (text rewraps, rows resize)
     // instead of being graphically scaled. Applied last — Compose's "animated
     // fixed constraints" override the incoming and modifier constraints alike.
-    if let Some(fm) = flight {
-        if let Some(c) = fm.content {
-            inner_constraints = Constraints::new(c.width, c.width, c.height, c.height);
-            // A scroll container reads its viewport from the constraints it was
-            // measured with, so a re-measured one must re-derive them — render
-            // clips and hit clamping both use these, and they would otherwise
-            // stay on the natural size while the box animates.
-            if nodes[idx].modifier.vertical_scroll_state().is_some() {
-                nodes[idx].scroll_viewport_height = c.height;
-            }
-            if nodes[idx].modifier.horizontal_scroll_state().is_some() {
-                nodes[idx].scroll_viewport_width = c.width;
-            }
+    if let Some(fm) = flight
+        && let Some(c) = fm.content
+    {
+        inner_constraints = Constraints::new(c.width, c.width, c.height, c.height);
+        // A scroll container reads its viewport from the constraints it was
+        // measured with, so a re-measured one must re-derive them — render
+        // clips and hit clamping both use these, and they would otherwise
+        // stay on the natural size while the box animates.
+        if nodes[idx].modifier.vertical_scroll_state().is_some() {
+            nodes[idx].scroll_viewport_height = c.height;
+        }
+        if nodes[idx].modifier.horizontal_scroll_state().is_some() {
+            nodes[idx].scroll_viewport_width = c.width;
         }
     }
 
@@ -1347,78 +1347,77 @@ pub(crate) fn measure_node_inner(
     //
     // Runs after `paddingFrom` because it wraps whatever is inside it, which is the padded content by
     // then — the same order the chain of two Compose nodes would give.
-    if let Some(size_px) = nodes[idx].modifier.get_minimum_interactive_size() {
-        if size_px > 0.0 {
-            let content = result.0;
-            let width = content.width.max(size_px);
-            let height = content.height.max(size_px);
-            let left = ((size_px - content.width) / 2.0).max(0.0);
-            let top = ((size_px - content.height) / 2.0).max(0.0);
-            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_left(), left);
-            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_top(), top);
-            // The paint reads THIS field, not the lines just above: a container merges its children's
-            // alignment lines (see the field's comment), so an ancestor reading the line would inset its
-            // own background. Only the node the modifier belongs to ever sets this.
-            //
-            // The CONTENT's own size, which is what the component declared — NOT `content`, which is
-            // the MEASURED box and a parent may have forced it wider or narrower (a ButtonGroup
-            // squeezing an item forces the node, and then `content` is the forced size, which painted
-            // an icon button as a 48 x 40 OVAL). The declared size is the inner container: read the
-            // chain's own `size(...)` when it is fixed, and fall back to the measured box when it is
-            // not (a text-sized button has no fixed size and is not what this insets for).
-            // Only a component with a DECLARED fixed size paints a box of its own inside the touch
-            // target — an IconButton declares `size(40, 40)` and the 48 dp target is padding around
-            // it. A component without one (a text Button) has no box to inset: its container IS the
-            // node, so publishing a content box here would paint it without its padding and, worse,
-            // freeze it: the row can widen the node, and a box derived from the content would not
-            // follow (measured: section 4's first item grew 75 -> 86 and its container did not move).
-            // Only a FULLY declared pair is a box this can paint: `Modifier::width()`/`height()`
-            // fill the other axis with `Dimension::Auto`, `fixed_size()` matches any static pair,
-            // and `to_logical_px()` answers 0.0 for `Auto` (and for `Fill`) — which would publish a
-            // content box with a zero side, and a zero-height `paint_rect` paints nothing.
-            let declared = nodes[idx]
-                .modifier
-                .fixed_size()
-                .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
-            if let Some((content_w, content_h)) = declared {
-                nodes[idx].minimum_interactive_content = Some((content_w, content_h));
-            }
-            // `minimum_interactive_painted` and `content_shift` are NOT cleared here: the clear at
-            // the top of this measurement covers them, and it has to run for a node that carries no
-            // minimum-interactive element at all. Clearing a second time here only read as if this
-            // block owned it.
-            {
-                let cx = (width - content.width) / 2.0;
-                let cy = (height - content.height) / 2.0;
-                if let Some((ix, iy, _iw, _ih)) = leaf_box.as_mut() {
-                    *ix += cx;
-                    *iy += cy;
-                    nodes[idx].content_box_override =
-                        Some((*ix, *iy, content.width, content.height));
-                } else {
-                    let kids = nodes[idx].children.clone();
-                    for c in kids {
-                        nodes[c].position.x += cx;
-                        nodes[c].position.y += cy;
-                    }
+    if let Some(size_px) = nodes[idx].modifier.get_minimum_interactive_size()
+        && size_px > 0.0
+    {
+        let content = result.0;
+        let width = content.width.max(size_px);
+        let height = content.height.max(size_px);
+        let left = ((size_px - content.width) / 2.0).max(0.0);
+        let top = ((size_px - content.height) / 2.0).max(0.0);
+        nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_left(), left);
+        nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_top(), top);
+        // The paint reads THIS field, not the lines just above: a container merges its children's
+        // alignment lines (see the field's comment), so an ancestor reading the line would inset its
+        // own background. Only the node the modifier belongs to ever sets this.
+        //
+        // The CONTENT's own size, which is what the component declared — NOT `content`, which is
+        // the MEASURED box and a parent may have forced it wider or narrower (a ButtonGroup
+        // squeezing an item forces the node, and then `content` is the forced size, which painted
+        // an icon button as a 48 x 40 OVAL). The declared size is the inner container: read the
+        // chain's own `size(...)` when it is fixed, and fall back to the measured box when it is
+        // not (a text-sized button has no fixed size and is not what this insets for).
+        // Only a component with a DECLARED fixed size paints a box of its own inside the touch
+        // target — an IconButton declares `size(40, 40)` and the 48 dp target is padding around
+        // it. A component without one (a text Button) has no box to inset: its container IS the
+        // node, so publishing a content box here would paint it without its padding and, worse,
+        // freeze it: the row can widen the node, and a box derived from the content would not
+        // follow (measured: section 4's first item grew 75 -> 86 and its container did not move).
+        // Only a FULLY declared pair is a box this can paint: `Modifier::width()`/`height()`
+        // fill the other axis with `Dimension::Auto`, `fixed_size()` matches any static pair,
+        // and `to_logical_px()` answers 0.0 for `Auto` (and for `Fill`) — which would publish a
+        // content box with a zero side, and a zero-height `paint_rect` paints nothing.
+        let declared = nodes[idx]
+            .modifier
+            .fixed_size()
+            .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
+        if let Some((content_w, content_h)) = declared {
+            nodes[idx].minimum_interactive_content = Some((content_w, content_h));
+        }
+        // `minimum_interactive_painted` and `content_shift` are NOT cleared here: the clear at
+        // the top of this measurement covers them, and it has to run for a node that carries no
+        // minimum-interactive element at all. Clearing a second time here only read as if this
+        // block owned it.
+        {
+            let cx = (width - content.width) / 2.0;
+            let cy = (height - content.height) / 2.0;
+            if let Some((ix, iy, _iw, _ih)) = leaf_box.as_mut() {
+                *ix += cx;
+                *iy += cy;
+                nodes[idx].content_box_override = Some((*ix, *iy, content.width, content.height));
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.x += cx;
+                    nodes[c].position.y += cy;
                 }
-                // The lines published above are the VISUAL content's position inside the bigger box, so
-                // they do not move with the centring — but the lines inherited from the children do, and
-                // so does a line a caller declared with `Modifier::alignment_line`, whose closure saw the
-                // pre-enlargement size. Shifting them keeps both in the new coordinates, which is what lets
-                // an outer `align_by` land on the visual edge.
-                for (l, value) in nodes[idx].alignment_lines.iter_mut() {
-                    let line = *l;
-                    if line == AlignmentLine::minimum_interactive_left()
-                        || line == AlignmentLine::minimum_interactive_top()
-                    {
-                        continue;
-                    }
-                    *value += if line.horizontal { cy } else { cx };
-                }
-                result.0 = Size::new(width, height);
-                nodes[idx].measured_size = result.0;
             }
+            // The lines published above are the VISUAL content's position inside the bigger box, so
+            // they do not move with the centring — but the lines inherited from the children do, and
+            // so does a line a caller declared with `Modifier::alignment_line`, whose closure saw the
+            // pre-enlargement size. Shifting them keeps both in the new coordinates, which is what lets
+            // an outer `align_by` land on the visual edge.
+            for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                let line = *l;
+                if line == AlignmentLine::minimum_interactive_left()
+                    || line == AlignmentLine::minimum_interactive_top()
+                {
+                    continue;
+                }
+                *value += if line.horizontal { cy } else { cx };
+            }
+            result.0 = Size::new(width, height);
+            nodes[idx].measured_size = result.0;
         }
     }
 
