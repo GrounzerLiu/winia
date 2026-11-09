@@ -127,7 +127,7 @@ pub fn main() {
 
 #[composable]
 fn selection_demo(ctx: &mut ComposeCtx) {
-    Text::new("Selection").font_size(22.0).build(ctx);
+    Text::new("Drag, click, copy").font_size(22.0).build(ctx);
     Text::new("Drag to select, double click for a word, triple click for a line, Ctrl+C to copy.")
         .font_size(12.0)
         .color(MUTED)
