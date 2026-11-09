@@ -302,11 +302,63 @@ pub struct PermissionRequest {
     id: u64,
 }
 
+/// What a poll already knows about one request.
+///
+/// The Java adapter hands a result out once (`takeResult` removes it), so the status has to be
+/// remembered: without that, a second poll reports "no result yet" and a granted permission looks
+/// like it went back to NotDetermined on the next frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+enum PollState {
+    /// The adapter has not delivered a result yet.
+    Pending,
+    /// Delivered by the adapter; every later poll reports it again.
+    Ready(PermissionStatus),
+    /// `cancel()` discarded the request, so polls have nothing left to report.
+    Discarded,
+}
+
+/// Apply one poll to the remembered state.
+///
+/// Split from the handle so the caching rule stays testable without an Activity.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn advance_poll(
+    state: PollState,
+    generation_matches: bool,
+    take_latest: impl FnOnce() -> Option<PermissionStatus>,
+) -> (PollState, Option<PermissionStatus>) {
+    match state {
+        PollState::Ready(status) => (state, Some(status)),
+        PollState::Discarded => (state, None),
+        // A destroyed Activity invalidates the handle before a result can arrive.
+        PollState::Pending if !generation_matches => (
+            PollState::Ready(PermissionStatus::Cancelled),
+            Some(PermissionStatus::Cancelled),
+        ),
+        PollState::Pending => match take_latest() {
+            Some(status) => (PollState::Ready(status), Some(status)),
+            None => (PollState::Pending, None),
+        },
+    }
+}
+
 #[cfg(target_os = "android")]
 struct RequestInner {
     app: winit::platform::android::activity::AndroidApp,
     id: u64,
     generation: u64,
+    state: std::sync::Mutex<PollState>,
+}
+
+#[cfg(target_os = "android")]
+impl RequestInner {
+    fn state(&self) -> PollState {
+        *self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn set_state(&self, next: PollState) {
+        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = next;
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -340,22 +392,25 @@ impl PermissionRequest {
                 app,
                 id,
                 generation: request_generation(),
+                state: std::sync::Mutex::new(PollState::Pending),
             }),
             id,
         }
     }
 
     /// Return the result once the platform has delivered it, without blocking.
+    ///
+    /// The first poll that sees a result remembers it, so polling again (for example on every
+    /// frame) keeps reporting the same status instead of falling back to None.
     pub fn poll(&self) -> Option<PermissionStatus> {
         #[cfg(target_os = "android")]
         {
-            if self.inner.generation != request_generation() {
-                return Some(PermissionStatus::Cancelled);
-            }
-            return crate::platform::android::permissions::poll_result(
-                &self.inner.app,
-                self.inner.id,
-            );
+            let generation_matches = self.inner.generation == request_generation();
+            let (next, status) = advance_poll(self.inner.state(), generation_matches, || {
+                crate::platform::android::permissions::poll_result(&self.inner.app, self.inner.id)
+            });
+            self.inner.set_state(next);
+            return status;
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -372,6 +427,7 @@ impl PermissionRequest {
     pub fn cancel(&self) {
         #[cfg(target_os = "android")]
         {
+            self.inner.set_state(PollState::Discarded);
             crate::platform::android::permissions::clear_result(&self.inner.app, self.inner.id);
         }
     }
@@ -731,6 +787,49 @@ mod tests {
             reconcile_result(2),
             Some(PermissionStatus::PermanentlyDenied)
         );
+    }
+
+    #[test]
+    fn polls_remember_a_delivered_result() {
+        // The first poll takes the result out of the adapter.
+        let (state, status) =
+            advance_poll(PollState::Pending, true, || Some(PermissionStatus::Granted));
+        assert_eq!(status, Some(PermissionStatus::Granted));
+        assert_eq!(state, PollState::Ready(PermissionStatus::Granted));
+
+        // Later polls replay it instead of asking the adapter again, which would report None.
+        let (state, status) = advance_poll(state, true, || panic!("adapter polled twice"));
+        assert_eq!(status, Some(PermissionStatus::Granted));
+        assert_eq!(state, PollState::Ready(PermissionStatus::Granted));
+    }
+
+    #[test]
+    fn polls_report_nothing_until_the_adapter_delivers() {
+        let (state, status) = advance_poll(PollState::Pending, true, || None);
+        assert_eq!(status, None);
+        assert_eq!(state, PollState::Pending);
+    }
+
+    #[test]
+    fn a_new_generation_reports_cancelled_once_and_then_repeats_it() {
+        let (state, status) = advance_poll(PollState::Pending, false, || {
+            panic!("adapter polled after teardown")
+        });
+        assert_eq!(status, Some(PermissionStatus::Cancelled));
+        assert_eq!(state, PollState::Ready(PermissionStatus::Cancelled));
+
+        let (state, status) = advance_poll(state, false, || panic!("adapter polled twice"));
+        assert_eq!(status, Some(PermissionStatus::Cancelled));
+        assert_eq!(state, PollState::Ready(PermissionStatus::Cancelled));
+    }
+
+    #[test]
+    fn polls_stay_silent_after_cancel() {
+        let (state, status) = advance_poll(PollState::Discarded, true, || {
+            panic!("adapter polled after cancel")
+        });
+        assert_eq!(status, None);
+        assert_eq!(state, PollState::Discarded);
     }
 
     #[test]
