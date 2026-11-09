@@ -352,25 +352,46 @@ fn advance_poll(
     }
 }
 
+/// The remembered poll state shared by every clone of one request handle.
+///
+/// Kept separate from `RequestInner` so the locking rule is testable on every platform without an
+/// Activity. The property that matters is that `discard()` cannot be lost: a poll that reads the
+/// state and writes it back later would overwrite a concurrent cancel with its stale copy.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+struct PollCell(std::sync::Mutex<PollState>);
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+impl PollCell {
+    fn new() -> Self {
+        Self(std::sync::Mutex::new(PollState::Pending))
+    }
+
+    /// Read, decide and write back under one lock acquisition.
+    fn update(
+        &self,
+        decide: impl FnOnce(PollState) -> (PollState, Option<PermissionStatus>),
+    ) -> Option<PermissionStatus> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let (next, status) = decide(*state);
+        *state = next;
+        status
+    }
+
+    fn discard(&self) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        *state = PollState::Discarded;
+    }
+}
+
 #[cfg(target_os = "android")]
 struct RequestInner {
     app: winit::platform::android::activity::AndroidApp,
     id: u64,
     generation: u64,
-    state: std::sync::Mutex<PollState>,
+    poll: PollCell,
 }
 
 #[cfg(target_os = "android")]
-impl RequestInner {
-    fn state(&self) -> PollState {
-        *self.state.lock().unwrap_or_else(|error| error.into_inner())
-    }
-
-    fn set_state(&self, next: PollState) {
-        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = next;
-    }
-}
-
 #[cfg(target_os = "android")]
 impl Drop for RequestInner {
     fn drop(&mut self) {
@@ -402,7 +423,7 @@ impl PermissionRequest {
                 app,
                 id,
                 generation: request_generation(),
-                state: std::sync::Mutex::new(PollState::Pending),
+                poll: PollCell::new(),
             }),
             id,
         }
@@ -416,11 +437,14 @@ impl PermissionRequest {
         #[cfg(target_os = "android")]
         {
             let generation_matches = self.inner.generation == request_generation();
-            let (next, status) = advance_poll(self.inner.state(), generation_matches, || {
-                crate::platform::android::permissions::poll_result(&self.inner.app, self.inner.id)
+            return self.inner.poll.update(|state| {
+                advance_poll(state, generation_matches, || {
+                    crate::platform::android::permissions::poll_result(
+                        &self.inner.app,
+                        self.inner.id,
+                    )
+                })
             });
-            self.inner.set_state(next);
-            return status;
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -437,7 +461,7 @@ impl PermissionRequest {
     pub fn cancel(&self) {
         #[cfg(target_os = "android")]
         {
-            self.inner.set_state(PollState::Discarded);
+            self.inner.poll.discard();
             crate::platform::android::permissions::clear_result(&self.inner.app, self.inner.id);
         }
     }
@@ -912,6 +936,66 @@ mod tests {
         });
         assert_eq!(status, None);
         assert_eq!(state, PollState::Discarded);
+    }
+
+    #[test]
+    fn a_cancel_during_a_poll_is_not_overwritten() {
+        // A poll reads, decides and writes the state. cancel() must not land between the read and
+        // the write, or the write-back restores the stale copy and the cancel disappears.
+        //
+        // Order: the poll announces it holds the state, the canceller runs, then the poll finishes.
+        // With one critical section the canceller waits and its Discarded wins. With two separate
+        // locks it interleaves and the poll's write-back resurrects the granted result.
+        let cell = std::sync::Arc::new(PollCell::new());
+        let (deciding, in_decision) = std::sync::mpsc::channel::<()>();
+        let (cancelled, cancel_done) = std::sync::mpsc::channel::<()>();
+        let (releaser, released) = std::sync::mpsc::channel::<()>();
+
+        std::thread::scope(|scope| {
+            let poll_cell = std::sync::Arc::clone(&cell);
+            scope.spawn(move || {
+                poll_cell.update(|state| {
+                    deciding.send(()).unwrap();
+                    let _ = released.recv_timeout(std::time::Duration::from_millis(200));
+                    advance_poll(state, true, || Some(PermissionStatus::Granted))
+                });
+            });
+
+            in_decision.recv().unwrap();
+            let cancel_cell = std::sync::Arc::clone(&cell);
+            let handle = scope.spawn(move || {
+                cancel_cell.discard();
+                cancelled.send(()).unwrap();
+            });
+
+            // The cancel must be blocked: the poll still owns the state. Give it long enough to
+            // finish if it were able to interleave.
+            assert!(
+                cancel_done
+                    .recv_timeout(std::time::Duration::from_millis(80))
+                    .is_err(),
+                "cancel() ran inside the poll's read-modify-write window"
+            );
+            let _ = releaser.send(());
+            handle.join().unwrap();
+        });
+
+        // The cancel ran after the poll, so the discard is what remains.
+        assert_eq!(
+            cell.update(|state| (state, None)),
+            None,
+            "the poll's write-back overwrote the cancel"
+        );
+    }
+
+    #[test]
+    fn a_poll_after_a_cancel_stays_silent() {
+        // The contract cancel() promises: once discarded, no poll reports a result again.
+        let cell = PollCell::new();
+        cell.discard();
+        for _ in 0..3 {
+            assert_eq!(cell.update(|state| (state, None)), None);
+        }
     }
 
     #[test]
