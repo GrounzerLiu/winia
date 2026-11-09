@@ -833,7 +833,7 @@ impl SplitButtonPart {
             );
             button = button.modifier(Modifier::new().draw_wrap_node(StateLayer {
                 color: layer,
-                shape: shape.clone(),
+                shape: shape,
             }));
         }
         let click = self.click_action();
@@ -952,7 +952,7 @@ fn drawn_shape(
         && reached(target_radii.2, radii.2)
         && reached(target_radii.3, radii.3);
     if settled {
-        target.clone()
+        *target
     } else {
         Shape::corners(radii.0, radii.1, radii.2, radii.3)
     }

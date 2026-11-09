@@ -170,7 +170,7 @@ pub(crate) fn find_scope_overlay_marker(modifier: &Modifier) -> Option<(u64, f32
 /// with live layout (the entering one) can honour it.
 pub(crate) fn shared_resize_for_kind(kind: &SharedKind) -> ResizeMode {
     match kind {
-        SharedKind::Bounds { resize, .. } => resize.clone(),
+        SharedKind::Bounds { resize, .. } => *resize,
         // Compose's `sharedElement` has no resize parameter and always
         // re-measures: "During the bounds transform, sharedElement will
         // re-measure and relayout its child layout using fixed constraints

@@ -238,7 +238,7 @@ impl PerWindow {
             _ => false,
         };
         if let Some(ref sw) = self.skia_window {
-            set_ime_enabled(&sw, wants_ime);
+            set_ime_enabled(sw, wants_ime);
         }
     }
 
@@ -439,7 +439,7 @@ impl PerWindow {
             self.overlay.layers[i].focused_id = new_id;
             self.overlay.layers[i].focused_slot_key = new_slot;
             if let Some(ref sw) = self.skia_window {
-                set_ime_enabled(&sw, want_ime);
+                set_ime_enabled(sw, want_ime);
             }
         } else {
             let (new_id, new_slot) = self

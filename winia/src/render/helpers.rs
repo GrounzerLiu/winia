@@ -167,7 +167,7 @@ pub(super) fn paint_shape(
         }
         crate::graphics::Shape::Pill => {
             let r = rect.width().min(rect.height()) / 2.0;
-            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), paint);
         }
         crate::graphics::Shape::Circle => {
             // Circle == Pill == Compose `RoundedCornerShape(50)`: percent corners

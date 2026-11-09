@@ -688,9 +688,7 @@ pub(crate) fn scroll_by_key_in_window(
 /// container can go. The axis choice follows the state that exists (vertical first).
 fn scroll_range(node: &LayoutNode) -> (f32, f32, (f32, f32)) {
     let vertical = node.modifier.vertical_scroll_state();
-    let state = vertical
-        .clone()
-        .or_else(|| node.modifier.horizontal_scroll_state());
+    let state = vertical.or_else(|| node.modifier.horizontal_scroll_state());
     let Some(state) = state else {
         return (0.0, 0.0, (0.0, 0.0));
     };

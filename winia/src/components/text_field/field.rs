@@ -1113,7 +1113,7 @@ impl TextField {
         let container_modifier = if let Some(interaction) = interaction.as_ref() {
             let fr_click = fr.clone();
             container_modifier
-                .focusable_with_source(&interaction)
+                .focusable_with_source(interaction)
                 .focus_requester(&fr)
                 .on_press(move |_| {
                     fr_click.request_focus();

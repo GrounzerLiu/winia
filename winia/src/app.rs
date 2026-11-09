@@ -293,7 +293,7 @@ pub fn open_window_with_saveable_key(
 
 fn wake_impl() {
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
-        let _ = proxy.wake_up();
+        proxy.wake_up();
         return;
     }
     debug::wake();
@@ -409,7 +409,7 @@ fn run_app_with_event_loop(
     let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
     crate::runtime::state::set_wake_fn(move || {
-        let _ = proxy2.wake_up();
+        proxy2.wake_up();
     });
     #[cfg(not(target_os = "android"))]
     debug::start_stdin_channel();

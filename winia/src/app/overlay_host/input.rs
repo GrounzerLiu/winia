@@ -32,7 +32,7 @@ pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
         let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
         // Reverse lookup of the target: ds.slot is the scroll node's slot_key in the overlay composer at down time.
         let target: Option<usize> = (|| {
-            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            let ov_idx = pw.overlay.layers.len().saturating_sub(1);
             let ov = pw.overlay.layers.get(ov_idx)?;
             let r = ov.composer.layout_root_idx()?;
             let nodes = ov.composer.arena_nodes();
@@ -317,7 +317,7 @@ pub(crate) fn overlay_down(
                 event_type: crate::input::PointerEventType::Down,
                 position: (0.0, 0.0),
                 scene_position: local,
-                kind: kind.clone(),
+                kind: kind,
                 is_alt_pressed: pw.modifiers.alt_key(),
                 is_ctrl_pressed: pw.modifiers.control_key(),
                 is_shift_pressed: pw.modifiers.shift_key(),

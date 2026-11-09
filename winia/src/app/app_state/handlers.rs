@@ -599,7 +599,7 @@ impl AppState {
                         is_shift_pressed: pw.modifiers.shift_key(),
                         is_meta_pressed: pw.modifiers.meta_key(),
                     };
-                    pw.input.last_kind = ptr_ev.kind.clone();
+                    pw.input.last_kind = ptr_ev.kind;
                     dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
                 }
                 // After Up, clear the capture and notify a selection change.
@@ -635,7 +635,7 @@ impl AppState {
                     pw.focused_slot_key = slot;
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
-                    let _ = proxy.wake_up();
+                    proxy.wake_up();
                 }
             }
             WindowEvent::PointerMoved { position, .. } => {
@@ -647,8 +647,7 @@ impl AppState {
                 // The pointer-move core (shared, so the real and Debug paths cannot diverge; the Debug
                 // path used to lack the x_off alignment offset, misplacing Center/Right text selection).
                 let modifiers = pw.modifiers;
-                let consumed =
-                    handle_pointer_move(pw, scene_pos, pw.input.last_kind.clone(), &modifiers);
+                let consumed = handle_pointer_move(pw, scene_pos, pw.input.last_kind, &modifiers);
                 // Request a redraw when the move was consumed (on_pointer_event may update State) or a
                 // drag selection is in progress; an unconsumed hover move does not wake the event loop.
                 if (consumed || pw.input.down.is_some())
@@ -1116,7 +1115,7 @@ impl AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    set_ime_enabled(&sw, want);
+                                    set_ime_enabled(sw, want);
                                 }
                                 break;
                             }
@@ -1139,7 +1138,7 @@ impl AppState {
                             // (node_or_descendant_wants_ime).
                             let wants_ime = node_or_descendant_wants_ime(nodes, found);
                             if let Some(ref sw) = pw.skia_window {
-                                set_ime_enabled(&sw, wants_ime);
+                                set_ime_enabled(sw, wants_ime);
                             }
                         }
                     }
@@ -1400,7 +1399,7 @@ impl AppState {
                 if pw.composer.pending_window_close_id().is_some()
                     && let Some(ref proxy) = *APP_PROXY.lock().unwrap()
                 {
-                    let _ = proxy.wake_up();
+                    proxy.wake_up();
                 }
                 // Consume DevTools events (parent window only) — new_events calls this as a fallback too (see below).
                 if is_parent {

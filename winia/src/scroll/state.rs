@@ -258,7 +258,7 @@ impl ScrollState {
         let off = self.offset.clone();
         let done_flag = self.is_scroll_in_progress.clone();
         crate::animation::push_animatable_with_done(off, target, spec, move || {
-            let _ = done_flag.set(false);
+            done_flag.set(false);
         });
     }
 

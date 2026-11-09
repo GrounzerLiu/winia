@@ -220,7 +220,7 @@ pub fn checkbox_colors_with_styles(theme: &crate::theme::ThemeColors) -> Checkbo
     let styles = crate::components::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<CheckboxStyling>() {
         let mut scope = CheckboxStylingScope {
-            theme: theme.clone(),
+            theme: *theme,
             is_dark: crate::components::component_styles::palette_is_dark(theme),
             colors,
         };

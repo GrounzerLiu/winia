@@ -25,7 +25,7 @@ impl ThemeSpec {
     pub fn colors(&self) -> ThemeColors {
         match self {
             ThemeSpec::Auto => system_theme_colors(),
-            ThemeSpec::Fixed(colors) => colors.clone(),
+            ThemeSpec::Fixed(colors) => *colors,
         }
     }
 }

@@ -568,10 +568,7 @@ pub(super) fn render_pass1(
                 paint_rect.width(),
                 paint_rect.height(),
             );
-            let shape = gl
-                .shadow_shape
-                .clone()
-                .unwrap_or(crate::graphics::Shape::Rectangle);
+            let shape = gl.shadow_shape.unwrap_or(crate::graphics::Shape::Rectangle);
             draw_elevation_shadow(
                 canvas,
                 rect,

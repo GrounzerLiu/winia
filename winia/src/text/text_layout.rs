@@ -126,7 +126,7 @@ impl<'a> TextLayout<'a> {
     /// `…cluster_cluster_at`, which doubled the word.
     pub fn get_closest_grapheme_cluster_at(&self, point: impl Into<skia_safe::Point>) -> usize {
         let point = point.into();
-        let point_clone = point.clone();
+        let point_clone = point;
         let glyph_info = self
             .paragraph
             .inner_paragraph()

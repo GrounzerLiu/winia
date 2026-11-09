@@ -1093,12 +1093,12 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 // 首帧无上一帧场景——用当前场景兜底（首帧 key 必相同，不会触发过渡）
                 SceneHolder {
                     key: scene.scene_key(),
-                    scene: std::sync::Arc::clone(&scene),
+                    scene: std::sync::Arc::clone(scene),
                 }
             });
             let scene_holder = SceneHolder {
                 key: scene.scene_key(),
-                scene: std::sync::Arc::clone(&scene),
+                scene: std::sync::Arc::clone(scene),
             };
             // 检测导航变化并启动过渡
             transition.detect(&scene_holder, forward, &spec, Some(prev_frame));

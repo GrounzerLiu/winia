@@ -170,7 +170,7 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
             .any(|o| !o.closing && o.focused_id.is_some())
         && let Some(ref sw) = pw.skia_window
     {
-        set_ime_enabled(&sw, false);
+        set_ime_enabled(sw, false);
     }
     cleanup_overlay_interactions(&mut pw.overlay.layers[idx]);
     // Start the exit animation (progress 1→0); with no exit spec → remove at once (do not push a
@@ -312,7 +312,7 @@ pub(crate) fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
     }
     if let Some(ref sw) = pw.skia_window {
         // Nothing in the panel is focused until the user tabs into it, so the IME has no target yet.
-        set_ime_enabled(&sw, false);
+        set_ime_enabled(sw, false);
     }
 }
 /// Hand the keyboard back when the last focus-scope overlay stops owning it: the nearest layer below

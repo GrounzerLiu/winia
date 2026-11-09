@@ -83,7 +83,7 @@ impl AppState {
                     // overlay is hit the click has to run immediately (the real path records on down
                     // and fires on up; here we record on down and exec straight away, otherwise an
                     // overlay button could never be clicked).
-                    let click_kind = pw.input.last_kind.clone();
+                    let click_kind = pw.input.last_kind;
                     if overlay_down(pw, (x, y), click_kind) {
                         // Overlay hit: run the click now (synthesized single event — record on
                         // down and fire on up immediately; the real path fires on PointerUp).
@@ -162,7 +162,7 @@ impl AppState {
                         pw.focused_id = Some(fid);
                         pw.focused_slot_key = Some(sk);
                         if let Some(ref sw) = pw.skia_window {
-                            set_ime_enabled(&sw, true);
+                            set_ime_enabled(sw, true);
                         }
                     }
                     debug_log!(
@@ -351,7 +351,7 @@ impl AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    set_ime_enabled(&sw, want);
+                                    set_ime_enabled(sw, want);
                                 }
                                 handled = true;
                                 break;
@@ -374,14 +374,14 @@ impl AppState {
                     // (with_focus=false — the debug path does no cursor/focus work).
                     pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_down(pw, (x, y), pw.input.last_kind.clone(), &modifiers, false);
+                    handle_pointer_down(pw, (x, y), pw.input.last_kind, &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
                     // Simulate a drag selection: shares the core with the real PointerMoved (including the x_off alignment offset).
                     pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_move(pw, (x, y), pw.input.last_kind.clone(), &modifiers);
+                    handle_pointer_move(pw, (x, y), pw.input.last_kind, &modifiers);
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();
                     }

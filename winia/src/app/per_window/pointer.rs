@@ -350,7 +350,7 @@ pub(crate) fn handle_pointer_down(
 ) -> bool {
     // Top-level popups first: an overlay hit records the click target (the event does not reach the
     // main tree); an outside click dismisses (modal / dismissible).
-    if overlay_down(pw, scene_pos, kind.clone()) {
+    if overlay_down(pw, scene_pos, kind) {
         // The overlay is drawn above the menu, so a menu left open underneath would be invisible
         // and still eat presses in the gaps.
         begin_closing_selection_menu(pw);
@@ -705,7 +705,7 @@ pub(crate) fn handle_pointer_down(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.input.last_kind = ptr_ev.kind.clone();
+    pw.input.last_kind = ptr_ev.kind;
     dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     true
 }
@@ -832,7 +832,7 @@ pub(crate) fn handle_pointer_move(
     // the nested-scroll chain.
     if pw.overlay.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
-            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            let ov_idx = pw.overlay.layers.len().saturating_sub(1);
             let slot = pw.overlay.drag_scroll.as_ref().unwrap().slot;
             let ov = pw.overlay.layers.get(ov_idx)?;
             let r = ov.composer.layout_root_idx()?;
@@ -854,7 +854,7 @@ pub(crate) fn handle_pointer_move(
         };
         if let Some(idx) = target {
             let (ax, ay) = {
-                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                let ov_idx = pw.overlay.layers.len().saturating_sub(1);
                 let ov = &pw.overlay.layers[ov_idx];
                 let nodes = ov.composer.arena_nodes();
                 if nodes[idx].modifier.vertical_scroll_state().is_some() {
@@ -866,7 +866,7 @@ pub(crate) fn handle_pointer_move(
                 }
             };
             if ax != 0.0 || ay != 0.0 {
-                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                let ov_idx = pw.overlay.layers.len().saturating_sub(1);
                 if let Some(ov) = pw.overlay.layers.get_mut(ov_idx)
                     && let Some(root) = ov.composer.layout_root_idx()
                 {
@@ -886,7 +886,7 @@ pub(crate) fn handle_pointer_move(
                     }
                 }
             }
-            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            let ov_idx = pw.overlay.layers.len().saturating_sub(1);
             if let Some(ov) = pw.overlay.layers.get(ov_idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
@@ -1017,7 +1017,7 @@ pub(crate) fn handle_pointer_move(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.input.last_kind = ptr_ev.kind.clone();
+    pw.input.last_kind = ptr_ev.kind;
     let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     handled || consumed
 }

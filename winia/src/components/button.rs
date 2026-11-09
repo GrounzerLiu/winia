@@ -409,7 +409,7 @@ pub fn button_visual_with_styles(
     let styles = crate::components::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<ButtonStyling>() {
         let mut scope = ButtonStylingScope {
-            theme: theme.clone(),
+            theme: *theme,
             is_dark: crate::components::component_styles::palette_is_dark(theme),
             colors: visual.colors,
             border: None,

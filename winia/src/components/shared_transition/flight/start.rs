@@ -1026,7 +1026,7 @@ impl Composer {
                     a.path = path;
                     a.bounds_fx = bounds_fx;
                     a.target_in_overlay = target_in_overlay;
-                    a.resize = resize.clone();
+                    a.resize = resize;
                     a.placeholder = placeholder;
                     // The target was measured naturally in this frame's layout
                     // (the flight had no bounds yet), so this IS its resting
@@ -1142,7 +1142,7 @@ impl Composer {
                 a.path,
                 a.bounds_fx.clone(),
                 a.target_in_overlay,
-                a.resize.clone(),
+                a.resize,
                 a.placeholder,
                 a.target_size,
                 a.measure.clone(),
@@ -1376,7 +1376,7 @@ impl Composer {
                     if t.flight != id {
                         return None;
                     }
-                    Some((i, t.role.clone()))
+                    Some((i, t.role))
                 })
                 .collect::<Vec<_>>()
             {
