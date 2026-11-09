@@ -270,7 +270,7 @@ fn the_matrix_respects_the_behavioural_invariants() {
                         };
                         let (size, rects) = run(&base);
                         checked += 1;
-                        let horizontal = true;
+                        let _horizontal = true;
                         let main_size = size.width;
                         let cross_size = size.height;
 
@@ -289,8 +289,8 @@ fn the_matrix_respects_the_behavioural_invariants() {
                         // No overlap of items on the same line (all pattern-0 items shrink).
                         for a in 0..rects.len() {
                             for b in (a + 1)..rects.len() {
-                                let (ax, ay, aw, ah) = rects[a];
-                                let (bx, by, bw, bh) = rects[b];
+                                let (ax, ay, aw, _ah) = rects[a];
+                                let (bx, by, bw, _bh) = rects[b];
                                 if (ay - by).abs() > 0.5 {
                                     continue;
                                 }
@@ -575,8 +575,8 @@ fn the_matrix_distributes_the_wrapped_lines() {
                 pattern: 0,
                 constraints,
             };
-            let (size, rects) = run(&case);
-            let mut ys: Vec<f32> = rects.iter().map(|rect| rect.1).collect();
+            let (_size, rects) = run(&case);
+            let ys: Vec<f32> = rects.iter().map(|rect| rect.1).collect();
             assert!(
                 ys.iter().all(|y| y.is_finite()),
                 "finite line positions for {case}: {rects:?}"

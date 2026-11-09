@@ -171,7 +171,7 @@ fn path_from_cubics(
         path.close();
     }
     if start_angle != 0
-        && let Some(first_cubic) = first_cubic
+        && let Some(_first_cubic) = first_cubic
     {
         let angle_to_first_cubic = randians_to_degrees(
             (cubics[0].anchor_0_y() - rotation_pivot_y)

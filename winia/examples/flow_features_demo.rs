@@ -27,7 +27,7 @@ fn block(ctx: &mut ComposeCtx, tag: &'static str, w: f32, h: f32, color: Color, 
 
 #[composable]
 fn flow_features(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
     let columns = ctx.remember(|| 3usize);
 
     Column::new()

@@ -30,6 +30,20 @@ mod shape_util;
 #[cfg(feature = "shape_util")]
 pub use shape_util::*;
 
+#[macro_export]
+macro_rules! assert_panic {
+    ($code:block) => {{
+        let old_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_info| {}));
+        let result = std::panic::catch_unwind(|| $code);
+        std::panic::set_hook(old_hook);
+        assert!(
+            result.is_err(),
+            "Expected panic, but code executed without panicking"
+        );
+    }};
+}
+
 #[cfg(test)]
 pub mod tests {
     use crate::cubic::{Cubic, PointTransformer};
@@ -174,18 +188,4 @@ pub mod tests {
             $crate::tests::assert_floats_equalish($expected, $actual, $epsilon, $msg);
         };
     }
-}
-
-#[macro_export]
-macro_rules! assert_panic {
-    ($code:block) => {{
-        let old_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_info| {}));
-        let result = std::panic::catch_unwind(|| $code);
-        std::panic::set_hook(old_hook);
-        assert!(
-            result.is_err(),
-            "Expected panic, but code executed without panicking"
-        );
-    }};
 }

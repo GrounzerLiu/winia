@@ -65,7 +65,7 @@ fn composable_keyed_bare_remember_fails_fast() {
     }
     let result = catch_unwind(AssertUnwindSafe(move || {
         let mut composer = Composer::new();
-        composer.compose(|ctx| bare(ctx));
+        composer.compose(bare);
     }));
     assert!(result.is_err(), "裸 remember 应 fail-fast panic");
 }

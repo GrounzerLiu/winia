@@ -61,7 +61,7 @@ fn bar(ctx: &mut ComposeCtx, tag: &str, label: &str, h: f32, color: Color) {
 
 #[composable]
 fn flex_layout_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
 
     Column::new()
         .modifier(
@@ -85,7 +85,7 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
                 |ctx| {
                     // Remembered, not constructed inline: a new handle on every recomposition is the
                     // one shape the state-handle rule forbids (docs/state-handles.md).
-                    let inner_scroll = ctx.remember(|| ScrollState::new()).get();
+                    let inner_scroll = ctx.remember(ScrollState::new).get();
                     Column::new()
                         .modifier(
                             Modifier::new()
@@ -183,7 +183,7 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
             //    around it clamps to the viewport (a plain Box would grow to its child instead — Compose
             //    never crops, which is what the box layout fix aligned).
             card(ctx, "overflow", "4. overflow reports content", |ctx| {
-                let strip = ctx.remember(|| ScrollState::new()).get();
+                let strip = ctx.remember(ScrollState::new).get();
                 Column::new()
                     .modifier(
                         Modifier::new()

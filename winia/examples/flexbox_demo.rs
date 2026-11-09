@@ -10,7 +10,6 @@
 //! Run with cargo run -p winia --example flexbox_demo.
 
 use letclone::clone;
-use std::sync::Arc;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]

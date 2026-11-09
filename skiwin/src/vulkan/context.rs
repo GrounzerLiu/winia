@@ -25,6 +25,7 @@ use super::renderer::VulkanRenderer;
 /// Global shared Vulkan queue that persists across all windows.
 static SHARED_QUEUE: Lazy<Mutex<Option<Arc<Queue>>>> = Lazy::new(|| Mutex::new(None));
 
+#[derive(Default)]
 pub struct VulkanRenderContext {
     pub queue: Option<Arc<Queue>>,
     pub skia_ctx: Option<Arc<Mutex<gpu::DirectContext>>>,
@@ -58,7 +59,7 @@ impl VulkanRenderContext {
 
         self.queue = Some(queue.clone());
 
-        Ok(VulkanRenderer::new(window.clone(), queue, skia_ctx)?)
+        VulkanRenderer::new(window.clone(), queue, skia_ctx)
     }
 
     fn create_skia_context(queue: &Arc<Queue>) -> SkiwinResult<Arc<Mutex<gpu::DirectContext>>> {
@@ -147,7 +148,7 @@ impl VulkanRenderContext {
             library,
             InstanceCreateInfo {
                 flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-                enabled_extensions: required_extensions.clone(),
+                enabled_extensions: required_extensions,
                 enabled_layers,
                 ..Default::default()
             },
@@ -204,15 +205,6 @@ impl VulkanRenderContext {
         queues
             .next()
             .ok_or_else(|| SkiwinError::Vulkan("no queue returned from the device".into()))
-    }
-}
-
-impl Default for VulkanRenderContext {
-    fn default() -> Self {
-        VulkanRenderContext {
-            queue: None,
-            skia_ctx: None,
-        }
     }
 }
 

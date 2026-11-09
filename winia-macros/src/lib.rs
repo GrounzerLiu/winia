@@ -272,19 +272,19 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             for arm in e.arms.iter_mut() {
                 if let Some((_, guard)) = &mut arm.guard {
                     let g = std::mem::replace(guard, Box::new(syn::parse_quote!(true)));
-                    *guard = Box::new(inject_expr_blocks(*g, ctx, counter));
+                    **guard = inject_expr_blocks(*g, ctx, counter);
                 }
                 let body = std::mem::replace(&mut arm.body, Box::new(syn::parse_quote!(())));
                 if let syn::Expr::Block(b) = *body {
                     let injected = inject_block(b.block, ctx, counter);
-                    arm.body = Box::new(syn::Expr::Block(syn::ExprBlock {
+                    *arm.body = syn::Expr::Block(syn::ExprBlock {
                         attrs: b.attrs,
                         label: b.label,
                         block: injected,
-                    }));
+                    });
                 } else {
                     // 非 Block 臂体（表达式臂）也递归
-                    arm.body = Box::new(inject_expr_blocks(*body, ctx, counter));
+                    *arm.body = inject_expr_blocks(*body, ctx, counter);
                 }
             }
             syn::Expr::Match(e)
@@ -711,11 +711,11 @@ fn transform_root_closure_with_hash(
 
     // 重建闭包（保留捕获/属性，body 换注入后的块）
     let mut out_closure = closure;
-    out_closure.body = Box::new(syn::Expr::Block(syn::ExprBlock {
+    *out_closure.body = syn::Expr::Block(syn::ExprBlock {
         attrs: Vec::new(),
         label: None,
         block: new_block,
-    }));
+    });
     quote!(#out_closure)
 }
 

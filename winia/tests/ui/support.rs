@@ -15,11 +15,10 @@
 //!
 //! 注意：UI 测试需要图形环境（真实窗口）。
 use winia::layout::LayoutDirection;
-use winia::unit::Size;
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -160,7 +159,7 @@ impl UiTest {
                 .expect("spawn demo 失败");
 
             // stdout 读线程（行 → mpsc）
-            let mut stdout = child.stdout.take().expect("stdout piped");
+            let stdout = child.stdout.take().expect("stdout piped");
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 use std::io::BufRead;
@@ -508,15 +507,14 @@ impl UiTest {
             self.send("r");
             std::thread::sleep(Duration::from_millis(120)); // let the next frame render and be captured
             self.send(&format!("px {x} {y}"));
-            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
-                if let Some((w, h, rx, ry, rgba)) =
+            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800))
+                && let Some((w, h, rx, ry, rgba)) =
                     line.strip_prefix("PIXEL:").and_then(parse_pixel_line)
-                {
-                    // The reply names the point it answered; a read that timed out leaves its line in the
-                    // channel, and the next call would otherwise take that answer for its own.
-                    if (rx, ry) == (x, y) {
-                        return Some((w, h, rgba.0, rgba.1, rgba.2, rgba.3));
-                    }
+            {
+                // The reply names the point it answered; a read that timed out leaves its line in the
+                // channel, and the next call would otherwise take that answer for its own.
+                if (rx, ry) == (x, y) {
+                    return Some((w, h, rgba.0, rgba.1, rgba.2, rgba.3));
                 }
             }
             if Instant::now() >= deadline {
@@ -551,15 +549,14 @@ impl UiTest {
         let mut last = None;
         loop {
             self.send("sem");
-            if let Some(line) = self.read_prefixed_line("SEMANTICS:", Duration::from_millis(800)) {
-                if let Ok(value) =
+            if let Some(line) = self.read_prefixed_line("SEMANTICS:", Duration::from_millis(800))
+                && let Ok(value) =
                     serde_json::from_str::<serde_json::Value>(line.trim_start_matches("SEMANTICS:"))
-                {
-                    if wait(&value) {
-                        return Some(value);
-                    }
-                    last = Some(value);
+            {
+                if wait(&value) {
+                    return Some(value);
                 }
+                last = Some(value);
             }
             if Instant::now() >= deadline {
                 return last;
@@ -581,10 +578,10 @@ impl UiTest {
             self.send("r");
             std::thread::sleep(Duration::from_millis(120));
             self.send(&format!("px {OUT_OF_FRAME} {OUT_OF_FRAME}"));
-            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
-                if let Some(size) = line.strip_prefix("PIXEL:").and_then(parse_frame_size) {
-                    return Some(size);
-                }
+            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800))
+                && let Some(size) = line.strip_prefix("PIXEL:").and_then(parse_frame_size)
+            {
+                return Some(size);
             }
             if Instant::now() >= deadline {
                 return None;
@@ -1626,18 +1623,17 @@ fn for_each_window_scoped(
 
 /// 第一个窗口的根节点（root 可能是数组——取第一个元素；单窗口退化兼容）
 fn root_of(tree: &Value) -> &Value {
-    if let Some(arr) = tree.as_array() {
-        if let Some(first) = arr.first() {
-            if let Some(root) = first.get("root") {
-                // root 值可能是根节点数组——取第一个节点
-                if let Some(rarr) = root.as_array() {
-                    if let Some(node) = rarr.first() {
-                        return node;
-                    }
-                }
-                return root;
-            }
+    if let Some(arr) = tree.as_array()
+        && let Some(first) = arr.first()
+        && let Some(root) = first.get("root")
+    {
+        // root 值可能是根节点数组——取第一个节点
+        if let Some(rarr) = root.as_array()
+            && let Some(node) = rarr.first()
+        {
+            return node;
         }
+        return root;
     }
     tree
 }
@@ -1965,40 +1961,6 @@ fn find_node_in_window(tree: &Value, window_id: u64, label: &str) -> Option<(f32
     found
 }
 
-#[cfg(test)]
-mod pixel_line_parsing {
-    use super::*;
-
-    /// The reply's point is in FRAME (physical) pixels, so it can be far past 255 — parsing it as a byte
-    /// rejected every frame whose centre sat beyond 255 on either axis (a 175%/200% scaled display, a large
-    /// window), which the centre-pixel helper then reported as "no pixel at all".
-    #[test]
-    fn frame_coordinates_are_not_bytes() {
-        assert_eq!(
-            parse_pixel_line("480x330:240 165 20 18 24 255"),
-            Some((480, 330, 240, 165, (20, 18, 24, 255)))
-        );
-        assert_eq!(
-            parse_pixel_line("1920x1080:960 540 253 247 255 255"),
-            Some((1920, 1080, 960, 540, (253, 247, 255, 255)))
-        );
-    }
-
-    /// Both miss forms are "no color"; the size is readable from either of them.
-    #[test]
-    fn misses_are_not_pixels_but_still_name_the_frame() {
-        assert_eq!(parse_pixel_line("none"), None);
-        assert_eq!(parse_pixel_line("480x330:out-of-frame"), None);
-        assert_eq!(parse_pixel_line("480x330:42"), None);
-        assert_eq!(parse_frame_size("480x330:out-of-frame"), Some((480, 330)));
-        assert_eq!(
-            parse_frame_size("480x330:240 165 20 18 24 255"),
-            Some((480, 330))
-        );
-        assert_eq!(parse_frame_size("none"), None);
-    }
-}
-
 /// `vscroll(<offset>)` of the tagged node (its `mod` string), for a tagged SCROLL CONTAINER in a popup
 /// entry.
 ///
@@ -2069,4 +2031,38 @@ fn overlay_text_rect(tree: &Value, text: &str) -> Option<(f32, f32, f32, f32)> {
         }
     });
     found
+}
+
+#[cfg(test)]
+mod pixel_line_parsing {
+    use super::*;
+
+    /// The reply's point is in FRAME (physical) pixels, so it can be far past 255 — parsing it as a byte
+    /// rejected every frame whose centre sat beyond 255 on either axis (a 175%/200% scaled display, a large
+    /// window), which the centre-pixel helper then reported as "no pixel at all".
+    #[test]
+    fn frame_coordinates_are_not_bytes() {
+        assert_eq!(
+            parse_pixel_line("480x330:240 165 20 18 24 255"),
+            Some((480, 330, 240, 165, (20, 18, 24, 255)))
+        );
+        assert_eq!(
+            parse_pixel_line("1920x1080:960 540 253 247 255 255"),
+            Some((1920, 1080, 960, 540, (253, 247, 255, 255)))
+        );
+    }
+
+    /// Both miss forms are "no color"; the size is readable from either of them.
+    #[test]
+    fn misses_are_not_pixels_but_still_name_the_frame() {
+        assert_eq!(parse_pixel_line("none"), None);
+        assert_eq!(parse_pixel_line("480x330:out-of-frame"), None);
+        assert_eq!(parse_pixel_line("480x330:42"), None);
+        assert_eq!(parse_frame_size("480x330:out-of-frame"), Some((480, 330)));
+        assert_eq!(
+            parse_frame_size("480x330:240 165 20 18 24 255"),
+            Some((480, 330))
+        );
+        assert_eq!(parse_frame_size("none"), None);
+    }
 }

@@ -110,7 +110,7 @@ it can still move.",
 
         // ---- 1. plain scrolling + scrollbar + the programmatic API -----------------
         card(ctx, "1. Plain scroll, scrollbar and scroll_by", |ctx| {
-            let scroll = ctx.remember(|| ScrollState::new()).get();
+            let scroll = ctx.remember(ScrollState::new).get();
             let last = ctx.remember(|| State::new(String::from("(no scroll_by yet)"))).get();
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Column::new()
@@ -198,8 +198,8 @@ it can still move.",
 
         // ---- 2. nested scroll ------------------------------------------------------
         card(ctx, "2. Nested: an inner strip inside the outer list", |ctx| {
-            let outer = ctx.remember(|| ScrollState::new()).get();
-            let inner = ctx.remember(|| ScrollState::new()).get();
+            let outer = ctx.remember(ScrollState::new).get();
+            let inner = ctx.remember(ScrollState::new).get();
             Column::new()
                 .modifier(
                     Modifier::new()
@@ -261,7 +261,7 @@ falls through to the outer list, in that order (pre -> child -> post).")
                 ("default (reach 120)", winia::overscroll::OverscrollEffect::new()),
                 ("stiff (reach 40)", winia::overscroll::OverscrollEffect::new().reach(40.0)),
             ] {
-                let scroll = ctx.remember(|| ScrollState::new()).get();
+                let scroll = ctx.remember(ScrollState::new).get();
                 let effect = ctx.remember(move || effect).get();
                 Text::new(label).font_size(11.0).color(MUTED).build(ctx);
                 Column::new()
@@ -289,7 +289,7 @@ fling that dies at an edge bends by velocity/40 through the same curve.",
 
         // ---- 4. keyboard scrolling --------------------------------------------------
         card(ctx, "4. Keyboard scrolling", |ctx| {
-            let scroll = ctx.remember(|| ScrollState::new()).get();
+            let scroll = ctx.remember(ScrollState::new).get();
             Column::new()
                 .modifier(
                     Modifier::new()
@@ -367,7 +367,7 @@ fn main() {
                 .title("Scroll demo")
                 .build(ctx, |ctx| {
                     settings::shell("Scroll", ctx, |ctx| {
-                        let page = ctx.remember(|| ScrollState::new()).get();
+                        let page = ctx.remember(ScrollState::new).get();
                         Column::new()
                             .spacing(12.0)
                             .modifier(
@@ -376,7 +376,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, |ctx| scroll_demo(ctx));
+                            .build(ctx, scroll_demo);
                     });
                 });
         });

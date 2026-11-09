@@ -126,7 +126,7 @@ impl<'p> Morph<'p> {
                 Cubic::from_array(&coordinates)
             };
             if first_cubic.is_none() {
-                first_cubic = Some(cubic.clone());
+                first_cubic = Some(cubic);
             }
             if let Some(last_cubic) = last_cubic {
                 result.push(last_cubic);
@@ -311,7 +311,7 @@ mod morph_tests {
     fn cubics_test() {
         let p1_cubics = &POLY1.cubics;
         let cubics11 = MORPH11.as_cubics(0.0);
-        assert!(cubics11.len() > 0);
+        assert!(!cubics11.is_empty());
         // The structure of a morph and its component shapes may not match exactly, because morph
         // calculations may optimize some of the zero-length curves out. But in general, every
         // curve in the morph *should* exist somewhere in the shape it is based on, so we
@@ -335,7 +335,7 @@ mod morph_tests {
         let shape1 = MaterialShapes::sunny();
         let shape2 = MaterialShapes::heart();
 
-        let morph = Morph::new(&shape1, &shape2);
+        let morph = Morph::new(shape1, shape2);
         let shape_at_50 = morph.as_cubics(0.5);
         print_cubics(&shape_at_50);
     }

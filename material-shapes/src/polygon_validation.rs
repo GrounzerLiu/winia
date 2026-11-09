@@ -1,5 +1,5 @@
 use crate::feature::FeatureTrait;
-use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
+use crate::rounded_polygon::RoundedPolygon;
 
 /// Utility struct to fix invalid [`RoundedPolygon`]s that would otherwise break [`Morph`](crate::morph::Morph)s in
 /// one way or another, as [`RoundedPolygon`] assumes correct input. Correct input means:

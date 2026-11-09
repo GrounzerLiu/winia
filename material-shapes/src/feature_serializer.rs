@@ -234,7 +234,7 @@ impl FeatureSerializer {
         let window_size = 8;
         let window_step = 6;
 
-        let mut point_start = start_index;
+        let point_start = start_index;
         let mut point_end = start_index;
         let mut point_count = 0;
         let mut points: Vec<f32> = Vec::with_capacity(window_size);
@@ -273,7 +273,7 @@ impl FeatureSerializer {
             point_end += 1;
         }
         require(point_count + 1 == window_size, {
-            let needed_points = if serialized[point_start..end_index].parse::<f32>().is_ok() {
+            let _needed_points = if serialized[point_start..end_index].parse::<f32>().is_ok() {
                 window_size - (point_count + 1)
             } else {
                 window_size - point_count

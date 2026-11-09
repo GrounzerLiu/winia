@@ -92,7 +92,7 @@ fn square() -> RoundedPolygon {
 }
 fn slanted() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.926, 0.970), CornerRounding::new(0.189, 0.811)),
             PointNRound::new(
                 Offset::new(-0.021, 0.967),
@@ -117,7 +117,7 @@ fn arch() -> RoundedPolygon {
 }
 fn fan() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(1.004, 1.000), CornerRounding::new(0.148, 0.417)),
             PointNRound::new(Offset::new(0.000, 1.000), CornerRounding::new(0.151, None)),
             PointNRound::new(Offset::new(0.000, -0.003), CornerRounding::new(0.148, None)),
@@ -130,7 +130,7 @@ fn fan() -> RoundedPolygon {
 }
 fn arrow() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.892), CornerRounding::new(0.313, None)),
             PointNRound::new(Offset::new(-0.216, 1.050), CornerRounding::new(0.207, None)),
             PointNRound::new(
@@ -166,7 +166,7 @@ fn oval() -> RoundedPolygon {
 }
 fn pill() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.961, 0.039), CornerRounding::new(0.426, None)),
             PointNRound::new(Offset::new(1.001, 0.428), None),
             PointNRound::new(Offset::new(1.000, 0.609), CornerRounding::new(1.000, None)),
@@ -184,7 +184,7 @@ fn triangle() -> RoundedPolygon {
 }
 fn diamond() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 1.096), CornerRounding::new(0.151, 0.524)),
             PointNRound::new(Offset::new(0.040, 0.500), CornerRounding::new(0.159, None)),
         ],
@@ -195,7 +195,7 @@ fn diamond() -> RoundedPolygon {
 }
 fn clam_shell() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.171, 0.841), CornerRounding::new(0.159, None)),
             PointNRound::new(Offset::new(-0.020, 0.500), CornerRounding::new(0.140, None)),
             PointNRound::new(Offset::new(0.170, 0.159), CornerRounding::new(0.159, None)),
@@ -207,7 +207,7 @@ fn clam_shell() -> RoundedPolygon {
 }
 fn pentagon() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, -0.009), CornerRounding::new(0.172, None)),
             PointNRound::new(Offset::new(1.030, 0.365), CornerRounding::new(0.164, None)),
             PointNRound::new(Offset::new(0.828, 0.970), CornerRounding::new(0.169, None)),
@@ -219,7 +219,7 @@ fn pentagon() -> RoundedPolygon {
 }
 fn gem() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.499, 1.023), CornerRounding::new(0.241, 0.778)),
             PointNRound::new(Offset::new(-0.005, 0.792), CornerRounding::new(0.208, None)),
             PointNRound::new(Offset::new(0.073, 0.258), CornerRounding::new(0.228, None)),
@@ -238,7 +238,7 @@ fn sunny() -> RoundedPolygon {
 }
 fn very_sunny() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 1.080), CornerRounding::new(0.085, None)),
             PointNRound::new(Offset::new(0.358, 0.843), CornerRounding::new(0.085, None)),
         ],
@@ -249,7 +249,7 @@ fn very_sunny() -> RoundedPolygon {
 }
 fn cookie_4() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(1.237, 1.236), CornerRounding::new(0.258, None)),
             PointNRound::new(Offset::new(0.500, 0.918), CornerRounding::new(0.233, None)),
         ],
@@ -260,7 +260,7 @@ fn cookie_4() -> RoundedPolygon {
 }
 fn cookie_6() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.723, 0.884), CornerRounding::new(0.394, None)),
             PointNRound::new(Offset::new(0.500, 1.099), CornerRounding::new(0.398, None)),
         ],
@@ -292,7 +292,7 @@ fn cookie_12() -> RoundedPolygon {
 }
 fn ghostish() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.000), CornerRounding::new(1.000, None)),
             PointNRound::new(Offset::new(1.000, 0.000), CornerRounding::new(1.000, None)),
             PointNRound::new(Offset::new(1.000, 1.140), CornerRounding::new(0.254, 0.106)),
@@ -305,7 +305,7 @@ fn ghostish() -> RoundedPolygon {
 }
 fn clover_4() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.074), None),
             PointNRound::new(Offset::new(0.725, -0.099), CornerRounding::new(0.476, None)),
         ],
@@ -316,7 +316,7 @@ fn clover_4() -> RoundedPolygon {
 }
 fn clover_8() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.036), None),
             PointNRound::new(Offset::new(0.758, -0.101), CornerRounding::new(0.209, None)),
         ],
@@ -327,7 +327,7 @@ fn clover_8() -> RoundedPolygon {
 }
 fn burst() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, -0.006), CornerRounding::new(0.006, None)),
             PointNRound::new(Offset::new(0.592, 0.158), CornerRounding::new(0.006, None)),
         ],
@@ -338,7 +338,7 @@ fn burst() -> RoundedPolygon {
 }
 fn soft_burst() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.193, 0.277), CornerRounding::new(0.053, None)),
             PointNRound::new(Offset::new(0.176, 0.055), CornerRounding::new(0.053, None)),
         ],
@@ -349,7 +349,7 @@ fn soft_burst() -> RoundedPolygon {
 }
 fn boom() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.296), CornerRounding::new(0.007, None)),
             PointNRound::new(Offset::new(0.543, -0.051), CornerRounding::new(0.007, None)),
         ],
@@ -360,7 +360,7 @@ fn boom() -> RoundedPolygon {
 }
 fn soft_boom() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.733, 0.454), None),
             PointNRound::new(Offset::new(0.839, 0.437), CornerRounding::new(0.532, None)),
             PointNRound::new(Offset::new(0.949, 0.449), CornerRounding::new(0.439, 1.000)),
@@ -373,7 +373,7 @@ fn soft_boom() -> RoundedPolygon {
 }
 fn flower() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.370, 0.187), None),
             PointNRound::new(Offset::new(0.416, 0.049), CornerRounding::new(0.381, None)),
             PointNRound::new(Offset::new(0.479, 0.001), CornerRounding::new(0.095, None)),
@@ -387,7 +387,7 @@ fn puffy() -> RoundedPolygon {
     let mut m = Matrix::default();
     m.scale(1.0, 0.742, 1.0);
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.053), None),
             PointNRound::new(Offset::new(0.545, -0.040), CornerRounding::new(0.405, None)),
             PointNRound::new(Offset::new(0.670, -0.035), CornerRounding::new(0.426, None)),
@@ -408,7 +408,7 @@ fn puffy() -> RoundedPolygon {
 }
 fn puffy_diamond() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.870, 0.130), CornerRounding::new(0.146, None)),
             PointNRound::new(Offset::new(0.818, 0.357), None),
             PointNRound::new(Offset::new(1.000, 0.332), CornerRounding::new(0.853, None)),
@@ -420,7 +420,7 @@ fn puffy_diamond() -> RoundedPolygon {
 }
 fn pixel_circle() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.000), None),
             PointNRound::new(Offset::new(0.704, 0.000), None),
             PointNRound::new(Offset::new(0.704, 0.065), None),
@@ -459,7 +459,7 @@ fn pixel_triangle() -> RoundedPolygon {
 }
 fn bun() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.796, 0.500), None),
             PointNRound::new(Offset::new(0.853, 0.518), CornerRounding::new(1.0, None)),
             PointNRound::new(Offset::new(0.992, 0.631), CornerRounding::new(1.0, None)),
@@ -472,7 +472,7 @@ fn bun() -> RoundedPolygon {
 }
 fn heart() -> RoundedPolygon {
     custom_polygon(
-        &vec![
+        &[
             PointNRound::new(Offset::new(0.500, 0.268), CornerRounding::new(0.016, None)),
             PointNRound::new(Offset::new(0.792, -0.066), CornerRounding::new(0.958, None)),
             PointNRound::new(Offset::new(1.064, 0.276), CornerRounding::new(1.000, None)),

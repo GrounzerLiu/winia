@@ -49,7 +49,6 @@ pub fn interpolate(start: f32, stop: f32, fraction: f32) -> f32 {
 
 /// Similar to num % mod, but ensures the result is always positive. For example: 4 % 3 =
 /// positive_modulo(4, 3) = 1, but: -4 % 3 = -1 positive_modulo(-4, 3) = 2
-
 pub fn positive_modulus(num: f32, modulus: f32) -> f32 {
     ((num % modulus) + modulus) % modulus
 }

@@ -58,7 +58,7 @@ pub(crate) fn list_name(label: &str) -> Modifier {
 }
 
 pub(crate) fn palette(i: usize) -> Color {
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         Color::from_argb(255, 90, 160, 220)
     } else {
         Color::from_argb(255, 120, 200, 140)
@@ -66,7 +66,7 @@ pub(crate) fn palette(i: usize) -> Color {
 }
 
 pub(crate) fn accent(i: usize) -> Color {
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         Color::from_argb(255, 220, 150, 90)
     } else {
         Color::from_argb(255, 200, 110, 60)

@@ -178,7 +178,7 @@ impl Cubic {
             // Try Muller's method instead; it can find a single root when a is 0
             if xb != 0.0 {
                 let t = 2.0 * xc / (-2.0 * xb);
-                if t >= 0.0 && t <= 1.0 {
+                if (0.0..=1.0).contains(&t) {
                     let x = self.point_on_curve(t).0;
                     if x < min_x {
                         min_x = x;
@@ -192,7 +192,7 @@ impl Cubic {
             let xs = xb * xb - 4.0 * xa * xc;
             if xs >= 0.0 {
                 let t1 = (-xb + xs.sqrt()) / (2.0 * xa);
-                if t1 >= 0.0 && t1 <= 1.0 {
+                if (0.0..=1.0).contains(&t1) {
                     let x = self.point_on_curve(t1).0;
                     if x < min_x {
                         min_x = x;
@@ -203,7 +203,7 @@ impl Cubic {
                 }
 
                 let t2 = (-xb - xs.sqrt()) / (2.0 * xa);
-                if t2 >= 0.0 && t2 <= 1.0 {
+                if (0.0..=1.0).contains(&t2) {
                     let x = self.point_on_curve(t2).0;
                     if x < min_x {
                         min_x = x;
@@ -224,7 +224,7 @@ impl Cubic {
         if Self::zero_ish(ya) {
             if yb != 0.0 {
                 let t = 2.0 * yc / (-2.0 * yb);
-                if t >= 0.0 && t <= 1.0 {
+                if (0.0..=1.0).contains(&t) {
                     let y = self.point_on_curve(t).1;
                     if y < min_y {
                         min_y = y;
@@ -238,7 +238,7 @@ impl Cubic {
             let ys = yb * yb - 4.0 * ya * yc;
             if ys >= 0.0 {
                 let t1 = (-yb + ys.sqrt()) / (2.0 * ya);
-                if t1 >= 0.0 && t1 <= 1.0 {
+                if (0.0..=1.0).contains(&t1) {
                     let y = self.point_on_curve(t1).1;
                     if y < min_y {
                         min_y = y;
@@ -249,7 +249,7 @@ impl Cubic {
                 }
 
                 let t2 = (-yb - ys.sqrt()) / (2.0 * ya);
-                if t2 >= 0.0 && t2 <= 1.0 {
+                if (0.0..=1.0).contains(&t2) {
                     let y = self.point_on_curve(t2).1;
                     if y < min_y {
                         min_y = y;
@@ -324,7 +324,7 @@ impl Cubic {
     ///
     /// `f` is the [`PointTransformer`] used to transform this [`Cubic`].
     pub fn transformed(&self, f: &PointTransformer) -> Cubic {
-        let mut new_cubic = self.clone();
+        let mut new_cubic = *self;
         new_cubic.transform(f);
         new_cubic
     }

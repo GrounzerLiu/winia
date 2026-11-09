@@ -427,7 +427,7 @@ fn layout_rtl_probe(direction: LayoutDirection) -> Composer {
             ThemeColors::light_from_seed(SEED),
             direction,
             ctx,
-            |ctx| build_rtl_probe(ctx),
+            build_rtl_probe,
         );
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 20.0));

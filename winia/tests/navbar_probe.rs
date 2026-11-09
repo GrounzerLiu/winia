@@ -1,12 +1,11 @@
 //! 临时探针：scaffold_demo 结构下 bottom bar 区域是否被内容侵入
 use winia::components::{
-    Icon, NAVIGATION_BAR_ICON_SIZE, NavigationBar, NavigationBarItem, Scaffold, Text, TopAppBar,
-    TopAppBarScrollBehavior, TopAppBarState,
+    Icon, NavigationBar, NavigationBarItem, Scaffold, Text, TopAppBar, TopAppBarScrollBehavior,
 };
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;
-use winia::runtime::composer::{ComposeCtx, Composer};
+use winia::runtime::composer::Composer;
 use winia::theme::{ThemeColors, WiniaTheme};
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
@@ -30,7 +29,7 @@ fn probe_bar_region_bleed() {
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
         WiniaTheme::with_theme_and_direction(
-            theme.clone(),
+            theme,
             winia::layout::LayoutDirection::Ltr,
             ctx,
             |ctx| {

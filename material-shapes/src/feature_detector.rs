@@ -40,9 +40,9 @@ impl Cubic {
     /// [`Feature::Corner`]. Corner convexity is determined by [`convex`](crate::utils::convex).
     pub fn as_feature(&self, next: &Cubic) -> Feature {
         if self.straight_ish() {
-            Feature::edge(vec![self.clone()])
+            Feature::edge(vec![*self])
         } else {
-            Feature::corner(vec![self.clone()], self.convex_to(next))
+            Feature::corner(vec![*self], self.convex_to(next))
         }
     }
 

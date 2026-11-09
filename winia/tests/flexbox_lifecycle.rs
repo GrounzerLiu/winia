@@ -46,7 +46,7 @@ fn a_config_for_resolver_sees_a_state_change() {
     let mut composer = Composer::new();
     let handle: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut frame = |composer: &mut Composer| {
+    let frame = |composer: &mut Composer| {
         clone!(handle);
         composer.compose(winia::compose!(|ctx| {
             let tall = ctx.remember(|| State::new(false)).get();
@@ -97,7 +97,7 @@ fn a_child_flex_change_reaches_the_parent() {
     let mut composer = Composer::new();
     let handle: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut frame = |composer: &mut Composer| {
+    let frame = |composer: &mut Composer| {
         clone!(handle);
         composer.compose(winia::compose!(|ctx| {
             let grow = ctx.remember(|| State::new(false)).get();
@@ -143,7 +143,7 @@ fn a_resolver_capturing_an_ancestor_value_still_updates() {
     let mut composer = Composer::new();
     let handle: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut frame = |composer: &mut Composer| {
+    let frame = |composer: &mut Composer| {
         clone!(handle);
         composer.compose(winia::compose!(|ctx| {
             let narrow = ctx.remember(|| State::new(false)).get();

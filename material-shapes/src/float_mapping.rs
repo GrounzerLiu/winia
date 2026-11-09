@@ -14,7 +14,7 @@ pub fn progress_in_range(progress: f32, progress_from: f32, progress_to: f32) ->
 /// Maps from one set of progress values to another. This is used by [`DoubleMapper`] to retrieve the
 /// value on one shape that maps to the appropriate value on the other.
 pub fn linear_map(x_value: &[f32], y_value: &[f32], x: f32) -> f32 {
-    require(x >= 0.0 && x <= 1.0, format!("Invalid progress: {}", x));
+    require((0.0..=1.0).contains(&x), format!("Invalid progress: {}", x));
     let segment_start_index = (0..x_value.len())
         .find(|&i| progress_in_range(x, x_value[i], x_value[(i + 1) % x_value.len()]))
         .unwrap();

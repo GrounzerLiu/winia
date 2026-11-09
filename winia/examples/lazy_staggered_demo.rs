@@ -62,7 +62,7 @@ fn tile_height(pattern: u32, index: usize) -> f32 {
         0 => 56.0,
         // Tall: every third tile towers over its neighbours.
         1 => {
-            if index % 3 == 0 {
+            if index.is_multiple_of(3) {
                 132.0
             } else {
                 48.0
@@ -77,7 +77,7 @@ fn tile_height(pattern: u32, index: usize) -> f32 {
 
 #[composable]
 fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
     let lanes = ctx.remember(|| State::new(2u32)).get();
     let count = ctx.remember(|| State::new(40usize)).get();
     let pattern = ctx.remember(|| State::new(3u32)).get();

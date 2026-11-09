@@ -92,7 +92,7 @@ impl SkiaWindowTrait for SoftSkiaWindow {
 
         // SAFETY: `u32` is 4 bytes with no padding, so the slice is exactly `w * h * 4` bytes of
         // pixel memory, and Skia is confined to it by the `ImageInfo` and stride below.
-        let pixels: &mut [u32] = &mut *buffer;
+        let pixels: &mut [u32] = &mut buffer;
         let bytes: &mut [u8] = unsafe {
             std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u8, pixels.len() * 4)
         };

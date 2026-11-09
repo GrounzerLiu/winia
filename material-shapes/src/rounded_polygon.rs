@@ -127,11 +127,11 @@ impl RoundedPolygon {
         let mut last_cubic: Option<Cubic> = None;
         let mut first_feature_split_start: Option<Vec<Cubic>> = None;
         let mut first_feature_split_end: Option<Vec<Cubic>> = None;
-        if features.len() > 0 && features[0].cubics().len() == 3 {
-            let center_cubic = features[0].cubics()[1].clone();
+        if !features.is_empty() && features[0].cubics().len() == 3 {
+            let center_cubic = features[0].cubics()[1];
             let (start, end) = center_cubic.split(0.5);
-            first_feature_split_start = Some(vec![features[0].cubics()[0].clone(), start]);
-            first_feature_split_end = Some(vec![end, features[0].cubics()[2].clone()]);
+            first_feature_split_start = Some(vec![features[0].cubics()[0], start]);
+            first_feature_split_end = Some(vec![end, features[0].cubics()[2]]);
         }
 
         for i in 0..=features.len() {
@@ -306,7 +306,7 @@ impl RoundedPolygon {
         let mut rounded_corners = Vec::new();
         for i in 0..n {
             let vtx_rounding = if let Some(per_vertex_rounding) = &per_vertex_rounding {
-                per_vertex_rounding[i].clone()
+                per_vertex_rounding[i]
             } else {
                 rounding
             };
@@ -449,7 +449,7 @@ impl RoundedPolygon {
 
     /** Creates a copy of the given [RoundedPolygon] */
     pub fn from_polygon(source: &RoundedPolygon) -> RoundedPolygon {
-        RoundedPolygon::new(source.features.clone(), source.center.clone())
+        RoundedPolygon::new(source.features.clone(), source.center)
     }
 
     /// Calculates an estimated center position for the polygon and returns it. This function should
@@ -721,7 +721,7 @@ impl RoundedCorner {
             actual_r,
         )
         .reverse();
-        let c = Cubic::circular_arc(
+        let _c = Cubic::circular_arc(
             self.center.x(),
             self.center.y(),
             flanking0.anchor_1_x(),
@@ -854,16 +854,11 @@ mod rounded_polygon_tests {
     use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
     use crate::tests::{assert_floats_equalish, assert_in_bounds, assert_polygons_equalish};
     use lazy_static::lazy_static;
-    use std::ops::MulAssign;
 
     lazy_static! {
         static ref ROUNDING: CornerRounding = CornerRounding::new(0.1, None);
-        static ref PER_VTX_ROUNDED: Vec<CornerRounding> = vec![
-            ROUNDING.clone(),
-            ROUNDING.clone(),
-            ROUNDING.clone(),
-            ROUNDING.clone()
-        ];
+        static ref PER_VTX_ROUNDED: Vec<CornerRounding> =
+            vec![*ROUNDING, *ROUNDING, *ROUNDING, *ROUNDING];
     }
 
     #[test]
@@ -883,7 +878,7 @@ mod rounded_polygon_tests {
         assert_in_bounds(&double_square.cubics, min, max);
 
         let square_rounded = RoundedPolygonBuilder::from_num_vertices(4)
-            .rounding(ROUNDING.clone())
+            .rounding(*ROUNDING)
             .build();
         min = Point(-1.0, -1.0);
         max = Point(1.0, 1.0);
@@ -915,13 +910,7 @@ mod rounded_polygon_tests {
         ];
 
         assert_panic!({
-            RoundedPolygon::from_vertices(
-                &vec![p0.x(), p0.y(), p1.x(), p1.y()],
-                None,
-                None,
-                None,
-                None,
-            )
+            RoundedPolygon::from_vertices(&[p0.x(), p0.y(), p1.x(), p1.y()], None, None, None, None)
         });
 
         let manual_square = RoundedPolygonBuilder::from_vertices(&verts).build();
@@ -949,7 +938,7 @@ mod rounded_polygon_tests {
         assert_in_bounds(&manual_square_offset.cubics, min, max);
 
         let manual_square_rounded = RoundedPolygonBuilder::from_vertices(&verts)
-            .rounding(ROUNDING.clone())
+            .rounding(*ROUNDING)
             .build();
         min = Point(-1.0, -1.0);
         max = Point(1.0, 1.0);
@@ -1061,8 +1050,7 @@ mod rounded_polygon_tests {
     #[test]
     fn compute_center_test() {
         let polygon =
-            RoundedPolygonBuilder::from_vertices(&vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0])
-                .build();
+            RoundedPolygonBuilder::from_vertices(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]).build();
 
         assert_floats_equalish(0.5, polygon.center_x(), 1e-4, None);
         assert_floats_equalish(0.5, polygon.center_y(), 1e-4, None);
@@ -1336,7 +1324,7 @@ mod polygon_tests {
         let p1 = Point(0.0, 1.0);
         let p2 = Point(-1.0, 0.0);
         let p3 = Point(0.0, -1.0);
-        let manual_square = RoundedPolygonBuilder::from_vertices(&vec![
+        let manual_square = RoundedPolygonBuilder::from_vertices(&[
             p0.x(),
             p0.y(),
             p1.x(),
@@ -1356,7 +1344,7 @@ mod polygon_tests {
         let p1_offset = p1 + offset;
         let p2_offset = p2 + offset;
         let p3_offset = p3 + offset;
-        let manual_square_offset = RoundedPolygonBuilder::from_vertices(&vec![
+        let manual_square_offset = RoundedPolygonBuilder::from_vertices(&[
             p0_offset.x(),
             p0_offset.y(),
             p1_offset.x(),
@@ -1484,7 +1472,7 @@ mod polygon_tests {
 
         // Same as the first polygon test, but with a copy of that polygon
         let square_copy =
-            RoundedPolygonBuilder::from_vertices(&vec![1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0])
+            RoundedPolygonBuilder::from_vertices(&[1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0])
                 .build();
         let square_copy_features = square_copy.features.clone();
         let cubics = square_copy_features
@@ -1509,11 +1497,11 @@ mod polygon_tests {
     #[test]
     fn empty_side_test() {
         let poly1 = RoundedPolygonBuilder::from_vertices(
-            &vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0], // Triangle with one point repeated
+            &[0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0], // Triangle with one point repeated
         )
         .build();
         let poly2 = RoundedPolygonBuilder::from_vertices(
-            &vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0], // Triangle
+            &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], // Triangle
         )
         .build();
         assert_cubic_lists_equalish(&poly1.cubics, &poly2.cubics);
@@ -1522,7 +1510,7 @@ mod polygon_tests {
         let mut result: Vec<Cubic> = Vec::new();
         for cubic in original {
             if !cubic.zero_length() {
-                result.push(cubic.clone());
+                result.push(*cubic);
             }
         }
         result

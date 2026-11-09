@@ -96,7 +96,7 @@ fn button(
 
 /// The two colours a card alternates between, so a reorder is easy to follow.
 fn card_color(key: u64) -> Color {
-    if key % 2 == 0 {
+    if key.is_multiple_of(2) {
         Color::from_argb(255, 92, 126, 196)
     } else {
         Color::from_argb(255, 118, 168, 132)
@@ -141,7 +141,7 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
     let keys = ctx.remember(|| (0u64..INITIAL).collect::<Vec<u64>>());
     let next_key = ctx.remember(|| INITIAL);
     let mode = ctx.remember(|| SpecMode::Default);
-    let list_state = ctx.remember(|| LazyListState::new()).get();
+    let list_state = ctx.remember(LazyListState::new).get();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))

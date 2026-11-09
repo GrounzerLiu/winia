@@ -258,10 +258,11 @@ fn the_selection_paints_handles() {
             for dy in 0..span.1 {
                 let x = from.0 + dx as f32;
                 let y = from.1 + dy as f32;
-                if let Some((r, g, b, _)) = app.pixel_at_logical(x, y) {
-                    if b as i32 > r as i32 + 40 && b > 120 {
-                        return true;
-                    }
+                if let Some((r, _g, b, _)) = app.pixel_at_logical(x, y)
+                    && b as i32 > r as i32 + 40
+                    && b > 120
+                {
+                    return true;
                 }
             }
         }

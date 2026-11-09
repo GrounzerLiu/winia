@@ -57,7 +57,7 @@ pub fn main() {
                 .build(ctx, |ctx| {
                     let items = ctx.remember(|| (0u64..4).collect::<Vec<u64>>());
                     let next_id = ctx.remember(|| 4u64);
-                    let scroll = ctx.remember(|| ScrollState::new()).get();
+                    let scroll = ctx.remember(ScrollState::new).get();
                     Column::new()
                         .modifier(Modifier::new().fill_max_size().padding(24.0))
                         .spacing(16.0)

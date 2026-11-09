@@ -29,15 +29,15 @@ use kit::{INITIAL, PAGES, STEP, accent, action, card, list_name, palette, tile};
 /// these buttons, and a button below the fold cannot be clicked by coordinates.
 #[composable]
 fn lazy_ops_demo(ctx: &mut ComposeCtx) {
-    let page_scroll = ctx.remember(|| ScrollState::new()).get();
+    let page_scroll = ctx.remember(ScrollState::new).get();
     // The data is the source of truth: keys are the item ids, so an insert at the head moves the
     // indices and leaves the anchor on the same ITEM.
     let data = ctx.remember(|| std::sync::Arc::new((0..INITIAL as u64).collect::<Vec<u64>>()));
     let next_key = ctx.remember(|| INITIAL as u64);
-    let main_state = ctx.remember(|| LazyListState::new()).get();
+    let main_state = ctx.remember(LazyListState::new).get();
     let reverse = ctx.remember(|| false);
     let locked = ctx.remember(|| false);
-    let pager_state = ctx.remember(|| LazyListState::new()).get();
+    let pager_state = ctx.remember(LazyListState::new).get();
     let page = ctx.remember(|| 0usize);
 
     Column::new()

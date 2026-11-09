@@ -257,7 +257,7 @@ fn keyframes_card(ctx: &mut ComposeCtx) {
 fn snap_repeat_card(ctx: &mut ComposeCtx) {
     let step = ctx.remember(|| State::new(0i32)).get();
     let x = ctx.animate_int_as_state(
-        step.get() as i32 * 140,
+        step.get() * 140,
         AnimationSpec::Snap(SnapSpec::new(Duration::from_millis(120))),
     );
     let pulse = ctx.remember(|| State::new(0u32)).get();
@@ -584,7 +584,7 @@ fn main() {
                 .title("Animation demo")
                 .build(ctx, |ctx| {
                     settings::shell("Animation", ctx, |ctx| {
-                        let page = ctx.remember(|| ScrollState::new()).get();
+                        let page = ctx.remember(ScrollState::new).get();
                         Column::new()
                             .spacing(12.0)
                             .modifier(
@@ -593,7 +593,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, |ctx| animation_demo(ctx));
+                            .build(ctx, animation_demo);
                     });
                 });
         });

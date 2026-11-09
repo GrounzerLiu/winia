@@ -45,6 +45,12 @@ impl CircleBuilder {
     }
 }
 
+impl Default for CircleBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct RectangleBuilder {
     width: Option<f32>,
     height: Option<f32>,
@@ -105,6 +111,12 @@ impl RectangleBuilder {
             self.center_x,
             self.center_y,
         )
+    }
+}
+
+impl Default for RectangleBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -237,6 +249,12 @@ impl PillBuilder {
     }
 }
 
+impl Default for PillBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct PillStarBuilder {
     width: Option<f32>,
     height: Option<f32>,
@@ -337,6 +355,12 @@ impl PillStarBuilder {
             self.center_x,
             self.center_y,
         )
+    }
+}
+
+impl Default for PillStarBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -473,7 +497,7 @@ impl RoundedPolygon {
             && let Some(inner_rounding) = inner_rounding
         {
             let mut new_pv_rounding = Vec::with_capacity(num_vertices_per_radius * 2);
-            for i in 0..num_vertices_per_radius {
+            for _i in 0..num_vertices_per_radius {
                 new_pv_rounding.push(rounding);
                 new_pv_rounding.push(inner_rounding);
             }
@@ -602,14 +626,14 @@ impl RoundedPolygon {
             "inner_radius must be between 0 and 1",
         );
 
-        let mut pv_rounding = per_vertex_rounding;
+        let pv_rounding = per_vertex_rounding;
         // If no per-vertex rounding supplied and caller asked for inner rounding,
         // create per-vertex rounding list based on supplied outer/inner rounding parameters
         if pv_rounding.is_none()
             && let Some(inner_rounding) = inner_rounding
         {
             let mut new_pv_rounding = Vec::with_capacity(num_vertices_per_radius * 2);
-            for i in 0..num_vertices_per_radius {
+            for _i in 0..num_vertices_per_radius {
                 new_pv_rounding.push(rounding);
                 new_pv_rounding.push(inner_rounding);
             }
@@ -706,7 +730,7 @@ fn pill_star_vertices_from_num_verts(
     let rect_tl = Point(-h_seg_half, -v_seg_half);
     let rect_tr = Point(h_seg_half, -v_seg_half);
     // Each iteration through this loop uses the next t value as we walk around the shape
-    for i in 0..num_vertices_per_radius * 2 {
+    for _i in 0..num_vertices_per_radius * 2 {
         // t could start (and end) after 0; extra boundedT logic makes sure it does the right
         // thing when crossing the boundar past 0 again
         let bounded_t = t % perimeter;
@@ -1027,7 +1051,7 @@ mod shapes_tests {
                 rounding,
                 inner_rounding,
             ];
-            let star = StarBuilder::new(6)
+            let _star = StarBuilder::new(6)
                 .inner_radius(0.5)
                 .per_vertex_rounding(per_vtx_rounded)
                 .build();

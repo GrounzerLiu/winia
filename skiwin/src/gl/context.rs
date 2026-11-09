@@ -15,18 +15,10 @@ use crate::{SkiwinError, SkiwinResult};
 
 use super::renderer::GlRenderer;
 
+#[derive(Default)]
 pub struct GlRenderContext {
     pub display: Option<Display>,
     pub config: Option<Config>,
-}
-
-impl Default for GlRenderContext {
-    fn default() -> Self {
-        Self {
-            display: None,
-            config: None,
-        }
-    }
 }
 
 impl GlRenderContext {

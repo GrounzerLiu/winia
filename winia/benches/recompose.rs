@@ -432,7 +432,7 @@ fn layout_reality(kind: Kind, label: &str) {
 
 fn scaling(kind: Kind, scoped: bool, label: &str) -> Vec<Result> {
     let sizes = [50usize, 200, 800];
-    let mut out = Vec::new();
+    let out = Vec::new();
     println!("--- {label} ---");
     for rows in sizes {
         // Cold: a fresh composer every frame — every group enters, nothing can be skipped.

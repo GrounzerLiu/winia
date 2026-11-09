@@ -86,8 +86,8 @@ fn hcell(ctx: &mut ComposeCtx, tag: String, color: Color) {
 
 #[composable]
 fn lazy_grid_demo(ctx: &mut ComposeCtx) {
-    let vertical = ctx.remember(|| LazyListState::new()).get();
-    let horizontal = ctx.remember(|| LazyListState::new()).get();
+    let vertical = ctx.remember(LazyListState::new).get();
+    let horizontal = ctx.remember(LazyListState::new).get();
     let cells = ctx.remember(|| State::new(3usize)).get();
     let adaptive = ctx.remember(|| State::new(false)).get();
     let count = ctx.remember(|| State::new(62usize)).get();

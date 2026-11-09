@@ -68,7 +68,7 @@ fn block(
 
 #[composable]
 fn box_layout_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
 
     Column::new()
         .modifier(

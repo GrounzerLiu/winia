@@ -125,7 +125,7 @@ fn vertical_band(
 #[composable]
 fn scrollbar_demo(ctx: &mut ComposeCtx) {
     // 1. Default: fades in, thickens and tints on hover, press the track to jump.
-    let fading = ctx.remember(|| ScrollState::new()).get();
+    let fading = ctx.remember(ScrollState::new).get();
     card(
         ctx,
         "1. Default bar: fade, hover thickening, tint, track jump",
@@ -134,7 +134,7 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // 2. Always visible, so the fade of card 1 has a reference.
-    let always = ctx.remember(|| ScrollState::new()).get();
+    let always = ctx.remember(ScrollState::new).get();
     card(
         ctx,
         "2. always_show(true): visible at rest",
@@ -147,7 +147,7 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // 3. Horizontal bar under a wide row.
-    let horizontal = ctx.remember(|| ScrollState::new()).get();
+    let horizontal = ctx.remember(ScrollState::new).get();
     card(
         ctx,
         "3. Horizontal bar",
@@ -184,7 +184,7 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // 4. Lazy list with the adapter: the thumb drags the LIST, not a ScrollState.
-    let lazy_state = ctx.remember(|| LazyListState::new()).get();
+    let lazy_state = ctx.remember(LazyListState::new).get();
     card(
         ctx,
         "4. Lazy column with LazyScrollbar",
@@ -223,7 +223,7 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // 5. Reversed vertical: offset 0 is the END, so the bar's geometry mirrors.
-    let reversed = ctx.remember(|| ScrollState::new()).get();
+    let reversed = ctx.remember(ScrollState::new).get();
     card(
         ctx,
         "5. Reversed vertical (vertical_scroll_reverse)",
@@ -251,7 +251,7 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // 6. Custom look: thicker bar, warm colours, taller minimum thumb.
-    let custom = ctx.remember(|| ScrollState::new()).get();
+    let custom = ctx.remember(ScrollState::new).get();
     card(
         ctx,
         "6. Custom style",
@@ -301,7 +301,7 @@ fn main() {
                 .title("Scrollbar demo")
                 .build(ctx, |ctx| {
                     settings::shell("Scrollbar", ctx, |ctx| {
-                        let page = ctx.remember(|| ScrollState::new()).get();
+                        let page = ctx.remember(ScrollState::new).get();
                         Column::new()
                             .spacing(12.0)
                             .modifier(
@@ -310,7 +310,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, |ctx| scrollbar_demo(ctx));
+                            .build(ctx, scrollbar_demo);
                     });
                 });
         });

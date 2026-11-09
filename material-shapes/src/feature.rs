@@ -231,14 +231,7 @@ impl FeatureTrait for Edge {
     }
 
     fn transformed(&self, f: &PointTransformer) -> Feature {
-        let new_cubics: Vec<Cubic> = self
-            .cubics
-            .iter()
-            .map(|c| {
-                let c = c.transformed(f);
-                c
-            })
-            .collect();
+        let new_cubics: Vec<Cubic> = self.cubics.iter().map(|c| c.transformed(f)).collect();
         Feature::edge(new_cubics)
     }
 
@@ -326,7 +319,6 @@ mod feature_tests {
     use crate::assert_panic;
     use crate::cubic::Cubic;
     use crate::feature::{Feature, FeatureFactory};
-    use std::panic::catch_unwind;
 
     #[test]
     fn cannot_build_empty_features() {
@@ -339,41 +331,35 @@ mod feature_tests {
     fn cannot_build_non_continuous_features() {
         let cubic1 = Cubic::straight_line(0.0, 0.0, 1.0, 1.0);
         let cubic2 = Cubic::straight_line(10.0, 10.0, 11.0, 11.0);
-        assert_panic!({
-            FeatureFactory::build_convex_corner(vec![cubic1.clone(), cubic2.clone()])
-        });
-        assert_panic!({
-            FeatureFactory::build_concave_corner(vec![cubic1.clone(), cubic2.clone()])
-        });
-        assert_panic!({
-            FeatureFactory::build_ignorable_feature(vec![cubic1.clone(), cubic2.clone()])
-        });
+        assert_panic!({ FeatureFactory::build_convex_corner(vec![cubic1, cubic2]) });
+        assert_panic!({ FeatureFactory::build_concave_corner(vec![cubic1, cubic2]) });
+        assert_panic!({ FeatureFactory::build_ignorable_feature(vec![cubic1, cubic2]) });
     }
     #[test]
     fn builds_concave_corner() {
         let cubic = Cubic::straight_line(0.0, 0.0, 1.0, 0.0);
-        let actual = FeatureFactory::build_concave_corner(vec![cubic.clone()]);
+        let actual = FeatureFactory::build_concave_corner(vec![cubic]);
         let expected = Feature::corner(vec![cubic], false);
         assert_eq!(actual, expected);
     }
     #[test]
     fn builds_convex_corner() {
         let cubic = Cubic::straight_line(0.0, 0.0, 1.0, 0.0);
-        let actual = FeatureFactory::build_convex_corner(vec![cubic.clone()]);
+        let actual = FeatureFactory::build_convex_corner(vec![cubic]);
         let expected = Feature::corner(vec![cubic], true);
         assert_eq!(actual, expected);
     }
     #[test]
     fn builds_edge() {
         let cubic = Cubic::straight_line(0.0, 0.0, 1.0, 0.0);
-        let actual = FeatureFactory::build_edge(cubic.clone());
+        let actual = FeatureFactory::build_edge(cubic);
         let expected = Feature::edge(vec![cubic]);
         assert_eq!(actual, expected);
     }
     #[test]
     fn builds_ignorable_as_edge() {
         let cubic = Cubic::straight_line(0.0, 0.0, 1.0, 0.0);
-        let actual = FeatureFactory::build_ignorable_feature(vec![cubic.clone()]);
+        let actual = FeatureFactory::build_ignorable_feature(vec![cubic]);
         let expected = Feature::edge(vec![cubic]);
         assert_eq!(actual, expected);
     }

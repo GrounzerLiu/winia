@@ -28,7 +28,7 @@ use kit::{ITEMS, accent, card, list_name, palette, tile};
 
 #[composable]
 fn lazy_layout_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
 
     Column::new()
         .modifier(
@@ -165,7 +165,7 @@ fn lazy_layout_demo(ctx: &mut ComposeCtx) {
                 "lazy-ltr-row-card",
                 "4. LTR control (scroll it)",
                 |ctx| {
-                    let state = ctx.remember(|| LazyListState::new()).get();
+                    let state = ctx.remember(LazyListState::new).get();
                     LazyRow::new()
                         .state(state.clone())
                         .modifier(

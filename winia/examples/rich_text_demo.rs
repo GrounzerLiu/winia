@@ -254,7 +254,7 @@ fn star() -> SvgDrawable {
 
 #[composable]
 fn rich_text_demo(ctx: &mut ComposeCtx) {
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
     let k = Knobs::remember(ctx);
     let selected = ctx.remember(|| State::new(0usize)).get();
 

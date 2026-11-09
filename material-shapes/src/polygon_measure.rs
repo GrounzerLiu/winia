@@ -89,7 +89,7 @@ impl MeasuredCubic {
             .measurer
             .find_cubic_cut_point(&self.cubic, relative_progress * self.measured_size);
         require(
-            t >= 0.0 && t <= 1.0,
+            (0.0..=1.0).contains(&t),
             "Cubic cut point is expected to be between 0 and 1",
         );
         // c1/c2 are the two new cubics, then we return MeasuredCubics created from them
@@ -183,7 +183,7 @@ impl MeasuredPolygon {
     /// ```
     pub fn cut_and_shift(&self, cutting_point: f32) -> MeasuredPolygon {
         require(
-            cutting_point >= 0.0 && cutting_point < 1.0,
+            (0.0..1.0).contains(&cutting_point),
             "Cutting point is expected to be between 0 and 1",
         );
         // Find the index of cubic we want to cut
@@ -267,12 +267,12 @@ impl MeasuredPolygon {
         for feature in polygon.features.iter() {
             let cubic_count = feature.cubics().len();
             for (cubic_index, cubic) in feature.cubics().iter().enumerate() {
-                if let Feature::Corner(corner) = feature
+                if let Feature::Corner(_corner) = feature
                     && cubic_index == cubic_count / 2
                 {
                     feature_to_cubic.push((feature.clone(), cubics.len()));
                 }
-                cubics.push(cubic.clone());
+                cubics.push(*cubic);
             }
         }
         // TODO(performance): Make changes to satisfy the lint warnings for unnecessary
@@ -320,7 +320,6 @@ impl Deref for MeasuredPolygon {
 
 /// Trait for measuring a cubic. Implementations can use whatever algorithm desired to produce
 /// these measurement values.
-
 pub trait Measurer {
     /// Returns size of given cubic, according to however the implementation wants to measure the
     /// size (angle, length, etc). It has to be greater or equal to 0.
@@ -367,6 +366,12 @@ impl LengthMeasurer {
             prev = point;
         }
         (1.0, total)
+    }
+}
+
+impl Default for LengthMeasurer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -457,7 +462,7 @@ mod polygon_measure_tests {
     #[test]
     fn irregular_triangle_angle_measure() {
         irregular_polygon_measure!(
-            &RoundedPolygonBuilder::from_vertices(&vec![0.0, -1.0, 1.0, 1.0, 0.0, 0.5, -1.0, 1.0,])
+            &RoundedPolygonBuilder::from_vertices(&[0.0, -1.0, 1.0, 1.0, 0.0, 0.5, -1.0, 1.0])
                 .per_vertex_rounding(vec![
                     CornerRounding::new(0.2, 0.5),
                     CornerRounding::new(0.2, 0.5),
@@ -471,16 +476,14 @@ mod polygon_measure_tests {
     #[test]
     fn quarter_angle_measure() {
         irregular_polygon_measure!(
-            &RoundedPolygonBuilder::from_vertices(&vec![
-                -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
-            ])
-            .per_vertex_rounding(vec![
-                CornerRounding::UNROUNDED,
-                CornerRounding::UNROUNDED,
-                CornerRounding::new(0.5, 0.5),
-                CornerRounding::UNROUNDED,
-            ])
-            .build()
+            &RoundedPolygonBuilder::from_vertices(&[-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0])
+                .per_vertex_rounding(vec![
+                    CornerRounding::UNROUNDED,
+                    CornerRounding::UNROUNDED,
+                    CornerRounding::new(0.5, 0.5),
+                    CornerRounding::UNROUNDED,
+                ])
+                .build()
         )
     }
 
@@ -502,7 +505,7 @@ mod polygon_measure_tests {
         let polygon = RoundedPolygonBuilder::from_vertices(&coordinates).build();
         custom_polygon_measure(
             &polygon,
-            &vec![
+            &[
                 diagonal / total,
                 horizontal / total,
                 diagonal / total,

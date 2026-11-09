@@ -32,21 +32,9 @@ fn pixel(surface: &mut skia_safe::Surface, x: i32, y: i32) -> (u8, u8, u8, u8) {
 }
 
 fn color_close(c: (u8, u8, u8), expected: (u8, u8, u8), tolerance: u8) -> bool {
-    let dr = if c.0 > expected.0 {
-        c.0 - expected.0
-    } else {
-        expected.0 - c.0
-    };
-    let dg = if c.1 > expected.1 {
-        c.1 - expected.1
-    } else {
-        expected.1 - c.1
-    };
-    let db = if c.2 > expected.2 {
-        c.2 - expected.2
-    } else {
-        expected.2 - c.2
-    };
+    let dr = c.0.abs_diff(expected.0);
+    let dg = c.1.abs_diff(expected.1);
+    let db = c.2.abs_diff(expected.2);
     dr <= tolerance && dg <= tolerance && db <= tolerance
 }
 
@@ -56,11 +44,11 @@ fn render_ui(w: f32, h: f32, ui: impl FnOnce(&mut ComposeCtx)) -> (skia_safe::Su
     composer.layout(Constraints::new(0.0, w, 0.0, h));
     let mut surface = raster_surface(w as i32, h as i32);
     surface.canvas().clear(skia_safe::Color::WHITE);
-    if let Some(root) = composer.layout_root() {
-        if let Some(root_idx) = composer.layout_root_idx() {
-            let nodes = composer.arena_nodes();
-            render::render(nodes, root_idx, surface.canvas());
-        }
+    if let Some(_root) = composer.layout_root()
+        && let Some(root_idx) = composer.layout_root_idx()
+    {
+        let nodes = composer.arena_nodes();
+        render::render(nodes, root_idx, surface.canvas());
     }
     (surface, composer)
 }
@@ -209,7 +197,7 @@ fn a_wrapped_center_aligns_the_short_line_too() {
         "the short second line must be centred under the first, not left-aligned: line1={line1:?} line2={line2:?}"
     );
     assert!(
-        (line1.0 as i32 + line1.1 as i32) / 2 > 100,
+        (line1.0 + line1.1) / 2 > 100,
         "the first line stays centred: {line1:?}"
     );
 }
@@ -331,7 +319,7 @@ fn text_overflow_ellipsis_stays_inside_its_box() {
         }
     }
     assert!(
-        right >= 0 && right < 41,
+        (0..41).contains(&right),
         "ellipsis text must stay inside the 40 px box, ink reached x={right}"
     );
 }
@@ -599,7 +587,7 @@ fn smoke_render_counter_ui() {
                         });
 
                     // 滚动区域
-                    let scroll = ctx.remember(|| ScrollState::new()).get();
+                    let scroll = ctx.remember(ScrollState::new).get();
                     Column::new()
                         .modifier(Modifier::new().size(200.0, 100.0).vertical_scroll(scroll))
                         .build(ctx, |ctx| {
@@ -692,7 +680,7 @@ fn brush_scene(
     h: f32,
 ) -> skia_safe::Surface {
     let brush = brush.into();
-    let (mut surface, _) = render_ui(
+    let (surface, _) = render_ui(
         w,
         h,
         winia::app_root!(move |ctx| {
@@ -1045,8 +1033,6 @@ fn a_solid_brush_is_the_same_as_a_solid_background() {
 /// DRAWS stays where the first frame drew it, from before the slot had been measured.
 #[test]
 fn a_node_moved_by_a_layout_time_offset_is_painted_at_its_new_position() {
-    use std::sync::Arc;
-
     // A `State`, not a bare atomic: the offset has to be read through the framework's dependency tracking,
     // which is how a slot's measured height reaches the rule.
     let y = winia::runtime::state::State::new(0.0f32);
@@ -1375,7 +1361,7 @@ fn a_text_brush_paints_a_gradient_across_the_glyphs() {
     let (mut first_red, mut last_blue) = (None, None);
     for x in 0..160 {
         for y in 0..60 {
-            let (r, g, b, _) = pixel(&mut surface, x, y);
+            let (r, _g, b, _) = pixel(&mut surface, x, y);
             if r as i32 - b as i32 > 60 && first_red.is_none() {
                 first_red = Some(x);
             }

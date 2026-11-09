@@ -123,7 +123,7 @@ impl MappingHelper {
             .mapping
             .binary_search_by(|(p1, _)| p1.partial_cmp(&f1.progress).unwrap());
         let insertion_index = match index {
-            Ok(i) => panic!("There can't be two features with the same progress"),
+            Ok(_i) => panic!("There can't be two features with the same progress"),
             Err(i) => i,
         };
         let n = self.mapping.len();

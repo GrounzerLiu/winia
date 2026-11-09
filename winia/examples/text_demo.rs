@@ -251,7 +251,7 @@ fn segmented(
 fn text_demo(ctx: &mut ComposeCtx) {
     // Remembered: a fresh ScrollState per build is a new identity every recomposition, so the page
     // could never Skip and the offset would reset on every frame.
-    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let scroll = ctx.remember(ScrollState::new).get();
     let k = Knobs::remember(ctx);
     // on_text_layout writes HERE rather than into a State: a state write during measure asks for a
     // recomposition mid-layout, which the materialiser rejects (the [dup-key] storm). A mutex plus a
