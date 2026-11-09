@@ -77,18 +77,6 @@ fn frame_pixel(
     (pixels[0], pixels[1], pixels[2], pixels[3])
 }
 
-/// Compose + lay out one frame without painting, then report a node-geometry probe.
-fn frame_layout<T>(
-    composer: &mut Composer,
-    ui: &impl Fn(&mut ComposeCtx),
-    size: (f32, f32),
-    probe: impl Fn(&Composer) -> T,
-) -> T {
-    composer.compose(|ctx| ui(ctx));
-    composer.layout(Constraints::new(0.0, size.0, 0.0, size.1));
-    probe(composer)
-}
-
 // ── AnimatedVisibility ──
 
 #[composable]
@@ -349,7 +337,8 @@ fn a_tween_takes_more_than_one_engine_step() {
             break;
         }
         steps += 1;
-        frame_layout(&mut composer, &ui, (100.0, 40.0), |_| {});
+        composer.compose(|ctx| ui(ctx));
+        composer.layout(Constraints::new(0.0, 100.0, 0.0, 40.0));
     }
     assert!(
         steps > 1,
