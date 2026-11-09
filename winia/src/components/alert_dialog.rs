@@ -594,6 +594,7 @@ struct DialogSlots {
 /// so text shorter than its share leaves the column shorter as well.
 ///
 /// The other slots have no weight; Compose gives none either.
+#[composable]
 fn alert_dialog_content(
     ctx: &mut ComposeCtx,
     slots: &DialogSlots,
@@ -1082,5 +1083,82 @@ mod tests {
             DIALOG_MAX_WIDTH - 2.0 * DIALOG_CONTAINER_PADDING,
             "coerced to what it is offered, not measured at its 900 dp request"
         );
+    }
+
+    /// The overlay composer is long-lived: `sync_overlays` dirties the whole content and composes
+    /// the same closure again on the next pass, so the slot tree survives across frames. Changing
+    /// which slots exist therefore shifts every following statement's key, which is the case
+    /// `docs/component-authoring.md` section 1.2 warns produces `[dup-key]`.
+    #[test]
+    fn changing_the_slot_set_across_frames_keeps_the_tree_valid() {
+        let typo = WiniaTheme::typography();
+        let mut c = Composer::new();
+
+        // Frame 1: icon + title + confirm.
+        c.compose(|ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            let theme = WiniaTheme::colors();
+            let slots = DialogSlots {
+                icon: Some(Box::new(fixed_slot(
+                    "icon",
+                    DIALOG_ICON_SIZE,
+                    DIALOG_ICON_SIZE,
+                ))),
+                title: Some(Box::new(fixed_slot("title", 100.0, 20.0))),
+                text: None,
+                confirm_button: Some(Box::new(fixed_slot("ok", 60.0, 40.0))),
+                dismiss_button: None,
+            };
+            let colors = DialogColors {
+                icon: theme.secondary,
+                title: theme.on_surface,
+                text: theme.on_surface_variant,
+                button: theme.primary,
+            };
+            let styles = DialogStyles {
+                title: typo.headline_small.clone(),
+                text: typo.body_medium.clone(),
+                button: typo.label_large.clone(),
+            };
+            // The real tree puts the content inside the surface's Column; without it the slots
+            // would be siblings of the root and `abs_rect` could not reach them.
+            crate::layout::components::Column::new().build(ctx, |ctx| {
+                alert_dialog_content(ctx, &slots, LayoutDirection::Ltr, true, colors, &styles);
+            });
+        });
+
+        // Frame 2: the icon is gone and a text slot appeared, so every child after the icon moves
+        // up one statement.
+        c.mark_content_dirty();
+        c.compose(|ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            let theme = WiniaTheme::colors();
+            let slots = DialogSlots {
+                icon: None,
+                title: Some(Box::new(fixed_slot("title", 100.0, 20.0))),
+                text: Some(Box::new(fixed_slot("body", 200.0, 40.0))),
+                confirm_button: Some(Box::new(fixed_slot("ok", 60.0, 40.0))),
+                dismiss_button: Some(Box::new(fixed_slot("cancel", 70.0, 40.0))),
+            };
+            let colors = DialogColors {
+                icon: theme.secondary,
+                title: theme.on_surface,
+                text: theme.on_surface_variant,
+                button: theme.primary,
+            };
+            let styles = DialogStyles {
+                title: typo.headline_small.clone(),
+                text: typo.body_medium.clone(),
+                button: typo.label_large.clone(),
+            };
+            crate::layout::components::Column::new().build(ctx, |ctx| {
+                alert_dialog_content(ctx, &slots, LayoutDirection::Ltr, false, colors, &styles);
+            });
+        });
+
+        c.layout(Constraints::new(0.0, 800.0, 0.0, 600.0));
+        // The second frame's slots are the ones that must be laid out.
+        let (_, _, w, _) = abs_rect(&c, "body");
+        assert_eq!(w, 200.0, "the text slot of the second frame is present");
     }
 }
