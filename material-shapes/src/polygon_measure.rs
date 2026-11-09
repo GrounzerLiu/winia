@@ -255,6 +255,9 @@ impl MeasuredPolygon {
             ret_outline_progress,
         )
     }
+    // Ported from the upstream Material Shapes implementation, which reuses the type name here;
+    // renaming would drift from that reference.
+    #[allow(clippy::self_named_constructors)]
     pub fn measured_polygon(
         measurer: Rc<dyn Measurer>,
         polygon: &RoundedPolygon,

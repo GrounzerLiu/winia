@@ -54,7 +54,7 @@ impl FeatureSerializer {
      * @param features The list of [Feature] objects to serialize.
      * @return The serialized string representation of the [features]
      */
-    pub fn serialize(features: &Vec<Feature>) -> String {
+    pub fn serialize(features: &[Feature]) -> String {
         let mut result = String::new();
         result.push_str("V1");
         for feature in features.iter() {
@@ -173,7 +173,7 @@ impl FeatureSerializer {
         result
     }
 
-    fn serialize_cubics(cubics: &Vec<Cubic>) -> String {
+    fn serialize_cubics(cubics: &[Cubic]) -> String {
         fn remove_trailing_zeroes(f: f32) -> String {
             let s = format!("{}", f);
             if s.contains('.') {
@@ -239,9 +239,10 @@ impl FeatureSerializer {
         let mut point_count = 0;
         let mut points: Vec<f32> = Vec::with_capacity(window_size);
 
-        // helper values saved in top level to avoid new allocations
-        let mut next_start_x = 0.0;
-        let mut next_start_y = 0.0;
+        // Helper values saved in top level to avoid new allocations. Declared here and assigned
+        // when a window closes; the initial value would never be read.
+        let mut next_start_x;
+        let mut next_start_y;
         let mut cubics: Vec<Cubic> = Vec::new();
 
         let separator_str = Self::SEPARATOR.to_string();

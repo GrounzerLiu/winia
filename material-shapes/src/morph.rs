@@ -64,7 +64,7 @@ impl<'p> Morph<'p> {
     ///
     /// Returns the axis-aligned bounding box for this object, where the rectangle's left, top, right,
     /// and bottom values will be stored in entries 0, 1, 2, and 3, in that order.
-    pub fn calculate_bounds<'b>(&self, approximate: impl Into<Option<bool>>) -> [f32; 4] {
+    pub fn calculate_bounds(&self, approximate: impl Into<Option<bool>>) -> [f32; 4] {
         let approximate = approximate.into().unwrap_or(true);
 
         let bounds_start = self.start.calculate_bounds(approximate);
@@ -116,6 +116,9 @@ impl<'p> Morph<'p> {
         for i in 0..self.morph_match.len() {
             let cubic = {
                 let mut coordinates = [0.0f32; 8];
+                // Indexing two source arrays in lockstep, so a zipped iterator would be less clear
+                // than the explicit index.
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..8 {
                     coordinates[j] = interpolate(
                         self.morph_match[i].0.points[j],
@@ -340,7 +343,7 @@ mod morph_tests {
         print_cubics(&shape_at_50);
     }
 
-    fn print_cubics(cubics: &Vec<Cubic>) {
+    fn print_cubics(cubics: &[Cubic]) {
         for cubic in cubics.iter() {
             println!(
                 "[{}]",

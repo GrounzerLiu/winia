@@ -79,6 +79,10 @@ impl GlRenderContext {
             window,
             surface,
             context,
+            // Skia's DirectContext is not Send/Sync, so this Arc cannot carry it across threads.
+            // It is kept as Arc because renderers are stored in shared window state; switching to
+            // Rc is a threading-model change for skiwin, not a lint cleanup.
+            #[allow(clippy::arc_with_non_send_sync)]
             Arc::new(Mutex::new(skia_ctx)),
         ))
     }

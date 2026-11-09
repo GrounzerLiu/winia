@@ -520,7 +520,7 @@ impl RoundedPolygon {
     ///
     /// Returns the axis-aligned max bounding box for this object, where the rectangle's left, top,
     /// right, and bottom values are stored in entries 0, 1, 2, and 3, in that order.
-    pub fn calculate_max_bounds<'a>(&self) -> [f32; 4] {
+    pub fn calculate_max_bounds(&self) -> [f32; 4] {
         let mut max_dist_squared = 0.0_f32;
         for cubic in &self.cubics {
             let anchor_distance = distance_squared(

@@ -1,3 +1,13 @@
+// The feature detection and serialization modules are implementations kept for later wiring:
+// nothing in Winia calls them yet, so they read as dead code. Marking them here keeps the code
+// without sprinkling per-item allows; remove this once they are wired up.
+//
+// The geometry constructors take long argument lists by nature (vertices, rounding, transforms);
+// splitting them into builder structs would obscure the algorithms they port.
+#![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::doc_overindented_list_items)]
+
 mod corner_rounding;
 mod cubic;
 mod feature;
@@ -129,7 +139,7 @@ pub mod tests {
         );
     }
 
-    pub fn assert_cubic_lists_equalish(expected: &Vec<Cubic>, actual: &Vec<Cubic>) {
+    pub fn assert_cubic_lists_equalish(expected: &[Cubic], actual: &[Cubic]) {
         assert_eq!(expected.len(), actual.len());
         for i in 0..expected.len() {
             assert_cubics_equalish(&expected[i], &actual[i]);
@@ -163,7 +173,7 @@ pub mod tests {
         assert!(actual.y() <= expected.y() + EPSILON);
     }
 
-    pub fn assert_in_bounds(shape: &Vec<Cubic>, min_point: Point, max_point: Point) {
+    pub fn assert_in_bounds(shape: &[Cubic], min_point: Point, max_point: Point) {
         for cubic in shape.iter() {
             assert_point_greaterish(min_point, Point(cubic.anchor_0_x(), cubic.anchor_0_y()));
             assert_point_lessish(max_point, Point(cubic.anchor_0_x(), cubic.anchor_0_y()));

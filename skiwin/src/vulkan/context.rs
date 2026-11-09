@@ -108,6 +108,9 @@ impl VulkanRenderContext {
             )
             .ok_or_else(|| SkiwinError::Vulkan("Skia could not create a Vulkan context".into()))?;
 
+            // Skia's DirectContext is not Send/Sync; see the note in the GL context for why this
+            // stays an Arc.
+            #[allow(clippy::arc_with_non_send_sync)]
             Ok(Arc::new(Mutex::new(direct_context)))
         }
     }

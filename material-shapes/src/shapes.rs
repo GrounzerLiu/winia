@@ -910,7 +910,7 @@ mod shapes_tests {
     }
 
     fn assert_circle_shape(
-        shape: &Vec<Cubic>,
+        shape: &[Cubic],
         radius: impl Into<Option<f32>>,
         center: impl Into<Option<Point>>,
     ) {

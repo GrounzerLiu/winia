@@ -161,6 +161,9 @@ impl VulkanRenderer {
         self.swapchain_is_valid = false;
     }
 
+    // The framebuffer closure genuinely returns Option: a failed view or framebuffer is skipped in
+    // release builds and panics in debug, so `map` is not equivalent.
+    #[allow(clippy::unnecessary_filter_map)]
     pub fn prepare_swapchain(&mut self) {
         let window_size: PhysicalSize<u32> = self.window.surface_size();
         if window_size.width > 0 && window_size.height > 0 && !self.swapchain_is_valid {
