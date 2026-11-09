@@ -173,8 +173,11 @@ slot comes out at the width it is offered and still starts at the padding. winia
 request over the constraints and let the surface's `clip` hide the spill; the alignment with Compose
 removed that, and `required_size` is what a caller reaches for if the spill is wanted.
 
-`confirm_button` is a slot like the rest, so a dialog without one builds (Compose's two-action
-overload requires it; its `content` overload is `BasicAlertDialog` here).
+`confirm_button` is a slot like the rest, so the builder still accepts a dialog without one — but a
+VISIBLE dialog with neither action trips a `debug_assert!`: Compose's two-action overload requires
+`confirmButton` positionally, and a dialog the user can only dismiss has no way to say what it was
+for. Hidden dialogs are exempt, since keeping one built-but-not-shown is normal. (Compose's
+arbitrary-content overload is `BasicAlertDialog` here.)
 
 The surface publishes `role = Dialog`, which is winia's landing for Compose's
 `Modifier.semantics { paneTitle = dialogPaneDescription }` on the dialog Box (`AlertDialog.kt:171`) and

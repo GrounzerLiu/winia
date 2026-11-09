@@ -27,6 +27,12 @@
 //!   `Primary` as a default the buttons may override (Compose notes that `TextButton` uses its
 //!   own colors, which is the usual choice for the two actions).
 //!
+//! **Deliberately not reproduced:** Compose reads `shouldUsePrecisionPointerComponentSizing` and
+//! shrinks the geometry for precise pointers — dialog padding 24 -> 20dp, text padding 24 -> 16dp,
+//! title `headlineSmall` at 20sp/26sp. That flag is an Android input-modality signal; winia has no
+//! equivalent notion of "the user is on a mouse right now", so the touch-sized values above are
+//! used unconditionally. If winia ever adds pointer-kind-aware sizing, this is the place it lands.
+//!
 //! Built on the existing `Dialog` overlay: modal scrim, outside-click dismissal, Escape
 //! handling through the overlay path, and the framework's dialog enter/exit motion
 //! (scale 0.8 + fade, 200ms) come from there.
@@ -344,7 +350,6 @@ pub struct AlertDialog {
     icon_content_color: Option<Color>,
     title_content_color: Option<Color>,
     text_content_color: Option<Color>,
-    button_content_color: Option<Color>,
     modifier: Modifier,
 }
 
@@ -367,7 +372,6 @@ impl AlertDialog {
             icon_content_color: None,
             title_content_color: None,
             text_content_color: None,
-            button_content_color: None,
             modifier: Modifier::new(),
         }
     }
@@ -466,13 +470,6 @@ impl AlertDialog {
         self
     }
 
-    /// Content colour provided to the buttons (default `Primary`). `Button`/`TextButton` set
-    /// their own colours, so this mainly reaches custom content — as in Compose.
-    pub fn button_content_color(mut self, color: Color) -> Self {
-        self.button_content_color = Some(color);
-        self
-    }
-
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
@@ -480,6 +477,15 @@ impl AlertDialog {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
+        // Compose requires `confirmButton` positionally, so a dialog without one cannot be built
+        // there. winia's builder keeps it optional for flexibility, but a visible dialog with no
+        // action at all is almost always a wiring mistake: the user can only dismiss it, and
+        // nothing tells them what the dialog was for. Debug builds surface that.
+        debug_assert!(
+            !self.visible || self.confirm_button.is_some() || self.dismiss_button.is_some(),
+            "AlertDialog is visible but has neither a confirm nor a dismiss button; Compose \
+             requires a confirmButton, so pass one or set visible(false)"
+        );
         let theme = WiniaTheme::colors();
         let direction = self
             .modifier
@@ -497,9 +503,9 @@ impl AlertDialog {
         let text_color = self
             .text_content_color
             .unwrap_or_else(|| AlertDialogDefaults::text_color(&theme));
-        let button_color = self
-            .button_content_color
-            .unwrap_or_else(|| AlertDialogDefaults::button_color(&theme));
+        // Compose's `AlertDialogImpl` passes `DialogTokens.ActionLabelTextColor` here and offers no
+        // parameter for it, so this stays fixed rather than configurable.
+        let button_color = AlertDialogDefaults::button_color(&theme);
         let title_style = WiniaTheme::typography().headline_small;
         let text_style = WiniaTheme::typography().body_medium;
         let button_style = WiniaTheme::typography().label_large;
@@ -704,6 +710,13 @@ mod tests {
 
     /// Compose an AlertDialog (invisible unless `visible`) and hand back the composer.
     fn compose_dialog(dialog: AlertDialog) -> Composer {
+        // A visible dialog without actions trips the debug assertion in `build`, and most tests here
+        // care about geometry rather than the buttons, so give them one unless the test set its own.
+        let dialog = if dialog.confirm_button.is_none() && dialog.dismiss_button.is_none() {
+            dialog.confirm_button(fixed_slot("default-ok", 60.0, 40.0))
+        } else {
+            dialog
+        };
         let mut c = Composer::new();
         c.compose(move |ctx| {
             crate::layout::adaptive::set_window_size(800.0, 600.0);
@@ -778,6 +791,33 @@ mod tests {
             matches!(overlays[0].position, PopupPosition::Center),
             "centred in the window"
         );
+    }
+
+    /// Compose requires `confirmButton` positionally; winia keeps it optional but asserts in debug
+    /// builds, because a visible dialog with no actions can only be dismissed.
+    #[test]
+    #[should_panic(expected = "neither a confirm nor a dismiss button")]
+    fn a_visible_dialog_without_actions_trips_the_debug_assertion() {
+        // Built directly rather than through `compose_dialog`, which fills in a default button.
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            AlertDialog::new(true)
+                .title(fixed_slot("t", 100.0, 20.0))
+                .build(ctx);
+        });
+    }
+
+    /// A hidden dialog is not asserted against: it is common to keep one built but not shown.
+    #[test]
+    fn a_hidden_dialog_without_actions_is_allowed() {
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            AlertDialog::new(false)
+                .title(fixed_slot("t", 100.0, 20.0))
+                .build(ctx);
+        });
+        assert!(c.take_overlays().is_empty());
     }
 
     /// `DialogProperties.dismissOnBackPress` and `isFocusable` reach the overlay, and both default to
