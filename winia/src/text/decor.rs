@@ -5,20 +5,38 @@ use crate::graphics::Color;
 
 /// How a decoration line is drawn (Skia's `TextDecorationStyle`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoStyle { Solid, Double, Dotted, Dashed, Wavy }
+pub enum DecoStyle {
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
 
 /// Whether a decoration goes through the glyph gaps or straight across (Skia's
 /// `TextDecorationMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoMode { Gaps, Through }
+pub enum DecoMode {
+    Gaps,
+    Through,
+}
 
 /// Glyph edge treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontEdge { Alias, AntiAlias, SubpixelAntiAlias }
+pub enum FontEdge {
+    Alias,
+    AntiAlias,
+    SubpixelAntiAlias,
+}
 
 /// Font hinting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontHint { None, Slight, Normal, Full }
+pub enum FontHint {
+    None,
+    Slight,
+    Normal,
+    Full,
+}
 
 /// One resolved run of rich text, with the range it covers.
 ///

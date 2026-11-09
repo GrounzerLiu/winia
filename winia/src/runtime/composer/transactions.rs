@@ -1,7 +1,5 @@
 use super::*;
 
-
-
 pub(super) struct ComposeRuntimeSnapshot {
     pub(super) slot_table: SlotTableRuntimeSnapshot,
     pub(super) current_group_key: u32,
@@ -29,19 +27,26 @@ pub(super) struct ComposeRuntimeTransaction {
 impl ComposeRuntimeTransaction {
     pub(super) fn new(composer: &mut Composer) -> Self {
         composer.compose_transaction = Some(composer.capture_compose_runtime());
-        Self { composer, committed: false }
+        Self {
+            composer,
+            committed: false,
+        }
     }
 
     pub(super) fn commit(&mut self) {
         self.committed = true;
-        unsafe { (*self.composer).compose_transaction = None; }
+        unsafe {
+            (*self.composer).compose_transaction = None;
+        }
     }
 }
 
 impl Drop for ComposeRuntimeTransaction {
     fn drop(&mut self) {
         if !self.committed {
-            unsafe { (*self.composer).rollback_compose_runtime(); }
+            unsafe {
+                (*self.composer).rollback_compose_runtime();
+            }
         }
     }
 }
@@ -172,7 +177,9 @@ impl LayoutTransaction {
     }
 
     unsafe fn rollback(&mut self) {
-        let Some(snapshot) = self.snapshot.take() else { return };
+        let Some(snapshot) = self.snapshot.take() else {
+            return;
+        };
         let composer = unsafe { &mut *self.composer };
 
         composer.pending_states.restore_pending(&snapshot.pending);
@@ -217,7 +224,9 @@ impl Drop for LayoutTransaction {
     fn drop(&mut self) {
         if !self.committed {
             // Rollback must not panic while an application panic is unwinding.
-            unsafe { self.rollback(); }
+            unsafe {
+                self.rollback();
+            }
         }
     }
 }
@@ -270,7 +279,9 @@ impl ComposeDependencyTransaction {
     }
 
     unsafe fn rollback(&mut self) {
-        let Some(snapshot) = self.snapshot.take() else { return };
+        let Some(snapshot) = self.snapshot.take() else {
+            return;
+        };
         let composer = unsafe { &mut *self.composer };
         composer.compose_slot_reads = snapshot.compose_slot_reads;
         composer.slot_deps = snapshot.slot_deps;
@@ -312,7 +323,9 @@ impl Drop for ComposeDependencyTransaction {
     fn drop(&mut self) {
         if !self.committed {
             // Rollback must not panic while another application panic unwinds.
-            unsafe { self.rollback(); }
+            unsafe {
+                self.rollback();
+            }
         }
     }
 }

@@ -2,11 +2,11 @@
 //!
 //! compose + layout 后检查节点的 position、size、children 关系。
 
-use winia::runtime::composer::Composer;
+use winia::components::Text;
 use winia::layout::constraints::Constraints;
-use winia::modifier::Modifier;
-use winia::components::{Text};
 use winia::layout::{Column, Row};
+use winia::modifier::Modifier;
+use winia::runtime::composer::Composer;
 
 #[test]
 fn leaf_node_has_correct_size() {
@@ -137,7 +137,10 @@ fn fill_max_width_expands_to_parent() {
     composer.compose(winia::app_root!(|ctx| {
         Column::new().build(ctx, |ctx| {
             let k1 = ctx.next_key();
-            ctx.start_leaf(k1, Modifier::new().fill_max_width().size(SizeValue::Auto, 20.0));
+            ctx.start_leaf(
+                k1,
+                Modifier::new().fill_max_width().size(SizeValue::Auto, 20.0),
+            );
             ctx.end_node();
         });
     }));
@@ -149,7 +152,10 @@ fn fill_max_width_expands_to_parent() {
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];
     let child = &nodes[root.children[0]];
-    assert_eq!(child.measured_size.width, 300.0, "fill_max_width child should fill parent width");
+    assert_eq!(
+        child.measured_size.width, 300.0,
+        "fill_max_width child should fill parent width"
+    );
 }
 
 #[test]
@@ -163,8 +169,14 @@ fn text_leaf_has_measured_size() {
     let root_idx = composer.layout_root_idx().expect("root exists");
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];
-    assert!(root.measured_size.width > 0.0, "text should have non-zero width");
-    assert!(root.measured_size.height > 0.0, "text should have non-zero height");
+    assert!(
+        root.measured_size.width > 0.0,
+        "text should have non-zero width"
+    );
+    assert!(
+        root.measured_size.height > 0.0,
+        "text should have non-zero height"
+    );
 }
 
 #[test]
@@ -172,20 +184,24 @@ fn nested_column_in_row() {
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
         Row::new().build(ctx, |ctx| {
-            Column::new().modifier(Modifier::new().size(80.0, 60.0)).build(ctx, |ctx| {
-                let k1 = ctx.next_key();
-                ctx.start_leaf(k1, Modifier::new().size(80.0, 30.0));
-                ctx.end_node();
-                let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().size(80.0, 30.0));
-                ctx.end_node();
-            });
+            Column::new()
+                .modifier(Modifier::new().size(80.0, 60.0))
+                .build(ctx, |ctx| {
+                    let k1 = ctx.next_key();
+                    ctx.start_leaf(k1, Modifier::new().size(80.0, 30.0));
+                    ctx.end_node();
+                    let k2 = ctx.next_key();
+                    ctx.start_leaf(k2, Modifier::new().size(80.0, 30.0));
+                    ctx.end_node();
+                });
             // 第二个 Column
-            Column::new().modifier(Modifier::new().fill_max_width().fill_max_height()).build(ctx, |ctx| {
-                let k3 = ctx.next_key();
-                ctx.start_leaf(k3, Modifier::new().fill_max_width().fill_max_height());
-                ctx.end_node();
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .build(ctx, |ctx| {
+                    let k3 = ctx.next_key();
+                    ctx.start_leaf(k3, Modifier::new().fill_max_width().fill_max_height());
+                    ctx.end_node();
+                });
         });
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 60.0));

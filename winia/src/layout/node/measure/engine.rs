@@ -21,8 +21,16 @@ use super::*;
 /// in an 800-row tree whose ROOT was among the hits produced 800 subcompositions and a one-row frame
 /// of 74915 µs, against ≈1600 µs with the subtree marking removed and no hit on the root
 /// (`docs/benchmarks.md` has the tables).
-pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
-    pub(crate) fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>) -> bool {
+pub(crate) fn apply_layout_dirty(
+    nodes: &mut [LayoutNode],
+    root_idx: usize,
+    dirty_keys: &std::collections::HashSet<u64>,
+) {
+    pub(crate) fn walk(
+        nodes: &mut [LayoutNode],
+        idx: usize,
+        dirty_keys: &std::collections::HashSet<u64>,
+    ) -> bool {
         let hit = dirty_keys.contains(&nodes[idx].slot_key);
         if hit {
             nodes[idx].layout_dirty = true;
@@ -45,9 +53,11 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys);
 }
 
-
 impl FlightMeasureFrame {
-    pub(crate) const IDLE: Self = Self { content: None, reported: None };
+    pub(crate) const IDLE: Self = Self {
+        content: None,
+        reported: None,
+    };
     pub(crate) fn is_idle(&self) -> bool {
         self.content.is_none() && self.reported.is_none()
     }
@@ -149,7 +159,10 @@ pub(crate) fn measure_node(
     // changed (`dirty` from the descriptor), and that is what re-measures it — folding an unchanged one
     // is what keeps an idle frame cheap. `layout_dirty` still forces it, which is how a state read
     // during the measurement (`first_measure`, the flight override) reaches it.
-    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+    if !nodes[idx].dirty
+        && !nodes[idx].layout_dirty
+        && nodes[idx].cached_constraints == Some(constraints)
+    {
         return (nodes[idx].measured_size, Vec::new());
     }
     let displaced = crate::layout::subcompose::swap_measuring_node(Some(idx));
@@ -220,7 +233,10 @@ pub(crate) fn measure_node_inner(
     // the same, the previous result is reused (the two-stage dependency: a layout animation value
     // re-measures without recomposing).
     // A subcomposing node is not special-cased here either — see the wrapper's note.
-    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+    if !nodes[idx].dirty
+        && !nodes[idx].layout_dirty
+        && nodes[idx].cached_constraints == Some(constraints)
+    {
         return (nodes[idx].measured_size, Vec::new());
     }
 
@@ -388,7 +404,8 @@ pub(crate) fn measure_node_inner(
                 // here the padding is added on top of the derived box). The chain order is exact:
                 // padding is a step too (`SizeStep::Padding`), so `.padding(8).aspect_ratio(2)`
                 // derives from the DEFLATED constraints, as Compose's node order does.
-                if let Some(size) = aspect_ratio_size(&inner_constraints, ratio, match_height_first) {
+                if let Some(size) = aspect_ratio_size(&inner_constraints, ratio, match_height_first)
+                {
                     inner_constraints = Constraints::fixed(size.width, size.height);
                 }
             }
@@ -415,10 +432,18 @@ pub(crate) fn measure_node_inner(
                     let rtl = nodes[idx].layout_direction == crate::layout::LayoutDirection::Rtl;
                     let width = match side {
                         crate::modifier::InsetSizeSide::Start => {
-                            if rtl { value.right } else { value.left }
+                            if rtl {
+                                value.right
+                            } else {
+                                value.left
+                            }
                         }
                         crate::modifier::InsetSizeSide::End => {
-                            if rtl { value.left } else { value.right }
+                            if rtl {
+                                value.left
+                            } else {
+                                value.right
+                            }
                         }
                         _ => 0.0,
                     };
@@ -507,7 +532,9 @@ pub(crate) fn measure_node_inner(
                 let target_max_w = max_width.unwrap_or(f32::MAX).max(0.0);
                 let target_min_w = min_width.map(|v| v.clamp(0.0, target_max_w)).unwrap_or(0.0);
                 let target_max_h = max_height.unwrap_or(f32::MAX).max(0.0);
-                let target_min_h = min_height.map(|v| v.clamp(0.0, target_max_h)).unwrap_or(0.0);
+                let target_min_h = min_height
+                    .map(|v| v.clamp(0.0, target_max_h))
+                    .unwrap_or(0.0);
                 let (lo_w, hi_w) = (inner_constraints.min_width, inner_constraints.max_width);
                 let (lo_h, hi_h) = (inner_constraints.min_height, inner_constraints.max_height);
                 if enforce_incoming {
@@ -654,7 +681,13 @@ pub(crate) fn measure_node_inner(
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
         let (pad_other_a, pad_other_b) = nodes[idx].modifier.get_padding_horizontal();
         let other = inner_constraints.max_width + pad_other_a + pad_other_b;
-        let mut h = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
+        let mut h = intrinsic_size_of(
+            nodes,
+            policies,
+            idx,
+            IntrinsicQuery::for_height(size),
+            other,
+        );
         if enforce_incoming {
             h = match intrinsic_incoming_height {
                 Some((lo, hi)) => h.clamp(lo, hi),
@@ -728,7 +761,10 @@ pub(crate) fn measure_node_inner(
         // AND the gesture delta, so the two ends of the offset range keep one meaning.
         if nodes[idx].modifier.vertical_scroll_state().is_some() {
             nodes[idx].scroll_reverse = nodes[idx].modifier.is_lazy_scroll_reverse()
-                || nodes[idx].modifier.is_vertical_scroll_reversed().unwrap_or(false);
+                || nodes[idx]
+                    .modifier
+                    .is_vertical_scroll_reversed()
+                    .unwrap_or(false);
         }
         if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_height = ch.get();
@@ -805,12 +841,16 @@ pub(crate) fn measure_node_inner(
         if let Some(sub) = nodes[idx].subcomposed_child {
             children.retain(|&c| c != sub);
         }
-        let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
+        let (size, placements) =
+            policies[pidx].measure(nodes, policies, &children, inner_constraints);
         // After measuring, sync a lazy list's content height/width into the node fields (the render
         // pass's reverse translate and apply_scroll_delta depend on them). `measure_node` reads the
         // previous frame's value at the top, so a 0 on the first frame makes a reverseLayout translate
-         // wrongly and pushes the whole content out of the viewport.
-        let content_h_state = nodes[idx].modifier.lazy_scroll_content_height().map(|s| s.get());
+        // wrongly and pushes the whole content out of the viewport.
+        let content_h_state = nodes[idx]
+            .modifier
+            .lazy_scroll_content_height()
+            .map(|s| s.get());
         if let Some(v) = content_h_state {
             nodes[idx].scroll_content_height = v;
             nodes[idx].scroll_content_width = v;
@@ -901,7 +941,9 @@ pub(crate) fn measure_node_inner(
             let mut content_h = 0.0f32;
             for &c in &children {
                 let b = nodes[c].position.y + nodes[c].measured_size.height;
-                if b > content_h { content_h = b; }
+                if b > content_h {
+                    content_h = b;
+                }
             }
             if content_h > 0.0 {
                 content_h += pad_bottom;
@@ -935,7 +977,9 @@ pub(crate) fn measure_node_inner(
             let mut content_w = 0.0f32;
             for &c in &children {
                 let right = nodes[c].position.x + nodes[c].measured_size.width;
-                if right > content_w { content_w = right; }
+                if right > content_w {
+                    content_w = right;
+                }
             }
             if content_w > 0.0 {
                 content_w += pad_end;
@@ -981,10 +1025,14 @@ pub(crate) fn measure_node_inner(
             // box fits the constraints, and cache THAT paragraph. The search runs here because
             // this arm is the only place that knows the constraints; a leaf without the parameter
             // takes the single measure below.
-            let auto_size = nodes[idx].modifier.elements().iter().find_map(|el| match el {
-                ModifierElement::TextContent { auto_size, .. } => *auto_size,
-                _ => None,
-            });
+            let auto_size = nodes[idx]
+                .modifier
+                .elements()
+                .iter()
+                .find_map(|el| match el {
+                    ModifierElement::TextContent { auto_size, .. } => *auto_size,
+                    _ => None,
+                });
             let measured = match auto_size {
                 Some((min, max)) if max > min => {
                     let min = min.max(1.0);
@@ -995,8 +1043,11 @@ pub(crate) fn measure_node_inner(
                     // microseconds; a binary search would need the height to be monotonic in the
                     // size, which wrapping does not guarantee.
                     while size > min {
-                        let candidate = measure_and_cache_text_at(&nodes[idx], layout_width, Some(size));
-                        if candidate.size.width <= box_w + 0.5 && candidate.size.height <= box_h + 0.5 {
+                        let candidate =
+                            measure_and_cache_text_at(&nodes[idx], layout_width, Some(size));
+                        if candidate.size.width <= box_w + 0.5
+                            && candidate.size.height <= box_h + 0.5
+                        {
                             break;
                         }
                         size = (size - 1.0).max(min);
@@ -1050,16 +1101,16 @@ pub(crate) fn measure_node_inner(
             // the filled width (measured before this fix: 12 where the box was 300). The callback
             // is fired from here because this arm is the only place that knows the constraints.
             let result = crate::text::TextLayoutResult {
-                    size: final_text_size,
-                    text_size: measured.text_size,
-                    line_count: measured.line_count,
-                    did_exceed_max_lines: measured.did_exceed_max_lines,
-                    first_baseline: measured.first_baseline,
-                    last_baseline: measured.last_baseline,
-                    // Compose's `didOverflowWidth` / `didOverflowHeight`: the laid-out text is
-                    // wider or taller than the box it was measured into.
-                    did_overflow_width: measured.longest_line > final_text_size.width + 0.5,
-                    did_overflow_height: measured.size.height > final_text_size.height + 0.5,
+                size: final_text_size,
+                text_size: measured.text_size,
+                line_count: measured.line_count,
+                did_exceed_max_lines: measured.did_exceed_max_lines,
+                first_baseline: measured.first_baseline,
+                last_baseline: measured.last_baseline,
+                // Compose's `didOverflowWidth` / `didOverflowHeight`: the laid-out text is
+                // wider or taller than the box it was measured into.
+                did_overflow_width: measured.longest_line > final_text_size.width + 0.5,
+                did_overflow_height: measured.size.height > final_text_size.height + 0.5,
             };
             if let Some(callback) = &measured.on_text_layout {
                 callback(&result);
@@ -1084,27 +1135,26 @@ pub(crate) fn measure_node_inner(
         } else if nodes[idx].has_image_content {
             // An Image leaf: its intrinsic size (bitmap pixels or the SVG viewBox), clamped by the
             // constraints.
-            let (iw, ih) = nodes[idx].modifier.image_intrinsic_size().unwrap_or((0.0, 0.0));
+            let (iw, ih) = nodes[idx]
+                .modifier
+                .image_intrinsic_size()
+                .unwrap_or((0.0, 0.0));
             Size::new(
                 inner_constraints.constrain_width(iw),
                 inner_constraints.constrain_height(ih),
             )
         } else {
             // A plain leaf
-            let w = inner_constraints.constrain_width(
-                if inner_constraints.has_fixed_width() {
-                    inner_constraints.min_width
-                } else {
-                    0.0
-                },
-            );
-            let h = inner_constraints.constrain_height(
-                if inner_constraints.has_fixed_height() {
-                    inner_constraints.min_height
-                } else {
-                    0.0
-                },
-            );
+            let w = inner_constraints.constrain_width(if inner_constraints.has_fixed_width() {
+                inner_constraints.min_width
+            } else {
+                0.0
+            });
+            let h = inner_constraints.constrain_height(if inner_constraints.has_fixed_height() {
+                inner_constraints.min_height
+            } else {
+                0.0
+            });
             Size::new(w, h)
         };
 
@@ -1152,7 +1202,8 @@ pub(crate) fn measure_node_inner(
                 let (pad_s, pad_t, pad_e, _pad_b) = nodes[idx].resolved_padding;
                 let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
                 let left = if rtl { pad_e } else { pad_s };
-                nodes[idx].content_box_override = Some((left + dx, pad_t + dy, inner.width, inner.height));
+                nodes[idx].content_box_override =
+                    Some((left + dx, pad_t + dy, inner.width, inner.height));
             } else {
                 let kids = nodes[idx].children.clone();
                 for c in kids {
@@ -1205,15 +1256,26 @@ pub(crate) fn measure_node_inner(
         let horizontal = line.horizontal;
         let size = result.0;
         let axis = if horizontal { size.height } else { size.width };
-        let axis_max = if horizontal { inner_constraints.max_height } else { inner_constraints.max_width };
+        let axis_max = if horizontal {
+            inner_constraints.max_height
+        } else {
+            inner_constraints.max_width
+        };
         // The minimum the padding must honour — the one from BEFORE the relaxation above, since the
         // content was measured without it.
-        let min_axis = if horizontal { pad_from_min_height } else { pad_from_min_width };
+        let min_axis = if horizontal {
+            pad_from_min_height
+        } else {
+            pad_from_min_width
+        };
         let line_position = nodes[idx].alignment_line(line).unwrap_or(0.0);
-        let padding_before = (before.unwrap_or(0.0) - line_position).clamp(0.0, (axis_max - axis).max(0.0));
+        let padding_before =
+            (before.unwrap_or(0.0) - line_position).clamp(0.0, (axis_max - axis).max(0.0));
         let padding_after = (after.unwrap_or(0.0) - axis + line_position)
             .clamp(0.0, (axis_max - axis - padding_before).max(0.0));
-        let grown = (padding_before + axis + padding_after).max(min_axis).max(axis);
+        let grown = (padding_before + axis + padding_after)
+            .max(min_axis)
+            .max(axis);
         let placed_at = if before.is_some() {
             padding_before
         } else {
@@ -1225,7 +1287,11 @@ pub(crate) fn measure_node_inner(
         if leaf_box.is_none() && nodes[idx].children.is_empty() {
             let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].resolved_padding;
             leaf_box = Some((
-                if nodes[idx].layout_direction == LayoutDirection::Rtl { pad_e } else { pad_s },
+                if nodes[idx].layout_direction == LayoutDirection::Rtl {
+                    pad_e
+                } else {
+                    pad_s
+                },
                 pad_t,
                 (size.width - pad_s - pad_e).max(0.0),
                 (size.height - pad_t - pad_b).max(0.0),
@@ -1327,7 +1393,8 @@ pub(crate) fn measure_node_inner(
                 if let Some((ix, iy, _iw, _ih)) = leaf_box.as_mut() {
                     *ix += cx;
                     *iy += cy;
-                    nodes[idx].content_box_override = Some((*ix, *iy, content.width, content.height));
+                    nodes[idx].content_box_override =
+                        Some((*ix, *iy, content.width, content.height));
                 } else {
                     let kids = nodes[idx].children.clone();
                     for c in kids {
@@ -1362,7 +1429,10 @@ pub(crate) fn measure_node_inner(
     // Report the size (Compose's onSizeChanged) once the final size is settled. The constant-fold
     // early exit does not come through here — an unchanged size needs no report — and the element
     // deduplicates again.
-    let (rw, rh) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
+    let (rw, rh) = (
+        nodes[idx].measured_size.width,
+        nodes[idx].measured_size.height,
+    );
     nodes[idx].modifier.report_measured_size(rw, rh);
 
     // Flight layout contract (Compose `PlaceHolderSize`): `reported` is the size
@@ -1372,11 +1442,14 @@ pub(crate) fn measure_node_inner(
     // keep the size the content was really measured at, so it lives in
     // `flight_content_size` instead: parents legitimately re-clobber
     // `measured_size` with the size they placed us at (`place()`).
-    nodes[idx].flight_content_size = if flight.is_some() { Some(result.0) } else { None };
+    nodes[idx].flight_content_size = if flight.is_some() {
+        Some(result.0)
+    } else {
+        None
+    };
     if let Some(reported) = flight.and_then(|f| f.reported) {
         nodes[idx].measured_size = reported;
         result.0 = reported;
     }
     result
 }
-

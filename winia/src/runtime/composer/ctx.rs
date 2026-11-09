@@ -81,9 +81,7 @@ impl<'a> AndroidUi<'a> {
 
 impl<'a> ComposeCtx<'a> {
     pub(crate) fn new(composer: &'a mut Composer) -> Self {
-        Self {
-            composer,
-        }
+        Self { composer }
     }
 
     /// The frame clock of this composition's window.
@@ -131,11 +129,12 @@ impl<'a> ComposeCtx<'a> {
         self.composer.lifecycle.clone()
     }
 
-
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
     pub fn remember<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> State<T> {
         let slot_key = self.next_remember_key();
-        self.composer.slot_table.remember(slot_key, || State::new(init()))
+        self.composer
+            .slot_table
+            .remember(slot_key, || State::new(init()))
     }
 
     /// Run `f` when the slot being composed RIGHT NOW is dropped — a lifecycle hook that costs no
@@ -151,7 +150,9 @@ impl<'a> ComposeCtx<'a> {
     /// which is what a recomposition needs.
     pub fn remember_on_forget(&mut self, f: impl FnOnce() + Send + 'static) {
         let slot_key = self.next_remember_key();
-        self.composer.slot_table.remember_on_forget(slot_key, Box::new(f));
+        self.composer
+            .slot_table
+            .remember_on_forget(slot_key, Box::new(f));
     }
 
     /// Tie a motion to the CURRENT slot: when the slot is forgotten — the branch changed shape, the
@@ -202,18 +203,23 @@ impl<'a> ComposeCtx<'a> {
         let caller_group = self.composer.current_group_key;
         self.composer.slot_table.begin_movable(key, id);
         self.composer.movable_saved_skip_depth = self.composer.group_skip_stack.len();
-        self.composer.movable_saved_path_counters = std::mem::take(&mut self.composer.path_counters);
-        self.composer.movable_saved_remember_counters = std::mem::take(&mut self.composer.remember_path_counters);
+        self.composer.movable_saved_path_counters =
+            std::mem::take(&mut self.composer.path_counters);
+        self.composer.movable_saved_remember_counters =
+            std::mem::take(&mut self.composer.remember_path_counters);
         self.composer.movable_saved_params = std::mem::take(&mut self.composer.pending_params);
-        self.composer.movable_saved_pending_next = std::mem::replace(&mut self.composer.pending_next, 0);
+        self.composer.movable_saved_pending_next =
+            std::mem::replace(&mut self.composer.pending_next, 0);
         self.composer.movable_saved_group_key = caller_group;
         self.composer.movable_saved_active = caller_active;
         // A placement owns its identities and dependency targets; inherited CompositionLocals remain
         // available, but caller statement/explicit-key/group stacks must not enter the stored tree.
         self.composer.movable_saved_scopes = std::mem::take(&mut self.composer.scope_source_stack);
-        self.composer.movable_saved_stmts = STMT_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        self.composer.movable_saved_stmts =
+            STMT_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
         self.composer.movable_saved_keys = std::mem::take(&mut self.composer.key_override_stack);
-        self.composer.movable_saved_groups = GROUP_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        self.composer.movable_saved_groups =
+            GROUP_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
         let root = self.composer.slot_table.current_slot().key;
         self.composer.slot_table.active_slot_key = root;
         ACTIVE_SLOT_KEY.with(|s| s.set(root));
@@ -236,13 +242,19 @@ impl<'a> ComposeCtx<'a> {
     fn restore_movable_context(&mut self) {
         self.composer.scope_source_stack = std::mem::take(&mut self.composer.movable_saved_scopes);
         self.composer.key_override_stack = std::mem::take(&mut self.composer.movable_saved_keys);
-        STMT_STACK.with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_stmts));
-        GROUP_STACK.with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_groups));
-        self.composer.path_counters = std::mem::take(&mut self.composer.movable_saved_path_counters);
-        self.composer.remember_path_counters = std::mem::take(&mut self.composer.movable_saved_remember_counters);
+        STMT_STACK
+            .with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_stmts));
+        GROUP_STACK
+            .with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_groups));
+        self.composer.path_counters =
+            std::mem::take(&mut self.composer.movable_saved_path_counters);
+        self.composer.remember_path_counters =
+            std::mem::take(&mut self.composer.movable_saved_remember_counters);
         self.composer.pending_params = std::mem::take(&mut self.composer.movable_saved_params);
         self.composer.pending_next = self.composer.movable_saved_pending_next;
-        self.composer.group_skip_stack.truncate(self.composer.movable_saved_skip_depth);
+        self.composer
+            .group_skip_stack
+            .truncate(self.composer.movable_saved_skip_depth);
         self.composer.current_group_key = self.composer.movable_saved_group_key;
         self.composer.slot_table.active_slot_key = self.composer.movable_saved_active;
         ACTIVE_SLOT_KEY.with(|s| s.set(self.composer.movable_saved_active));
@@ -256,9 +268,9 @@ impl<'a> ComposeCtx<'a> {
         init: impl FnOnce() -> T,
     ) -> crate::runtime::state::Backchannel<T> {
         let slot_key = self.next_remember_key();
-        self.composer.slot_table.remember_handle(slot_key, || {
-            crate::runtime::state::Backchannel::new(init())
-        })
+        self.composer
+            .slot_table
+            .remember_handle(slot_key, || crate::runtime::state::Backchannel::new(init()))
     }
 
     /// Remember an animation-tick handle: recompose without waking the event
@@ -268,9 +280,9 @@ impl<'a> ComposeCtx<'a> {
         init: impl FnOnce() -> T,
     ) -> crate::runtime::state::Animating<T> {
         let slot_key = self.next_remember_key();
-        self.composer.slot_table.remember_handle(slot_key, || {
-            crate::runtime::state::Animating::new(init())
-        })
+        self.composer
+            .slot_table
+            .remember_handle(slot_key, || crate::runtime::state::Animating::new(init()))
     }
 
     /// Remember a draw-layer handle: writes land without recomposition
@@ -280,9 +292,9 @@ impl<'a> ComposeCtx<'a> {
         init: impl FnOnce() -> T,
     ) -> crate::runtime::state::Visual<T> {
         let slot_key = self.next_remember_key();
-        self.composer.slot_table.remember_handle(slot_key, || {
-            crate::runtime::state::Visual::new(init())
-        })
+        self.composer
+            .slot_table
+            .remember_handle(slot_key, || crate::runtime::state::Visual::new(init()))
     }
 
     /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
@@ -399,8 +411,14 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
-    pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
-        self.composer.slot_table.remember(key, || State::new(init()))
+    pub fn remember_at_key<T: Clone + 'static>(
+        &mut self,
+        key: u64,
+        init: impl FnOnce() -> T,
+    ) -> State<T> {
+        self.composer
+            .slot_table
+            .remember(key, || State::new(init()))
     }
 
     /// 生成下一个组合 key（公开 API，用于 start_node）
@@ -446,7 +464,9 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.start_scope(key);
         self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
-        ScopeGuard { composer: self.composer as *mut Composer }
+        ScopeGuard {
+            composer: self.composer as *mut Composer,
+        }
     }
 
     /// 调用链版 RAII scope 开始：scope key = 当前调用链哈希（try_stable_base）
@@ -467,19 +487,26 @@ impl<'a> ComposeCtx<'a> {
             *ordinal += 1;
             key
         } else {
-            self.composer.try_stable_base().unwrap_or_else(|| self.composer.namespace_key_base(fallback_hash))
+            self.composer
+                .try_stable_base()
+                .unwrap_or_else(|| self.composer.namespace_key_base(fallback_hash))
         };
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_SCOPE_TRACE").is_ok() {
             let stack = STMT_STACK.with(|s| s.borrow().clone());
             let src = self.composer.scope_source_stack.last().and_then(|s| *s);
-            eprintln!("[scope] fallback={:#x} key={:#x} src={:?} stmt_stack={:?}", fallback_hash, key, src, stack);
+            eprintln!(
+                "[scope] fallback={:#x} key={:#x} src={:?} stmt_stack={:?}",
+                fallback_hash, key, src, stack
+            );
         }
         self.composer.scope_source_stack.push(Some(key));
         self.composer.slot_table.start_scope(key);
         self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
-        ScopeGuard { composer: self.composer as *mut Composer }
+        ScopeGuard {
+            composer: self.composer as *mut Composer,
+        }
     }
 
     /// `#[composable]` 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
@@ -504,7 +531,10 @@ impl<'a> ComposeCtx<'a> {
         let seq = self.composer.slot_table.sibling_position();
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_STMT_TRACE").is_ok() {
-            eprintln!("[stmt] compose={} id={} seq={}", self.composer.compose_count, id, seq);
+            eprintln!(
+                "[stmt] compose={} id={} seq={}",
+                self.composer.compose_count, id, seq
+            );
         }
         STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
         StmtGuard
@@ -518,7 +548,9 @@ impl<'a> ComposeCtx<'a> {
 
     /// `#[composable]` 宏注入：退出语句（与 push_stmt 配对）
     pub fn pop_stmt(&mut self) {
-        STMT_STACK.with(|s| { s.borrow_mut().pop(); });
+        STMT_STACK.with(|s| {
+            s.borrow_mut().pop();
+        });
     }
 
     /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
@@ -583,7 +615,6 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
-
     /// 参数比较（对标 Compose `$composer.changed(param)`）。
     ///
     /// 在 start 组件**前**调用（参数求值处）：与"即将 start 的 slot"上帧记录的参数
@@ -608,7 +639,12 @@ impl<'a> ComposeCtx<'a> {
         let param_idx = self.composer.pending_next;
         let unchanged = {
             let idx = *self.composer.slot_table.child_counters.last().unwrap_or(&0);
-            let prev = self.composer.slot_table.current_slot().children.get(idx)
+            let prev = self
+                .composer
+                .slot_table
+                .current_slot()
+                .children
+                .get(idx)
                 .and_then(|c| c.params.get(param_idx))
                 .map(|p| p.eq_any(param));
             prev == Some(true)
@@ -725,7 +761,11 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// animateFloatAsState — 动画浮点值到目标值
-    pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
+    pub fn animate_float_as_state(
+        &mut self,
+        target: f32,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<f32> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
@@ -742,7 +782,8 @@ impl<'a> ComposeCtx<'a> {
         spec: crate::animation::AnimationSpec,
         done: impl FnOnce() + Send + 'static,
     ) -> State<f32> {
-        self.animate_value_as_state_with_done(target, spec, done).into_state()
+        self.animate_value_as_state_with_done(target, spec, done)
+            .into_state()
     }
 
     /// `animateValueAsState` + the completion callback (Compose's `finishedListener`); any
@@ -770,11 +811,16 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
-    pub fn animate_color_as_state(&mut self, target: crate::graphics::Color, spec: crate::animation::AnimationSpec) -> State<crate::graphics::Color> {
+    pub fn animate_color_as_state(
+        &mut self,
+        target: crate::graphics::Color,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<crate::graphics::Color> {
         let slot_key = self.next_remember_key();
-        let handle = self.composer.slot_table.remember_handle(slot_key, || {
-            crate::runtime::state::Animating::new(target)
-        });
+        let handle = self
+            .composer
+            .slot_table
+            .remember_handle(slot_key, || crate::runtime::state::Animating::new(target));
         self.own_motion(handle.state_id());
         crate::animation::push_animatable_color(
             crate::runtime::state::State::from_raw(handle.as_raw().clone()),
@@ -785,22 +831,38 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// animateDpAsState — 动画 Dp 值（对标 Compose animateDpAsState）
-    pub fn animate_dp_as_state(&mut self, target: crate::unit::Dp, spec: crate::animation::AnimationSpec) -> State<crate::unit::Dp> {
+    pub fn animate_dp_as_state(
+        &mut self,
+        target: crate::unit::Dp,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<crate::unit::Dp> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateOffsetAsState — 动画 Offset 值（对标 Compose animateOffsetAsState）
-    pub fn animate_offset_as_state(&mut self, target: crate::unit::Offset, spec: crate::animation::AnimationSpec) -> State<crate::unit::Offset> {
+    pub fn animate_offset_as_state(
+        &mut self,
+        target: crate::unit::Offset,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<crate::unit::Offset> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateSizeAsState — 动画 Size 值（对标 Compose animateSizeAsState）
-    pub fn animate_size_as_state(&mut self, target: crate::unit::Size, spec: crate::animation::AnimationSpec) -> State<crate::unit::Size> {
+    pub fn animate_size_as_state(
+        &mut self,
+        target: crate::unit::Size,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<crate::unit::Size> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
-    pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
+    pub fn animate_int_as_state(
+        &mut self,
+        target: i32,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<i32> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
@@ -823,7 +885,10 @@ impl<'a> ComposeCtx<'a> {
     /// 设置当前节点的 IME 预输入回调
     /// 设置当前节点的 IME 预输入回调（app.rs 的 Ime::Preedit 直接调用）。
     /// desc 通道（组合期无 arena 节点）
-    pub fn set_current_node_ime_callback(&mut self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
+    pub fn set_current_node_ime_callback(
+        &mut self,
+        callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>,
+    ) {
         if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
             desc.ime_callback = Some(callback);
         }
@@ -875,7 +940,11 @@ impl<'a> ComposeCtx<'a> {
             }
             None => self.composer.panic_no_stable_key("remember"),
         };
-        let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
+        let counter = self
+            .composer
+            .remember_path_counters
+            .entry(base)
+            .or_insert(0);
         let c = *counter;
         *counter += 1;
         #[cfg(debug_assertions)]
@@ -929,7 +998,8 @@ impl<'a> ComposeCtx<'a> {
         modifier: Modifier,
         on_remove: Box<dyn FnOnce() + Send>,
     ) {
-        self.composer.start_node(key, modifier, None, Some(on_remove));
+        self.composer
+            .start_node(key, modifier, None, Some(on_remove));
     }
 
     /// 结束当前节点
@@ -956,4 +1026,3 @@ impl<'a> ComposeCtx<'a> {
         self.composer.end_restartable_group();
     }
 }
-

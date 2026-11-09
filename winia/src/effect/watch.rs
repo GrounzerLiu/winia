@@ -36,8 +36,12 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
     // wrapper it replaced only added a layer: the outer handle was written once at init and read once
     // per frame, so it could never invalidate anything the inner one did not.
     let state: State<T> = ctx.remember(|| initial.clone());
-    let slot: Arc<Mutex<WatchSubscription<T>>> =
-        ctx.remember_handle(|| Arc::new(Mutex::new(WatchSubscription { rx: None, task: None })));
+    let slot: Arc<Mutex<WatchSubscription<T>>> = ctx.remember_handle(|| {
+        Arc::new(Mutex::new(WatchSubscription {
+            rx: None,
+            task: None,
+        }))
+    });
     let slot_arc = Arc::clone(&slot);
 
     // `same_channel` is the receiver's identity test: two clones of one channel answer true, two

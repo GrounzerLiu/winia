@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::layout::node::{scroll_offset_for_node, LayoutNode};
+use crate::layout::node::{LayoutNode, scroll_offset_for_node};
 use crate::modifier::ModifierElement;
 
 /// A node-local rectangle: `(x, y, width, height)`.
@@ -79,7 +79,8 @@ impl Default for BringIntoViewRequester {
 
 impl std::fmt::Debug for BringIntoViewRequester {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BringIntoViewRequester").finish_non_exhaustive()
+        f.debug_struct("BringIntoViewRequester")
+            .finish_non_exhaustive()
     }
 }
 
@@ -92,7 +93,9 @@ impl std::fmt::Debug for BringIntoViewRequester {
 /// (and therefore the same spring).
 pub(crate) fn reveal_node(nodes: &mut [LayoutNode], root: usize, target: usize) {
     let mut chain: Vec<(usize, f32, f32)> = Vec::new();
-    if !chain_to(nodes, root, target, 0.0, 0.0, &mut chain) { return; }
+    if !chain_to(nodes, root, target, 0.0, 0.0, &mut chain) {
+        return;
+    }
     let (tx, ty) = (
         chain.last().map(|c| c.1).unwrap_or(0.0),
         chain.last().map(|c| c.2).unwrap_or(0.0),
@@ -115,11 +118,15 @@ fn chain_to(
     out: &mut Vec<(usize, f32, f32)>,
 ) -> bool {
     out.push((idx, x, y));
-    if idx == target { return true; }
+    if idx == target {
+        return true;
+    }
     let (sx, sy) = scroll_offset_for_node(&nodes[idx]);
     for &child in &nodes[idx].children {
         let (px, py) = (nodes[child].position.x, nodes[child].position.y);
-        if chain_to(nodes, child, target, x + px - sx, y + py - sy, out) { return true; }
+        if chain_to(nodes, child, target, x + px - sx, y + py - sy, out) {
+            return true;
+        }
     }
     out.pop();
     false
@@ -178,7 +185,10 @@ fn reveal_in(
     ay: f32,
     rect: LocalRect,
 ) -> LocalRect {
-    let (w, h) = (nodes[ancestor].measured_size.width, nodes[ancestor].measured_size.height);
+    let (w, h) = (
+        nodes[ancestor].measured_size.width,
+        nodes[ancestor].measured_size.height,
+    );
     // The padding the ancestor RESOLVED when it measured (element padding + window insets) — the
     // modifier alone drops the insets and would use the un-inset viewport here.
     let (pad_s, pad_t, pad_e, pad_b) = nodes[ancestor].resolved_padding;
@@ -271,7 +281,8 @@ mod tests {
         let state = ScrollState::new();
         state.fling_limit.set(300.0);
         let requester = BringIntoViewRequester::new();
-        let mut container = LayoutNode::new(Modifier::new().vertical_scroll(state.clone()), Some(0));
+        let mut container =
+            LayoutNode::new(Modifier::new().vertical_scroll(state.clone()), Some(0));
         container.children = vec![1];
         container.measured_size = Size::new(100.0, 100.0);
         container.scroll_viewport_height = 100.0;
@@ -297,7 +308,11 @@ mod tests {
         requester.bring_into_view();
         process_bring_into_view(&mut nodes, 0);
         let target: Option<f32> = crate::animation::animation_target(state.offset.state_id());
-        assert_eq!(target, Some(300.0), "the bottom item is revealed at the container's end");
+        assert_eq!(
+            target,
+            Some(300.0),
+            "the bottom item is revealed at the container's end"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -355,7 +370,11 @@ mod reveal_tests {
         let scroll = ScrollState::new();
         scroll.offset.set(offset);
         scroll.fling_limit.set(400.0);
-        let mut nodes = vec![LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).size(200.0, 200.0))];
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new()
+                .vertical_scroll(scroll.clone())
+                .size(200.0, 200.0),
+        )];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[0].scroll_viewport_height = 200.0;
         nodes[0].scroll_content_height = 600.0;
@@ -380,7 +399,11 @@ mod reveal_tests {
         reveal_node(&mut nodes, 0, 4);
         assert!(animated(&scroll), "the reveal starts a spring");
         let target: Option<f32> = crate::animation::animation_target(scroll.offset.state_id());
-        assert_eq!(target, Some(200.0), "rows 300..400 land at the viewport bottom");
+        assert_eq!(
+            target,
+            Some(200.0),
+            "rows 300..400 land at the viewport bottom"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -408,8 +431,16 @@ mod reveal_tests {
         let outer = ScrollState::new();
         let inner = ScrollState::new();
         let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().vertical_scroll(outer.clone()).size(200.0, 200.0)),
-            LayoutNode::leaf(Modifier::new().vertical_scroll(inner.clone()).size(200.0, 200.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(outer.clone())
+                    .size(200.0, 200.0),
+            ),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(inner.clone())
+                    .size(200.0, 200.0),
+            ),
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[0].scroll_content_height = 200.0;
@@ -428,7 +459,10 @@ mod reveal_tests {
 
         reveal_node(&mut nodes, 0, 4);
         assert!(animated(&inner), "the inner list does the work");
-        assert!(!animated(&outer), "and the outer one has nothing left to scroll");
+        assert!(
+            !animated(&outer),
+            "and the outer one has nothing left to scroll"
+        );
         crate::animation::clear_all_animations();
     }
 }

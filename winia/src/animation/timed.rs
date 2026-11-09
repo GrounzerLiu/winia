@@ -1,5 +1,5 @@
-use super::*;
 use super::motion::{estimate_spring_duration_seconds, interpolate_keyframes, loop_factor};
+use super::*;
 
 /// A motion that can be asked for its value at ANY time — Compose's `TargetBasedAnimation` /
 /// `DecayAnimation` and their `getValueFromNanos`.
@@ -168,14 +168,19 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
                 if t >= 1.0 {
                     return target;
                 }
-                self.from.lerp(&target, interpolate_keyframes(&spec.frames, t))
+                self.from
+                    .lerp(&target, interpolate_keyframes(&spec.frames, t))
             }
             AnimationSpec::KeyframesWithSpline(spec) => {
                 let target = self.target_of();
                 let total = spec.duration.as_secs_f32().max(1e-6);
                 let t = (elapsed.as_secs_f32() / total).clamp(0.0, 1.0);
-                if t <= 0.0 { return self.from.clone(); }
-                if t >= 1.0 { return target; }
+                if t <= 0.0 {
+                    return self.from.clone();
+                }
+                if t >= 1.0 {
+                    return target;
+                }
                 self.from.lerp(&target, spec.fraction_at(t))
             }
             AnimationSpec::Repeatable(spec) => {
@@ -192,7 +197,11 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
                     return match spec.mode {
                         RepeatMode::Restart => target,
                         RepeatMode::Reverse => {
-                            if spec.iterations % 2 == 0 { self.from.clone() } else { target }
+                            if spec.iterations % 2 == 0 {
+                                self.from.clone()
+                            } else {
+                                target
+                            }
                         }
                     };
                 }
@@ -331,9 +340,13 @@ pub(super) fn spring_at_rest(displacement: f32, velocity: f32, threshold: f32) -
 
 /// The spring integrator: fixed steps inside one frame's time (accumulator style).
 pub(super) fn compute_spring_displacement(
-    stiffness: f32, damping_ratio: f32, mass: f32,
-    initial_displacement: f32, velocity: &mut f32,
-    elapsed: Duration, threshold: f32,
+    stiffness: f32,
+    damping_ratio: f32,
+    mass: f32,
+    initial_displacement: f32,
+    velocity: &mut f32,
+    elapsed: Duration,
+    threshold: f32,
 ) -> f32 {
     compute_spring_displacement_with_step(
         stiffness,
@@ -353,9 +366,13 @@ pub(super) fn compute_spring_displacement(
 /// at the 1/60 s frame step, 1.7 px at 1/240 s, under 1.5 px at 1/480 s — the query's own integration error,
 /// not a difference in what is being computed.
 pub(super) fn compute_spring_displacement_with_step(
-    stiffness: f32, damping_ratio: f32, mass: f32,
-    initial_displacement: f32, velocity: &mut f32,
-    elapsed: Duration, threshold: f32,
+    stiffness: f32,
+    damping_ratio: f32,
+    mass: f32,
+    initial_displacement: f32,
+    velocity: &mut f32,
+    elapsed: Duration,
+    threshold: f32,
     frame_cap: f32,
 ) -> f32 {
     /// The longest step an ordinary frame uses (1/60 s).
@@ -391,7 +408,6 @@ pub(super) fn compute_spring_displacement_with_step(
     }
     displacement
 }
-
 
 /// Compose's `estimateAnimationDurationMillis` (`animation-core/SpringEstimation.kt`): how long
 /// `spec` takes to move from `from` to `to`.

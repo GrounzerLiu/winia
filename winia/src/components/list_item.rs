@@ -1,14 +1,14 @@
 //! Material 3 ListItem with one, two, and three-line slot layouts.
 
+use crate::components::text::ProvideTextStyle;
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::{Alignment, BoxLayout};
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::{Alignment, BoxLayout};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::text::TextStyle;
 use crate::theme::WiniaTheme;
-use crate::components::text::{ProvideTextStyle};
-use crate::text::{TextStyle};
 use std::sync::Arc;
 
 pub const LIST_ITEM_ONE_LINE_HEIGHT: f32 = 56.0;
@@ -54,11 +54,25 @@ impl ListItemColors {
         disabled_overline: Color,
         disabled_supporting: Color,
     ) -> Self {
-        Self { container, content, leading, trailing, overline, supporting, disabled_content, disabled_leading, disabled_trailing, disabled_overline, disabled_supporting }
+        Self {
+            container,
+            content,
+            leading,
+            trailing,
+            overline,
+            supporting,
+            disabled_content,
+            disabled_leading,
+            disabled_trailing,
+            disabled_overline,
+            disabled_supporting,
+        }
     }
 
     pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
-        let disabled = |color: Color| Color::from_argb((color.a as f32 * 0.38) as u8, color.r, color.g, color.b);
+        let disabled = |color: Color| {
+            Color::from_argb((color.a as f32 * 0.38) as u8, color.r, color.g, color.b)
+        };
         Self::new(
             theme.surface,
             theme.on_surface,
@@ -82,13 +96,27 @@ impl ListItemDefaults {
         ListItemColors::from_theme(theme)
     }
 
-    pub fn shape() -> Shape { Shape::Rectangle }
-    pub fn one_line_height() -> f32 { LIST_ITEM_ONE_LINE_HEIGHT }
-    pub fn two_line_height() -> f32 { LIST_ITEM_TWO_LINE_HEIGHT }
-    pub fn three_line_height() -> f32 { LIST_ITEM_THREE_LINE_HEIGHT }
-    pub fn headline_style() -> TextStyle { WiniaTheme::typography().body_large }
-    pub fn supporting_style() -> TextStyle { WiniaTheme::typography().body_medium }
-    pub fn overline_style() -> TextStyle { WiniaTheme::typography().label_small }
+    pub fn shape() -> Shape {
+        Shape::Rectangle
+    }
+    pub fn one_line_height() -> f32 {
+        LIST_ITEM_ONE_LINE_HEIGHT
+    }
+    pub fn two_line_height() -> f32 {
+        LIST_ITEM_TWO_LINE_HEIGHT
+    }
+    pub fn three_line_height() -> f32 {
+        LIST_ITEM_THREE_LINE_HEIGHT
+    }
+    pub fn headline_style() -> TextStyle {
+        WiniaTheme::typography().body_large
+    }
+    pub fn supporting_style() -> TextStyle {
+        WiniaTheme::typography().body_medium
+    }
+    pub fn overline_style() -> TextStyle {
+        WiniaTheme::typography().label_small
+    }
 }
 
 pub struct ListItem {
@@ -106,18 +134,68 @@ pub struct ListItem {
 
 impl ListItem {
     pub fn new(headline: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
-        Self { headline: Box::new(headline), overline: None, supporting: None, leading: None, trailing: None, on_click: None, enabled: true, colors: None, interaction_source: None, modifier: Modifier::new() }
+        Self {
+            headline: Box::new(headline),
+            overline: None,
+            supporting: None,
+            leading: None,
+            trailing: None,
+            on_click: None,
+            enabled: true,
+            colors: None,
+            interaction_source: None,
+            modifier: Modifier::new(),
+        }
     }
 
-    pub fn overline_content(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.overline = Some(Box::new(content)); self }
-    pub fn supporting_content(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.supporting = Some(Box::new(content)); self }
-    pub fn leading_content(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.leading = Some(Box::new(content)); self }
-    pub fn trailing_content(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.trailing = Some(Box::new(content)); self }
-    pub fn on_click(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self { self.on_click = Some(Arc::new(callback)); self }
-    pub fn enabled(mut self, enabled: bool) -> Self { self.enabled = enabled; self }
-    pub fn colors(mut self, colors: ListItemColors) -> Self { self.colors = Some(colors); self }
-    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self { self.interaction_source = Some(source); self }
-    pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
+    pub fn overline_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.overline = Some(Box::new(content));
+        self
+    }
+    pub fn supporting_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.supporting = Some(Box::new(content));
+        self
+    }
+    pub fn leading_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.leading = Some(Box::new(content));
+        self
+    }
+    pub fn trailing_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.trailing = Some(Box::new(content));
+        self
+    }
+    pub fn on_click(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_click = Some(Arc::new(callback));
+        self
+    }
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+    pub fn colors(mut self, colors: ListItemColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -125,35 +203,62 @@ impl ListItem {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| ListItemDefaults::colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| ListItemDefaults::colors(&theme));
         let has_two_lines = self.overline.is_some() || self.supporting.is_some();
         let has_three_lines = self.overline.is_some() && self.supporting.is_some();
-        let height = if has_three_lines { LIST_ITEM_THREE_LINE_HEIGHT } else if has_two_lines { LIST_ITEM_TWO_LINE_HEIGHT } else { LIST_ITEM_ONE_LINE_HEIGHT };
+        let height = if has_three_lines {
+            LIST_ITEM_THREE_LINE_HEIGHT
+        } else if has_two_lines {
+            LIST_ITEM_TWO_LINE_HEIGHT
+        } else {
+            LIST_ITEM_ONE_LINE_HEIGHT
+        };
         // The three-line layout is not padded by a shared constant: Compose's `verticalPadding(listItemType)`
         // picks `ListItemThreeLineVerticalPadding` for it and `ListItemVerticalPadding` for the other two
         // (`ListItem.kt:766-770`).
-        let vertical_padding = if has_three_lines { LIST_ITEM_THREE_LINE_VERTICAL_PADDING } else { LIST_ITEM_VERTICAL_PADDING };
-        let content_color = if self.enabled { colors.content } else { colors.disabled_content };
+        let vertical_padding = if has_three_lines {
+            LIST_ITEM_THREE_LINE_VERTICAL_PADDING
+        } else {
+            LIST_ITEM_VERTICAL_PADDING
+        };
+        let content_color = if self.enabled {
+            colors.content
+        } else {
+            colors.disabled_content
+        };
         let shape = ListItemDefaults::shape();
         let interaction = (self.enabled && self.on_click.is_some()).then(|| {
-            self.interaction_source.unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get())
+            self.interaction_source
+                .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get())
         });
         let mut modifier = Modifier::new()
             .fill_max_width()
             .height(height)
-            .padding_sides(LIST_ITEM_HORIZONTAL_PADDING, vertical_padding, LIST_ITEM_HORIZONTAL_PADDING, vertical_padding)
+            .padding_sides(
+                LIST_ITEM_HORIZONTAL_PADDING,
+                vertical_padding,
+                LIST_ITEM_HORIZONTAL_PADDING,
+                vertical_padding,
+            )
             .background(colors.container, shape)
             .then(self.modifier);
         if self.enabled {
             if let Some(callback) = self.on_click {
-                let interaction = interaction.expect("clickable ListItem requires an interaction source");
+                let interaction =
+                    interaction.expect("clickable ListItem requires an interaction source");
                 modifier = modifier
                     .clickable_with_source(&interaction, move || callback())
                     .ripple_with_shape(&interaction, content_color, true, shape);
             }
         }
 
-        match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) {
+        match ctx.start_restartable_group(
+            key,
+            modifier,
+            BoxLayout::new().alignment(Alignment::Center),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let leading = self.leading;
@@ -162,30 +267,72 @@ impl ListItem {
                 let supporting = self.supporting;
                 let headline = self.headline;
                 crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    crate::layout::Row::new().alignment(if has_three_lines { Alignment::Start } else { Alignment::Center }).spacing(LIST_ITEM_SLOT_GAP).build(ctx, |ctx| {
-                        if let Some(leading) = leading {
-                            crate::theme::WiniaTheme::with_content_color(if self.enabled { colors.leading } else { colors.disabled_leading }, ctx, |ctx| {
-                                leading(ctx);
-                            });
-                        }
-                        crate::layout::Column::new().modifier(Modifier::new().layout_weight(1.0)).alignment(Alignment::Start).spacing(0.0).build(ctx, |ctx| {
-                            if let Some(overline) = overline {
-                                let mut text_style = ListItemDefaults::overline_style(); text_style.color = Some(if self.enabled { colors.overline } else { colors.disabled_overline });
-                                ProvideTextStyle(text_style, ctx, overline);
+                    crate::layout::Row::new()
+                        .alignment(if has_three_lines {
+                            Alignment::Start
+                        } else {
+                            Alignment::Center
+                        })
+                        .spacing(LIST_ITEM_SLOT_GAP)
+                        .build(ctx, |ctx| {
+                            if let Some(leading) = leading {
+                                crate::theme::WiniaTheme::with_content_color(
+                                    if self.enabled {
+                                        colors.leading
+                                    } else {
+                                        colors.disabled_leading
+                                    },
+                                    ctx,
+                                    |ctx| {
+                                        leading(ctx);
+                                    },
+                                );
                             }
-                            let mut text_style = ListItemDefaults::headline_style(); text_style.color = Some(if self.enabled { colors.content } else { colors.disabled_content });
-                            ProvideTextStyle(text_style, ctx, headline);
-                            if let Some(supporting) = supporting {
-                                let mut text_style = ListItemDefaults::supporting_style(); text_style.color = Some(if self.enabled { colors.supporting } else { colors.disabled_supporting });
-                                ProvideTextStyle(text_style, ctx, supporting);
+                            crate::layout::Column::new()
+                                .modifier(Modifier::new().layout_weight(1.0))
+                                .alignment(Alignment::Start)
+                                .spacing(0.0)
+                                .build(ctx, |ctx| {
+                                    if let Some(overline) = overline {
+                                        let mut text_style = ListItemDefaults::overline_style();
+                                        text_style.color = Some(if self.enabled {
+                                            colors.overline
+                                        } else {
+                                            colors.disabled_overline
+                                        });
+                                        ProvideTextStyle(text_style, ctx, overline);
+                                    }
+                                    let mut text_style = ListItemDefaults::headline_style();
+                                    text_style.color = Some(if self.enabled {
+                                        colors.content
+                                    } else {
+                                        colors.disabled_content
+                                    });
+                                    ProvideTextStyle(text_style, ctx, headline);
+                                    if let Some(supporting) = supporting {
+                                        let mut text_style = ListItemDefaults::supporting_style();
+                                        text_style.color = Some(if self.enabled {
+                                            colors.supporting
+                                        } else {
+                                            colors.disabled_supporting
+                                        });
+                                        ProvideTextStyle(text_style, ctx, supporting);
+                                    }
+                                });
+                            if let Some(trailing) = trailing {
+                                crate::theme::WiniaTheme::with_content_color(
+                                    if self.enabled {
+                                        colors.trailing
+                                    } else {
+                                        colors.disabled_trailing
+                                    },
+                                    ctx,
+                                    |ctx| {
+                                        trailing(ctx);
+                                    },
+                                );
                             }
                         });
-                        if let Some(trailing) = trailing {
-                            crate::theme::WiniaTheme::with_content_color(if self.enabled { colors.trailing } else { colors.disabled_trailing }, ctx, |ctx| {
-                                trailing(ctx);
-                            });
-                        }
-                    });
                 });
             }
         }
@@ -193,15 +340,19 @@ impl ListItem {
         ctx.end_restartable_group();
     }
 
-    pub fn get_enabled(&self) -> bool { self.enabled }
-    pub fn get_colors(&self) -> Option<ListItemColors> { self.colors }
+    pub fn get_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn get_colors(&self) -> Option<ListItemColors> {
+        self.colors
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
+    use crate::runtime::composer::Composer;
 
     fn layout_item(item: ListItem, width: f32) -> Composer {
         let mut composer = Composer::new();
@@ -210,7 +361,11 @@ mod tests {
         composer
     }
 
-    fn child<'a>(nodes: &'a [crate::layout::node::LayoutNode], parent: usize, index: usize) -> &'a crate::layout::node::LayoutNode {
+    fn child<'a>(
+        nodes: &'a [crate::layout::node::LayoutNode],
+        parent: usize,
+        index: usize,
+    ) -> &'a crate::layout::node::LayoutNode {
         &nodes[nodes[parent].children[index]]
     }
 
@@ -220,20 +375,51 @@ mod tests {
         assert_eq!(LIST_ITEM_TWO_LINE_HEIGHT, 72.0);
         assert_eq!(LIST_ITEM_THREE_LINE_HEIGHT, 88.0);
         assert_eq!(LIST_ITEM_HORIZONTAL_PADDING, 16.0);
-        assert_eq!(LIST_ITEM_VERTICAL_PADDING, 8.0, "one/two-line vertical inset");
-        assert_eq!(LIST_ITEM_THREE_LINE_VERTICAL_PADDING, 12.0, "three-line vertical inset");
+        assert_eq!(
+            LIST_ITEM_VERTICAL_PADDING, 8.0,
+            "one/two-line vertical inset"
+        );
+        assert_eq!(
+            LIST_ITEM_THREE_LINE_VERTICAL_PADDING, 12.0,
+            "three-line vertical inset"
+        );
         assert_eq!(LIST_ITEM_SLOT_GAP, 16.0, "leading/trailing slot gap");
-        assert_eq!(ListItemDefaults::headline_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0))));
-        assert_eq!(ListItemDefaults::supporting_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0))));
-        assert_eq!(ListItemDefaults::overline_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(11.0))));
+        assert_eq!(
+            ListItemDefaults::headline_style().font_size,
+            Some(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
+        );
+        assert_eq!(
+            ListItemDefaults::supporting_style().font_size,
+            Some(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0)))
+        );
+        assert_eq!(
+            ListItemDefaults::overline_style().font_size,
+            Some(crate::unit::TextUnit::Sp(crate::unit::Sp(11.0)))
+        );
     }
 
     #[test]
     fn list_item_layout_uses_m3_heights_and_horizontal_inset() {
         let cases = [
-            (ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx)), LIST_ITEM_ONE_LINE_HEIGHT),
-            (ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx)).supporting_content(|ctx| crate::components::Text::new("Supporting").build(ctx)), LIST_ITEM_TWO_LINE_HEIGHT),
-            (ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx)).overline_content(|ctx| crate::components::Text::new("Overline").build(ctx)).supporting_content(|ctx| crate::components::Text::new("Supporting").build(ctx)), LIST_ITEM_THREE_LINE_HEIGHT),
+            (
+                ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx)),
+                LIST_ITEM_ONE_LINE_HEIGHT,
+            ),
+            (
+                ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx))
+                    .supporting_content(|ctx| {
+                        crate::components::Text::new("Supporting").build(ctx)
+                    }),
+                LIST_ITEM_TWO_LINE_HEIGHT,
+            ),
+            (
+                ListItem::new(|ctx| crate::components::Text::new("Headline").build(ctx))
+                    .overline_content(|ctx| crate::components::Text::new("Overline").build(ctx))
+                    .supporting_content(|ctx| {
+                        crate::components::Text::new("Supporting").build(ctx)
+                    }),
+                LIST_ITEM_THREE_LINE_HEIGHT,
+            ),
         ];
         for (item, expected_height) in cases {
             let composer = layout_item(item, 320.0);
@@ -252,11 +438,20 @@ mod tests {
             };
             let (_, pad_t, _, pad_b) = nodes[root].modifier.get_padding_sides();
             assert_eq!(pad_t, expected_vertical, "top inset follows the line count");
-            assert_eq!(pad_b, expected_vertical, "bottom inset follows the line count");
+            assert_eq!(
+                pad_b, expected_vertical,
+                "bottom inset follows the line count"
+            );
             assert_eq!(row.position.x, LIST_ITEM_HORIZONTAL_PADDING);
             assert!(row.position.y >= expected_vertical);
-            assert!(row.position.y + row.measured_size.height <= expected_height - expected_vertical + 0.01);
-            assert_eq!(row.measured_size.width, 320.0 - 2.0 * LIST_ITEM_HORIZONTAL_PADDING);
+            assert!(
+                row.position.y + row.measured_size.height
+                    <= expected_height - expected_vertical + 0.01
+            );
+            assert_eq!(
+                row.measured_size.width,
+                320.0 - 2.0 * LIST_ITEM_HORIZONTAL_PADDING
+            );
         }
     }
 
@@ -279,8 +474,14 @@ mod tests {
         let trailing = child(nodes, row_index(nodes, root), 2);
         assert_eq!(leading.position.y, 0.0);
         assert_eq!(trailing.position.y, 0.0);
-        assert!(leading.position.x + leading.measured_size.width + LIST_ITEM_SLOT_GAP <= text.position.x + 0.01);
-        assert!(text.position.x + text.measured_size.width + LIST_ITEM_SLOT_GAP <= trailing.position.x + 0.01);
+        assert!(
+            leading.position.x + leading.measured_size.width + LIST_ITEM_SLOT_GAP
+                <= text.position.x + 0.01
+        );
+        assert!(
+            text.position.x + text.measured_size.width + LIST_ITEM_SLOT_GAP
+                <= trailing.position.x + 0.01
+        );
     }
 
     fn row_index(nodes: &[crate::layout::node::LayoutNode], root: usize) -> usize {
@@ -293,8 +494,10 @@ mod tests {
             crate::layout::LazyColumn::new()
                 .modifier(Modifier::new().fill_max_width().height(200.0))
                 .items_plain(3, |ctx, index| {
-                    ListItem::new(move |ctx| crate::components::Text::new(format!("Item {index}")).build(ctx))
-                        .build(ctx);
+                    ListItem::new(move |ctx| {
+                        crate::components::Text::new(format!("Item {index}")).build(ctx)
+                    })
+                    .build(ctx);
                 })
                 .build(ctx);
         });
@@ -304,10 +507,16 @@ mod tests {
         let lazy = &nodes[root];
         assert_eq!(lazy.measured_size.width, 320.0);
         assert_eq!(lazy.measured_size.height, 200.0);
-        assert!(!lazy.children.is_empty(), "LazyColumn should register visible ListItem children");
+        assert!(
+            !lazy.children.is_empty(),
+            "LazyColumn should register visible ListItem children"
+        );
         for &child_idx in &lazy.children {
             assert_eq!(nodes[child_idx].measured_size.width, 320.0);
-            assert_eq!(nodes[child_idx].measured_size.height, LIST_ITEM_ONE_LINE_HEIGHT);
+            assert_eq!(
+                nodes[child_idx].measured_size.height,
+                LIST_ITEM_ONE_LINE_HEIGHT
+            );
         }
     }
     #[test]

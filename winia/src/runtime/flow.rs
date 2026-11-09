@@ -7,11 +7,11 @@
 
 pub mod ops;
 
-pub use ops::{debounce, Debounce};
+pub use ops::{Debounce, debounce};
 
-use crate::runtime::state::{begin_tracking_frame, take_deps, StateId, StateObserver, StateSignal};
-use std::pin::Pin;
+use crate::runtime::state::{StateId, StateObserver, StateSignal, begin_tracking_frame, take_deps};
 use parking_lot::Mutex;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
@@ -229,14 +229,18 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
 
     /// Subscribe and publish the first value. Runs once, from composition.
     fn start(&self) {
-        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else { return };
+        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else {
+            return;
+        };
         let observer: std::sync::Arc<dyn crate::runtime::state::StateObserver> = me;
         self.refresh(&observer);
     }
 
     /// Drop every subscription. Runs from the composition point's `on_forget`.
     fn stop(&self) {
-        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else { return };
+        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else {
+            return;
+        };
         let observer: std::sync::Arc<dyn crate::runtime::state::StateObserver> = me;
         self.reconcile(&observer, Vec::new());
     }
@@ -283,7 +287,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
 
         let mut rounds = 0;
         loop {
-            self.dirty.store(false, std::sync::atomic::Ordering::Release);
+            self.dirty
+                .store(false, std::sync::atomic::Ordering::Release);
             let mut attempts = 0;
             let (value, deps) = loop {
                 let version = crate::runtime::state::global_version();
@@ -303,11 +308,14 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
             // Dedup lives in `set`: an unchanged result notifies nobody.
             self.state.set(value);
             rounds += 1;
-            if !self.dirty.load(std::sync::atomic::Ordering::Acquire) || rounds >= MAX_DERIVE_ATTEMPTS {
+            if !self.dirty.load(std::sync::atomic::Ordering::Acquire)
+                || rounds >= MAX_DERIVE_ATTEMPTS
+            {
                 break;
             }
         }
-        self.running.store(false, std::sync::atomic::Ordering::Release);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -326,7 +334,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> crate::runtime::state::StateO
 mod tests {
     use super::*;
     use crate::runtime::state::State;
-    use futures_util::task::{waker, ArcWake};
+    use futures_util::task::{ArcWake, waker};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::Context;
 
@@ -357,7 +365,11 @@ mod tests {
         let s = state.clone();
         let mut flow = snapshot_flow(move || s.get() > 0);
 
-        assert_eq!(poll_once(&mut flow, &mut cx), Poll::Ready(Some(false)), "seed");
+        assert_eq!(
+            poll_once(&mut flow, &mut cx),
+            Poll::Ready(Some(false)),
+            "seed"
+        );
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending);
 
         state.set(1);
@@ -382,7 +394,11 @@ mod tests {
         assert_eq!(counter.0.load(Ordering::SeqCst), 0, "nothing woke it yet");
 
         state.set(true);
-        assert_eq!(counter.0.load(Ordering::SeqCst), 1, "a read state woke the collector");
+        assert_eq!(
+            counter.0.load(Ordering::SeqCst),
+            1,
+            "a read state woke the collector"
+        );
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Ready(Some(true)));
     }
 
@@ -503,7 +519,11 @@ mod tests {
             derived.peek(),
             "no runtime and no drive: the write itself published the new value"
         );
-        assert_eq!(calls.load(Ordering::SeqCst), settled + 1, "one recompute per write");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            settled + 1,
+            "one recompute per write"
+        );
 
         source.set(6);
         assert_eq!(
@@ -565,7 +585,11 @@ mod tests {
         assert_eq!(derived.peek(), 1);
 
         flag.set(false);
-        assert_eq!(derived.peek(), 2, "the branch flip recomputed through the flag it reads");
+        assert_eq!(
+            derived.peek(),
+            2,
+            "the branch flip recomputed through the flag it reads"
+        );
 
         let settled = calls.load(Ordering::SeqCst);
         a.set(9);
@@ -600,14 +624,23 @@ mod tests {
             let derived = crate::runtime::flow::remember_derived_state(ctx, move || s.get() != 0);
             *slot_in.lock().unwrap() = Some(derived);
         });
-        let drive = || rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });
+        let drive = || {
+            rt.block_on(async {
+                for _ in 0..50 {
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
         drive();
 
         let derived = slot.lock().unwrap().clone().unwrap();
         assert!(!derived.peek(), "the seed comes from the first computation");
         let mut changes = derived.changes();
         // The seed is the stream's first item.
-        assert_eq!(rt.block_on(async { futures_util::StreamExt::next(&mut changes).await }), Some(false));
+        assert_eq!(
+            rt.block_on(async { futures_util::StreamExt::next(&mut changes).await }),
+            Some(false)
+        );
 
         // A flip notifies once.
         source.set(5);
@@ -671,6 +704,10 @@ mod tests {
             Poll::Ready(Some(1)),
             "the emitted value must come from a run whose reads were already subscribed"
         );
-        assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending, "and then it settles");
+        assert_eq!(
+            poll_once(&mut flow, &mut cx),
+            Poll::Pending,
+            "and then it settles"
+        );
     }
 }

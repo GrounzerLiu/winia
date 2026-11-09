@@ -112,9 +112,9 @@ impl WheelPager {
         kind: WheelKind,
         now: std::time::Instant,
     ) -> Option<bool> {
-        let stale = self
-            .last
-            .map_or(true, |t| now.saturating_duration_since(t) >= Self::SESSION_GAP);
+        let stale = self.last.map_or(true, |t| {
+            now.saturating_duration_since(t) >= Self::SESSION_GAP
+        });
         // A new container, the other axis, a fresh gesture or a reversal all mean the banked travel
         // belongs to a motion the user has abandoned: half a notch one way and half a notch back is a
         // scrub, not a page step.
@@ -147,7 +147,12 @@ pub(crate) const OVERLAY_WHEEL_SPACE_BASE: u64 = 1;
 /// The rule is the main tree's, and it is shared so the overlay layers and the injected debug wheel
 /// cannot drift from it: a node takes the wheel when it has the axis the delta moves, or — for a purely
 /// vertical wheel — when it has a HORIZONTAL state that PAGES.
-pub(crate) fn wheel_scroll_target(nodes: &[LayoutNode], path: &[usize], dx: f32, dy: f32) -> Option<usize> {
+pub(crate) fn wheel_scroll_target(
+    nodes: &[LayoutNode],
+    path: &[usize],
+    dx: f32,
+    dy: f32,
+) -> Option<usize> {
     // A HORIZONTAL PAGER still takes a vertical wheel. Compose does not do this: its wheel logic takes
     // the DOMINANT axis and returns 0 when that is not the container's axis
     // (NonTouchScrollingLogic.kt:255-264), so a plain wheel over a HorizontalPager does nothing there.
@@ -164,7 +169,10 @@ pub(crate) fn wheel_scroll_target(nodes: &[LayoutNode], path: &[usize], dx: f32,
                 || (dy != 0.0
                     && dx == 0.0
                     && nodes[idx].modifier.vertical_scroll_state().is_none()
-                    && nodes[idx].modifier.horizontal_scroll_state().is_some_and(|s| s.snaps()))
+                    && nodes[idx]
+                        .modifier
+                        .horizontal_scroll_state()
+                        .is_some_and(|s| s.snaps()))
         })
         .copied()
 }
@@ -205,8 +213,8 @@ pub(crate) fn wheel_page_step(
         return WheelPage::NotPaged;
     }
     // `reverseLayout` mirrors the direction (the pixel and fling paths do the same).
-    let reverse = node.modifier.is_lazy_scroll_reverse()
-        || node.modifier.is_horizontal_scroll_reverse();
+    let reverse =
+        node.modifier.is_lazy_scroll_reverse() || node.modifier.is_horizontal_scroll_reverse();
     match pager.page_step((space, node.id, vertical_axis), amount, wheel.kind, now) {
         Some(forward) if state.snap_page(forward, reverse) => WheelPage::Stepped,
         // No page left in that direction: swallowed (and the bar pulses), never nudged.
@@ -236,7 +244,10 @@ pub(crate) fn apply_wheel_to_target(
 ) -> WheelOutcome {
     match wheel_page_step(nodes, target, space, wheel, pager, now) {
         WheelPage::Stepped | WheelPage::Held => {
-            return WheelOutcome { paged: true, consumed: Default::default() }
+            return WheelOutcome {
+                paged: true,
+                consumed: Default::default(),
+            };
         }
         WheelPage::AtEnd => {
             // The notch hit the end of the pages. The paged container must not be nudged - a pixel
@@ -253,7 +264,10 @@ pub(crate) fn apply_wheel_to_target(
             );
             let (pulse_dx, pulse_dy) = wheel_axes_for(&nodes[target], wheel.dx, wheel.dy);
             pulse_refused_wheel(&nodes[target], pulse_dx, pulse_dy, consumed);
-            return WheelOutcome { paged: false, consumed };
+            return WheelOutcome {
+                paged: false,
+                consumed,
+            };
         }
         WheelPage::NotPaged => {}
     }
@@ -268,7 +282,10 @@ pub(crate) fn apply_wheel_to_target(
         density,
     );
     pulse_refused_wheel(&nodes[target], dx, dy, consumed);
-    WheelOutcome { paged: false, consumed }
+    WheelOutcome {
+        paged: false,
+        consumed,
+    }
 }
 
 /// The axes a wheel event acts on for `target`: a horizontal-only container reads the wheel's dy as
@@ -304,4 +321,3 @@ pub(crate) fn pulse_refused_wheel(
         }
     }
 }
-

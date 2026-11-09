@@ -17,15 +17,21 @@ pub enum AnimationSpec {
 }
 
 impl From<TweenSpec> for AnimationSpec {
-    fn from(s: TweenSpec) -> Self { AnimationSpec::Tween(s) }
+    fn from(s: TweenSpec) -> Self {
+        AnimationSpec::Tween(s)
+    }
 }
 
 impl From<SpringSpec> for AnimationSpec {
-    fn from(s: SpringSpec) -> Self { AnimationSpec::Spring(s) }
+    fn from(s: SpringSpec) -> Self {
+        AnimationSpec::Spring(s)
+    }
 }
 
 impl From<DecaySpec> for AnimationSpec {
-    fn from(s: DecaySpec) -> Self { AnimationSpec::Decay(s) }
+    fn from(s: DecaySpec) -> Self {
+        AnimationSpec::Decay(s)
+    }
 }
 
 impl AnimationSpec {
@@ -110,7 +116,11 @@ impl SpringSpec {
     pub const STIFFNESS_SPATIAL_FAST: f32 = 1400.0;
 
     pub fn bouncy() -> Self {
-        Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
+        Self {
+            damping_ratio: 0.6,
+            threshold: 0.1,
+            ..Self::default()
+        }
     }
 
     /// The theme's `DefaultEffects` token — `WiniaTheme::motion_scheme().default_effects`, which in the
@@ -184,7 +194,11 @@ impl TweenSpec {
         duration: Duration,
         interpolator: impl Into<std::sync::Arc<dyn interpolator::Interpolator>>,
     ) -> Self {
-        Self { duration, delay: Duration::ZERO, interpolator: interpolator.into() }
+        Self {
+            duration,
+            delay: Duration::ZERO,
+            interpolator: interpolator.into(),
+        }
     }
 
     /// The same tween, waiting `delay` before it starts (Compose's `tween(delayMillis)`).
@@ -228,7 +242,10 @@ impl KeyframesSpec {
     pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
         let linear: std::sync::Arc<dyn interpolator::Interpolator> =
             std::sync::Arc::new(interpolator::Linear::new());
-        let frames = frames.into_iter().map(|(p, v)| (p, v, linear.clone())).collect();
+        let frames = frames
+            .into_iter()
+            .map(|(p, v)| (p, v, linear.clone()))
+            .collect();
         Self { duration, frames }
     }
 }
@@ -248,13 +265,21 @@ impl KeyframesSpec {
 pub struct KeyframesOf {
     from: f32,
     to: f32,
-    frames: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)>,
+    frames: Vec<(
+        u64,
+        f32,
+        Option<std::sync::Arc<dyn interpolator::Interpolator>>,
+    )>,
 }
 
 impl KeyframesOf {
     /// The band the values are measured in — the value the animation starts at and the one it targets.
     pub fn between(from: f32, to: f32) -> Self {
-        Self { from, to, frames: Vec::new() }
+        Self {
+            from,
+            to,
+            frames: Vec::new(),
+        }
     }
 
     /// `value at millis`, interpolated linearly from the previous keyframe.
@@ -279,8 +304,11 @@ impl KeyframesOf {
         // (`dedup_by_key` keeps the FIRST of a run, which made `at(100, 0.2).at(100, 0.8)` keep 0.2
         // while Compose's builder is a map and keeps 0.8 - measured.)
         self.frames.sort_by_key(|(millis, _, _)| *millis);
-        let mut deduped: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)> =
-            Vec::with_capacity(self.frames.len());
+        let mut deduped: Vec<(
+            u64,
+            f32,
+            Option<std::sync::Arc<dyn interpolator::Interpolator>>,
+        )> = Vec::with_capacity(self.frames.len());
         for frame in self.frames.drain(..) {
             match deduped.last_mut() {
                 Some(last) if last.0 == frame.0 => *last = frame,
@@ -290,8 +318,18 @@ impl KeyframesOf {
         self.frames = deduped;
         let linear: std::sync::Arc<dyn interpolator::Interpolator> =
             std::sync::Arc::new(interpolator::Linear::new());
-        let duration_ms = self.frames.last().map(|(millis, _, _)| *millis).unwrap_or(0);
-        if self.frames.first().map(|(millis, _, _)| *millis).unwrap_or(0) != 0 {
+        let duration_ms = self
+            .frames
+            .last()
+            .map(|(millis, _, _)| *millis)
+            .unwrap_or(0);
+        if self
+            .frames
+            .first()
+            .map(|(millis, _, _)| *millis)
+            .unwrap_or(0)
+            != 0
+        {
             // Compose starts from the initial value when there is no keyframe at 0.
             self.frames.insert(0, (0, self.from, None));
         }
@@ -315,7 +353,10 @@ impl KeyframesOf {
                 (progress, fraction, easing.unwrap_or_else(|| linear.clone()))
             })
             .collect();
-        KeyframesSpec { duration: Duration::from_millis(duration_ms), frames }
+        KeyframesSpec {
+            duration: Duration::from_millis(duration_ms),
+            frames,
+        }
     }
 }
 
@@ -348,7 +389,9 @@ impl SnapSpec {
 
 impl Default for SnapSpec {
     fn default() -> Self {
-        Self { delay: Duration::ZERO }
+        Self {
+            delay: Duration::ZERO,
+        }
     }
 }
 
@@ -387,11 +430,15 @@ pub trait AnimatableValue: Clone + PartialEq {
     /// Rebuild from that projection (exact only for scalar types; a placeholder for vectors).
     fn from_f32(v: f32) -> Self;
     /// Exact target comparison (the default `PartialEq`).
-    fn same_target(&self, other: &Self) -> bool { self == other }
+    fn same_target(&self, other: &Self) -> bool {
+        self == other
+    }
     /// Whether a Spring can run on this type. A scalar is one spring; a value that overrides
     /// [`Self::write_components`] with several components runs one spring per component, which is
     /// Compose's `VectorConverter` + `VectorizedSpringSpec`.
-    fn supports_spring() -> bool { false }
+    fn supports_spring() -> bool {
+        false
+    }
     /// Write the components a Spring advances independently, returning how many: each gets its own
     /// spring and its own visibility threshold, which is how `Size` lands BOTH axes on target and how
     /// `Color` mixes in Oklab.
@@ -409,10 +456,18 @@ pub trait AnimatableValue: Clone + PartialEq {
 }
 
 impl AnimatableValue for f32 {
-    fn lerp(&self, to: &f32, t: f32) -> Self { self + (to - self) * t }
-    fn to_f32(&self) -> f32 { *self }
-    fn from_f32(v: f32) -> Self { v }
-    fn supports_spring() -> bool { true }
+    fn lerp(&self, to: &f32, t: f32) -> Self {
+        self + (to - self) * t
+    }
+    fn to_f32(&self) -> f32 {
+        *self
+    }
+    fn from_f32(v: f32) -> Self {
+        v
+    }
+    fn supports_spring() -> bool {
+        true
+    }
 }
 
 impl AnimatableValue for crate::graphics::Color {
@@ -437,10 +492,14 @@ impl AnimatableValue for crate::graphics::Color {
 
     /// The lightness component. Only the scalar fallbacks use it (Decay, and a Spring on a value that
     /// does not declare four components) — a colour animation goes through the lanes.
-    fn to_f32(&self) -> f32 { self.to_oklab()[1] }
+    fn to_f32(&self) -> f32 {
+        self.to_oklab()[1]
+    }
 
     /// A grey at that lightness: the scalar form is a placeholder, as the trait documents.
-    fn from_f32(v: f32) -> Self { Self::from_oklab([1.0, v, 0.0, 0.0]) }
+    fn from_f32(v: f32) -> Self {
+        Self::from_oklab([1.0, v, 0.0, 0.0])
+    }
 
     /// Compose's four components: alpha, L, a, b.
     fn write_components(&self, out: &mut [f32; MAX_ANIMATION_COMPONENTS]) -> usize {
@@ -458,9 +517,10 @@ impl AnimatableValue for crate::graphics::Color {
 
     /// A colour is a four-component value like `Size`/`Offset`, so a Spring is a spring per component
     /// rather than a replacement motion.
-    fn supports_spring() -> bool { true }
+    fn supports_spring() -> bool {
+        true
+    }
 }
-
 
 // ── Value equality ───────────────────────────────────────────────────────────────────────────────
 //
@@ -474,7 +534,9 @@ impl TweenSpec {
     pub fn same_parameter(&self, other: &Self) -> bool {
         self.duration == other.duration
             && self.delay == other.delay
-            && self.interpolator.same_parameter(other.interpolator.as_ref())
+            && self
+                .interpolator
+                .same_parameter(other.interpolator.as_ref())
     }
 }
 
@@ -483,9 +545,11 @@ impl KeyframesSpec {
     pub fn same_parameter(&self, other: &Self) -> bool {
         self.duration == other.duration
             && self.frames.len() == other.frames.len()
-            && self.frames.iter().zip(other.frames.iter()).all(|(a, b)| {
-                a.0 == b.0 && a.1 == b.1 && a.2.same_parameter(b.2.as_ref())
-            })
+            && self
+                .frames
+                .iter()
+                .zip(other.frames.iter())
+                .all(|(a, b)| a.0 == b.0 && a.1 == b.1 && a.2.same_parameter(b.2.as_ref()))
     }
 }
 
@@ -552,20 +616,39 @@ mod same_parameter_tests {
         let b = TweenSpec::new(Duration::from_millis(300), Linear::new());
         assert!(a.same_parameter(&b));
         assert!(!a.same_parameter(&TweenSpec::new(Duration::from_millis(301), Linear::new())));
-        assert!(!a.same_parameter(&TweenSpec::new(Duration::from_millis(300), EaseInSine::new())));
-        let delayed = TweenSpec::new(Duration::from_millis(300), Linear::new()).delay(Duration::from_millis(50));
+        assert!(!a.same_parameter(&TweenSpec::new(
+            Duration::from_millis(300),
+            EaseInSine::new()
+        )));
+        let delayed = TweenSpec::new(Duration::from_millis(300), Linear::new())
+            .delay(Duration::from_millis(50));
         assert!(!a.same_parameter(&delayed), "a delay is part of the spec");
     }
 
     #[test]
     fn keyframes_compare_by_their_frames() {
-        let a = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
-        let b = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)]);
+        let a = KeyframesSpec::new(
+            Duration::from_millis(400),
+            vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)],
+        );
+        let b = KeyframesSpec::new(
+            Duration::from_millis(400),
+            vec![(0.0, 0.0), (0.5, 2.0), (1.0, 1.0)],
+        );
         assert!(a.same_parameter(&b));
-        let c = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (0.5, 2.5), (1.0, 1.0)]);
-        assert!(!a.same_parameter(&c), "a moved keyframe is a different curve");
+        let c = KeyframesSpec::new(
+            Duration::from_millis(400),
+            vec![(0.0, 0.0), (0.5, 2.5), (1.0, 1.0)],
+        );
+        assert!(
+            !a.same_parameter(&c),
+            "a moved keyframe is a different curve"
+        );
         let d = KeyframesSpec::new(Duration::from_millis(400), vec![(0.0, 0.0), (1.0, 1.0)]);
-        assert!(!a.same_parameter(&d), "a shorter frame list is a different curve");
+        assert!(
+            !a.same_parameter(&d),
+            "a shorter frame list is a different curve"
+        );
     }
 
     #[test]
@@ -577,7 +660,10 @@ mod same_parameter_tests {
         let more = RepeatableSpec::new(4, RepeatMode::Restart, base.clone());
         assert!(!a.same_parameter(&more));
         let reversed = RepeatableSpec::new(3, RepeatMode::Reverse, base);
-        assert!(!a.same_parameter(&reversed), "the mode decides where the last iteration ends");
+        assert!(
+            !a.same_parameter(&reversed),
+            "the mode decides where the last iteration ends"
+        );
     }
 
     #[test]
@@ -586,10 +672,22 @@ mod same_parameter_tests {
         let tween = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), Linear::new()));
         assert!(!spring.same_parameter(&tween));
         assert!(spring.same_parameter(&AnimationSpec::Spring(SpringSpec::default())));
-        let stiffer = SpringSpec { stiffness: 300.0, ..SpringSpec::default() };
-        assert!(!spring.same_parameter(&AnimationSpec::Spring(stiffer)), "a stiffer spring is a different curve");
-        let a = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseInSine::new()));
-        let b = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutSine::new()));
+        let stiffer = SpringSpec {
+            stiffness: 300.0,
+            ..SpringSpec::default()
+        };
+        assert!(
+            !spring.same_parameter(&AnimationSpec::Spring(stiffer)),
+            "a stiffer spring is a different curve"
+        );
+        let a = AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(200),
+            EaseInSine::new(),
+        ));
+        let b = AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(200),
+            EaseOutSine::new(),
+        ));
         assert!(!a.same_parameter(&b));
     }
 }

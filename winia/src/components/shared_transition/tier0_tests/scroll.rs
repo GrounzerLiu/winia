@@ -16,14 +16,22 @@ fn tier0_flight_scroll_addback_exact() {
     // Switch list → detail under a live (0, 40) ancestor scroll.
     show.set(false);
     scroll_frame(&mut composer, &show, &scroll);
-    assert_eq!(composer.shared_flights.len(), 1, "flight opened under scroll");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "flight opened under scroll"
+    );
 
     // Frozen scroll bookkeeping: detached source sums to zero, the live
     // target freezes the (0, 40) ancestor sum.
     {
         let a = composer.shared_flights.values().next().expect("flight");
         assert_eq!(a.start_scroll, (0.0, 0.0), "detached source is rootless");
-        assert_eq!(a.end_scroll, (0.0, 40.0), "target freezes the ancestor scroll");
+        assert_eq!(
+            a.end_scroll,
+            (0.0, 40.0),
+            "target freezes the ancestor scroll"
+        );
         let e = a.flight.end.expect("end resolved after first poll");
         // Render invariant: lerped end + add-back == pure layout origin,
         // i.e. the flight transform paints exactly on the lerped rect.
@@ -32,8 +40,7 @@ fn tier0_flight_scroll_addback_exact() {
         let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot).expect("target");
         let (px, py) = pure_accumulation(&composer, tidx);
         assert!(
-            (e.x + a.end_scroll.0 - px).abs() < 1e-3
-                && (e.y + a.end_scroll.1 - py).abs() < 1e-3,
+            (e.x + a.end_scroll.0 - px).abs() < 1e-3 && (e.y + a.end_scroll.1 - py).abs() < 1e-3,
             "end + scroll == pure layout origin ({} + {} vs {px},{py})",
             e.x,
             e.y
@@ -126,7 +133,10 @@ fn tier0_flight_scroll_addback_exact() {
         }
         scroll_advance(&mut composer, &show, &scroll);
     }
-    assert!(painted, "flight must pass through the scroll-alignment window");
+    assert!(
+        painted,
+        "flight must pass through the scroll-alignment window"
+    );
 
     for _ in 0..200 {
         if composer.shared_flights.is_empty() {
@@ -134,7 +144,10 @@ fn tier0_flight_scroll_addback_exact() {
         }
         scroll_advance(&mut composer, &show, &scroll);
     }
-    assert!(composer.shared_flights.is_empty(), "scrolled flight completes");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "scrolled flight completes"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -150,7 +163,9 @@ fn ancestor_scroll_sum_accumulates_nested_scrollers() {
     let root = LayoutNode::leaf(Modifier::new());
     let mut outer = LayoutNode::leaf(Modifier::new().vertical_scroll(outer_v));
     let mut inner = LayoutNode::leaf(
-        Modifier::new().vertical_scroll(inner_v).horizontal_scroll(inner_h),
+        Modifier::new()
+            .vertical_scroll(inner_v)
+            .horizontal_scroll(inner_h),
     );
     let mut leaf = LayoutNode::leaf(Modifier::new());
     let (rid, oid, iid) = (root.id, outer.id, inner.id);
@@ -158,8 +173,7 @@ fn ancestor_scroll_sum_accumulates_nested_scrollers() {
     inner.parent_id = Some(oid);
     leaf.parent_id = Some(iid);
     let nodes = vec![root, outer, inner, leaf];
-    let id_to_idx: HashMap<u64, usize> =
-        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let id_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     // Canvas nests additively: 25 + 15 vertical, 10 horizontal.
     assert_eq!(ancestor_scroll_sum(&nodes, &id_to_idx, 3), (10.0, 40.0));
     // The node's own offset never counts (only strict ancestors).

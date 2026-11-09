@@ -10,12 +10,12 @@
 //! The implementation delegates to `flex::measure_flex::<HorizontalAxis>()`.
 
 use super::constraints::Constraints;
-use crate::unit::Size;
+use super::container::build_container;
 use super::flex;
 use super::node::*;
-use super::container::build_container;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::Size;
 
 /// Row's layout policy.
 #[derive(Debug, Clone)]
@@ -36,14 +36,28 @@ impl RowLayout {
         }
     }
 
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
-    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
-    pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
+    pub fn spacing(mut self, s: f32) -> Self {
+        self.spacing = s;
+        self
+    }
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
+        self
+    }
 }
 
 impl Default for RowLayout {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MeasurePolicy for RowLayout {
@@ -86,7 +100,13 @@ impl MeasurePolicy for RowLayout {
         children: &[usize],
         height: f32,
     ) -> f32 {
-        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MinWidth, height, self.spacing)
+        flex::flex_intrinsic_main(
+            ctx,
+            children,
+            IntrinsicQuery::MinWidth,
+            height,
+            self.spacing,
+        )
     }
 
     /// `HorizontalMaxWidth`
@@ -96,7 +116,13 @@ impl MeasurePolicy for RowLayout {
         children: &[usize],
         height: f32,
     ) -> f32 {
-        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MaxWidth, height, self.spacing)
+        flex::flex_intrinsic_main(
+            ctx,
+            children,
+            IntrinsicQuery::MaxWidth,
+            height,
+            self.spacing,
+        )
     }
 
     /// `HorizontalMinHeight`: `intrinsicCrossAxisSize(measurables, maxIntrinsicWidth, minIntrinsicHeight, availableWidth)`
@@ -154,7 +180,11 @@ mod tests {
     fn a_match_parent_flag_is_ignored_by_a_row() {
         let row = RowLayout::new();
         let mut nodes = vec![
-            LayoutNode::leaf(crate::modifier::Modifier::new().size(40.0, 10.0).match_parent_size()),
+            LayoutNode::leaf(
+                crate::modifier::Modifier::new()
+                    .size(40.0, 10.0)
+                    .match_parent_size(),
+            ),
             make_leaf(30.0, 10.0),
         ];
         let children: Vec<usize> = (0..nodes.len()).collect();
@@ -164,7 +194,11 @@ mod tests {
             &children,
             Constraints::new(0.0, 200.0, 0.0, 100.0),
         );
-        assert_eq!(size, Size::new(70.0, 10.0), "the row stacks both children normally");
+        assert_eq!(
+            size,
+            Size::new(70.0, 10.0),
+            "the row stacks both children normally"
+        );
         assert_eq!(
             placements[0].size,
             Size::new(40.0, 10.0),
@@ -175,7 +209,11 @@ mod tests {
     #[test]
     fn a_row_places_its_children_end_to_end() {
         let row = RowLayout::new();
-        let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0), make_leaf(20.0, 120.0)];
+        let mut nodes = vec![
+            make_leaf(10.0, 100.0),
+            make_leaf(30.0, 80.0),
+            make_leaf(20.0, 120.0),
+        ];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = row.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.width, 60.0); // 10+30+20
@@ -208,18 +246,28 @@ mod tests {
     fn an_absolute_arrangement_ignores_the_layout_direction() {
         // Compose's Arrangement.Absolute.* packs to a PHYSICAL edge: the RTL row must not mirror it.
         let absolute = Arrangement::Absolute(AbsoluteArrangement::Start);
-        let row = RowLayout::new().arrangement(absolute).direction(LayoutDirection::Rtl);
+        let row = RowLayout::new()
+            .arrangement(absolute)
+            .direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
-        assert_eq!(placements[0].position.x, 0.0, "Absolute::Start stays left in RTL");
+        assert_eq!(
+            placements[0].position.x, 0.0,
+            "Absolute::Start stays left in RTL"
+        );
         assert_eq!(placements[1].position.x, 10.0);
 
         // The mirroring family with the same distribution DOES mirror, which is the whole point.
-        let relative = RowLayout::new().arrangement(Arrangement::Start).direction(LayoutDirection::Rtl);
+        let relative = RowLayout::new()
+            .arrangement(Arrangement::Start)
+            .direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
         let (_, placements) = relative.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
-        assert_eq!(placements[0].position.x, 30.0, "Start mirrors, Absolute::Start does not");
+        assert_eq!(
+            placements[0].position.x, 30.0,
+            "Start mirrors, Absolute::Start does not"
+        );
     }
 
     #[test]
@@ -228,9 +276,17 @@ mod tests {
         let row = RowLayout::new().arrangement(absolute);
         let mut nodes = vec![make_leaf(10.0, 20.0), make_leaf(30.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (size, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(100.0, 100.0, 0.0, 100.0));
+        let (size, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(100.0, 100.0, 0.0, 100.0),
+        );
         assert_eq!(size.width, 100.0);
-        assert_eq!(placements[0].position.x, 60.0, "60 of the 100 is left over, so the pair ends at the right edge");
+        assert_eq!(
+            placements[0].position.x, 60.0,
+            "60 of the 100 is left over, so the pair ends at the right edge"
+        );
         assert_eq!(placements[1].position.x, 70.0);
     }
 
@@ -244,12 +300,21 @@ mod tests {
             let row = RowLayout::new().arrangement(Arrangement::Aligned(alignment));
             let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
             let children: Vec<usize> = (0..nodes.len()).collect();
-            let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
+            let (_, placements) = row.measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(200.0, 200.0, 0.0, 100.0),
+            );
             assert_eq!(
                 placements[0].position.x, expected,
                 "Aligned({alignment:?}) puts the 100 of leftover at the aligned edge"
             );
-            assert_eq!(placements[1].position.x, expected + 50.0, "the children keep their own gap");
+            assert_eq!(
+                placements[1].position.x,
+                expected + 50.0,
+                "the children keep their own gap"
+            );
         }
     }
 
@@ -262,11 +327,22 @@ mod tests {
             .direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
+        let (_, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(200.0, 200.0, 0.0, 100.0),
+        );
         // The pair packs to the LEFT edge (End in RTL) and the children run right to left, so the
         // first one ends up on the right of the pair.
-        assert_eq!(placements[1].position.x, 0.0, "End in RTL packs the pair to the left");
-        assert_eq!(placements[0].position.x, 50.0, "and the first child is rightmost inside it");
+        assert_eq!(
+            placements[1].position.x, 0.0,
+            "End in RTL packs the pair to the left"
+        );
+        assert_eq!(
+            placements[0].position.x, 50.0,
+            "and the first child is rightmost inside it"
+        );
     }
 
     #[test]
@@ -278,8 +354,16 @@ mod tests {
             .spacing(10.0);
         let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(50.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(200.0, 200.0, 0.0, 100.0));
-        assert_eq!(placements[0].position.x, 90.0, "50 + 10 + 50 = 110 of content, 90 left over at the end");
+        let (_, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(200.0, 200.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].position.x, 90.0,
+            "50 + 10 + 50 = 110 of content, 90 left over at the end"
+        );
         assert_eq!(placements[1].position.x, 150.0);
     }
 
@@ -303,8 +387,16 @@ mod tests {
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(20.0, 50.0), make_leaf(30.0, 50.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].position.x, 30.0, "the first child (20 wide) sits rightmost");
+        let (_, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].position.x, 30.0,
+            "the first child (20 wide) sits rightmost"
+        );
         assert_eq!(placements[1].position.x, 0.0);
     }
 
@@ -327,8 +419,14 @@ mod tests {
         );
         assert_eq!(size.width, 100.0, "the width comes from the constraints");
         // LTR: 0 / 70 (gap 50). Mirrored for RTL: 80 / 0.
-        assert_eq!(placements[0].position.x, 80.0, "the first child sits rightmost");
-        assert_eq!(placements[1].position.x, 0.0, "the second child sits leftmost");
+        assert_eq!(
+            placements[0].position.x, 80.0,
+            "the first child sits rightmost"
+        );
+        assert_eq!(
+            placements[1].position.x, 0.0,
+            "the second child sits leftmost"
+        );
     }
 
     /// Two baselines on one line — the case Compose's `alignBy` exists for, a small label next to
@@ -340,10 +438,10 @@ mod tests {
     /// placed both texts identically would satisfy the aligned case vacuously.
     #[test]
     fn align_by_baseline_puts_two_sizes_on_one_line() {
-        use crate::layout::AlignmentLine;
-        use crate::modifier::Modifier;
-        use crate::layout::components::Row;
         use crate::components::text::Text;
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::Row;
+        use crate::modifier::Modifier;
 
         let lines = |aligned: bool| -> (f32, f32) {
             let mut composer = crate::runtime::composer::Composer::new();
@@ -352,7 +450,9 @@ mod tests {
                     let small = Text::new("small").font_size(12.0);
                     let big = Text::new("BIG").font_size(28.0);
                     if aligned {
-                        small.modifier(Modifier::new().align_by_baseline()).build(ctx);
+                        small
+                            .modifier(Modifier::new().align_by_baseline())
+                            .build(ctx);
                         big.modifier(Modifier::new().align_by_baseline()).build(ctx);
                     } else {
                         small.build(ctx);
@@ -362,7 +462,9 @@ mod tests {
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
             let nodes = composer.arena_nodes();
-            let texts: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].has_text_content).collect();
+            let texts: Vec<usize> = (0..nodes.len())
+                .filter(|&i| nodes[i].has_text_content)
+                .collect();
             assert_eq!(texts.len(), 2, "both texts composed");
             let line_of = |i: usize| {
                 nodes[i].position.y
@@ -395,11 +497,11 @@ mod tests {
     /// text's baseline somewhere else entirely, and the assertion only means something because of it.
     #[test]
     fn a_baseline_inside_a_child_is_visible_to_the_row() {
-        use crate::layout::AlignmentLine;
-        use crate::modifier::Modifier;
-        use crate::layout::components::{Column, Row};
         use crate::components::text::Text;
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::{Column, Row};
         use crate::layout::node::LayoutNode;
+        use crate::modifier::Modifier;
 
         /// Every text's baseline in the ROOT's coordinates, walking down so a nested text is measured
         /// where it is actually drawn.
@@ -477,9 +579,9 @@ mod tests {
     /// unchanged — the text did not move inside its own box; the box grew around it.
     #[test]
     fn padding_from_baseline_puts_the_baseline_where_it_was_asked() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::components::text::Text;
 
         let measure = |padded: bool| -> (f32, f32, f32) {
             let mut composer = crate::runtime::composer::Composer::new();
@@ -508,10 +610,7 @@ mod tests {
             natural_line < 40.0,
             "the control must be a case the padding actually changes (baseline {natural_line})"
         );
-        assert_eq!(
-            padded_line, 40.0,
-            "the baseline sits 40 from the box's top"
-        );
+        assert_eq!(padded_line, 40.0, "the baseline sits 40 from the box's top");
         assert_eq!(
             padded_h,
             natural_h - natural_line + 40.0,
@@ -524,10 +623,10 @@ mod tests {
     /// text inside it.
     #[test]
     fn padding_from_baseline_reads_an_inherited_baseline() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::layout::components::Column;
         use crate::modifier::Modifier;
-        use crate::components::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
@@ -561,20 +660,20 @@ mod tests {
     /// `LastBaseline`, whose merger is `::max`.
     #[test]
     fn padding_from_the_last_baseline_places_by_the_bottom() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::components::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Text::new("one two three four five six seven eight")
                 .font_size(14.0)
                 // Narrow enough to wrap, which is what makes First and Last differ.
-                .modifier(
-                    Modifier::new()
-                        .width(60.0)
-                        .padding_from(AlignmentLine::LAST_BASELINE, None, Some(12.0)),
-                )
+                .modifier(Modifier::new().width(60.0).padding_from(
+                    AlignmentLine::LAST_BASELINE,
+                    None,
+                    Some(12.0),
+                ))
                 .build(ctx);
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -601,19 +700,16 @@ mod tests {
     /// two `coerceIn`s.
     #[test]
     fn padding_from_gives_the_maximum_to_before() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::components::text::Text;
 
         let measure = |padded: bool| -> (f32, f32) {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 let text = Text::new("Label").font_size(16.0);
                 let text = if padded {
-                    text.modifier(Modifier::new().padding_from_baseline(
-                        Some(40.0),
-                        Some(40.0),
-                    ))
+                    text.modifier(Modifier::new().padding_from_baseline(Some(40.0), Some(40.0)))
                 } else {
                     text
                 };
@@ -648,9 +744,9 @@ mod tests {
     /// (`foundation/layout/AlignmentLine.kt:50-55`).
     #[test]
     fn padding_from_satisfies_a_minimum_without_moving_the_line() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::components::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
@@ -705,8 +801,8 @@ mod tests {
     /// other way round.
     #[test]
     fn a_custom_vertical_line_aligns_children_horizontally() {
-        use crate::layout::{AlignmentLine, LineMerger};
         use crate::layout::components::Column;
+        use crate::layout::{AlignmentLine, LineMerger};
         use crate::modifier::Modifier;
 
         let line = AlignmentLine::vertical(LineMerger::Min);
@@ -724,8 +820,14 @@ mod tests {
                         .modifier(wide)
                         .build(ctx, |_ctx| {});
                     // Narrow child: its line is 5 from its start.
-                    let narrow = Modifier::new().size(40.0, 20.0).alignment_line(line, |_s| 5.0);
-                    let narrow = if aligned { narrow.align_by(line) } else { narrow };
+                    let narrow = Modifier::new()
+                        .size(40.0, 20.0)
+                        .alignment_line(line, |_s| 5.0);
+                    let narrow = if aligned {
+                        narrow.align_by(line)
+                    } else {
+                        narrow
+                    };
                     crate::layout::components::Column::new()
                         .modifier(narrow)
                         .build(ctx, |_ctx| {});
@@ -799,7 +901,10 @@ mod tests {
         let nodes = composer.arena_nodes();
         let root = composer.layout_root_idx().expect("laid out");
         assert_eq!(
-            (nodes[root].measured_size.width, nodes[root].measured_size.height),
+            (
+                nodes[root].measured_size.width,
+                nodes[root].measured_size.height
+            ),
             (95.0, 20.0),
             "15 of padding on the left (25 - the line at 10), and the height untouched"
         );
@@ -848,23 +953,46 @@ mod tests {
             let root = composer.layout_root_idx().expect("laid out");
             let content = nodes[root].children[0];
             (
-                (nodes[root].measured_size.width, nodes[root].measured_size.height),
+                (
+                    nodes[root].measured_size.width,
+                    nodes[root].measured_size.height,
+                ),
                 (nodes[content].position.x, nodes[content].position.y),
                 (
-                    nodes[root].alignment_line(AlignmentLine::minimum_interactive_left()).unwrap_or(-1.0),
-                    nodes[root].alignment_line(AlignmentLine::minimum_interactive_top()).unwrap_or(-1.0),
+                    nodes[root]
+                        .alignment_line(AlignmentLine::minimum_interactive_left())
+                        .unwrap_or(-1.0),
+                    nodes[root]
+                        .alignment_line(AlignmentLine::minimum_interactive_top())
+                        .unwrap_or(-1.0),
                 ),
             )
         };
 
         let (control_size, control_pos, _) = measure(false);
-        assert_eq!(control_size, (24.0, 24.0), "the control is the component's own size");
-        assert_eq!(control_pos, (0.0, 0.0), "and its content starts at the corner");
+        assert_eq!(
+            control_size,
+            (24.0, 24.0),
+            "the control is the component's own size"
+        );
+        assert_eq!(
+            control_pos,
+            (0.0, 0.0),
+            "and its content starts at the corner"
+        );
 
         let (size, pos, lines) = measure(true);
-        assert_eq!(size, (48.0, 48.0), "the box is the touch target on both axes");
+        assert_eq!(
+            size,
+            (48.0, 48.0),
+            "the box is the touch target on both axes"
+        );
         assert_eq!(pos, (12.0, 12.0), "the content is centred inside it");
-        assert_eq!(lines, (12.0, 12.0), "and the lines say where the visual content starts");
+        assert_eq!(
+            lines,
+            (12.0, 12.0),
+            "and the lines say where the visual content starts"
+        );
     }
 
     /// A component already larger than the minimum is left alone, and the lines report 0 — it fills the
@@ -888,7 +1016,10 @@ mod tests {
         let nodes = composer.arena_nodes();
         let root = composer.layout_root_idx().expect("laid out");
         assert_eq!(
-            (nodes[root].measured_size.width, nodes[root].measured_size.height),
+            (
+                nodes[root].measured_size.width,
+                nodes[root].measured_size.height
+            ),
             (80.0, 60.0),
             "the box keeps the content's size"
         );
@@ -964,10 +1095,10 @@ mod tests {
     /// well below the big text's.
     #[test]
     fn a_wrapped_child_below_the_line_makes_the_row_taller_than_its_tallest_child() {
-        use crate::layout::AlignmentLine;
-        use crate::modifier::Modifier;
-        use crate::layout::components::Row;
         use crate::components::text::Text;
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::Row;
+        use crate::modifier::Modifier;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
@@ -985,7 +1116,9 @@ mod tests {
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
         let nodes = composer.arena_nodes();
-        let texts: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].has_text_content).collect();
+        let texts: Vec<usize> = (0..nodes.len())
+            .filter(|&i| nodes[i].has_text_content)
+            .collect();
         assert_eq!(texts.len(), 2, "both texts composed");
         let line_of = |i: usize| {
             nodes[i].position.y
@@ -1002,7 +1135,9 @@ mod tests {
             .iter()
             .map(|&t| nodes[t].measured_size.height)
             .fold(0.0f32, f32::max);
-        let row_height = nodes[composer.layout_root_idx().unwrap()].measured_size.height;
+        let row_height = nodes[composer.layout_root_idx().unwrap()]
+            .measured_size
+            .height;
         assert!(
             row_height > tallest,
             "the row must make room for what hangs below the line: row {row_height} against the \
@@ -1019,15 +1154,18 @@ mod tests {
     /// maximum for the last — the same values, shifted into the Column's coordinates.
     #[test]
     fn a_container_merges_its_childrens_baselines() {
+        use crate::components::text::Text;
         use crate::layout::AlignmentLine;
         use crate::layout::components::Column;
-        use crate::components::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Column::new().build(ctx, |ctx| {
                 // Narrow enough to wrap into several lines.
-                Text::new("a small text that wraps").font_size(12.0).modifier(crate::modifier::Modifier::new().width(40.0)).build(ctx);
+                Text::new("a small text that wraps")
+                    .font_size(12.0)
+                    .modifier(crate::modifier::Modifier::new().width(40.0))
+                    .build(ctx);
                 Text::new("second").font_size(12.0).build(ctx);
             });
         });
@@ -1096,10 +1234,22 @@ impl Row {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
-    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
+    pub fn spacing(mut self, s: f32) -> Self {
+        self.spacing = s;
+        self
+    }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // Record the parameters: equal ones Skip, as in Column.
@@ -1108,7 +1258,10 @@ impl Row {
         ctx.changed(&self.alignment);
         // The direction takes part in `changed` (as in Column): a direction switch has to Enter and
         // replace the policy.
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         build_container(
             ctx,
@@ -1124,5 +1277,7 @@ impl Row {
 }
 
 impl Default for Row {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

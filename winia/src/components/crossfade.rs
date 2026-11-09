@@ -40,7 +40,7 @@
 //!   A `Repeatable` spec is accepted and settles like Compose's (it is finite — its iterations end).
 
 use crate::animation::visibility::VisibilityTransition;
-use crate::animation::{interpolator, push_animatable, AnimationSpec, TweenSpec};
+use crate::animation::{AnimationSpec, TweenSpec, interpolator, push_animatable};
 use crate::layout::box_layout::BoxLayout;
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
@@ -205,7 +205,11 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
 
                 // ── One alpha per entry: toward 1 if it is the target, 0 otherwise ──
                 for entry in set.entries.iter() {
-                    let goal = if self.matches(&entry.value, &target_now) { 1.0 } else { 0.0 };
+                    let goal = if self.matches(&entry.value, &target_now) {
+                        1.0
+                    } else {
+                        0.0
+                    };
                     push_animatable(set.alpha(entry.era), goal, spec.clone());
                 }
 
@@ -214,7 +218,9 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
                 let survivors: Vec<Entry<T>> = set
                     .entries
                     .iter()
-                    .filter(|e| self.matches(&e.value, &target_now) || set.alpha(e.era).peek() > 0.001)
+                    .filter(|e| {
+                        self.matches(&e.value, &target_now) || set.alpha(e.era).peek() > 0.001
+                    })
                     .cloned()
                     .collect();
                 if survivors.len() != set.entries.len() {
@@ -226,8 +232,8 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
                 for entry in set.entries.iter() {
                     let cfg = fade.clone();
                     let g = set.alpha(entry.era);
-                    let layer =
-                        Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
+                    let layer = Modifier::new()
+                        .graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
                     let value = entry.value.clone();
                     let gen_id = self.generation_key(&value, entry.era);
                     ctx.key((GENERATION_ENTRY, gen_id), |ctx| {
@@ -307,7 +313,10 @@ impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
         let mut alphas = std::collections::HashMap::new();
         alphas.insert(0, State::new(1.0));
         Self {
-            entries: vec![Entry { value: first, era: 0 }],
+            entries: vec![Entry {
+                value: first,
+                era: 0,
+            }],
             alphas,
             next_gen: 1,
         }
@@ -316,11 +325,18 @@ impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
     /// This entry's alpha. An entry that is on screen always has one — `push` creates it — so the
     /// fallback only covers a value that was never pushed.
     fn alpha(&self, era: u64) -> State<f32> {
-        self.alphas.get(&era).cloned().unwrap_or_else(|| State::new(0.0))
+        self.alphas
+            .get(&era)
+            .cloned()
+            .unwrap_or_else(|| State::new(0.0))
     }
 
     /// Where the entry matching `value` by content key sits, if it is on screen.
-    fn position_by_key(&self, value: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>) -> Option<usize> {
+    fn position_by_key(
+        &self,
+        value: &T,
+        key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>,
+    ) -> Option<usize> {
         self.entries.iter().position(|e| same(&e.value, value, key))
     }
 
@@ -369,10 +385,16 @@ mod tests {
                 // The curve, sampled where the two easings differ most.
                 // Values solved independently (bisection on the bezier) and pinned in
                 // `animation::interpolator::tests::fast_out_slow_in_is_compares_default_easing`.
-                assert!((spec.interpolator.interpolate(0.25) - 0.2366).abs() < 0.005,
-                    "FastOutSlowIn(0.25) = {}", spec.interpolator.interpolate(0.25));
-                assert!((spec.interpolator.interpolate(0.75) - 0.9594).abs() < 0.005,
-                    "FastOutSlowIn(0.75) = {}", spec.interpolator.interpolate(0.75));
+                assert!(
+                    (spec.interpolator.interpolate(0.25) - 0.2366).abs() < 0.005,
+                    "FastOutSlowIn(0.25) = {}",
+                    spec.interpolator.interpolate(0.25)
+                );
+                assert!(
+                    (spec.interpolator.interpolate(0.75) - 0.9594).abs() < 0.005,
+                    "FastOutSlowIn(0.75) = {}",
+                    spec.interpolator.interpolate(0.75)
+                );
             }
             other => panic!("Crossfade's default must be a tween, got {other:?}"),
         }
@@ -396,7 +418,9 @@ mod tests {
 
     /// Every leaf's width, ascending — two generations on screen show up as two entries.
     fn leaf_widths(composer: &Composer) -> Vec<f32> {
-        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+        let Some(root) = composer.layout_root_idx() else {
+            return Vec::new();
+        };
         let nodes = composer.arena_nodes();
         fn walk(nodes: &[LayoutNode], idx: usize, out: &mut Vec<f32>) {
             if nodes[idx].children.is_empty() {
@@ -416,7 +440,9 @@ mod tests {
     /// Integration: a target change cross-fades both generations and settles on the new content.
     #[test]
     fn crossfade_switches_content_on_target_change() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -444,7 +470,11 @@ mod tests {
         target.set(7);
         recompose(&mut composer);
         advance(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![200.0], "after the switch only target 7");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![200.0],
+            "after the switch only target 7"
+        );
 
         target.set(0);
         recompose(&mut composer);
@@ -455,7 +485,9 @@ mod tests {
     /// Retarget mid-transition (A→B unfinished, then C): converges on the new target, no panic.
     #[test]
     fn crossfade_retarget_mid_fade() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -494,7 +526,11 @@ mod tests {
         target.set(2);
         recompose(&mut composer);
         advance(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![200.0], "retarget converges on the new target");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![200.0],
+            "retarget converges on the new target"
+        );
     }
 
     /// Compose's `Crossfade` keeps the OUTGOING generation composed and fades it alongside the
@@ -502,7 +538,9 @@ mod tests {
     /// outgoing to nothing, swapped, then faded the incoming in — one generation at a time.
     #[test]
     fn both_generations_are_composed_during_a_transition() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -523,7 +561,11 @@ mod tests {
         };
 
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![50.0], "at rest: one generation");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![50.0],
+            "at rest: one generation"
+        );
 
         target.set(7);
         recompose(&mut composer);
@@ -538,7 +580,11 @@ mod tests {
         for _ in 0..40 {
             advance_one(&mut composer);
         }
-        assert_eq!(leaf_widths(&composer), vec![200.0], "the outgoing is removed");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![200.0],
+            "the outgoing is removed"
+        );
     }
 
     /// One transition plays ONE spec's worth of time, not two (the old serial version needed
@@ -546,7 +592,9 @@ mod tests {
     /// 400 ms.
     #[test]
     fn the_switch_takes_one_spec_duration_not_two() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -593,7 +641,9 @@ mod tests {
     /// width proves the content really did re-run with the new value.
     #[test]
     fn the_same_content_key_does_not_animate() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -618,11 +668,19 @@ mod tests {
 
         target.set(3);
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![80.0], "the content re-ran with the new value");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![80.0],
+            "the content re-ran with the new value"
+        );
 
         target.set(10);
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![80.0, 150.0],
+            "a new key animates"
+        );
     }
 
     /// A switch made while a cross-fade is STILL RUNNING puts the new target on screen at once, and
@@ -635,14 +693,19 @@ mod tests {
     /// at all (measured: `[50, 60]` where `[50, 60, 70]` belongs).
     #[test]
     fn a_switch_during_a_transition_puts_the_target_on_screen_at_once() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
         let mut recompose = |composer: &mut Composer| {
             composer.compose(|ctx| {
                 Crossfade::new(t.clone()).build(ctx, |ctx, page| {
-                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                    SizedLeaf {
+                        w: 50.0 + page as f32 * 10.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -659,7 +722,11 @@ mod tests {
         target.set(1);
         recompose(&mut composer);
         advance(&mut composer, 2);
-        assert_eq!(leaf_widths(&composer), vec![50.0, 60.0], "the first cross-fade is running");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![50.0, 60.0],
+            "the first cross-fade is running"
+        );
 
         // …switch again while that one is still in flight
         target.set(2);
@@ -689,7 +756,9 @@ mod tests {
     /// that shows up as a third marker.
     #[test]
     fn a_state_that_comes_back_reuses_its_own_slot() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         SLOT_MARKERS.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut composer = Composer::new();
         let target = State::new(0u32);
@@ -700,7 +769,10 @@ mod tests {
                     let slot = ctx
                         .remember(|| SLOT_MARKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
                         .peek();
-                    SizedLeaf { w: 10.0 + slot as f32 * 100.0 }.build(ctx);
+                    SizedLeaf {
+                        w: 10.0 + slot as f32 * 100.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -714,12 +786,20 @@ mod tests {
         };
 
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![10.0], "the first state lives in slot 0");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![10.0],
+            "the first state lives in slot 0"
+        );
 
         target.set(1);
         recompose(&mut composer);
         advance(&mut composer, 2);
-        assert_eq!(leaf_widths(&composer), vec![10.0, 110.0], "the second state gets its own slot");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![10.0, 110.0],
+            "the second state gets its own slot"
+        );
 
         // …back to 0 while 1 is still fading: 0 is on screen, so it is replaced in place.
         target.set(0);
@@ -737,21 +817,30 @@ mod tests {
         );
 
         advance(&mut composer, 60);
-        assert_eq!(leaf_widths(&composer), vec![10.0], "and it settles on the state that came back");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![10.0],
+            "and it settles on the state that came back"
+        );
     }
 
     /// A cross-fade leaves nothing running behind it: once only the target is on screen, the
     /// animation engine is idle again.
     #[test]
     fn nothing_is_still_animating_once_a_switch_settles() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
         let mut recompose = |composer: &mut Composer| {
             composer.compose(|ctx| {
                 Crossfade::new(t.clone()).build(ctx, |ctx, page| {
-                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                    SizedLeaf {
+                        w: 50.0 + page as f32 * 10.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -771,7 +860,10 @@ mod tests {
             }
         }
         assert!(settled, "the cross-fade finishes and the engine goes idle");
-        assert!(!crate::animation::is_animating(), "nothing is left animating");
+        assert!(
+            !crate::animation::is_animating(),
+            "nothing is left animating"
+        );
     }
 
     /// A spec that cannot reach a target must not be able to strand a generation. `Decay` has no target —
@@ -783,7 +875,9 @@ mod tests {
     /// still on screen).
     #[test]
     fn a_decay_spec_still_settles_the_cross_fade() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
         let target = State::new(0u32);
@@ -793,14 +887,21 @@ mod tests {
                 Crossfade::new(t.clone())
                     .animation(crate::animation::DecaySpec::default())
                     .build(ctx, |ctx, page| {
-                        SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                        SizedLeaf {
+                            w: 50.0 + page as f32 * 10.0,
+                        }
+                        .build(ctx);
                     });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
 
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![50.0], "the first state is alone");
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![50.0],
+            "the first state is alone"
+        );
         target.set(1);
         recompose(&mut composer);
 
@@ -826,14 +927,19 @@ mod tests {
     /// parameter), which no test had checked.
     #[test]
     fn the_container_modifier_is_applied() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             Crossfade::new(State::new(0u32))
                 .modifier(Modifier::new().size(123.0, 45.0))
                 .build(ctx, |ctx, page| {
-                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                    SizedLeaf {
+                        w: 50.0 + page as f32 * 10.0,
+                    }
+                    .build(ctx);
                 });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -849,7 +955,9 @@ mod tests {
     /// Each generation's layer alpha paired with the width of the leaf inside it (50 = the first state,
     /// 60 = the second): the alpha alone cannot say which generation is which on an early frame.
     fn alphas_by_width(composer: &Composer) -> Vec<(f32, f32)> {
-        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+        let Some(root) = composer.layout_root_idx() else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         fn leaves(nodes: &[LayoutNode], idx: usize, out: &mut Vec<f32>) {
             if nodes[idx].children.is_empty() {
@@ -885,7 +993,9 @@ mod tests {
     /// different clocks, fails here. The width-based assertions elsewhere never looked at the alpha at all.
     #[test]
     fn both_generations_share_the_fade_so_their_alphas_sum_to_one() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
         let target = State::new(0u32);
@@ -893,7 +1003,10 @@ mod tests {
         let mut recompose = |composer: &mut Composer| {
             composer.compose(|ctx| {
                 Crossfade::new(t.clone()).build(ctx, |ctx, page| {
-                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                    SizedLeaf {
+                        w: 50.0 + page as f32 * 10.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -933,7 +1046,10 @@ mod tests {
         }
         let later = alphas_by_width(&composer);
         let alpha_of = |v: &[(f32, f32)], w: f32| {
-            v.iter().find(|(width, _)| *width == w).map(|(_, a)| *a).expect("that generation")
+            v.iter()
+                .find(|(width, _)| *width == w)
+                .map(|(_, a)| *a)
+                .expect("that generation")
         };
         assert!(
             alpha_of(&later, 60.0) > alpha_of(&first, 60.0),

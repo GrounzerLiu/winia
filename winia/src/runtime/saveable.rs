@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use crate::composable;
-use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::state::State;
 
 /// One saved scalar. Deliberately a closed set: anything richer is the caller's to flatten.
@@ -58,30 +58,50 @@ saveable_int!(i32);
 saveable_int!(i64);
 
 impl Saveable for f32 {
-    fn to_saved(&self) -> SavedValue { SavedValue::F64(*self as f64) }
+    fn to_saved(&self) -> SavedValue {
+        SavedValue::F64(*self as f64)
+    }
     fn from_saved(value: &SavedValue) -> Option<Self> {
-        match value { SavedValue::F64(v) => Some(*v as f32), _ => None }
+        match value {
+            SavedValue::F64(v) => Some(*v as f32),
+            _ => None,
+        }
     }
 }
 
 impl Saveable for f64 {
-    fn to_saved(&self) -> SavedValue { SavedValue::F64(*self) }
+    fn to_saved(&self) -> SavedValue {
+        SavedValue::F64(*self)
+    }
     fn from_saved(value: &SavedValue) -> Option<Self> {
-        match value { SavedValue::F64(v) => Some(*v), _ => None }
+        match value {
+            SavedValue::F64(v) => Some(*v),
+            _ => None,
+        }
     }
 }
 
 impl Saveable for bool {
-    fn to_saved(&self) -> SavedValue { SavedValue::Bool(*self) }
+    fn to_saved(&self) -> SavedValue {
+        SavedValue::Bool(*self)
+    }
     fn from_saved(value: &SavedValue) -> Option<Self> {
-        match value { SavedValue::Bool(v) => Some(*v), _ => None }
+        match value {
+            SavedValue::Bool(v) => Some(*v),
+            _ => None,
+        }
     }
 }
 
 impl Saveable for String {
-    fn to_saved(&self) -> SavedValue { SavedValue::Text(self.clone()) }
+    fn to_saved(&self) -> SavedValue {
+        SavedValue::Text(self.clone())
+    }
     fn from_saved(value: &SavedValue) -> Option<Self> {
-        match value { SavedValue::Text(v) => Some(v.clone()), _ => None }
+        match value {
+            SavedValue::Text(v) => Some(v.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -116,7 +136,11 @@ impl SaveableStateRegistry {
     /// Consumed on read: two callers with the same key cannot both restore it, which is what makes a
     /// duplicated key a visible mistake instead of a silent share.
     pub fn consume_restored(&self, key: &str) -> Option<SavedValue> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).restored.remove(key)
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restored
+            .remove(key)
     }
 
     /// Decode the value saved under `key` and consume it only if it decodes.
@@ -130,7 +154,11 @@ impl SaveableStateRegistry {
             inner.restored.get(key).cloned()
         };
         let value = T::from_saved(&raw?)?;
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).restored.remove(key);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restored
+            .remove(key);
         Some(value)
     }
 
@@ -154,13 +182,19 @@ impl SaveableStateRegistry {
     fn register(self: &Arc<Self>, key: &str, provider: Provider) -> SaveableRegistration {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         debug_assert!(
-            !inner.providers.iter().any(|(_, existing, _)| existing == key),
+            !inner
+                .providers
+                .iter()
+                .any(|(_, existing, _)| existing == key),
             "two composition points registered the same saveable key: {key}"
         );
         let id = inner.next_id;
         inner.next_id += 1;
         inner.providers.push((id, key.to_string(), provider));
-        SaveableRegistration { registry: Arc::downgrade(self), id }
+        SaveableRegistration {
+            registry: Arc::downgrade(self),
+            id,
+        }
     }
 
     fn unregister(&self, id: u64) {
@@ -188,7 +222,9 @@ impl Drop for SaveableRegistration {
 
 static SAVEABLE_REGISTRY: std::sync::LazyLock<CompositionLocal<Arc<SaveableStateRegistry>>> =
     std::sync::LazyLock::new(|| {
-        CompositionLocal::new(|| panic!("no saveable registry: wrap the composition in with_saveable_registry"))
+        CompositionLocal::new(|| {
+            panic!("no saveable registry: wrap the composition in with_saveable_registry")
+        })
     });
 
 /// Provide `registry` to everything composed inside `f`.
@@ -203,7 +239,10 @@ pub(crate) fn registry_in_scope() -> bool {
 }
 
 /// The composer-side form: provide an already-held registry without cloning the Arc twice.
-pub(crate) fn with_registry_of<R>(registry: &Arc<SaveableStateRegistry>, f: impl FnOnce() -> R) -> R {
+pub(crate) fn with_registry_of<R>(
+    registry: &Arc<SaveableStateRegistry>,
+    f: impl FnOnce() -> R,
+) -> R {
     SAVEABLE_REGISTRY.provides(Arc::clone(registry), f)
 }
 
@@ -220,7 +259,9 @@ pub fn remember_saveable<T: Saveable>(
 ) -> State<T> {
     let registry = SAVEABLE_REGISTRY.try_current();
     // Decode first, consume second: a value that does not fit this call site stays for a later one.
-    let restored: Option<T> = registry.as_ref().and_then(|registry| registry.restore_typed(key));
+    let restored: Option<T> = registry
+        .as_ref()
+        .and_then(|registry| registry.restore_typed(key));
     // `remember` already wraps the value in a `State`: building one inside would nest two.
     let state: State<T> = ctx.remember(move || restored.unwrap_or_else(init));
     if let Some(registry) = registry {
@@ -231,7 +272,10 @@ pub fn remember_saveable<T: Saveable>(
         type RegistrationCell = Arc<std::sync::Mutex<Option<(String, Arc<SaveableRegistration>)>>>;
         let cell: RegistrationCell = ctx.remember_handle(|| Arc::new(std::sync::Mutex::new(None)));
         let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());
-        let stale = slot.as_ref().map(|(registered, _)| registered != key).unwrap_or(true);
+        let stale = slot
+            .as_ref()
+            .map(|(registered, _)| registered != key)
+            .unwrap_or(true);
         if stale {
             // Drop the old registration first: it holds the same key while we register the new one,
             // and a duplicate key is a debug assertion.
@@ -356,7 +400,10 @@ mod tests {
         });
         let saved = registry.perform_save();
         assert!(saved.contains_key("tab.b"), "the new key saves");
-        assert!(!saved.contains_key("tab.a"), "and the old one no longer does");
+        assert!(
+            !saved.contains_key("tab.a"),
+            "and the old one no longer does"
+        );
     }
 
     /// Every scalar round-trips, and a mismatched variant is refused rather than coerced.
@@ -364,7 +411,10 @@ mod tests {
     fn every_scalar_round_trips_and_mismatches_are_refused() {
         assert_eq!(bool::from_saved(&true.to_saved()), Some(true));
         assert_eq!(f64::from_saved(&1.5f64.to_saved()), Some(1.5));
-        assert_eq!(String::from_saved(&"hi".to_string().to_saved()), Some("hi".to_string()));
+        assert_eq!(
+            String::from_saved(&"hi".to_string().to_saved()),
+            Some("hi".to_string())
+        );
         assert_eq!(i32::from_saved(&(-7i32).to_saved()), Some(-7));
         assert_eq!(i64::from_saved(&(9i64).to_saved()), Some(9));
         assert_eq!(i32::from_saved(&SavedValue::Text("x".into())), None);
@@ -490,7 +540,11 @@ pub mod persist {
                 return HashMap::new();
             }
             if meta.len() > MAX_FILE_BYTES {
-                debug_log!("[saveable] refusing to read {}: {} bytes", path.display(), meta.len());
+                debug_log!(
+                    "[saveable] refusing to read {}: {} bytes",
+                    path.display(),
+                    meta.len()
+                );
                 return HashMap::new();
             }
             let text = match std::fs::read_to_string(&path) {
@@ -581,7 +635,11 @@ pub mod persist {
         #[cfg(target_os = "macos")]
         {
             if let Some(home) = std::env::var_os("HOME") {
-                return Some(PathBuf::from(home).join("Library").join("Application Support"));
+                return Some(
+                    PathBuf::from(home)
+                        .join("Library")
+                        .join("Application Support"),
+                );
             }
         }
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -606,7 +664,9 @@ pub mod persist {
             let encoded = match value {
                 SavedValue::Bool(v) => Some(serde_json::json!({ "b": v })),
                 SavedValue::I64(v) => Some(serde_json::json!({ "i": v })),
-                SavedValue::F64(v) => Some(serde_json::json!({ "f": format!("{:016x}", v.to_bits()) })),
+                SavedValue::F64(v) => {
+                    Some(serde_json::json!({ "f": format!("{:016x}", v.to_bits()) }))
+                }
                 SavedValue::Text(v) => Some(serde_json::json!({ "t": v })),
             };
             if let Some(encoded) = encoded {
@@ -767,7 +827,10 @@ pub mod persist {
             let store = PersistStore::open(&dir);
             store.save(5, &sample());
             std::fs::write(store.path_for(5), "{ this is not json").unwrap();
-            assert!(store.load(5).is_empty(), "a corrupt file is ignored, not fatal");
+            assert!(
+                store.load(5).is_empty(),
+                "a corrupt file is ignored, not fatal"
+            );
 
             std::fs::write(store.path_for(5), "").unwrap();
             assert!(store.load(5).is_empty(), "an empty file is ignored too");
@@ -791,7 +854,10 @@ pub mod persist {
             let store = PersistStore::open(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(store.path_for(9), vec![b'x'; (MAX_FILE_BYTES + 1) as usize]).unwrap();
-            assert!(store.load(9).is_empty(), "a multi-megabyte file is not worth reading");
+            assert!(
+                store.load(9).is_empty(),
+                "a multi-megabyte file is not worth reading"
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -800,8 +866,15 @@ pub mod persist {
             let dir = temp_dir("version");
             let store = PersistStore::open(&dir);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(store.path_for(1), r#"{"version":99,"values":{"a":{"i":1}}}"#).unwrap();
-            assert!(store.load(1).is_empty(), "a future format must not be guessed at");
+            std::fs::write(
+                store.path_for(1),
+                r#"{"version":99,"values":{"a":{"i":1}}}"#,
+            )
+            .unwrap();
+            assert!(
+                store.load(1).is_empty(),
+                "a future format must not be guessed at"
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -817,7 +890,10 @@ pub mod persist {
             .unwrap();
             let loaded = store.load(1);
             assert_eq!(loaded.get("good"), Some(&SavedValue::I64(3)));
-            assert_eq!(loaded.get("also"), Some(&SavedValue::Text("ok".to_string())));
+            assert_eq!(
+                loaded.get("also"),
+                Some(&SavedValue::Text("ok".to_string()))
+            );
             assert!(!loaded.contains_key("bad"));
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -828,7 +904,10 @@ pub mod persist {
             let dir = temp_dir("bigvalue");
             let store = PersistStore::open(&dir);
             let mut values = HashMap::new();
-            values.insert("huge".to_string(), SavedValue::Text("x".repeat((MAX_FILE_BYTES + 1) as usize)));
+            values.insert(
+                "huge".to_string(),
+                SavedValue::Text("x".repeat((MAX_FILE_BYTES + 1) as usize)),
+            );
             store.save(1, &values);
             assert!(
                 !store.path_for(1).exists(),
@@ -858,7 +937,9 @@ pub mod persist {
         fn an_app_name_cannot_escape_its_directory() {
             assert_eq!(valid_app_name("my-app"), Some("my-app"));
             assert_eq!(valid_app_name("  spaced  "), Some("spaced"));
-            for bad in ["", "   ", ".", "..", "a/b", "a\\b", "../evil", "x..y", "nul"] {
+            for bad in [
+                "", "   ", ".", "..", "a/b", "a\\b", "../evil", "x..y", "nul",
+            ] {
                 assert_eq!(valid_app_name(bad), None, "{bad:?} must be refused");
             }
         }

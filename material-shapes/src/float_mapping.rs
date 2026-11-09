@@ -1,4 +1,4 @@
-use crate::utils::{positive_modulus, require, DISTANCE_EPSILON};
+use crate::utils::{DISTANCE_EPSILON, positive_modulus, require};
 
 /// Checks if the given progress is in the given progress range, since progress is in the [0..1)
 /// interval, and wraps, there is a special case when `progress_to` < `progress_From`. For example, if the
@@ -13,22 +13,29 @@ pub fn progress_in_range(progress: f32, progress_from: f32, progress_to: f32) ->
 
 /// Maps from one set of progress values to another. This is used by [`DoubleMapper`] to retrieve the
 /// value on one shape that maps to the appropriate value on the other.
-pub fn linear_map(
-    x_value: &[f32],
-    y_value: &[f32],
-    x: f32,
-) -> f32 {
+pub fn linear_map(x_value: &[f32], y_value: &[f32], x: f32) -> f32 {
     require(x >= 0.0 && x <= 1.0, format!("Invalid progress: {}", x));
-    let segment_start_index = (0..x_value.len()).find(|&i| progress_in_range(x, x_value[i], x_value[(i + 1) % x_value.len()])).unwrap();
+    let segment_start_index = (0..x_value.len())
+        .find(|&i| progress_in_range(x, x_value[i], x_value[(i + 1) % x_value.len()]))
+        .unwrap();
     let segment_end_index = (segment_start_index + 1) % x_value.len();
-    let segment_size_x = positive_modulus(x_value[segment_end_index] - x_value[segment_start_index], 1.0);
-    let segment_size_y = positive_modulus(y_value[segment_end_index] - y_value[segment_start_index], 1.0);
+    let segment_size_x = positive_modulus(
+        x_value[segment_end_index] - x_value[segment_start_index],
+        1.0,
+    );
+    let segment_size_y = positive_modulus(
+        y_value[segment_end_index] - y_value[segment_start_index],
+        1.0,
+    );
     let position_in_segment = if segment_size_x < 0.001 {
         0.5
     } else {
         positive_modulus(x - x_value[segment_start_index], 1.0) / segment_size_x
     };
-    positive_modulus(y_value[segment_start_index] + segment_size_y * position_in_segment, 1.0)
+    positive_modulus(
+        y_value[segment_start_index] + segment_size_y * position_in_segment,
+        1.0,
+    )
 }
 
 /// [`DoubleMapper`] creates mappings from values in the `[0..1)` source space to values in the
@@ -70,17 +77,17 @@ fn validate_progress(p: &Vec<f32>) {
         let curr = &p[i];
         require(
             *curr >= 0.0 && *curr < 1.0,
-            format!("FloatMapping - Progress outside of range: {:?}", p)
+            format!("FloatMapping - Progress outside of range: {:?}", p),
         );
         require(
             progress_distance(*curr, prev) > DISTANCE_EPSILON,
-            format!("FloatMapping - Progress repeats a value: {:?}", p)
+            format!("FloatMapping - Progress repeats a value: {:?}", p),
         );
         if curr < &prev {
             wraps += 1;
             require(
                 wraps <= 1,
-                format!("FloatMapping - Progress wraps more than once: {:?}", p)
+                format!("FloatMapping - Progress wraps more than once: {:?}", p),
             );
         }
         prev = *curr;
@@ -124,8 +131,8 @@ impl DoubleMapper {
 
 #[cfg(test)]
 mod float_mapping_tests {
-    use crate::{assert_equalish, assert_panic};
     use crate::float_mapping::DoubleMapper;
+    use crate::{assert_equalish, assert_panic};
 
     #[test]
     fn identity_mapping_test() {
@@ -173,16 +180,12 @@ mod float_mapping_tests {
     }
     #[test]
     fn target_double_wrap_throws() {
-        assert_panic!({
-            DoubleMapper::new(&[(0.0, 0.0), (0.3, 0.6), (0.6, 0.3), (0.9, 0.9)])
-        });
+        assert_panic!({ DoubleMapper::new(&[(0.0, 0.0), (0.3, 0.6), (0.6, 0.3), (0.9, 0.9)]) });
     }
 
     #[test]
     fn source_double_wrap_throws() {
-        assert_panic!({
-            DoubleMapper::new(&[(0.0, 0.0), (0.6, 0.3), (0.3, 0.6), (0.9, 0.9)])
-        });
+        assert_panic!({ DoubleMapper::new(&[(0.0, 0.0), (0.6, 0.3), (0.3, 0.6), (0.9, 0.9)]) });
     }
 
     fn validate_mapping(mapper: &DoubleMapper, expected_function: &dyn Fn(f32) -> f32) {

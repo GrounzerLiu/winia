@@ -8,7 +8,8 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
     let anchor_widths: Vec<f32> = {
         let nodes = pw.composer.arena_nodes();
         let root = pw.composer.layout_root_idx();
-        pw.overlay.layers
+        pw.overlay
+            .layers
             .iter()
             .map(|ov| {
                 if !ov.match_anchor_width {
@@ -53,7 +54,11 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
                 let margin = crate::components::dropdown_menu::MENU_VERTICAL_MARGIN;
                 crate::layout::Constraints::new(
                     anchor_width,
-                    if ov.match_anchor_width { anchor_width } else { pw.width },
+                    if ov.match_anchor_width {
+                        anchor_width
+                    } else {
+                        pw.width
+                    },
                     margin,
                     (pw.height - margin * 2.0).max(0.0),
                 )
@@ -71,20 +76,29 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
     let root = pw.composer.layout_root_idx();
     let (w, h) = (pw.width, pw.height);
     for ov in &mut pw.overlay.layers {
-        let size = ov.composer.layout_root()
+        let size = ov
+            .composer
+            .layout_root()
             .map(|r| (r.measured_size.width, r.measured_size.height))
             .unwrap_or((0.0, 0.0));
         // Anchor position (main tree).
-        let anchor = ov.anchor_slot.and_then(|s| root.and_then(|r| {
-            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
-        })).and_then(|nid| root.map(|r| {
-            node_abs_position(nodes, r, nid)
-        }));
-        let anchor_size = ov.anchor_slot.and_then(|s| root.and_then(|r| {
-            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
-        })).and_then(|nid| root.and_then(|r| {
-            crate::layout::node::find_node_by_id(nodes, r, nid).map(|i| nodes[i].measured_size)
-        }));
+        let anchor = ov
+            .anchor_slot
+            .and_then(|s| {
+                root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s))
+            })
+            .and_then(|nid| root.map(|r| node_abs_position(nodes, r, nid)));
+        let anchor_size = ov
+            .anchor_slot
+            .and_then(|s| {
+                root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s))
+            })
+            .and_then(|nid| {
+                root.and_then(|r| {
+                    crate::layout::node::find_node_by_id(nodes, r, nid)
+                        .map(|i| nodes[i].measured_size)
+                })
+            });
         let anchored = anchor.is_some() && anchor_size.is_some();
         let (ax, ay, aw, ah) = match (anchor, anchor_size) {
             (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
@@ -99,11 +113,13 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             // An overlay may know its own direction from COMPOSE time, where the composition local is still
             // valid — placement runs after composition, which is why the node rule below cannot recover it.
             let from_node = ov.direction.or_else(|| {
-                let anchor_node = ov
-                    .anchor_slot
-                    .and_then(|s| root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s)));
+                let anchor_node = ov.anchor_slot.and_then(|s| {
+                    root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s))
+                });
                 anchor_node
-                    .and_then(|nid| root.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, nid)))
+                    .and_then(|nid| {
+                        root.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, nid))
+                    })
                     .map(|idx| nodes[idx].layout_direction)
                     .or_else(|| root.map(|r| nodes[r].layout_direction))
             });
@@ -119,12 +135,21 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             // to the nearer window edge — each taken only if the menu fits inside `MenuVerticalMargin` (48dp).
             // winia's placement used to do the first alone, which is why a long menu hung off the bottom edge
             // with its last rows unreachable.
-            crate::components::dropdown_menu::dropdown_menu_position((ax, ay, aw, ah), size, (w, h), direction)
+            crate::components::dropdown_menu::dropdown_menu_position(
+                (ax, ay, aw, ah),
+                size,
+                (w, h),
+                direction,
+            )
         } else {
             crate::overlay::resolve_popup_position(
                 ov.position,
                 direction,
-                if anchored { Some((ax, ay, aw, ah)) } else { None },
+                if anchored {
+                    Some((ax, ay, aw, ah))
+                } else {
+                    None
+                },
                 size,
                 (w, h),
             )
@@ -159,8 +184,12 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
     // focused_slot_key restore in recompose_layout_render): arena node ids are
     // rebuilt, slot keys are stable.
     for ov in &mut pw.overlay.layers {
-        let Some(slot) = ov.focused_slot_key else { continue; };
-        let Some(r) = ov.composer.layout_root_idx() else { continue; };
+        let Some(slot) = ov.focused_slot_key else {
+            continue;
+        };
+        let Some(r) = ov.composer.layout_root_idx() else {
+            continue;
+        };
         let nodes = ov.composer.arena_nodes_mut();
         if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
             crate::layout::node::clear_focus(nodes, r);

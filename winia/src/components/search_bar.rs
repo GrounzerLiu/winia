@@ -17,14 +17,14 @@
 //!   callers conventionally deactivate inside on_search. Esc → deactivate.
 //! - No system Back on desktop: Esc substitutes (documented divergence).
 
+use crate::components::text_field::{TextField, TextFieldValue};
 use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::layout::SizeValue;
+use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::modifier::{Modifier};
-use crate::layout::{SizeValue};
-use crate::graphics::{Color, Shape};
-use crate::components::text_field::{TextField, TextFieldValue};
-use crate::text::field::{TextFieldColors};
+use crate::text::field::TextFieldColors;
 use std::sync::Arc;
 
 /// Search bar state: text query + active flag + expansion progress.
@@ -107,7 +107,11 @@ impl SearchBarState {
                 return;
             }
         }
-        let spec = if target == 1.0 { expand_spec() } else { collapse_spec() };
+        let spec = if target == 1.0 {
+            expand_spec()
+        } else {
+            collapse_spec()
+        };
         crate::animation::push_animatable(self.progress.clone(), target, spec);
         self.drive_content_fade(target);
     }
@@ -228,7 +232,9 @@ pub const SEARCH_BAR_CONTENT_FADE_DELAY_MS: u64 = 50;
 
 /// Compose `MotionTokens.EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`.
 fn emphasized_decelerate() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
-    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
+    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(
+        0.05, 0.7, 0.1, 1.0,
+    ))
 }
 
 /// Compose's expand easing comes from `MotionTokens`, not from a named `EasingFunctions` entry, so it is
@@ -240,7 +246,9 @@ fn expand_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator::I
 
 /// Compose `AnimationExitEasing = CubicBezierEasing(0.0f, 1.0f, 0.0f, 1.0f)`.
 fn collapse_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
-    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
+    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(
+        0.0, 1.0, 0.0, 1.0,
+    ))
 }
 
 /// Expand spec: 600ms, emphasized-decelerate, starting 100ms late.
@@ -252,7 +260,9 @@ fn expand_spec() -> crate::animation::AnimationSpec {
             std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
             expand_interpolator(),
         )
-        .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS)),
+        .delay(std::time::Duration::from_millis(
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+        )),
     )
 }
 
@@ -263,7 +273,9 @@ fn collapse_spec() -> crate::animation::AnimationSpec {
             std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             collapse_interpolator(),
         )
-        .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS)),
+        .delay(std::time::Duration::from_millis(
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+        )),
     )
 }
 
@@ -275,7 +287,9 @@ fn content_fade_in_spec() -> crate::animation::AnimationSpec {
             std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_MS),
             crate::animation::interpolator::Linear::new(),
         )
-        .delay(std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_DELAY_MS)),
+        .delay(std::time::Duration::from_millis(
+            SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+        )),
     )
 }
 
@@ -297,8 +311,12 @@ fn docked_enter_spec() -> crate::overlay::OverlayAnimSpec {
     crate::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
         SEARCH_BAR_EXPAND_MS,
     ))
-    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
-    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
+    .delay(std::time::Duration::from_millis(
+        SEARCH_BAR_ANIMATION_DELAY_MS,
+    ))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(
+        0.05, 0.7, 0.1, 1.0,
+    ))
 }
 
 /// Compose `DockedExitTransition` = `fadeOut(AnimationExitFloatSpec) + shrinkVertically(
@@ -308,10 +326,13 @@ fn docked_exit_spec() -> crate::overlay::OverlayAnimSpec {
     crate::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
         SEARCH_BAR_COLLAPSE_MS,
     ))
-    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
-    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
+    .delay(std::time::Duration::from_millis(
+        SEARCH_BAR_ANIMATION_DELAY_MS,
+    ))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(
+        0.0, 1.0, 0.0, 1.0,
+    ))
 }
-
 
 // ───────────────────── expansion geometry (Compose `FullScreenSearchBarLayout`) ─────────────────────
 //
@@ -552,7 +573,9 @@ impl SearchBar {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + 'static) {
         let theme = crate::theme::WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| SearchBarDefaults::colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| SearchBarDefaults::colors(&theme));
         let state = self
             .state
             .unwrap_or_else(|| ctx.remember(SearchBarState::new).get());
@@ -586,7 +609,11 @@ impl SearchBar {
         // window (the measured complaint: "it expands in the middle").
         let anchor_key = ctx.next_key();
         let user_modifier = self.modifier;
-        match ctx.start_restartable_group(anchor_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            anchor_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 crate::components::surface::Surface::new()
@@ -616,7 +643,12 @@ impl SearchBar {
                             en,
                             true, // read-only: tap expands instead of editing
                             true, // fill pill height: content centered
-                            &ph, &li, &ti, &ic, &None, &None,
+                            &ph,
+                            &li,
+                            &ti,
+                            &ic,
+                            &None,
+                            &None,
                         );
                     });
             }
@@ -666,9 +698,9 @@ impl SearchBar {
         crate::overlay::Dialog::new(active)
             .position(crate::overlay::PopupPosition::TopLeft)
             .anchor_slot(Some(anchor_slot))
-            .anchor_slide(crate::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
-                slide_progress.get()
-            })))
+            .anchor_slide(crate::overlay::AnchorSlide::new(std::sync::Arc::new(
+                move || slide_progress.get(),
+            )))
             .on_dismiss_request(move || st_dismiss.close())
             .enter_animation(Some(crate::overlay::OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
@@ -690,28 +722,33 @@ impl SearchBar {
                 let query_now = state.query_text();
                 ctx.changed(&query_now);
                 let key = ctx.next_key();
-                match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                match ctx.start_restartable_group(
+                    key,
+                    Modifier::new(),
+                    crate::layout::BoxLayout::new(),
+                ) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         // Expanded leading defaults to a back arrow (cf. fullscreen
                         // SearchBar navigation icon); caller leading_icon overrides it.
-                        let li: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>> =
-                            match li.clone() {
-                                Some(custom) => Some(custom),
-                                None => {
-                                    let st = state.clone();
-                                    Some(Arc::new(move |ctx: &mut ComposeCtx| {
-                                        let st = st.clone();
-                                        crate::components::icon_button::IconButton::new()
-                                            .on_click(move || st.close())
-                                            .build(ctx, |ctx| {
-                                                crate::components::icon::Icon::svg_path(BACK_ICON_PATH)
-                                                    .size(24.0)
-                                                    .build(ctx);
-                                            });
-                                    }))
-                                }
-                            };
+                        let li: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>> = match li
+                            .clone()
+                        {
+                            Some(custom) => Some(custom),
+                            None => {
+                                let st = state.clone();
+                                Some(Arc::new(move |ctx: &mut ComposeCtx| {
+                                    let st = st.clone();
+                                    crate::components::icon_button::IconButton::new()
+                                        .on_click(move || st.close())
+                                        .build(ctx, |ctx| {
+                                            crate::components::icon::Icon::svg_path(BACK_ICON_PATH)
+                                                .size(24.0)
+                                                .build(ctx);
+                                        });
+                                }))
+                            }
+                        };
                         // The expanded container MORPHS out of the collapsed bar instead of scaling in:
                         // its SIZE interpolates from the bar's measured size to the window, its corner
                         // radius is `collapsed_corner_radius * (1 - progress)` and its vertical padding grows
@@ -757,9 +794,9 @@ impl SearchBar {
                                 let p = prog.clone();
                                 crate::layout::components::Column::new()
                                     .modifier(Modifier::new().padding_vertical(
-                                        crate::layout::Dimension::Dynamic(std::sync::Arc::new(move || {
-                                            expansion_vertical_padding(p.get())
-                                        })),
+                                        crate::layout::Dimension::Dynamic(std::sync::Arc::new(
+                                            move || expansion_vertical_padding(p.get()),
+                                        )),
                                     ))
                                     .build(ctx, |ctx| {
                                         // Focus the expanded field on the first expansion, the way Compose's
@@ -767,7 +804,9 @@ impl SearchBar {
                                         // `LaunchedEffect(Unit) { focusRequester.requestFocus() }`: without
                                         // it the keyboard has no target and typing does nothing (measured:
                                         // typing "ap" left the results at their unfiltered 18 rows).
-                                        let focus = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+                                        let focus = ctx
+                                            .remember(|| crate::modifier::FocusRequester::new())
+                                            .get();
                                         let asked = ctx.remember(|| false);
                                         if !asked.get() {
                                             asked.set(true);
@@ -781,7 +820,12 @@ impl SearchBar {
                                             en,
                                             false,
                                             true, // fixed bar height (56) like collapsed
-                                            &ph, &li, &ti, &ic, &None, &Some(focus),
+                                            &ph,
+                                            &li,
+                                            &ti,
+                                            &ic,
+                                            &None,
+                                            &Some(focus),
                                         );
                                         crate::components::divider::Divider::horizontal()
                                             .color(divider)
@@ -826,7 +870,9 @@ pub struct DockedSearchBar {
 
 impl DockedSearchBar {
     pub fn new() -> Self {
-        Self { inner: SearchBar::new() }
+        Self {
+            inner: SearchBar::new(),
+        }
     }
 
     pub fn state(mut self, s: SearchBarState) -> Self {
@@ -934,7 +980,11 @@ impl DockedSearchBar {
         // The anchor modifier stays clean: no FillMaxWidth encoding needed.
         let anchor_key = ctx.next_key();
         let anchor_modifier = Modifier::new();
-        match ctx.start_restartable_group(anchor_key, anchor_modifier, crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            anchor_key,
+            anchor_modifier,
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 crate::components::surface::Surface::new()
@@ -956,8 +1006,13 @@ impl DockedSearchBar {
                             &os,
                             en,
                             !active, // collapsed: read-only to expand on tap; expanded: editable (single input — no duplicate in popup)
-                            true, // fill pill height: content centered
-                            &ph, &li, &ti, &ic, &None, &None,
+                            true,    // fill pill height: content centered
+                            &ph,
+                            &li,
+                            &ti,
+                            &ic,
+                            &None,
+                            &None,
                         );
                     });
             }
@@ -1009,7 +1064,6 @@ impl Default for DockedSearchBar {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests;

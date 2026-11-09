@@ -20,36 +20,35 @@
 
 use crate::animation::interpolator;
 use crate::animation::{AnimationSpec, InfiniteRepeatableSpec, TweenSpec};
+use crate::components::progress_indicator::{self, ProgressIndicatorStrokeCap};
 use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
-use crate::components::progress_indicator::{self, ProgressIndicatorStrokeCap};
 use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{CornerRounding, Cubic, Morph, MorphToPath, PolygonToPath, RoundedPolygon};
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-
 mod circular;
 mod linear;
 mod shared;
 
-pub(crate) use linear::*;
-pub(crate) use shared::*;
 #[cfg(test)]
 pub(crate) use circular::*;
+pub(crate) use linear::*;
+pub(crate) use shared::*;
 
 pub use circular::CircularWavyProgressIndicator;
 pub use linear::LinearWavyProgressIndicator;
 pub use shared::{
-    WavyProgressIndicatorDefaults, WAVY_ANIMATION_DURATION_MS, WAVY_CIRCULAR_SIZE,
-    WAVY_CIRCULAR_WAVELENGTH, WAVY_GAP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH,
-    WAVY_LINEAR_HEIGHT, WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_LINEAR_STOP_SIZE,
-    WAVY_LINEAR_WIDTH, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH,
+    WAVY_ANIMATION_DURATION_MS, WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_WAVELENGTH, WAVY_GAP_SIZE,
+    WAVY_LINEAR_DETERMINATE_WAVELENGTH, WAVY_LINEAR_HEIGHT, WAVY_LINEAR_INDETERMINATE_WAVELENGTH,
+    WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_WIDTH, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH,
+    WavyProgressIndicatorDefaults,
 };
 
 #[cfg(test)]

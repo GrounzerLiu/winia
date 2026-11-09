@@ -16,11 +16,11 @@
 //!
 //! 架构：同 Slider/ProgressIndicator —— `Modifier::draw()` 自定义 Canvas 绘制，无交互。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
+use crate::graphics::Color;
 use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 
 /// 默认厚度（`DividerTokens.Thickness = 1dp`）
@@ -60,12 +60,22 @@ pub struct Divider {
 impl Divider {
     /// 水平分隔线（对标 `HorizontalDivider`）
     pub fn horizontal() -> Self {
-        Self { vertical: false, thickness: DIVIDER_THICKNESS, modifier: Modifier::new(), color: None }
+        Self {
+            vertical: false,
+            thickness: DIVIDER_THICKNESS,
+            modifier: Modifier::new(),
+            color: None,
+        }
     }
 
     /// 垂直分隔线（对标 `VerticalDivider`）
     pub fn vertical() -> Self {
-        Self { vertical: true, thickness: DIVIDER_THICKNESS, modifier: Modifier::new(), color: None }
+        Self {
+            vertical: true,
+            thickness: DIVIDER_THICKNESS,
+            modifier: Modifier::new(),
+            color: None,
+        }
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
@@ -105,7 +115,11 @@ impl Divider {
         // the line itself is one DEVICE px at any density (see `draw_divider_line`), so this
         // is the only part that differs from Compose: a hairline occupies 1 logical px here
         // where Compose gives it none.
-        let layout_thickness = if thickness.is_nan() || thickness <= 0.0 { 1.0 } else { thickness };
+        let layout_thickness = if thickness.is_nan() || thickness <= 0.0 {
+            1.0
+        } else {
+            thickness
+        };
 
         // Framework CustomDraw receives the NODE rect (padding not applied);
         // user modifier padding (M3 inset/middle-inset variants) shrinks the content
@@ -122,7 +136,10 @@ impl Divider {
                     vertical: true,
                     thickness,
                     color,
-                    pad_s, pad_t, pad_e, pad_b,
+                    pad_s,
+                    pad_t,
+                    pad_e,
+                    pad_b,
                 })
         } else {
             Modifier::new()
@@ -132,7 +149,10 @@ impl Divider {
                     vertical: false,
                     thickness,
                     color,
-                    pad_s, pad_t, pad_e, pad_b,
+                    pad_s,
+                    pad_t,
+                    pad_e,
+                    pad_b,
                 })
         };
 
@@ -205,7 +225,11 @@ pub(crate) fn draw_divider_line(
 ) {
     // Anything at or below zero is the hairline (the sentinel is `f32::NAN`, and a negative
     // thickness has no meaning as an extent); a real thickness is stroked at that width.
-    let px = if thickness.is_nan() || thickness <= 0.0 { 0.0 } else { thickness };
+    let px = if thickness.is_nan() || thickness <= 0.0 {
+        0.0
+    } else {
+        thickness
+    };
     let mut paint = skia_safe::Paint::default();
     paint.set_anti_alias(true);
     paint.set_style(skia_safe::PaintStyle::Stroke);
@@ -276,8 +300,8 @@ fn skia_color(c: Color) -> skia_safe::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
+    use crate::runtime::composer::Composer;
 
     // ── 默认值 ──
     #[test]
@@ -342,7 +366,10 @@ mod tests {
         (px.to_vec(), pm.width() as usize)
     }
 
-    fn render_divider_scaled(scale: f32, build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+    fn render_divider_scaled(
+        scale: f32,
+        build: impl FnOnce(&mut ComposeCtx),
+    ) -> (Vec<[u8; 4]>, usize) {
         render_divider_transformed(scale, (0.0, 0.0), build)
     }
 
@@ -369,9 +396,14 @@ mod tests {
         // 扫第一行（y=0）应整行都是 divider 色
         let mut found = 0;
         for x in 0..w {
-            if color_eq(color, px_at(&buf, w, x, 0), 6) { found += 1; }
+            if color_eq(color, px_at(&buf, w, x, 0), 6) {
+                found += 1;
+            }
         }
-        assert!(found > w * 9 / 10, "水平分隔线应横跨 90%+ 宽度，found={found}/{w}");
+        assert!(
+            found > w * 9 / 10,
+            "水平分隔线应横跨 90%+ 宽度，found={found}/{w}"
+        );
     }
     #[test]
     fn vertical_divider_pixels() {
@@ -383,7 +415,9 @@ mod tests {
         // fillMaxHeight → 线纵贯整个高度；宽度 1dp → x≈0
         let mut found = 0;
         for y in 0..300 {
-            if color_eq(color, px_at(&buf, w, 0, y), 6) { found += 1; }
+            if color_eq(color, px_at(&buf, w, 0, y), 6) {
+                found += 1;
+            }
         }
         assert!(found > 270, "垂直分隔线应纵贯 90%+ 高度，found={found}");
     }
@@ -393,15 +427,23 @@ mod tests {
         // 自定义颜色 + 3dp 厚度：线应出现在 y=0..3 行
         let custom = Color::from_argb(255, 255, 0, 0);
         let (buf, w) = render_divider(|ctx| {
-            Divider::horizontal().thickness(3.0).color(custom).build(ctx);
+            Divider::horizontal()
+                .thickness(3.0)
+                .color(custom)
+                .build(ctx);
         });
         let mut rows = 0;
         for y in 0..3 {
-            if color_eq(custom, px_at(&buf, w, 10, y), 6) { rows += 1; }
+            if color_eq(custom, px_at(&buf, w, 10, y), 6) {
+                rows += 1;
+            }
         }
         assert!(rows >= 2, "3dp 厚度线应占 2-3 行，rows={rows}");
         // 下方应无颜色
-        assert!(!color_eq(custom, px_at(&buf, w, 10, 10), 6), "3dp 线不应延伸到 y=10");
+        assert!(
+            !color_eq(custom, px_at(&buf, w, 10, 10), 6),
+            "3dp 线不应延伸到 y=10"
+        );
     }
 
     #[test]
@@ -410,11 +452,16 @@ mod tests {
         // change, and fully covered (see the multi-scale test for the HiDPI case).
         let custom = Color::from_argb(255, 0, 0, 255);
         let (buf, w) = render_divider(|ctx| {
-            Divider::horizontal().thickness(DIVIDER_HAIRLINE).color(custom).build(ctx);
+            Divider::horizontal()
+                .thickness(DIVIDER_HAIRLINE)
+                .color(custom)
+                .build(ctx);
         });
         let mut rows = 0;
         for y in 0..5 {
-            if color_eq(custom, px_at(&buf, w, 10, y), 6) { rows += 1; }
+            if color_eq(custom, px_at(&buf, w, 10, y), 6) {
+                rows += 1;
+            }
         }
         assert_eq!(rows, 1, "Hairline 应只占 1 行，rows={rows}");
     }
@@ -432,13 +479,20 @@ mod tests {
         // 线应从 x=20 开始（不在 x<20 出现）
         let mut early = 0;
         for x in 0..15 {
-            if color_eq(color, px_at(&buf, w, x, 0), 6) { early += 1; }
+            if color_eq(color, px_at(&buf, w, x, 0), 6) {
+                early += 1;
+            }
         }
-        assert_eq!(early, 0, "padding_start(20) 后 x<15 不应有线，early={early}");
+        assert_eq!(
+            early, 0,
+            "padding_start(20) 后 x<15 不应有线，early={early}"
+        );
         // 线应在 x>=20 出现
         let mut later = 0;
         for x in 22..40 {
-            if color_eq(color, px_at(&buf, w, x, 0), 6) { later += 1; }
+            if color_eq(color, px_at(&buf, w, x, 0), 6) {
+                later += 1;
+            }
         }
         assert!(later > 0, "padding_start(20) 后线应从 x=20 开始");
     }
@@ -449,19 +503,38 @@ mod tests {
         use crate::modifier::DrawNode;
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let color = DividerDefaults::color(&theme);
-        let mk = |vertical: bool, thickness: f32, color: Color, pad_s: f32| {
-            DividerNode {
-                vertical, thickness, color,
-                pad_s, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
-            }
+        let mk = |vertical: bool, thickness: f32, color: Color, pad_s: f32| DividerNode {
+            vertical,
+            thickness,
+            color,
+            pad_s,
+            pad_t: 0.0,
+            pad_e: 0.0,
+            pad_b: 0.0,
         };
         let base = mk(false, 1.0, color, 0.0);
         assert_eq!(base.node_key(), mk(false, 1.0, color, 0.0).node_key());
-        assert_ne!(base.node_key(), mk(true, 1.0, color, 0.0).node_key(), "vertical 应进 key");
-        assert_ne!(base.node_key(), mk(false, 2.0, color, 0.0).node_key(), "thickness 应进 key");
+        assert_ne!(
+            base.node_key(),
+            mk(true, 1.0, color, 0.0).node_key(),
+            "vertical 应进 key"
+        );
+        assert_ne!(
+            base.node_key(),
+            mk(false, 2.0, color, 0.0).node_key(),
+            "thickness 应进 key"
+        );
         let other = Color::from_argb(255, 1, 2, 3);
-        assert_ne!(base.node_key(), mk(false, 1.0, other, 0.0).node_key(), "color 应进 key");
-        assert_ne!(base.node_key(), mk(false, 1.0, color, 20.0).node_key(), "pad_s 应进 key");
+        assert_ne!(
+            base.node_key(),
+            mk(false, 1.0, other, 0.0).node_key(),
+            "color 应进 key"
+        );
+        assert_ne!(
+            base.node_key(),
+            mk(false, 1.0, color, 20.0).node_key(),
+            "pad_s 应进 key"
+        );
         // Hairline（NaN）：同 payload NaN → to_bits 相等 → key 相等。
         // This IS the skip decision's input for this node: `Modifier::param_eq` compares the node track by
         // `node_key_of` (`modifier.rs:3397-3412`), so a hairline divider's key is stable and the group can
@@ -469,7 +542,11 @@ mod tests {
         // so it decides nothing here.
         let h1 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
         let h2 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
-        assert_eq!(h1.node_key(), h2.node_key(), "同 Hairline key 应相等（to_bits 按位比）");
+        assert_eq!(
+            h1.node_key(),
+            h2.node_key(),
+            "同 Hairline key 应相等（to_bits 按位比）"
+        );
         assert_ne!(base.node_key(), h1.node_key(), "Hairline 与 1.0 key 应不等");
     }
 
@@ -520,7 +597,8 @@ mod tests {
         // The trap, asserted so nobody reintroduces it: NaN as the LAYOUT extent is not bitwise-compared by
         // the element track.
         assert!(
-            !chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE).param_eq(&chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE)),
+            !chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE)
+                .param_eq(&chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE)),
             "a NaN height in the chain compares unequal to itself through the Size element"
         );
     }
@@ -553,27 +631,57 @@ mod tests {
             pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
         };
         // 横线 + padding_start(20) 内缩场景
-        let node_mod = Modifier::new().fill_max_width().height(1.0).draw_node(DividerNode {
-            vertical: false, thickness: 1.0, color,
-            pad_s: 20.0, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
-        });
-        let enum_mod = Modifier::new().fill_max_width().height(1.0).draw(move |canvas, rect| {
-            let inner = skia_safe::Rect::new(rect.left + 20.0, rect.top, rect.right, rect.bottom);
-            draw_divider_line(canvas, inner, false, 1.0, color);
-        });
+        let node_mod = Modifier::new()
+            .fill_max_width()
+            .height(1.0)
+            .draw_node(DividerNode {
+                vertical: false,
+                thickness: 1.0,
+                color,
+                pad_s: 20.0,
+                pad_t: 0.0,
+                pad_e: 0.0,
+                pad_b: 0.0,
+            });
+        let enum_mod = Modifier::new()
+            .fill_max_width()
+            .height(1.0)
+            .draw(move |canvas, rect| {
+                let inner =
+                    skia_safe::Rect::new(rect.left + 20.0, rect.top, rect.right, rect.bottom);
+                draw_divider_line(canvas, inner, false, 1.0, color);
+            });
         let px_node = render_with(node_mod);
         let px_enum = render_with(enum_mod);
         assert_eq!(px_node.len(), 300 * 300);
-        assert_eq!(px_node, px_enum, "node 路与旧 draw 路必须逐字节一致（含 padding 内缩）");
+        assert_eq!(
+            px_node, px_enum,
+            "node 路与旧 draw 路必须逐字节一致（含 padding 内缩）"
+        );
         // 垂直线对照
-        let node_v = Modifier::new().fill_max_height().width(2.0).draw_node(DividerNode {
-            vertical: true, thickness: 2.0, color,
-            pad_s: 0.0, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
-        });
-        let enum_v = Modifier::new().fill_max_height().width(2.0).draw(move |canvas, rect| {
-            draw_divider_line(canvas, rect, true, 2.0, color);
-        });
-        assert_eq!(render_with(node_v), render_with(enum_v), "垂直线双路必须一致");
+        let node_v = Modifier::new()
+            .fill_max_height()
+            .width(2.0)
+            .draw_node(DividerNode {
+                vertical: true,
+                thickness: 2.0,
+                color,
+                pad_s: 0.0,
+                pad_t: 0.0,
+                pad_e: 0.0,
+                pad_b: 0.0,
+            });
+        let enum_v = Modifier::new()
+            .fill_max_height()
+            .width(2.0)
+            .draw(move |canvas, rect| {
+                draw_divider_line(canvas, rect, true, 2.0, color);
+            });
+        assert_eq!(
+            render_with(node_v),
+            render_with(enum_v),
+            "垂直线双路必须一致"
+        );
     }
 
     #[test]
@@ -585,13 +693,18 @@ mod tests {
         let custom = Color::from_argb(255, 0, 0, 255);
         for translate in [0.0f32, 0.25, 0.4, 0.75] {
             let (buf, w) = render_divider_transformed(1.5, (0.0, translate), |ctx| {
-                Divider::horizontal().thickness(DIVIDER_HAIRLINE).color(custom).build(ctx);
+                Divider::horizontal()
+                    .thickness(DIVIDER_HAIRLINE)
+                    .color(custom)
+                    .build(ctx);
             });
             // The ideal centre in device px, and the row it falls in.
             let ideal = (0.0 + 0.5 / 1.5) * 1.5 + translate;
             let row = ideal.floor() as usize;
             let x = 60usize;
-            let touched: Vec<usize> = (0..8).filter(|y| px_at(&buf, w, x, *y) != [255, 255, 255, 255]).collect();
+            let touched: Vec<usize> = (0..8)
+                .filter(|y| px_at(&buf, w, x, *y) != [255, 255, 255, 255])
+                .collect();
             assert_eq!(
                 touched,
                 vec![row],
@@ -678,5 +791,4 @@ mod tests {
             }
         }
     }
-
 }

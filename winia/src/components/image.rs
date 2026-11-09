@@ -11,16 +11,17 @@
 //! Both sources scale through the same `content_scale_rect` — scaling, alignment and RTL, then
 //! clipToBounds — so an SVG and a bitmap behave identically.
 
-use crate::graphics::{ContentScale, ImageAlignment};
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::modifier::Modifier;
-use crate::graphics::{ColorFilter, FilterQuality};
 use crate::graphics::IconSource;
-
+use crate::graphics::{ColorFilter, FilterQuality};
+use crate::graphics::{ContentScale, ImageAlignment};
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 
 impl Default for ContentScale {
-    fn default() -> Self { Self::Fit }
+    fn default() -> Self {
+        Self::Fit
+    }
 }
 
 impl ContentScale {
@@ -59,13 +60,21 @@ impl ContentScale {
             ImageAlignment::TopStart
             | ImageAlignment::CenterStart
             | ImageAlignment::BottomStart => {
-                if rtl { 1.0 } else { 0.0 }
+                if rtl {
+                    1.0
+                } else {
+                    0.0
+                }
             }
-            ImageAlignment::TopCenter
-            | ImageAlignment::Center
-            | ImageAlignment::BottomCenter => 0.5,
+            ImageAlignment::TopCenter | ImageAlignment::Center | ImageAlignment::BottomCenter => {
+                0.5
+            }
             _ => {
-                if rtl { 0.0 } else { 1.0 }
+                if rtl {
+                    0.0
+                } else {
+                    1.0
+                }
             }
         };
         let fy = match alignment {
@@ -77,11 +86,11 @@ impl ContentScale {
     }
 }
 
-
 impl Default for ImageAlignment {
-    fn default() -> Self { Self::Center }
+    fn default() -> Self {
+        Self::Center
+    }
 }
-
 
 /// 图片组件（对标 Compose foundation `Image`）。
 ///
@@ -208,15 +217,27 @@ impl Image {
     }
 
     // ── Getters（测试用）──
-    pub fn get_source(&self) -> &IconSource { &self.source }
-    pub fn get_content_scale(&self) -> ContentScale { self.content_scale }
-    pub fn get_alignment(&self) -> ImageAlignment { self.alignment }
-    pub fn get_alpha(&self) -> f32 { self.alpha.eval() }
+    pub fn get_source(&self) -> &IconSource {
+        &self.source
+    }
+    pub fn get_content_scale(&self) -> ContentScale {
+        self.content_scale
+    }
+    pub fn get_alignment(&self) -> ImageAlignment {
+        self.alignment
+    }
+    pub fn get_alpha(&self) -> f32 {
+        self.alpha.eval()
+    }
     pub fn get_color_filter(&self) -> Option<ColorFilter> {
         self.color_filter.as_ref().map(|filter| filter.eval())
     }
-    pub fn get_filter_quality(&self) -> FilterQuality { self.filter_quality }
-    pub fn get_modifier(&self) -> &Modifier { &self.modifier }
+    pub fn get_filter_quality(&self) -> FilterQuality {
+        self.filter_quality
+    }
+    pub fn get_modifier(&self) -> &Modifier {
+        &self.modifier
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -242,7 +263,10 @@ mod tests {
     fn test_image_builder_color_filter_and_quality() {
         use crate::graphics::{BlendMode, Color};
         let img = Image::file("a.png")
-            .color_filter(ColorFilter::Tint { color: Color::RED, blend_mode: BlendMode::SrcIn })
+            .color_filter(ColorFilter::Tint {
+                color: Color::RED,
+                blend_mode: BlendMode::SrcIn,
+            })
             .filter_quality(FilterQuality::High);
         assert!(matches!(
             img.get_color_filter(),
@@ -251,14 +275,16 @@ mod tests {
         assert_eq!(img.get_filter_quality(), FilterQuality::High);
 
         let gray = ColorFilter::Matrix([
-            0.2126, 0.7152, 0.0722, 0.0, 0.0,
-            0.2126, 0.7152, 0.0722, 0.0, 0.0,
-            0.2126, 0.7152, 0.0722, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, 0.2126, 0.7152, 0.0722, 0.0, 0.0, 0.2126, 0.7152,
+            0.0722, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
         ]);
         let img2 = Image::file("a.png").color_filter(gray.clone());
         assert_eq!(img2.get_color_filter(), Some(gray.clone()));
-        assert_ne!(img.get_color_filter(), Some(gray), "Tint 与 Matrix 是不同滤镜");
+        assert_ne!(
+            img.get_color_filter(),
+            Some(gray),
+            "Tint 与 Matrix 是不同滤镜"
+        );
     }
 
     #[test]

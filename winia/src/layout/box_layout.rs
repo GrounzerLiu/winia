@@ -9,12 +9,12 @@
 //! (`BoxScope.matchParentSize`). The full contract is in `docs/box.md`.
 
 use super::constraints::Constraints;
-use crate::unit::{Offset, Size};
-use super::node::*;
-use super::node::measure_node;
 use super::container::build_container;
+use super::node::measure_node;
+use super::node::*;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::{Offset, Size};
 
 /// The box measure policy: children stack, and the box sizes to the largest of them.
 ///
@@ -100,7 +100,8 @@ impl BoxLayout {
 
     /// The alignment in force, whichever of the two was set.
     pub fn effective_alignment(&self) -> ContentAlignment {
-        self.content_alignment.unwrap_or_else(|| ContentAlignment::both(self.alignment))
+        self.content_alignment
+            .unwrap_or_else(|| ContentAlignment::both(self.alignment))
     }
 }
 
@@ -190,7 +191,11 @@ impl MeasurePolicy for BoxLayout {
                 // `Stretch` is skipped in the one-axis fallback: it means "fill the CROSS axis" in a
                 // Row/Column, and a Box would read it as fill-both-axes (which it cannot honour
                 // without resizing the child, something Compose's `BoxScope.align` never does).
-                let fallback = if matching { ContentAlignment::CENTER } else { align };
+                let fallback = if matching {
+                    ContentAlignment::CENTER
+                } else {
+                    align
+                };
                 let child_align = nodes[children[i]]
                     .modifier
                     .get_content_align_self()
@@ -238,9 +243,7 @@ mod tests {
 
     fn make_leaf(w: f32, h: f32) -> LayoutNode {
         use crate::modifier::Modifier;
-        let mut node = LayoutNode::leaf(
-            Modifier::new().size(w, h),
-        );
+        let mut node = LayoutNode::leaf(Modifier::new().size(w, h));
         node.measured_size = Size::new(w, h);
         node
     }
@@ -255,12 +258,8 @@ mod tests {
         ];
         let children: Vec<usize> = (0..nodes.len()).collect();
 
-        let (size, placements) = box_layout.measure(
-            &mut nodes,
-            &[],
-            &children,
-            Constraints::UNBOUNDED,
-        );
+        let (size, placements) =
+            box_layout.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
 
         // The box takes the widest child, 100, and the tallest, 80.
         assert_eq!(size, Size::new(100.0, 80.0));
@@ -270,18 +269,11 @@ mod tests {
     #[test]
     fn center_alignment_centres_every_child() {
         let box_layout = BoxLayout::new().alignment(Alignment::Center);
-        let mut nodes = vec![
-            make_leaf(50.0, 30.0),
-            make_leaf(100.0, 80.0),
-        ];
+        let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
 
-        let (size, placements) = box_layout.measure(
-            &mut nodes,
-            &[],
-            &children,
-            Constraints::UNBOUNDED,
-        );
+        let (size, placements) =
+            box_layout.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
 
         // The box is 100 x 80, so every child is centred inside it.
         assert_eq!(size, Size::new(100.0, 80.0));
@@ -330,12 +322,8 @@ mod tests {
             let box_layout = BoxLayout::new().content_alignment(alignment);
             let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
             let children: Vec<usize> = (0..nodes.len()).collect();
-            let (_, placements) = box_layout.measure(
-                &mut nodes,
-                &[],
-                &children,
-                Constraints::UNBOUNDED,
-            );
+            let (_, placements) =
+                box_layout.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
             assert_eq!(
                 placements[0].position, expected,
                 "{alignment:?} should place the 50x30 child at {expected:?}"
@@ -385,14 +373,25 @@ mod tests {
     #[test]
     fn a_child_alignment_wins_over_the_boxes_own_and_covers_both_carriers() {
         let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().size(50.0, 50.0).content_align_self(ContentAlignment::BOTTOM_END)),
-            LayoutNode::leaf(Modifier::new().size(50.0, 50.0).align_self(Alignment::Center)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(50.0, 50.0)
+                    .content_align_self(ContentAlignment::BOTTOM_END),
+            ),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(50.0, 50.0)
+                    .align_self(Alignment::Center),
+            ),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
         ];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (size, placements) = BoxLayout::new()
-            .alignment(Alignment::Start)
-            .measure(&mut nodes, &[], &children, Constraints::fixed(400.0, 400.0));
+        let (size, placements) = BoxLayout::new().alignment(Alignment::Start).measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::fixed(400.0, 400.0),
+        );
         assert_eq!(size, Size::new(400.0, 400.0));
         assert_eq!(
             placements[0].position,
@@ -424,7 +423,11 @@ mod tests {
             &children,
             Constraints::new(0.0, 200.0, 0.0, 200.0),
         );
-        assert_eq!(size, Size::new(500.0, 50.0), "the content size, not the 200 maximum");
+        assert_eq!(
+            size,
+            Size::new(500.0, 50.0),
+            "the content size, not the 200 maximum"
+        );
     }
 
     /// The box still floors at the incoming minimum — that half of the old `constrain` was right.
@@ -473,7 +476,11 @@ mod tests {
             &children,
             Constraints::new(0.0, 400.0, 0.0, 400.0),
         );
-        assert_eq!(size, Size::new(120.0, 40.0), "the match-parent child must not grow the box");
+        assert_eq!(
+            size,
+            Size::new(120.0, 40.0),
+            "the match-parent child must not grow the box"
+        );
         assert_eq!(
             placements[1].size,
             Size::new(120.0, 40.0),
@@ -499,12 +506,8 @@ mod tests {
                 .content_align_self(ContentAlignment::BOTTOM_END),
         )];
         let children: Vec<usize> = vec![0];
-        let (size, placements) = BoxLayout::new().measure(
-            &mut nodes,
-            &[],
-            &children,
-            Constraints::fixed(200.0, 100.0),
-        );
+        let (size, placements) =
+            BoxLayout::new().measure(&mut nodes, &[], &children, Constraints::fixed(200.0, 100.0));
         assert_eq!(size, Size::new(200.0, 100.0));
         assert_eq!(placements[0].size, Size::new(200.0, 100.0));
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
@@ -517,7 +520,11 @@ mod tests {
     fn a_match_parent_child_that_escapes_the_box_is_centred() {
         let mut nodes = vec![
             make_leaf(100.0, 100.0),
-            LayoutNode::leaf(Modifier::new().required_size(200.0, 60.0).match_parent_size()),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .required_size(200.0, 60.0)
+                    .match_parent_size(),
+            ),
         ];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = BoxLayout::new().measure(
@@ -526,8 +533,16 @@ mod tests {
             &children,
             Constraints::new(0.0, 400.0, 0.0, 400.0),
         );
-        assert_eq!(size, Size::new(100.0, 100.0), "the escaping child does not size the box");
-        assert_eq!(placements[1].size, Size::new(200.0, 60.0), "it keeps its measured size");
+        assert_eq!(
+            size,
+            Size::new(100.0, 100.0),
+            "the escaping child does not size the box"
+        );
+        assert_eq!(
+            placements[1].size,
+            Size::new(200.0, 60.0),
+            "it keeps its measured size"
+        );
         assert_eq!(
             placements[1].position,
             Offset::new(-50.0, 20.0),
@@ -539,7 +554,9 @@ mod tests {
     /// `constraints.minWidth`), which is 0 under loose constraints.
     #[test]
     fn a_box_of_only_match_parent_children_takes_the_minimum() {
-        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(300.0, 200.0).match_parent_size())];
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().size(300.0, 200.0).match_parent_size(),
+        )];
         let children: Vec<usize> = vec![0];
 
         let (loose, _) = BoxLayout::new().measure(
@@ -548,15 +565,17 @@ mod tests {
             &children,
             Constraints::new(0.0, 400.0, 0.0, 400.0),
         );
-        assert_eq!(loose, Size::new(0.0, 0.0), "nothing sizes the box, so it is the minimum");
-
-        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(300.0, 200.0).match_parent_size())];
-        let (tight, placements) = BoxLayout::new().measure(
-            &mut nodes,
-            &[],
-            &children,
-            Constraints::fixed(100.0, 50.0),
+        assert_eq!(
+            loose,
+            Size::new(0.0, 0.0),
+            "nothing sizes the box, so it is the minimum"
         );
+
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().size(300.0, 200.0).match_parent_size(),
+        )];
+        let (tight, placements) =
+            BoxLayout::new().measure(&mut nodes, &[], &children, Constraints::fixed(100.0, 50.0));
         assert_eq!(tight, Size::new(100.0, 50.0));
         assert_eq!(placements[0].size, Size::new(100.0, 50.0));
     }
@@ -580,7 +599,11 @@ mod tests {
                         .modifier(Modifier::new().size(120.0, 40.0))
                         .build(ctx);
                     let m = Modifier::new().size(300.0, 200.0);
-                    let m = if matching.get() { m.match_parent_size() } else { m };
+                    let m = if matching.get() {
+                        m.match_parent_size()
+                    } else {
+                        m
+                    };
                     Stack::new().modifier(m).build(ctx, |_ctx| {});
                 });
             }
@@ -648,13 +671,13 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
         ];
         let children: Vec<usize> = vec![0, 1];
-        let (size, placements) = BoxLayout::new().measure(
-            &mut nodes,
-            &[],
-            &children,
-            Constraints::UNBOUNDED,
+        let (size, placements) =
+            BoxLayout::new().measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        assert_eq!(
+            size,
+            Size::new(f32::MAX, f32::MAX),
+            "the sizing child reports infinity"
         );
-        assert_eq!(size, Size::new(f32::MAX, f32::MAX), "the sizing child reports infinity");
         assert_eq!(
             placements[1].size,
             Size::new(40.0, 10.0),
@@ -700,10 +723,15 @@ mod tests {
         let root = composer.arena.root.expect("root");
         let matched = composer.arena_nodes()[root].children[1];
         assert!(
-            composer.arena_nodes()[matched].modifier.is_match_parent_size(),
+            composer.arena_nodes()[matched]
+                .modifier
+                .is_match_parent_size(),
             "the node under test is the one carrying the flag"
         );
-        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(100.0, 40.0));
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(100.0, 40.0)
+        );
         assert_eq!(
             composer.arena_nodes()[matched].measured_size,
             Size::new(100.0, 40.0),
@@ -717,8 +745,15 @@ mod tests {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let root = composer.arena.root.expect("root");
         let matched = composer.arena_nodes()[root].children[1];
-        assert!(composer.arena_nodes()[matched].modifier.is_match_parent_size());
-        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(200.0, 40.0));
+        assert!(
+            composer.arena_nodes()[matched]
+                .modifier
+                .is_match_parent_size()
+        );
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(200.0, 40.0)
+        );
         assert_eq!(
             composer.arena_nodes()[matched].measured_size,
             Size::new(200.0, 40.0),
@@ -749,7 +784,11 @@ mod tests {
         composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
         let root = composer.arena.root.expect("root");
         let matched = composer.arena_nodes()[root].children[1];
-        assert!(composer.arena_nodes()[matched].modifier.is_match_parent_size());
+        assert!(
+            composer.arena_nodes()[matched]
+                .modifier
+                .is_match_parent_size()
+        );
         assert_eq!(
             composer.arena_nodes()[matched].position,
             Offset::new(5.0, 7.0),
@@ -860,9 +899,16 @@ mod tests {
         }));
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let root = composer.arena.root.expect("root");
-        assert_eq!(composer.arena_nodes()[root].measured_size, Size::new(300.0, 150.0));
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size,
+            Size::new(300.0, 150.0)
+        );
         let scrim = composer.arena_nodes()[root].children[1];
-        assert!(composer.arena_nodes()[scrim].modifier.is_match_parent_size());
+        assert!(
+            composer.arena_nodes()[scrim]
+                .modifier
+                .is_match_parent_size()
+        );
         assert_eq!(
             composer.arena_nodes()[scrim].measured_size,
             Size::new(300.0, 150.0),
@@ -901,7 +947,11 @@ mod tests {
         );
         let anchor = composer.arena_nodes()[root].children[0];
         let scrim = composer.arena_nodes()[root].children[1];
-        assert!(composer.arena_nodes()[scrim].modifier.is_match_parent_size());
+        assert!(
+            composer.arena_nodes()[scrim]
+                .modifier
+                .is_match_parent_size()
+        );
         assert_eq!(
             composer.arena_nodes()[anchor].position,
             Offset::new(14.0, 14.0),
@@ -957,12 +1007,8 @@ mod tests {
             LayoutNode::leaf(Modifier::new().required_size(f32::MAX, 40.0)),
             LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
         ];
-        let (size, placements) = BoxLayout::new().measure(
-            &mut nodes,
-            &[],
-            &[0, 1],
-            Constraints::UNBOUNDED,
-        );
+        let (size, placements) =
+            BoxLayout::new().measure(&mut nodes, &[], &[0, 1], Constraints::UNBOUNDED);
         assert_eq!(size, Size::new(f32::MAX, 40.0));
         assert_eq!(
             placements[1].size,
@@ -979,12 +1025,8 @@ mod tests {
             LayoutNode::leaf(Modifier::new().required_size(f32::INFINITY, f32::INFINITY)),
             LayoutNode::leaf(Modifier::new().size(40.0, 10.0).match_parent_size()),
         ];
-        let (size, placements) = BoxLayout::new().measure(
-            &mut nodes,
-            &[],
-            &[0, 1],
-            Constraints::UNBOUNDED,
-        );
+        let (size, placements) =
+            BoxLayout::new().measure(&mut nodes, &[], &[0, 1], Constraints::UNBOUNDED);
         assert_eq!(size, Size::new(f32::INFINITY, f32::INFINITY));
         assert_eq!(placements[1].size, Size::new(40.0, 10.0));
     }
@@ -1044,10 +1086,16 @@ impl Stack {
     }
 
     /// Append a modifier. A `layout_direction` in it wins over the ambient CompositionLocal.
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
 
     /// Place every child with one axis-symmetric value — see [`BoxLayout::alignment`].
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
 
     /// Each axis on its own — Compose's 2-D `Box(contentAlignment = …)`.
     pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
@@ -1072,7 +1120,10 @@ impl Stack {
         ctx.changed(&self.propagate_min_constraints);
         // Direction: an explicit modifier wins over the CompositionLocal (as in Column/Row) — the
         // horizontal half of the alignment mirrors under it.
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         // The content closure becomes the composition scope, same as Column.
         let mut policy = match self.content_alignment {
             Some(a) => BoxLayout::new().content_alignment(a).direction(dir),
@@ -1084,5 +1135,7 @@ impl Stack {
 }
 
 impl Default for Stack {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

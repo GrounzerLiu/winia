@@ -101,7 +101,11 @@ impl WindowTheme {
     /// scale back to the default, leaving the window on the old one until something else re-ran it.
     pub(crate) fn applied(&self) -> AppliedTheme {
         let cell = self.cell();
-        AppliedTheme { colors: cell.colors, typography: cell.typography.clone(), direction: cell.direction }
+        AppliedTheme {
+            colors: cell.colors,
+            typography: cell.typography.clone(),
+            direction: cell.direction,
+        }
     }
 
     /// The palette to compose with — the last resolved one, deliberately not a fresh resolve: a frame
@@ -113,7 +117,12 @@ impl WindowTheme {
     /// Publish what the declaring tree sampled this frame. Returns whether anything moved — the window's
     /// own frame has to be scheduled in that case, because the change happened in ANOTHER composer (which
     /// leaves the window's composer with nothing pending).
-    pub(crate) fn publish(&self, spec: ThemeSpec, typography: Typography, direction: LayoutDirection) -> bool {
+    pub(crate) fn publish(
+        &self,
+        spec: ThemeSpec,
+        typography: Typography,
+        direction: LayoutDirection,
+    ) -> bool {
         let mut cell = self.cell();
         if cell.spec == spec && cell.typography == typography && cell.direction == direction {
             return false;
@@ -139,7 +148,10 @@ impl WindowTheme {
         cell.resolved_epoch = epoch;
         let colors = cell.spec.colors();
         cell.colors = colors;
-        if colors == drawn.colors && cell.typography == drawn.typography && cell.direction == drawn.direction {
+        if colors == drawn.colors
+            && cell.typography == drawn.typography
+            && cell.direction == drawn.direction
+        {
             return false;
         }
         drawn.colors = colors;
@@ -152,7 +164,12 @@ impl WindowTheme {
     pub(crate) fn provide(&self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let (spec, colors, typography, direction) = {
             let cell = self.cell();
-            (cell.spec.clone(), cell.colors, cell.typography.clone(), cell.direction)
+            (
+                cell.spec.clone(),
+                cell.colors,
+                cell.typography.clone(),
+                cell.direction,
+            )
         };
         WiniaTheme::provide_resolved(spec, colors, typography, direction, ctx, content);
     }
@@ -168,7 +185,9 @@ thread_local! {
 /// its own (a window). Falls back to the palette in force, so content created outside any theme node
 /// behaves as it always did.
 pub(crate) fn current_theme_spec() -> ThemeSpec {
-    CURRENT_THEME_SPEC.with(|s| s.borrow().clone()).unwrap_or_else(|| ThemeSpec::Fixed(WiniaTheme::colors()))
+    CURRENT_THEME_SPEC
+        .with(|s| s.borrow().clone())
+        .unwrap_or_else(|| ThemeSpec::Fixed(WiniaTheme::colors()))
 }
 
 /// Restores the enclosing spec when a theme provide ends (also on the panic path).
@@ -188,7 +207,13 @@ impl WiniaTheme {
         // A TRACKED read: this scope becomes a dependent of the mode, so `set_system_dark_mode` (or the
         // platform's ThemeChanged) invalidates exactly the compositions that resolved a theme.
         let _ = SYSTEM_THEME_STATE.get();
-        Self::provide_spec(ThemeSpec::Auto, Typography::default(), LayoutDirection::Ltr, ctx, content);
+        Self::provide_spec(
+            ThemeSpec::Auto,
+            Typography::default(),
+            LayoutDirection::Ltr,
+            ctx,
+            content,
+        );
     }
 
     /// 在子树中提供亮色主题。
@@ -202,8 +227,18 @@ impl WiniaTheme {
     }
 
     /// 在子树中提供自定义颜色方案 + LTR 方向。
-    pub fn with_theme(colors: ThemeColors, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        Self::with_theme_typography_and_direction(colors, Typography::default(), LayoutDirection::Ltr, ctx, content);
+    pub fn with_theme(
+        colors: ThemeColors,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        Self::with_theme_typography_and_direction(
+            colors,
+            Typography::default(),
+            LayoutDirection::Ltr,
+            ctx,
+            content,
+        );
     }
 
     /// 在子树中提供自定义颜色方案、Typography 和 LTR 方向。
@@ -213,12 +248,29 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        Self::with_theme_typography_and_direction(colors, typography, LayoutDirection::Ltr, ctx, content);
+        Self::with_theme_typography_and_direction(
+            colors,
+            typography,
+            LayoutDirection::Ltr,
+            ctx,
+            content,
+        );
     }
 
     /// 在子树中提供自定义颜色方案和布局方向。
-    pub fn with_theme_and_direction(colors: ThemeColors, direction: LayoutDirection, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        Self::with_theme_typography_and_direction(colors, Typography::default(), direction, ctx, content);
+    pub fn with_theme_and_direction(
+        colors: ThemeColors,
+        direction: LayoutDirection,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        Self::with_theme_typography_and_direction(
+            colors,
+            Typography::default(),
+            direction,
+            ctx,
+            content,
+        );
     }
 
     /// 在子树中提供完整的颜色、Typography 与布局方向主题。
@@ -229,7 +281,13 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        Self::provide_spec(ThemeSpec::Fixed(colors), typography, direction, ctx, content);
+        Self::provide_spec(
+            ThemeSpec::Fixed(colors),
+            typography,
+            direction,
+            ctx,
+            content,
+        );
     }
 
     /// The one place a theme reaches the locals: resolve the spec, provide the four locals, and record
@@ -326,12 +384,20 @@ impl WiniaTheme {
     }
 
     /// 在子树中覆盖 Material Typography token，不改变颜色或布局方向。
-    pub fn with_typography(typography: Typography, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    pub fn with_typography(
+        typography: Typography,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
         LOCAL_TYPOGRAPHY.provides(typography, || content(ctx));
     }
 
     /// 在子树中覆盖内容色（对标 Compose `CompositionLocalProvider(LocalContentColor)`）
-    pub fn with_content_color(color: Color, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    pub fn with_content_color(
+        color: Color,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
         LOCAL_CONTENT_COLOR.provides(color, || content(ctx));
     }
 
@@ -380,4 +446,3 @@ impl WiniaTheme {
         LOCAL_CONTENT_COLOR.current()
     }
 }
-

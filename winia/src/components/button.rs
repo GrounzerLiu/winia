@@ -11,14 +11,14 @@
 //! ```
 
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::layout::Dimension;
-use crate::graphics::{Shape};
+use crate::graphics::Shape;
 use crate::input::interaction::{ComponentState, MutableInteractionSource};
-use std::sync::Arc;
+use crate::layout::BoxLayout;
+use crate::layout::Dimension;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 use std::fmt;
+use std::sync::Arc;
 
 /// Button 变体风格
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,17 +125,28 @@ impl ButtonColors {
         disabled_container: crate::graphics::Color,
         disabled_content: crate::graphics::Color,
     ) -> Self {
-        Self { container, content, disabled_container, disabled_content }
+        Self {
+            container,
+            content,
+            disabled_container,
+            disabled_content,
+        }
     }
 
     /// 按启用状态取容器色
     pub fn container_color(&self, enabled: bool) -> crate::graphics::Color {
-        self.container_color_for(&ComponentState { enabled, ..ComponentState::idle() })
+        self.container_color_for(&ComponentState {
+            enabled,
+            ..ComponentState::idle()
+        })
     }
 
     /// 按启用状态取内容（文字）色
     pub fn content_color(&self, enabled: bool) -> crate::graphics::Color {
-        self.content_color_for(&ComponentState { enabled, ..ComponentState::idle() })
+        self.content_color_for(&ComponentState {
+            enabled,
+            ..ComponentState::idle()
+        })
     }
 
     /// 状态化容器色——仅区分 enabled/disabled（与 material3 ButtonColors 一致；
@@ -150,7 +161,11 @@ impl ButtonColors {
 
     /// 状态化内容色（内容色仅区分 enabled/disabled——与 material3 ButtonColors 一致）
     pub fn content_color_for(&self, state: &ComponentState) -> crate::graphics::Color {
-        if state.enabled { self.content } else { self.disabled_content }
+        if state.enabled {
+            self.content
+        } else {
+            self.disabled_content
+        }
     }
 
     /// 从主题按 style 生成默认色（Compose ButtonDefaults.buttonColors 对标）
@@ -172,18 +187,9 @@ impl ButtonColors {
                 alpha(theme.on_surface, 0.10),
                 alpha(theme.on_surface_variant, 0.38),
             ),
-            ButtonStyle::Tonal => (
-                alpha(theme.on_surface, 0.12),
-                alpha(theme.on_surface, 0.38),
-            ),
-            ButtonStyle::Outlined => (
-                transparent,
-                alpha(theme.on_surface_variant, 0.38),
-            ),
-            ButtonStyle::Text => (
-                transparent,
-                alpha(theme.on_surface_variant, 0.38),
-            ),
+            ButtonStyle::Tonal => (alpha(theme.on_surface, 0.12), alpha(theme.on_surface, 0.38)),
+            ButtonStyle::Outlined => (transparent, alpha(theme.on_surface_variant, 0.38)),
+            ButtonStyle::Text => (transparent, alpha(theme.on_surface_variant, 0.38)),
         };
         Self::new(container, content, disabled_container, disabled_content)
     }
@@ -204,7 +210,13 @@ pub struct ButtonElevation {
 
 impl ButtonElevation {
     pub fn new(default: f32, pressed: f32, focused: f32, hovered: f32, disabled: f32) -> Self {
-        Self { default, pressed, focused, hovered, disabled }
+        Self {
+            default,
+            pressed,
+            focused,
+            hovered,
+            disabled,
+        }
     }
 
     /// M3 `FilledButtonTokens` / `FilledTonalButtonTokens`: rest 0 / pressed 0 / focused 0 / **hovered 1** /
@@ -314,12 +326,7 @@ impl ButtonBorder {
         let color = if enabled {
             c
         } else {
-            crate::graphics::Color::from_argb(
-                (c.a as f32 * 0.10) as u8,
-                c.r,
-                c.g,
-                c.b,
-            )
+            crate::graphics::Color::from_argb((c.a as f32 * 0.10) as u8, c.r, c.g, c.b)
         };
         Self::new(1.0, color)
     }
@@ -327,7 +334,6 @@ impl ButtonBorder {
 
 /// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
 pub struct ButtonDefaults;
-
 
 /// The mutable view a [`ButtonStyling`] writes into.
 ///
@@ -431,10 +437,7 @@ impl ButtonDefaults {
 
     /// 默认按钮颜色（对标 material3 `ButtonDefaults.buttonColors()`——
     /// 从主题色板按 style 推导容器/内容色）
-    pub fn button_colors(
-        theme: &crate::theme::ThemeColors,
-        style: ButtonStyle,
-    ) -> ButtonColors {
+    pub fn button_colors(theme: &crate::theme::ThemeColors, style: ButtonStyle) -> ButtonColors {
         ButtonColors::from_theme(theme, style)
     }
 
@@ -666,7 +669,12 @@ impl Button {
     /// 设置内容 padding (start, top, end, bottom)——不设置则按 style 取
     /// [`ButtonDefaults::content_padding`]；每边支持动态 `SizeValue`
     /// （`&State<f32>` / `State<f32>` / 闭包——动画可作用于内边距）
-    pub fn content_padding<A: Into<Dimension>, B: Into<Dimension>, C: Into<Dimension>, D: Into<Dimension>>(
+    pub fn content_padding<
+        A: Into<Dimension>,
+        B: Into<Dimension>,
+        C: Into<Dimension>,
+        D: Into<Dimension>,
+    >(
         mut self,
         padding: (A, B, C, D),
     ) -> Self {
@@ -734,7 +742,8 @@ impl Button {
         ctx.changed(&colors);
         ctx.changed(&visual.border);
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
-        let interaction = self.interaction_source
+        let interaction = self
+            .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
         let state = interaction.state(self.enabled);
@@ -764,9 +773,14 @@ impl Button {
         } else {
             let target = elevation.for_state(&state);
             let to = state.elevation_interaction();
-            let from = if state.enabled { last_kind.peek() } else { None };
-            let spec = ButtonElevation::spec_for(from, to)
-                .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+            let from = if state.enabled {
+                last_kind.peek()
+            } else {
+                None
+            };
+            let spec = ButtonElevation::spec_for(from, to).unwrap_or(
+                crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()),
+            );
             last_kind.set(to);
             Some(ctx.animate_float_as_state(target, spec))
         };
@@ -781,10 +795,13 @@ impl Button {
         // upstream comments is "intentional here to prevent any bounce in this component"
         // (`:248-252`) — the same rule the icon buttons follow, and the reason this is not a
         // spatial spring.
-        let press_progress = ctx.animate_float_as_state(
-            if state.pressed { 1.0 } else { 0.0 },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default()),
-        );
+        let press_progress =
+            ctx.animate_float_as_state(
+                if state.pressed { 1.0 } else { 0.0 },
+                crate::animation::AnimationSpec::Spring(
+                    crate::animation::SpringSpec::effects_default(),
+                ),
+            );
         let pressed_radius = self.size_variant.pressed_container_radius();
         // The press morph is a PAINT-time value: the closures read the animated progress with
         // `peek()`, so pressing no longer recomposes the button every frame. ONE carrier is handed to
@@ -946,51 +963,67 @@ impl Button {
                 .alignment(crate::layout::Alignment::Center)
                 .propagate_min_constraints(true),
             |ctx| {
-        // content 闭包自动成为组合 scope（与 Column 一致）
-        match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
-            crate::runtime::composer::GroupStatus::Skip => {}
-            crate::runtime::composer::GroupStatus::Enter => {
-                // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
-                // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
-                // 取按钮内容色（如 Filled 内图标自动 on_primary）
-                crate::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
-                    let mut text_style = crate::theme::WiniaTheme::typography().label_large;
-                    text_style.color = Some(text_color);
-                    crate::components::text::ProvideTextStyle(
-                        text_style,
-                        ctx,
-                        |ctx| {
-                            crate::layout::Row::new()
-                                .alignment(crate::layout::Alignment::Center)
-                                .spacing(self.size_variant.icon_label_space())
-                                .build(ctx, content);
-                        },
-                    );
-                });
-            }
-        }
-        // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
-        ctx.set_current_node_focus_color(theme.primary);
-        ctx.end_restartable_group();
+                // content 闭包自动成为组合 scope（与 Column 一致）
+                match ctx.start_restartable_group(
+                    key,
+                    modifier,
+                    BoxLayout::new().alignment(crate::layout::Alignment::Center),
+                ) {
+                    crate::runtime::composer::GroupStatus::Skip => {}
+                    crate::runtime::composer::GroupStatus::Enter => {
+                        // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
+                        // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
+                        // 取按钮内容色（如 Filled 内图标自动 on_primary）
+                        crate::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
+                            let mut text_style = crate::theme::WiniaTheme::typography().label_large;
+                            text_style.color = Some(text_color);
+                            crate::components::text::ProvideTextStyle(text_style, ctx, |ctx| {
+                                crate::layout::Row::new()
+                                    .alignment(crate::layout::Alignment::Center)
+                                    .spacing(self.size_variant.icon_label_space())
+                                    .build(ctx, content);
+                            });
+                        });
+                    }
+                }
+                // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
+                ctx.set_current_node_focus_color(theme.primary);
+                ctx.end_restartable_group();
             },
         );
     }
 
     // ── Getters（测试用）──
-    pub fn get_enabled(&self) -> bool { self.enabled }
-    pub fn get_style(&self) -> ButtonStyle { self.style }
-    pub fn get_colors(&self) -> Option<ButtonColors> { self.colors }
-    pub fn get_elevation(&self) -> Option<ButtonElevation> { self.elevation }
-    pub fn get_shape(&self) -> Shape { self.shape }
+    pub fn get_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn get_style(&self) -> ButtonStyle {
+        self.style
+    }
+    pub fn get_colors(&self) -> Option<ButtonColors> {
+        self.colors
+    }
+    pub fn get_elevation(&self) -> Option<ButtonElevation> {
+        self.elevation
+    }
+    pub fn get_shape(&self) -> Shape {
+        self.shape
+    }
     pub fn get_content_padding(&self) -> Option<&(Dimension, Dimension, Dimension, Dimension)> {
         self.content_padding.as_ref()
     }
     pub fn get_min_size(&self) -> (Option<Dimension>, Option<Dimension>) {
         (self.min_width.clone(), self.min_height.clone())
     }
-    pub fn get_border(&self) -> Option<ButtonBorder> { self.border }
-    pub fn get_size(&self) -> ButtonSize { self.size_variant }
-    pub fn get_modifier(&self) -> &Modifier { &self.modifier }
+    pub fn get_border(&self) -> Option<ButtonBorder> {
+        self.border
+    }
+    pub fn get_size(&self) -> ButtonSize {
+        self.size_variant
+    }
+    pub fn get_modifier(&self) -> &Modifier {
+        &self.modifier
+    }
 }
 
 impl Default for Button {
@@ -1009,7 +1042,6 @@ impl fmt::Debug for Button {
             .finish()
     }
 }
-
 
 #[cfg(test)]
 mod tests;

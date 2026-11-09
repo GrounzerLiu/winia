@@ -32,19 +32,19 @@
 //! exactly that in BOTH schemes, so the morph now runs on upstream's own
 //! `MotionSchemeKeyTokens.DefaultEffects` (`SplitButton.kt:695`, `:775`, `:887`).
 
+use crate::components::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
+use crate::graphics::{Color, Shape};
+use crate::input::interaction::MutableInteractionSource;
+use crate::layout::LayoutDirection;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{
+    IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, intrinsic_size_of, measure_node,
+};
+use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
-use crate::unit::{Offset, Size};
-use crate::layout::node::{
-    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
-};
-use crate::layout::LayoutDirection;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
-use crate::components::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
-use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 /// The shapes a split button morphs between (material3 `SplitButtonShapes`).
@@ -65,7 +65,11 @@ impl SplitButtonShapes {
     /// A shape set that does not morph: resting and pressed are the same and there is no checked
     /// shape (material3's `SplitButtonShapes(shape, shape, null)`).
     pub const fn flat(shape: Shape) -> Self {
-        Self { shape, pressed_shape: shape, checked_shape: None }
+        Self {
+            shape,
+            pressed_shape: shape,
+            checked_shape: None,
+        }
     }
 }
 
@@ -239,7 +243,10 @@ pub struct SplitButtonLayout {
 
 impl SplitButtonLayout {
     pub fn new() -> Self {
-        Self { spacing: SplitButtonDefaults::SPACING, modifier: Modifier::new() }
+        Self {
+            spacing: SplitButtonDefaults::SPACING,
+            modifier: Modifier::new(),
+        }
     }
 
     /// The gap between the two buttons (`SplitButtonLayout(spacing = …)`).
@@ -273,7 +280,10 @@ impl SplitButtonLayout {
             .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let key = ctx.next_key();
-        let policy = SplitButtonPolicy { spacing: self.spacing, direction };
+        let policy = SplitButtonPolicy {
+            spacing: self.spacing,
+            direction,
+        };
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::runtime::composer::GroupStatus::Skip => {}
             crate::runtime::composer::GroupStatus::Enter => {
@@ -410,8 +420,7 @@ impl MeasurePolicy for SplitButtonPolicy {
             Constraints::new(0.0, constraints.max_width, height, height),
         );
         // 5. The leading button gets the remaining width.
-        let remaining =
-            (constraints.max_width - (trailing_size.width + self.spacing)).max(0.0);
+        let remaining = (constraints.max_width - (trailing_size.width + self.spacing)).max(0.0);
         let (leading_size, _) = measure_node(
             nodes,
             policies,
@@ -419,9 +428,8 @@ impl MeasurePolicy for SplitButtonPolicy {
             Constraints::new(0.0, remaining, height, height),
         );
 
-        let width = constraints.constrain_width(
-            leading_size.width + trailing_size.width + self.spacing,
-        );
+        let width =
+            constraints.constrain_width(leading_size.width + trailing_size.width + self.spacing);
         // material3 places the two side by side and centres each vertically; under RTL it is
         // `placeRelative`, which mirrors the pair, so the LEADING button ends up on the right.
         let leading_x = if self.direction == LayoutDirection::Rtl {
@@ -478,7 +486,9 @@ pub struct LeadingButton {
 
 impl LeadingButton {
     pub fn new(on_click: impl Fn() + Send + Sync + 'static) -> Self {
-        Self { part: SplitButtonPart::new(SplitButtonRole::Leading, Some(Arc::new(on_click))) }
+        Self {
+            part: SplitButtonPart::new(SplitButtonRole::Leading, Some(Arc::new(on_click))),
+        }
     }
 
     /// Size tier (material3 keys its defaults by button height; [`ButtonSize`] is that table here).
@@ -557,7 +567,9 @@ pub struct TrailingButton {
 impl TrailingButton {
     /// A trailing button that runs an action.
     pub fn new() -> Self {
-        Self { part: SplitButtonPart::new(SplitButtonRole::Trailing, None) }
+        Self {
+            part: SplitButtonPart::new(SplitButtonRole::Trailing, None),
+        }
     }
 
     /// A trailing button that reflects a menu's open state. material3's `checked` overload: while
@@ -582,7 +594,10 @@ impl TrailingButton {
     }
 
     /// The checked form's callback: material3's `onCheckedChange`.
-    pub fn on_checked_change(mut self, on_checked_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
+    pub fn on_checked_change(
+        mut self,
+        on_checked_change: impl Fn(bool) + Send + Sync + 'static,
+    ) -> Self {
         self.part.on_checked_change = Some(Arc::new(on_checked_change));
         self
     }
@@ -725,7 +740,12 @@ impl SplitButtonPart {
             ctx.animate_float_as_state(target_radii.2, shape_morph_spec()),
             ctx.animate_float_as_state(target_radii.3, shape_morph_spec()),
         ];
-        let drawn_radii = (radii[0].get(), radii[1].get(), radii[2].get(), radii[3].get());
+        let drawn_radii = (
+            radii[0].get(),
+            radii[1].get(),
+            radii[2].get(),
+            radii[3].get(),
+        );
         let shape = drawn_shape(&target_shape, target_radii, drawn_radii);
 
         // The content's optical offset follows the SETTLED radii — where the button rests, or the stadium
@@ -735,8 +755,10 @@ impl SplitButtonPart {
         // the offset for the two SETTLED states ("menu icon offset when unselected", "the icon becomes
         // centered when selected"). This keeps both of those, drops the press slide, and still slides the
         // icon to its centred position while the menu opens. Recorded in `docs/split-button.md`.
-        let settled_radii =
-            corner_radii(&SplitButtonDefaults::shape_for_state(&shapes, false, checked), height);
+        let settled_radii = corner_radii(
+            &SplitButtonDefaults::shape_for_state(&shapes, false, checked),
+            height,
+        );
         let settled = [
             ctx.animate_float_as_state(settled_radii.0, shape_morph_spec()),
             ctx.animate_float_as_state(settled_radii.1, shape_morph_spec()),
@@ -770,7 +792,12 @@ impl SplitButtonPart {
                 return 0.0;
             }
             optical_shift_of(
-                (settled[0].get(), settled[1].get(), settled[2].get(), settled[3].get()),
+                (
+                    settled[0].get(),
+                    settled[1].get(),
+                    settled[2].get(),
+                    settled[3].get(),
+                ),
                 rtl,
                 gap_padding,
             )
@@ -868,12 +895,7 @@ struct StateLayer {
 }
 
 impl crate::modifier::DrawWrapNode for StateLayer {
-    fn draw_after(
-        &self,
-        canvas: &skia_safe::Canvas,
-        rect: skia_safe::Rect,
-        _modifier: &Modifier,
-    ) {
+    fn draw_after(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect, _modifier: &Modifier) {
         crate::render::draw_background_for_node(canvas, rect, &self.color, &self.shape);
     }
 }
@@ -888,9 +910,12 @@ impl crate::modifier::DrawWrapNode for StateLayer {
 pub(crate) fn corner_radii(shape: &Shape, height: f32) -> (f32, f32, f32, f32) {
     let full = height / 2.0;
     match shape {
-        Shape::RoundedRect { corner_radius } => {
-            (*corner_radius, *corner_radius, *corner_radius, *corner_radius)
-        }
+        Shape::RoundedRect { corner_radius } => (
+            *corner_radius,
+            *corner_radius,
+            *corner_radius,
+            *corner_radius,
+        ),
         Shape::TopRoundedRect { radius } => (*radius, *radius, 0.0, 0.0),
         Shape::RightRoundedRect { radius } => (0.0, *radius, *radius, 0.0),
         Shape::LeftRoundedRect { radius } => (*radius, 0.0, 0.0, *radius),
@@ -916,7 +941,11 @@ pub(crate) fn corner_radii(shape: &Shape, height: f32) -> (f32, f32, f32, f32) {
 /// itself once every corner has reached its target — so a settled chain reads exactly like material3's
 /// `shapeByInteraction` result (the checked stadium included) while the transition approaches it instead of
 /// snapping to it.
-fn drawn_shape(target: &Shape, target_radii: (f32, f32, f32, f32), radii: (f32, f32, f32, f32)) -> Shape {
+fn drawn_shape(
+    target: &Shape,
+    target_radii: (f32, f32, f32, f32),
+    radii: (f32, f32, f32, f32),
+) -> Shape {
     let reached = |target: f32, current: f32| (target - current).abs() <= 0.01;
     let settled = reached(target_radii.0, radii.0)
         && reached(target_radii.1, radii.1)
@@ -955,7 +984,6 @@ pub(crate) fn optical_shift_of(radii: (f32, f32, f32, f32), rtl: bool, gap_paddi
 fn shape_morph_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
-
 
 #[cfg(test)]
 mod tests;

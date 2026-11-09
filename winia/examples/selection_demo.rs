@@ -11,16 +11,36 @@
 //! Run with: cargo run -p winia --example selection_demo
 
 use letclone::clone;
-use winia::components::{remember_selection_state, DisableSelection, SelectionState};
+use winia::components::{DisableSelection, SelectionState, remember_selection_state};
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
 mod settings;
 
-const CARD_BG: Color = Color { r: 0x2A, g: 0x27, b: 0x2E, a: 255 };
-const MUTED: Color = Color { r: 0x9E, g: 0x9A, b: 0xA6, a: 255 };
-const ACCENT: Color = Color { r: 0xD0, g: 0xBC, b: 0xFF, a: 255 };
-const WARM: Color = Color { r: 0xFF, g: 0xB4, b: 0xAB, a: 255 };
+const CARD_BG: Color = Color {
+    r: 0x2A,
+    g: 0x27,
+    b: 0x2E,
+    a: 255,
+};
+const MUTED: Color = Color {
+    r: 0x9E,
+    g: 0x9A,
+    b: 0xA6,
+    a: 255,
+};
+const ACCENT: Color = Color {
+    r: 0xD0,
+    g: 0xBC,
+    b: 0xFF,
+    a: 255,
+};
+const WARM: Color = Color {
+    r: 0xFF,
+    g: 0xB4,
+    b: 0xAB,
+    a: 255,
+};
 
 /// One titled card. The body is a composition scope of its own, like every container.
 #[composable]
@@ -45,7 +65,12 @@ fn readout(ctx: &mut ComposeCtx, label: &str, state: &SelectionState) {
     let selection = state.selection();
     let text = state.selected_text().unwrap_or_default();
     let summary = match &selection {
-        Some(sel) => format!("{} .. {} — {} chars", sel.start(), sel.end(), text.chars().count()),
+        Some(sel) => format!(
+            "{} .. {} — {} chars",
+            sel.start(),
+            sel.end(),
+            text.chars().count()
+        ),
         None => "no selection".to_string(),
     };
     Text::new(format!("[{label}] {summary}"))
@@ -96,9 +121,7 @@ pub fn main() {
 
 #[composable]
 fn selection_demo(ctx: &mut ComposeCtx) {
-    Text::new("Selection")
-        .font_size(22.0)
-        .build(ctx);
+    Text::new("Selection").font_size(22.0).build(ctx);
     Text::new("Drag to select, double click for a word, triple click for a line, Ctrl+C to copy.")
         .font_size(12.0)
         .color(MUTED)
@@ -114,7 +137,6 @@ fn selection_demo(ctx: &mut ComposeCtx) {
     let left = remember_selection_state(ctx);
     let right = remember_selection_state(ctx);
     let words = remember_selection_state(ctx);
-
 
     // ── 1. The state: observe it, and drive it ──────────────────────────────
     card(ctx, "SelectionState", {
@@ -144,14 +166,18 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                         clone!(state);
                         move || state.select_all()
                     })
-                    .build(ctx, |ctx| Text::new("Select all").font_size(12.0).build(ctx));
+                    .build(ctx, |ctx| {
+                        Text::new("Select all").font_size(12.0).build(ctx)
+                    });
                 Button::new()
                     .modifier(Modifier::new().test_tag("sel-extend"))
                     .on_click({
                         clone!(state);
                         move || state.extend_selection_by_word()
                     })
-                    .build(ctx, |ctx| Text::new("Extend by word").font_size(12.0).build(ctx));
+                    .build(ctx, |ctx| {
+                        Text::new("Extend by word").font_size(12.0).build(ctx)
+                    });
                 Button::new()
                     .modifier(Modifier::new().test_tag("sel-clear"))
                     .on_click({
@@ -196,7 +222,9 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                     clone!(disabled_state);
                     move || disabled_state.select_all()
                 })
-                .build(ctx, |ctx| Text::new("Select all here").font_size(12.0).build(ctx));
+                .build(ctx, |ctx| {
+                    Text::new("Select all here").font_size(12.0).build(ctx)
+                });
         }
     });
 
@@ -220,11 +248,13 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                                 Shape::rounded(8.0),
                             ))
                             .build(ctx, |ctx| {
-                                Text::new("Inner run — Select all here must not take the outer text.")
-                                    .font_size(14.0)
-                                    .color(ACCENT)
-                                    .modifier(Modifier::new().fill_max_width().test_tag("sel-inner"))
-                                    .build(ctx);
+                                Text::new(
+                                    "Inner run — Select all here must not take the outer text.",
+                                )
+                                .font_size(14.0)
+                                .color(ACCENT)
+                                .modifier(Modifier::new().fill_max_width().test_tag("sel-inner"))
+                                .build(ctx);
                             });
                         Text::new("Outer run after the inner container.")
                             .font_size(14.0)
@@ -234,8 +264,12 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                 });
             Text::new(format!(
                 "outer: {} — inner: {}",
-                outer.selected_text().unwrap_or_else(|| "(none)".to_string()),
-                inner.selected_text().unwrap_or_else(|| "(none)".to_string())
+                outer
+                    .selected_text()
+                    .unwrap_or_else(|| "(none)".to_string()),
+                inner
+                    .selected_text()
+                    .unwrap_or_else(|| "(none)".to_string())
             ))
             .font_size(11.0)
             .color(MUTED)
@@ -252,10 +286,12 @@ fn selection_demo(ctx: &mut ComposeCtx) {
             Row::new().spacing(12.0).build(ctx, |ctx| {
                 SelectionContainer::new()
                     .state(left.clone())
-                    .modifier(Modifier::new().width(320.0).padding(8.0).background(
-                        Color::from_argb(20, 255, 180, 171),
-                        Shape::rounded(8.0),
-                    ))
+                    .modifier(
+                        Modifier::new()
+                            .width(320.0)
+                            .padding(8.0)
+                            .background(Color::from_argb(20, 255, 180, 171), Shape::rounded(8.0)),
+                    )
                     .build(ctx, |ctx| {
                         Text::new("Left container: select me, then press the right one.")
                             .font_size(13.0)
@@ -264,10 +300,12 @@ fn selection_demo(ctx: &mut ComposeCtx) {
                     });
                 SelectionContainer::new()
                     .state(right.clone())
-                    .modifier(Modifier::new().width(320.0).padding(8.0).background(
-                        Color::from_argb(20, 208, 188, 255),
-                        Shape::rounded(8.0),
-                    ))
+                    .modifier(
+                        Modifier::new()
+                            .width(320.0)
+                            .padding(8.0)
+                            .background(Color::from_argb(20, 208, 188, 255), Shape::rounded(8.0)),
+                    )
                     .build(ctx, |ctx| {
                         Text::new("Right container: pressing here leaves the left selection.")
                             .font_size(13.0)
@@ -278,7 +316,9 @@ fn selection_demo(ctx: &mut ComposeCtx) {
             Text::new(format!(
                 "left: {} — right: {}",
                 left.selected_text().unwrap_or_else(|| "(none)".to_string()),
-                right.selected_text().unwrap_or_else(|| "(none)".to_string())
+                right
+                    .selected_text()
+                    .unwrap_or_else(|| "(none)".to_string())
             ))
             .font_size(11.0)
             .color(MUTED)

@@ -8,9 +8,11 @@ fn placeholder_copies_are_not_hittable() {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("scope");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, true);
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, true);
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -19,7 +21,10 @@ fn placeholder_copies_are_not_hittable() {
     let idx = marked_indices(&composer)[0];
     let (cx, cy) = {
         let nodes = composer.arena_nodes();
-        (nodes[idx].content_box().width / 2.0, nodes[idx].content_box().height / 2.0)
+        (
+            nodes[idx].content_box().width / 2.0,
+            nodes[idx].content_box().height / 2.0,
+        )
     };
     let root = composer.layout_root_idx().expect("root");
 

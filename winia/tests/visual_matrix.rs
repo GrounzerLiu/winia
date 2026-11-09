@@ -3,16 +3,20 @@
 //! The matrix deliberately uses explicit theme/direction inputs and semantic pixel
 //! checks instead of platform-dependent golden images.
 
-use winia::runtime::composer::{ComposeCtx, Composer};
-use winia::layout::constraints::Constraints;
-use winia::layout::LayoutDirection;
-use winia::modifier::{Modifier, ScrollState};
-use winia::graphics::{Color};
-use winia::render;
 use winia::State;
-use winia::unit::{Sp, TextUnit};
-use winia::components::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold};
+use winia::components::{
+    Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar,
+    NavigationBarItem, Scaffold, Text, TextField, TextFieldValue, TopAppBar, TopAppBarColors,
+    TopAppBarScrollBehavior, TopAppBarVariant,
+};
+use winia::graphics::Color;
+use winia::layout::LayoutDirection;
+use winia::layout::constraints::Constraints;
+use winia::modifier::{Modifier, ScrollState};
+use winia::render;
+use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::theme::{ThemeColors, Typography, WiniaTheme};
+use winia::unit::{Sp, TextUnit};
 
 const WIDTH: i32 = 520;
 // Tall enough for everything the matrix builds. It was 420, which the matrix had outgrown:
@@ -60,7 +64,11 @@ fn find_tag(nodes: &[winia::layout::node::LayoutNode], idx: usize, tag: &str) ->
         .find_map(|&child| find_tag(nodes, child, tag))
 }
 
-fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: TopAppBarColors) -> skia_safe::Surface {
+fn render_scroll_color_probe(
+    variant: TopAppBarVariant,
+    offset: f32,
+    colors: TopAppBarColors,
+) -> skia_safe::Surface {
     let scroll = ScrollState::new();
     scroll.offset.set(offset);
     // The flexible variants have their OWN expanded heights, and they depend on whether a subtitle
@@ -76,48 +84,118 @@ fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: Top
     composer.compose(winia::app_root!(|ctx| {
         let behavior = TopAppBarScrollBehavior::new(scroll.clone(), expanded);
         match variant {
-            TopAppBarVariant::Standard => TopAppBar::new(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
-            TopAppBarVariant::CenterAligned => TopAppBar::center_aligned(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
-            TopAppBarVariant::Medium => TopAppBar::medium(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
-            TopAppBarVariant::Large => TopAppBar::large(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::Standard => TopAppBar::new(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
+            TopAppBarVariant::CenterAligned => TopAppBar::center_aligned(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
+            TopAppBarVariant::Medium => TopAppBar::medium(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
+            TopAppBarVariant::Large => TopAppBar::large(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
             // `0328d45` added these two and this match was never updated, so the whole target
             // stopped compiling — which is why these painting tests have not run since.
-            TopAppBarVariant::MediumFlexible => TopAppBar::medium_flexible(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
-            TopAppBarVariant::LargeFlexible => TopAppBar::large_flexible(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::MediumFlexible => TopAppBar::medium_flexible(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
+            TopAppBarVariant::LargeFlexible => TopAppBar::large_flexible(|_ctx| {})
+                .scroll_behavior(behavior)
+                .colors(colors)
+                .modifier(Modifier::new().test_tag("color-probe"))
+                .build(ctx),
         }
     }));
     composer.layout(Constraints::new(0.0, 320.0, 0.0, 180.0));
-    let mut surface = skia_safe::surfaces::raster_n32_premul((320, 180)).expect("scroll color surface");
+    let mut surface =
+        skia_safe::surfaces::raster_n32_premul((320, 180)).expect("scroll color surface");
     surface.canvas().clear(skia_safe::Color::WHITE);
     let root = composer.layout_root_idx().unwrap();
     render::render(composer.arena_nodes(), root, surface.canvas());
     surface
 }
 
-fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe::Surface, Composer) {
+fn render_scaffold_case(
+    direction: LayoutDirection,
+    custom: bool,
+) -> (skia_safe::Surface, Composer) {
     let theme = ThemeColors::default_light();
-    let typography = if custom { custom_typography() } else { Typography::default() };
+    let typography = if custom {
+        custom_typography()
+    } else {
+        Typography::default()
+    };
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
         WiniaTheme::with_theme_typography_and_direction(theme, typography, direction, ctx, |ctx| {
             Scaffold::new(|ctx, _| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::graphics::Shape::Rectangle).test_tag("scaffold-content"));
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .fill_max_size()
+                        .background(
+                            Color::from_argb(255, 245, 245, 245),
+                            winia::graphics::Shape::Rectangle,
+                        )
+                        .test_tag("scaffold-content"),
+                );
                 ctx.end_node();
             })
             .top_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::graphics::Shape::Rectangle).test_tag("scaffold-top"));
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(64.0)
+                        .background(
+                            Color::from_argb(255, 220, 220, 225),
+                            winia::graphics::Shape::Rectangle,
+                        )
+                        .test_tag("scaffold-top"),
+                );
                 ctx.end_node();
             })
             .bottom_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::graphics::Shape::Rectangle).test_tag("scaffold-bottom"));
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(80.0)
+                        .background(
+                            Color::from_argb(255, 230, 225, 235),
+                            winia::graphics::Shape::Rectangle,
+                        )
+                        .test_tag("scaffold-bottom"),
+                );
                 ctx.end_node();
             })
             .floating_action_button(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::graphics::Shape::Circle).test_tag("scaffold-fab"));
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .size(56.0, 56.0)
+                        .background(
+                            Color::from_argb(255, 103, 80, 164),
+                            winia::graphics::Shape::Circle,
+                        )
+                        .test_tag("scaffold-fab"),
+                );
                 ctx.end_node();
             })
             .build(ctx);
@@ -150,13 +228,21 @@ fn custom_typography() -> Typography {
     }
 }
 
-fn render_case(dark: bool, direction: LayoutDirection, custom: bool) -> (skia_safe::Surface, Composer) {
+fn render_case(
+    dark: bool,
+    direction: LayoutDirection,
+    custom: bool,
+) -> (skia_safe::Surface, Composer) {
     let theme = if dark {
         ThemeColors::dark_from_seed(SEED)
     } else {
         ThemeColors::light_from_seed(SEED)
     };
-    let typography = if custom { custom_typography() } else { Typography::default() };
+    let typography = if custom {
+        custom_typography()
+    } else {
+        Typography::default()
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -257,9 +343,20 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
                 assert_eq!(nodes[root].measured_size.width, WIDTH as f32);
                 assert!(nodes[root].measured_size.height > 0.0);
                 for tag in [
-                    "chip", "chip-selected", "chip-disabled", "field", "field-error",
-                    "field-disabled", "button", "button-disabled", "fab", "fab-disabled",
-                    "appbar-standard", "appbar-center", "appbar-medium", "appbar-large",
+                    "chip",
+                    "chip-selected",
+                    "chip-disabled",
+                    "field",
+                    "field-error",
+                    "field-disabled",
+                    "button",
+                    "button-disabled",
+                    "fab",
+                    "fab-disabled",
+                    "appbar-standard",
+                    "appbar-center",
+                    "appbar-medium",
+                    "appbar-large",
                 ] {
                     let idx = find_tag(nodes, root, tag).unwrap_or_else(|| panic!("missing {tag}"));
                     assert!(nodes[idx].measured_size.width > 0.0, "{tag} width");
@@ -270,10 +367,22 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
                 let button = find_tag(nodes, root, "button").unwrap();
                 let fab = find_tag(nodes, root, "fab").unwrap();
                 assert_eq!(nodes[chip].measured_size.height, 32.0, "chip height");
-                assert!(nodes[field].measured_size.height >= 56.0, "field minimum height");
-                assert!(nodes[button].measured_size.height >= 40.0, "button minimum height");
-                assert_eq!(nodes[fab].measured_size.width, FloatingActionButtonSize::Regular.container_size());
-                assert_eq!(nodes[fab].measured_size.height, FloatingActionButtonSize::Regular.container_size());
+                assert!(
+                    nodes[field].measured_size.height >= 56.0,
+                    "field minimum height"
+                );
+                assert!(
+                    nodes[button].measured_size.height >= 40.0,
+                    "button minimum height"
+                );
+                assert_eq!(
+                    nodes[fab].measured_size.width,
+                    FloatingActionButtonSize::Regular.container_size()
+                );
+                assert_eq!(
+                    nodes[fab].measured_size.height,
+                    FloatingActionButtonSize::Regular.container_size()
+                );
                 for (tag, height) in [
                     ("appbar-standard", 64.0),
                     ("appbar-center", 64.0),
@@ -284,7 +393,10 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
                     assert_eq!(nodes[appbar].measured_size.width, WIDTH as f32 - 32.0);
                     assert_eq!(nodes[appbar].measured_size.height, height, "{tag} height");
                 }
-                assert!(non_white_pixels(&mut surface) > 1000, "matrix case rendered no meaningful pixels");
+                assert!(
+                    non_white_pixels(&mut surface) > 1000,
+                    "matrix case rendered no meaningful pixels"
+                );
             }
         }
     }
@@ -295,10 +407,16 @@ fn build_rtl_probe(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().width(200.0).test_tag("rtl-probe"))
         .build(ctx, |ctx| {
             let leading_key = ctx.next_key();
-            ctx.start_leaf(leading_key, Modifier::new().size(30.0, 12.0).test_tag("rtl-leading"));
+            ctx.start_leaf(
+                leading_key,
+                Modifier::new().size(30.0, 12.0).test_tag("rtl-leading"),
+            );
             ctx.end_node();
             let trailing_key = ctx.next_key();
-            ctx.start_leaf(trailing_key, Modifier::new().size(70.0, 12.0).test_tag("rtl-trailing"));
+            ctx.start_leaf(
+                trailing_key,
+                Modifier::new().size(70.0, 12.0).test_tag("rtl-trailing"),
+            );
             ctx.end_node();
         });
 }
@@ -340,14 +458,31 @@ fn top_app_bar_scroll_color_probe_uses_base_and_scrolled_containers() {
     let scrolled = Color::from_argb(255, 210, 70, 20);
     let colors = TopAppBarColors::new(base, Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE)
         .scrolled_container(scrolled);
-    for variant in [TopAppBarVariant::Standard, TopAppBarVariant::CenterAligned, TopAppBarVariant::Medium, TopAppBarVariant::Large] {
+    for variant in [
+        TopAppBarVariant::Standard,
+        TopAppBarVariant::CenterAligned,
+        TopAppBarVariant::Medium,
+        TopAppBarVariant::Large,
+    ] {
         let mut initial = render_scroll_color_probe(variant, 0.0, colors);
         let p0 = pixel(&mut initial, 2, 2);
-        assert_eq!(p0, (base.r, base.g, base.b, base.a), "{variant:?} initial container");
-        let offset = if matches!(variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { 1_000.0 } else { 1.0 };
+        assert_eq!(
+            p0,
+            (base.r, base.g, base.b, base.a),
+            "{variant:?} initial container"
+        );
+        let offset = if matches!(variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) {
+            1_000.0
+        } else {
+            1.0
+        };
         let mut scrolled_surface = render_scroll_color_probe(variant, offset, colors);
         let p1 = pixel(&mut scrolled_surface, 2, 2);
-        assert_eq!(p1, (scrolled.r, scrolled.g, scrolled.b, scrolled.a), "{variant:?} scrolled container");
+        assert_eq!(
+            p1,
+            (scrolled.r, scrolled.g, scrolled.b, scrolled.a),
+            "{variant:?} scrolled container"
+        );
     }
 }
 
@@ -365,14 +500,37 @@ fn scaffold_visual_matrix_mirrors_fab_and_preserves_content_geometry() {
         let ltr_fab = &ln[ln[lr].children[3]];
         let rtl_fab = &rn[rn[rr].children[3]];
         assert_eq!(ltr_content.position.y, rtl_content.position.y);
-        assert_eq!(ltr_content.measured_size.height, rtl_content.measured_size.height);
-        assert_eq!((ltr_fab.measured_size.width, ltr_fab.measured_size.height), (56.0, 56.0));
-        assert_eq!((rtl_fab.measured_size.width, rtl_fab.measured_size.height), (56.0, 56.0));
+        assert_eq!(
+            ltr_content.measured_size.height,
+            rtl_content.measured_size.height
+        );
+        assert_eq!(
+            (ltr_fab.measured_size.width, ltr_fab.measured_size.height),
+            (56.0, 56.0)
+        );
+        assert_eq!(
+            (rtl_fab.measured_size.width, rtl_fab.measured_size.height),
+            (56.0, 56.0)
+        );
         assert!(rtl_fab.position.x < ltr_fab.position.x);
-        let ltr_px = pixel(&mut ltr_surface, (ltr_fab.position.x + 28.0) as i32, (ltr_fab.position.y + 28.0) as i32);
-        let rtl_px = pixel(&mut rtl_surface, (rtl_fab.position.x + 28.0) as i32, (rtl_fab.position.y + 28.0) as i32);
-        assert!(ltr_px.0 < 240 || ltr_px.1 < 240 || ltr_px.2 < 240, "LTR FAB should render");
-        assert!(rtl_px.0 < 240 || rtl_px.1 < 240 || rtl_px.2 < 240, "RTL FAB should render");
+        let ltr_px = pixel(
+            &mut ltr_surface,
+            (ltr_fab.position.x + 28.0) as i32,
+            (ltr_fab.position.y + 28.0) as i32,
+        );
+        let rtl_px = pixel(
+            &mut rtl_surface,
+            (rtl_fab.position.x + 28.0) as i32,
+            (rtl_fab.position.y + 28.0) as i32,
+        );
+        assert!(
+            ltr_px.0 < 240 || ltr_px.1 < 240 || ltr_px.2 < 240,
+            "LTR FAB should render"
+        );
+        assert!(
+            rtl_px.0 < 240 || rtl_px.1 < 240 || rtl_px.2 < 240,
+            "RTL FAB should render"
+        );
     }
 }
 
@@ -382,9 +540,22 @@ fn material_visual_matrix_custom_typography_changes_textfield_geometry() {
     let (_, custom_composer) = render_case(false, LayoutDirection::Ltr, true);
     let default_nodes = default_composer.arena_nodes();
     let custom_nodes = custom_composer.arena_nodes();
-    let default_field = find_tag(default_nodes, default_composer.layout_root_idx().unwrap(), "field").unwrap();
-    let custom_field = find_tag(custom_nodes, custom_composer.layout_root_idx().unwrap(), "field").unwrap();
-    assert!(custom_nodes[custom_field].measured_size.height >= default_nodes[default_field].measured_size.height);
+    let default_field = find_tag(
+        default_nodes,
+        default_composer.layout_root_idx().unwrap(),
+        "field",
+    )
+    .unwrap();
+    let custom_field = find_tag(
+        custom_nodes,
+        custom_composer.layout_root_idx().unwrap(),
+        "field",
+    )
+    .unwrap();
+    assert!(
+        custom_nodes[custom_field].measured_size.height
+            >= default_nodes[default_field].measured_size.height
+    );
 }
 
 // ── NavigationBar 视觉矩阵 ──
@@ -397,14 +568,11 @@ fn render_navigation_bar_case(direction: LayoutDirection) -> skia_safe::Surface 
         WiniaTheme::with_theme_and_direction(theme, direction, ctx, |ctx| {
             NavigationBar::new(|ctx| {
                 for i in 0..3 {
-                    NavigationBarItem::new(
-                        i == 0,
-                        |ctx| {
-                            let key = ctx.next_key();
-                            ctx.start_leaf(key, Modifier::new().size(24.0, 24.0));
-                            ctx.end_node();
-                        },
-                    )
+                    NavigationBarItem::new(i == 0, |ctx| {
+                        let key = ctx.next_key();
+                        ctx.start_leaf(key, Modifier::new().size(24.0, 24.0));
+                        ctx.end_node();
+                    })
                     .label(move |ctx| {
                         Text::new(format!("Tab{i}")).build(ctx);
                     })
@@ -432,12 +600,24 @@ fn navigation_bar_visual_matrix_pill_container_and_rtl_mirror() {
 
     let mut ltr = render_navigation_bar_case(LayoutDirection::Ltr);
     // 容器底色（左下角背景区）
-    assert_eq!(pixel(&mut ltr, 5, 75), to_rgba(container), "容器应为 surfaceContainer");
+    assert_eq!(
+        pixel(&mut ltr, 5, 75),
+        to_rgba(container),
+        "容器应为 surfaceContainer"
+    );
     // 选中项指示器胶囊：item0 中心 x≈57.3，胶囊横跨 29.3..85.3、y 12..44；
     // 取 (35, 28)——在胶囊内且避开图标（图标占 45.3..69.3）
-    assert_eq!(pixel(&mut ltr, 35, 28), to_rgba(indicator), "选中项应有 SecondaryContainer 胶囊");
+    assert_eq!(
+        pixel(&mut ltr, 35, 28),
+        to_rgba(indicator),
+        "选中项应有 SecondaryContainer 胶囊"
+    );
     // 未选中项无胶囊：item1 中心 x≈180，取 (155, 28)（避开其图标 168..192）
-    assert_eq!(pixel(&mut ltr, 155, 28), to_rgba(container), "未选中项不应有胶囊");
+    assert_eq!(
+        pixel(&mut ltr, 155, 28),
+        to_rgba(container),
+        "未选中项不应有胶囊"
+    );
     // 选中项 label 已渲染（y 48..64 区域存在非容器色像素）
     let mut label_pixels = 0;
     for y in 50..62 {
@@ -451,8 +631,16 @@ fn navigation_bar_visual_matrix_pill_container_and_rtl_mirror() {
 
     // RTL：选中项镜像到最右三分之一，胶囊跟随
     let mut rtl = render_navigation_bar_case(LayoutDirection::Rtl);
-    assert_eq!(pixel(&mut rtl, 325, 28), to_rgba(indicator), "RTL 下选中项胶囊镜像到最右");
-    assert_eq!(pixel(&mut rtl, 35, 28), to_rgba(container), "RTL 下最左三分之一无胶囊");
+    assert_eq!(
+        pixel(&mut rtl, 325, 28),
+        to_rgba(indicator),
+        "RTL 下选中项胶囊镜像到最右"
+    );
+    assert_eq!(
+        pixel(&mut rtl, 35, 28),
+        to_rgba(container),
+        "RTL 下最左三分之一无胶囊"
+    );
 }
 
 #[test]
@@ -464,25 +652,27 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
 
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
-        WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
-            NavigationBar::new(|ctx| {
-                for i in 0..3 {
-                    NavigationBarItem::new(
-                        i == 0,
-                        |ctx| {
+        WiniaTheme::with_theme_and_direction(
+            ThemeColors::default_light(),
+            LayoutDirection::Ltr,
+            ctx,
+            |ctx| {
+                NavigationBar::new(|ctx| {
+                    for i in 0..3 {
+                        NavigationBarItem::new(i == 0, |ctx| {
                             let key = ctx.next_key();
                             ctx.start_leaf(key, Modifier::new().size(24.0, 24.0));
                             ctx.end_node();
-                        },
-                    )
-                    .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
-                    .icon_position(winia::components::NavigationItemIconPosition::Start)
-                    .on_click(|| {})
-                    .build(ctx);
-                }
-            })
-            .build(ctx);
-        });
+                        })
+                        .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
+                        .icon_position(winia::components::NavigationItemIconPosition::Start)
+                        .on_click(|| {})
+                        .build(ctx);
+                    }
+                })
+                .build(ctx);
+            },
+        );
     }));
     composer.layout(Constraints::new(0.0, 360.0, 0.0, 80.0));
     let mut surface = skia_safe::surfaces::raster_n32_premul((360, 80)).expect("navbar surface");
@@ -495,22 +685,40 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
     let nodes = composer.arena_nodes();
     let item0 = nodes[nodes[root].children[0]].children[0];
     let pill = &nodes[item0];
-    assert_eq!(pill.measured_size.height, winia::components::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
-        "水平指示器高应为 40");
+    assert_eq!(
+        pill.measured_size.height,
+        winia::components::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
+        "水平指示器高应为 40"
+    );
     let px = pill.position.x;
     let py = pill.position.y;
     let pw = pill.measured_size.width;
     // 胶囊内四角附近（避开 CornerFull 圆角）：中心行/列取色
     let mut s = surface;
-    assert_eq!(pixel(&mut s, (px + 6.0) as i32, (py + 20.0) as i32), to_rgba(indicator),
-        "胶囊左端应为 SecondaryContainer");
-    assert_eq!(pixel(&mut s, (px + pw - 6.0) as i32, (py + 20.0) as i32), to_rgba(indicator),
-        "胶囊右端应包住 label 尾部");
-    assert_eq!(pixel(&mut s, (px + pw / 2.0) as i32, (py + 4.0) as i32), to_rgba(indicator),
-        "胶囊顶部（40 高居中于 80 bar）");
+    assert_eq!(
+        pixel(&mut s, (px + 6.0) as i32, (py + 20.0) as i32),
+        to_rgba(indicator),
+        "胶囊左端应为 SecondaryContainer"
+    );
+    assert_eq!(
+        pixel(&mut s, (px + pw - 6.0) as i32, (py + 20.0) as i32),
+        to_rgba(indicator),
+        "胶囊右端应包住 label 尾部"
+    );
+    assert_eq!(
+        pixel(&mut s, (px + pw / 2.0) as i32, (py + 4.0) as i32),
+        to_rgba(indicator),
+        "胶囊顶部（40 高居中于 80 bar）"
+    );
     // 胶囊外左右应为容器色（leading/trailing 各 16dp 之外）
-    assert_eq!(pixel(&mut s, (px - 8.0) as i32, (py + 20.0) as i32), to_rgba(container),
-        "胶囊左侧之外应为容器色");
-    assert_eq!(pixel(&mut s, (px + pw + 8.0) as i32, (py + 20.0) as i32), to_rgba(container),
-        "胶囊右侧之外应为容器色");
+    assert_eq!(
+        pixel(&mut s, (px - 8.0) as i32, (py + 20.0) as i32),
+        to_rgba(container),
+        "胶囊左侧之外应为容器色"
+    );
+    assert_eq!(
+        pixel(&mut s, (px + pw + 8.0) as i32, (py + 20.0) as i32),
+        to_rgba(container),
+        "胶囊右侧之外应为容器色"
+    );
 }

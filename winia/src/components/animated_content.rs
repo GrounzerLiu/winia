@@ -34,7 +34,7 @@
 //! transform are all in place. What remains winia's own is the engine underneath, not this API.
 
 use crate::animation::visibility::VisibilityTransition;
-use crate::animation::{interpolator, push_animatable, AnimationSpec, SpringSpec, TweenSpec};
+use crate::animation::{AnimationSpec, SpringSpec, TweenSpec, interpolator, push_animatable};
 use crate::layout::box_layout::BoxLayout;
 use crate::layout::node::{ContentAlignment, LayoutDirection};
 use crate::layout::{MeasurePolicy, Placement};
@@ -62,7 +62,10 @@ fn default_enter() -> VisibilityTransition {
 
 /// Compose's default exit: `fadeOut(tween(90))` — out fast, in slow.
 fn default_exit() -> VisibilityTransition {
-    VisibilityTransition::fade_out(TweenSpec::new(Duration::from_millis(90), interpolator::fast_out_slow_in()))
+    VisibilityTransition::fade_out(TweenSpec::new(
+        Duration::from_millis(90),
+        interpolator::fast_out_slow_in(),
+    ))
 }
 
 /// Content switch transition (both generations on screen: one layer per enter/exit, plus
@@ -163,7 +166,10 @@ impl MeasurePolicy for ContentSizePolicy {
             })
             .collect();
         (
-            Size::new(constraints.constrain_width(w), constraints.constrain_height(h)),
+            Size::new(
+                constraints.constrain_width(w),
+                constraints.constrain_height(h),
+            ),
             placements,
         )
     }
@@ -380,7 +386,11 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 // ── One alpha per entry, with the direction's own transition ──
                 for entry in set.entries.iter() {
                     let rising = self.matches(&entry.value, &target_now);
-                    let spec = if rising { self.enter.spec.clone() } else { self.exit.spec.clone() };
+                    let spec = if rising {
+                        self.enter.spec.clone()
+                    } else {
+                        self.exit.spec.clone()
+                    };
                     push_animatable(set.alpha(entry.era), if rising { 1.0 } else { 0.0 }, spec);
                 }
 
@@ -389,7 +399,9 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 let survivors: Vec<Entry<T>> = set
                     .entries
                     .iter()
-                    .filter(|e| self.matches(&e.value, &target_now) || set.alpha(e.era).peek() > 0.001)
+                    .filter(|e| {
+                        self.matches(&e.value, &target_now) || set.alpha(e.era).peek() > 0.001
+                    })
                     .cloned()
                     .collect();
                 if survivors.len() != set.entries.len() {
@@ -408,14 +420,21 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 }
 
                 if std::env::var("AC_TRACE2").is_ok() {
-                    let dump: Vec<(u64, f32)> =
-                        set.entries.iter().map(|e| (e.era, set.alpha(e.era).peek())).collect();
+                    let dump: Vec<(u64, f32)> = set
+                        .entries
+                        .iter()
+                        .map(|e| (e.era, set.alpha(e.era).peek()))
+                        .collect();
                     eprintln!("ACTRACE entries(era,alpha)={:?}", dump);
                 }
                 // ── Compose what is left, oldest first so the newest is drawn on top ──
                 for entry in set.entries.iter() {
                     let rising = self.matches(&entry.value, &target_now);
-                    let cfg = if rising { self.enter.clone() } else { self.exit.clone() };
+                    let cfg = if rising {
+                        self.enter.clone()
+                    } else {
+                        self.exit.clone()
+                    };
                     let g = set.alpha(entry.era);
                     let cs = container_size.clone();
                     let layer = Modifier::new().graphics_layer(move || {
@@ -494,7 +513,10 @@ impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
         let mut alphas = std::collections::HashMap::new();
         alphas.insert(0, State::new(1.0));
         Self {
-            entries: vec![Entry { value: first, era: 0 }],
+            entries: vec![Entry {
+                value: first,
+                era: 0,
+            }],
             alphas,
             next_gen: 1,
         }
@@ -503,11 +525,18 @@ impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
     /// This entry's alpha. An entry that is on screen always has one — `push` creates it — so the
     /// fallback only covers a value that was never pushed.
     fn alpha(&self, era: u64) -> State<f32> {
-        self.alphas.get(&era).cloned().unwrap_or_else(|| State::new(0.0))
+        self.alphas
+            .get(&era)
+            .cloned()
+            .unwrap_or_else(|| State::new(0.0))
     }
 
     /// Where the entry matching `value` by content key sits, if it is on screen.
-    fn position_by_key(&self, value: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>) -> Option<usize> {
+    fn position_by_key(
+        &self,
+        value: &T,
+        key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>,
+    ) -> Option<usize> {
         self.entries.iter().position(|e| same(&e.value, value, key))
     }
 
@@ -532,7 +561,6 @@ fn same<T: PartialEq>(a: &T, b: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + 
         None => a == b,
     }
 }
-
 
 #[cfg(test)]
 mod tests;

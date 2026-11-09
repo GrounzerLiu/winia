@@ -59,7 +59,9 @@ impl DatePicker {
     /// Composes the picker.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let colors = self.colors.unwrap_or_else(|| DatePickerColors::from_theme(&WiniaTheme::colors()));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| DatePickerColors::from_theme(&WiniaTheme::colors()));
         let model = self.state.calendar_model().clone();
         let month = model.month_of_millis(self.state.displayed_month_millis());
         let state = self.state.clone();
@@ -81,7 +83,9 @@ impl DatePicker {
         let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year, so a page index converts to a month by
         // counting from here — the same reference `month_pages` composes against.
-        let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
+        let first_month = model
+            .month_of(*state.year_range().start(), 1)
+            .start_utc_time_millis;
         // `SwitchableDateEntryContent` reads the mode here and hands the toggle to the header
         // (`DatePicker.kt:1432`, `:1467-1480`). Reading it registers this slot as a reader, so the
         // calendar and the text field replace each other rather than both being composed.
@@ -138,7 +142,14 @@ impl DatePicker {
                 } else {
                     title.clone()
                 };
-                header(ctx, &state, title.as_deref(), &colors, display_mode, on_toggle_display_mode);
+                header(
+                    ctx,
+                    &state,
+                    title.as_deref(),
+                    &colors,
+                    display_mode,
+                    on_toggle_display_mode,
+                );
                 Column::new()
                     .modifier(
                         Modifier::new()
@@ -156,7 +167,14 @@ impl DatePicker {
                             return;
                         }
                         let open = year_panel_open.get();
-                        sync_month_pages(ctx, &state, &model, &month_rows, first_month, &month_step_in_flight);
+                        sync_month_pages(
+                            ctx,
+                            &state,
+                            &model,
+                            &month_rows,
+                            first_month,
+                            &month_step_in_flight,
+                        );
                         months_navigation(
                             ctx,
                             &state,
@@ -188,13 +206,24 @@ impl DatePicker {
                                 // A Column, not bare siblings: the Stack overlaps what it holds, and the
                                 // weekday row has to stay above the grid it belongs to.
                                 Column::new()
-                                    .modifier(Modifier::new().fill_max_width().test_tag(CALENDAR_PANEL_TAG))
+                                    .modifier(
+                                        Modifier::new()
+                                            .fill_max_width()
+                                            .test_tag(CALENDAR_PANEL_TAG),
+                                    )
                                     .arrangement(Arrangement::Start)
                                     .build(ctx, |ctx| {
                                         weekday_row(ctx, &model, &colors);
                                         // The modal picker leaves the neighbouring month's slots empty, as material3
                                         // does and as the M3 specs' modal anatomy has no state for.
-                                        month_pages(ctx, &state, &model, &colors, &month_rows, false);
+                                        month_pages(
+                                            ctx,
+                                            &state,
+                                            &model,
+                                            &colors,
+                                            &month_rows,
+                                            false,
+                                        );
                                     });
                                 AnimatedVisibility::new(year_panel_open.clone())
                                     .enter(
@@ -211,7 +240,14 @@ impl DatePicker {
                                         .with_expand(),
                                     )
                                     .build(ctx, |ctx| {
-                                        year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
+                                        year_panel(
+                                            ctx,
+                                            &state,
+                                            &model,
+                                            &colors,
+                                            &year_rows,
+                                            on_year_selected,
+                                        );
                                     });
                             });
                     });
@@ -255,11 +291,22 @@ pub(crate) fn month_pages(
                 .fill_max_width()
                 .height(DatePickerDefaults::MONTH_HEIGHT),
         )
-        .items(page_count, |index: usize| index as u64, move |ctx, index| {
-            let month = list_model.plus_months(first_month, index as i64);
-            let grid = MonthGrid::of(month, selected, today, selectable.as_ref());
-            month_grid(ctx, &list_state_for_pages, &list_model, &grid, &list_colors, show_outside_month);
-        })
+        .items(
+            page_count,
+            |index: usize| index as u64,
+            move |ctx, index| {
+                let month = list_model.plus_months(first_month, index as i64);
+                let grid = MonthGrid::of(month, selected, today, selectable.as_ref());
+                month_grid(
+                    ctx,
+                    &list_state_for_pages,
+                    &list_model,
+                    &grid,
+                    &list_colors,
+                    show_outside_month,
+                );
+            },
+        )
         .build(ctx);
 }
 
@@ -300,13 +347,13 @@ pub(crate) fn sync_month_pages(
     step_in_flight: &State<Option<usize>>,
 ) {
     let range = state.year_range();
-    let page_of = |month_millis: i64| {
+    let page_of =
+        |month_millis: i64| model.month_of_millis(month_millis).index_in(&range).max(0) as usize;
+    let month_of = |page: usize| {
         model
-            .month_of_millis(month_millis)
-            .index_in(&range)
-            .max(0) as usize
+            .plus_months(first_month, page as i64)
+            .start_utc_time_millis
     };
-    let month_of = |page: usize| model.plus_months(first_month, page as i64).start_utc_time_millis;
 
     let published = ctx.remember(|| i64::MIN);
     let pending = ctx.remember(|| None::<usize>);
@@ -394,4 +441,3 @@ pub(crate) fn sync_month_pages(
         step_in_flight.set(None);
     }
 }
-

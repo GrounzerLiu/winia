@@ -66,7 +66,10 @@ impl SymbolAxes {
 pub enum IconSource {
     /// Raw SVG path data (copied from fonts.google.com/icons) — wrapped at render time in an
     /// `<svg viewBox="0 0 24 24">` document handed to Skia's `svg::Dom`; no hand-written parser.
-    SvgPath { data: Arc<str>, fill_type: PathFillType },
+    SvgPath {
+        data: Arc<str>,
+        fill_type: PathFillType,
+    },
     /// A complete SVG document string (`<svg viewBox=...>...</svg>`).
     Svg(Arc<str>),
     /// An image file path (png/jpg/jpeg/webp/bmp/svg, decoded by extension).
@@ -84,7 +87,10 @@ pub enum IconSource {
 
 impl IconSource {
     pub fn svg_path(data: impl Into<Arc<str>>) -> Self {
-        IconSource::SvgPath { data: data.into(), fill_type: PathFillType::NonZero }
+        IconSource::SvgPath {
+            data: data.into(),
+            fill_type: PathFillType::NonZero,
+        }
     }
 
     pub fn svg(data: impl Into<Arc<str>>) -> Self {
@@ -197,10 +203,7 @@ impl PartialEq for IconSpec {
 
 /// Option lifted Dyn::same_parameter — the comparison every element that stores an optional carrier
 /// needs (a literal-vs-state difference is a CHANGE; two states are the same request).
-pub(crate) fn option_same_parameter<T: PartialEq>(
-    a: &Option<Dyn<T>>,
-    b: &Option<Dyn<T>>,
-) -> bool {
+pub(crate) fn option_same_parameter<T: PartialEq>(a: &Option<Dyn<T>>, b: &Option<Dyn<T>>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => a.same_parameter(b),
@@ -217,8 +220,16 @@ pub(crate) fn option_same_parameter<T: PartialEq>(
 /// is not guaranteed thread-safe, so the decode cache is thread-local (created and used on the render
 /// thread) and never shared across threads.
 pub(crate) enum DecodedIcon {
-    Bitmap { image: skia_safe::Image, width: f32, height: f32 },
-    Svg { dom: RefCell<svg::Dom>, width: f32, height: f32 },
+    Bitmap {
+        image: skia_safe::Image,
+        width: f32,
+        height: f32,
+    },
+    Svg {
+        dom: RefCell<svg::Dom>,
+        width: f32,
+        height: f32,
+    },
 }
 
 /// Decode cache key (SvgPath is distinguished by data + fill rule).
@@ -295,7 +306,11 @@ fn decode_svg_str(data: &str) -> Option<DecodedIcon> {
     let (w, h) = parse_view_box(data).unwrap_or((24.0, 24.0));
     let mut dom = svg::Dom::from_str(data, skia_safe::FontMgr::default()).ok()?;
     dom.set_container_size((w, h));
-    Some(DecodedIcon::Svg { dom: RefCell::new(dom), width: w, height: h })
+    Some(DecodedIcon::Svg {
+        dom: RefCell::new(dom),
+        width: w,
+        height: h,
+    })
 }
 
 fn decode_file(path: &str) -> Option<DecodedIcon> {
@@ -326,14 +341,19 @@ fn decode_bytes(data: &[u8], path: &str) -> Option<DecodedIcon> {
         // The decode cache guarantees it is generated once, not recomputed per paint.
         let image = image.with_default_mipmaps().unwrap_or(image);
         let (w, h) = (image.width() as f32, image.height() as f32);
-        return Some(DecodedIcon::Bitmap { image, width: w, height: h });
+        return Some(DecodedIcon::Bitmap {
+            image,
+            width: w,
+            height: h,
+        });
     }
     None
 }
 
 fn file_intrinsic_size(path: &str) -> Option<(f32, f32)> {
-    static FILE_SIZE_CACHE: LazyLock<parking_lot::Mutex<HashMap<String, (Instant, Option<(f32, f32)>)>>> =
-        LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+    static FILE_SIZE_CACHE: LazyLock<
+        parking_lot::Mutex<HashMap<String, (Instant, Option<(f32, f32)>)>>,
+    > = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
     let mut cache = FILE_SIZE_CACHE.lock();
     if let Some((at, v)) = cache.get(path) {
         if at.elapsed() < CACHE_TTL {
@@ -364,7 +384,10 @@ fn asset_intrinsic_size(path: &str) -> Option<(f32, f32)> {
 /// the 3rd and 4th viewBox values when they are absent.
 pub fn parse_view_box(svg: &str) -> Option<(f32, f32)> {
     let tag = svg_open_tag(svg)?;
-    if let (Some(w), Some(h)) = (parse_svg_attr_len(tag, "width"), parse_svg_attr_len(tag, "height")) {
+    if let (Some(w), Some(h)) = (
+        parse_svg_attr_len(tag, "width"),
+        parse_svg_attr_len(tag, "height"),
+    ) {
         return Some((w, h));
     }
     let lower = tag.to_ascii_lowercase();
@@ -474,7 +497,6 @@ struct BlobKey {
     wght: i32,
 }
 
-
 #[cfg(any(
     feature = "material-symbols-outlined",
     feature = "material-symbols-rounded",
@@ -508,4 +530,3 @@ pub(crate) fn symbol_blob(
     }
     blob
 }
-

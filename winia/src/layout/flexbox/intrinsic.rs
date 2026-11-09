@@ -10,8 +10,8 @@
 
 use super::config::FlexBoxConfig;
 use super::policy::FlexBoxLayout;
-use crate::layout::node::{IntrinsicCtx, IntrinsicQuery};
 use crate::layout::Constraints;
+use crate::layout::node::{IntrinsicCtx, IntrinsicQuery};
 
 /// A width intrinsic: the main axis when rows, the cross axis when columns. Compose resolves the
 /// config with the query bound in place (:1035, :1098).
@@ -65,7 +65,11 @@ fn main_axis(
     let horizontal = config.direction.is_horizontal();
     let gap = config.main_gap(horizontal);
     let query = if horizontal {
-        if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth }
+        if min {
+            IntrinsicQuery::MinWidth
+        } else {
+            IntrinsicQuery::MaxWidth
+        }
     } else if min {
         IntrinsicQuery::MinHeight
     } else {
@@ -118,13 +122,29 @@ fn cross_axis(
     let cross_gap = config.cross_gap(horizontal);
     let (main_query, cross_query) = if horizontal {
         (
-            if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth },
-            if min { IntrinsicQuery::MinHeight } else { IntrinsicQuery::MaxHeight },
+            if min {
+                IntrinsicQuery::MinWidth
+            } else {
+                IntrinsicQuery::MaxWidth
+            },
+            if min {
+                IntrinsicQuery::MinHeight
+            } else {
+                IntrinsicQuery::MaxHeight
+            },
         )
     } else {
         (
-            if min { IntrinsicQuery::MinHeight } else { IntrinsicQuery::MaxHeight },
-            if min { IntrinsicQuery::MinWidth } else { IntrinsicQuery::MaxWidth },
+            if min {
+                IntrinsicQuery::MinHeight
+            } else {
+                IntrinsicQuery::MaxHeight
+            },
+            if min {
+                IntrinsicQuery::MinWidth
+            } else {
+                IntrinsicQuery::MaxWidth
+            },
         )
     };
     let mut line_main = 0.0f32;

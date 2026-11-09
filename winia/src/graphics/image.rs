@@ -24,7 +24,6 @@ pub enum ContentScale {
     FillBounds,
 }
 
-
 /// Where the image content sits inside the bounds (Compose's nine `Alignment` values).
 /// `Start`/`End` mirror with the layout direction, so `Start` is on the right under RTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,17 +59,27 @@ pub(crate) fn content_scale_rect(
     // Alignment offset (0.0 / 0.5 / 1.0; Start and End swap under RTL).
     let sx = match alignment {
         ImageAlignment::TopStart | ImageAlignment::CenterStart | ImageAlignment::BottomStart => {
-            if rtl { 1.0 } else { 0.0 }
+            if rtl {
+                1.0
+            } else {
+                0.0
+            }
         }
         ImageAlignment::TopCenter | ImageAlignment::Center | ImageAlignment::BottomCenter => 0.5,
         ImageAlignment::TopEnd | ImageAlignment::CenterEnd | ImageAlignment::BottomEnd => {
-            if rtl { 0.0 } else { 1.0 }
+            if rtl {
+                0.0
+            } else {
+                1.0
+            }
         }
     };
     let sy = match alignment {
         ImageAlignment::TopStart | ImageAlignment::TopCenter | ImageAlignment::TopEnd => 0.0,
         ImageAlignment::CenterStart | ImageAlignment::Center | ImageAlignment::CenterEnd => 0.5,
-        ImageAlignment::BottomStart | ImageAlignment::BottomCenter | ImageAlignment::BottomEnd => 1.0,
+        ImageAlignment::BottomStart | ImageAlignment::BottomCenter | ImageAlignment::BottomEnd => {
+            1.0
+        }
     };
     Rect::from_xywh(
         rect.left + (rect.width() - w) * sx,

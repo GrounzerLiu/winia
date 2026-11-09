@@ -1,14 +1,14 @@
 //! `SelectionContainer` — Compose's text-selection container.
 
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::modifier::Modifier;
 use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composer::GroupStatus;
 
-
-
-use crate::text::selection::{LOCAL_SELECTION_DISABLED, LOCAL_SELECTION_REGISTRAR, Selection, SelectionRegistrar};
+use crate::text::selection::{
+    LOCAL_SELECTION_DISABLED, LOCAL_SELECTION_REGISTRAR, Selection, SelectionRegistrar,
+};
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
@@ -21,7 +21,11 @@ pub struct SelectionContainer {
 
 impl SelectionContainer {
     pub fn new() -> Self {
-        SelectionContainer { modifier: Modifier::new(), on_change: None, state: None }
+        SelectionContainer {
+            modifier: Modifier::new(),
+            on_change: None,
+            state: None,
+        }
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
@@ -54,7 +58,9 @@ impl SelectionContainer {
         // to survive recomposition.
         let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
         // Whether the context menu is open, plus the relay the pointer path calls to open it.
-        let menu_open = ctx.remember(|| crate::runtime::state::State::new(false)).get();
+        let menu_open = ctx
+            .remember(|| crate::runtime::state::State::new(false))
+            .get();
         {
             let menu_open = menu_open.clone();
             registrar.set_context_menu_requested(move |_x, _y| menu_open.set(true));
@@ -72,7 +78,11 @@ impl SelectionContainer {
             let user = self.on_change;
             registrar.set_on_change(move |sel: &Selection| {
                 if let Some(state) = &state {
-                    state.set_selection(if sel.is_empty() { None } else { Some(sel.clone()) });
+                    state.set_selection(if sel.is_empty() {
+                        None
+                    } else {
+                        Some(sel.clone())
+                    });
                 }
                 if let Some(cb) = &user {
                     cb(sel);
@@ -170,7 +180,9 @@ impl SelectionContainer {
 /// selection — the press is the equivalent pointer here.
 pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::KbEvent) -> bool {
     use crate::input::KbEventType;
-    if ke.event_type != KbEventType::KeyDown { return false; }
+    if ke.event_type != KbEventType::KeyDown {
+        return false;
+    }
     // Ctrl on every platform; Cmd (meta) is the macOS spelling, as in the copy node.
     let ctrl = ke.is_ctrl_pressed || (cfg!(target_os = "macos") && ke.is_meta_pressed);
     let shift = ke.is_shift_pressed;
@@ -179,7 +191,8 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
         _ => None,
     }) else {
         // The character shortcuts.
-        let is_a = matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a"));
+        let is_a =
+            matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a"));
         if ctrl && is_a {
             return reg.select_all();
         }
@@ -187,9 +200,12 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
         // some OTHER component inside the container holds focus, which a container of plain texts
         // never does — so the routed path is the one that actually runs (measured: a selection in
         // the demo, Ctrl+C, and the clipboard still held the previous contents).
-        let is_c = matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
+        let is_c =
+            matches!(&ke.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
         if ctrl && is_c {
-            let Some(selection) = reg.build_selection() else { return false };
+            let Some(selection) = reg.build_selection() else {
+                return false;
+            };
             crate::clipboard::request_text(selection.text());
             return true;
         }
@@ -198,8 +214,20 @@ pub(crate) fn apply_selection_key(reg: &SelectionRegistrar, ke: &crate::input::K
     use winit::keyboard::NamedKey;
     let changed = if shift {
         match named {
-            NamedKey::ArrowLeft => if ctrl { reg.extend_selection_by_word_step(false) } else { reg.extend_selection_by_character(false) },
-            NamedKey::ArrowRight => if ctrl { reg.extend_selection_by_word_step(true) } else { reg.extend_selection_by_character(true) },
+            NamedKey::ArrowLeft => {
+                if ctrl {
+                    reg.extend_selection_by_word_step(false)
+                } else {
+                    reg.extend_selection_by_character(false)
+                }
+            }
+            NamedKey::ArrowRight => {
+                if ctrl {
+                    reg.extend_selection_by_word_step(true)
+                } else {
+                    reg.extend_selection_by_character(true)
+                }
+            }
             NamedKey::ArrowUp => reg.extend_selection_by_line(false),
             NamedKey::ArrowDown => reg.extend_selection_by_line(true),
             NamedKey::Home => reg.extend_selection_to_line_edge(false),
@@ -228,16 +256,25 @@ struct CopySelectionKey {
 impl crate::modifier::KeyNode for CopySelectionKey {
     fn on_event(&self, ev: &crate::input::KbEvent) -> bool {
         use crate::input::KbEventType;
-        if ev.event_type != KbEventType::KeyDown { return false; }
-        let is_c = matches!(&ev.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
-        if !is_c || !(ev.is_ctrl_pressed || ev.is_meta_pressed) { return false; }
+        if ev.event_type != KbEventType::KeyDown {
+            return false;
+        }
+        let is_c =
+            matches!(&ev.key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"));
+        if !is_c || !(ev.is_ctrl_pressed || ev.is_meta_pressed) {
+            return false;
+        }
         // No selection: leave the key to whatever else wanted it.
-        let Some(selection) = self.registrar.build_selection() else { return false; };
+        let Some(selection) = self.registrar.build_selection() else {
+            return false;
+        };
         crate::clipboard::request_text(selection.text());
         true
     }
 
-    fn node_key(&self) -> String { "SelectionContainer.copy".to_string() }
+    fn node_key(&self) -> String {
+        "SelectionContainer.copy".to_string()
+    }
 }
 
 /// Disable selection for this subtree, like Compose's `DisableSelection`.
@@ -251,7 +288,9 @@ pub struct DisableSelection {
 
 impl DisableSelection {
     /// Always disable selection, as Compose's `DisableSelection` does.
-    pub fn new() -> Self { Self { enabled: true } }
+    pub fn new() -> Self {
+        Self { enabled: true }
+    }
 
     /// Conditionally disable selection while keeping this scope at a stable call site. When the
     /// value changes, the whole subtree is marked dirty so reused Text nodes re-read the local and
@@ -272,7 +311,9 @@ impl DisableSelection {
 }
 
 impl Default for DisableSelection {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 /// The observable handle on a container's selection — Compose's `SelectionState`.
 ///
@@ -320,7 +361,9 @@ impl SelectionState {
     /// A run excluded by [`DisableSelection`] is not in the container's table at all, so it is not
     /// in this list either.
     pub fn selectable_texts(&self) -> Vec<String> {
-        self.bound().map(|reg| reg.selectable_texts()).unwrap_or_default()
+        self.bound()
+            .map(|reg| reg.selectable_texts())
+            .unwrap_or_default()
     }
 
     /// Select every selectable run in the container — Compose's `selectAll`.
@@ -386,7 +429,9 @@ impl SelectionState {
     /// SelectionContainer") — and the state keeps publishing a selection nothing can change.
     fn unbind(&self, registrar: &SelectionRegistrar) {
         let mut bound = self.inner.registrar.lock();
-        if !bound.as_ref().is_some_and(|r| r.is_same(registrar)) { return; }
+        if !bound.as_ref().is_some_and(|r| r.is_same(registrar)) {
+            return;
+        }
         *bound = None;
         drop(bound);
         self.set_selection(None);
@@ -405,12 +450,16 @@ impl SelectionState {
 }
 
 impl Default for SelectionState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl std::fmt::Debug for SelectionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SelectionState").field("selection", &self.selection()).finish()
+        f.debug_struct("SelectionState")
+            .field("selection", &self.selection())
+            .finish()
     }
 }
 
@@ -420,7 +469,9 @@ pub fn remember_selection_state(ctx: &mut ComposeCtx) -> SelectionState {
     ctx.remember(SelectionState::new).get()
 }
 impl Default for SelectionContainer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -466,7 +517,11 @@ pub(crate) fn compute_selection(
         // Across containers: snap inside the anchor's container, clamping to its bounds.
         let total = anchor_reg.total_text_len();
         let (dx, dy) = (scene_x - down_x, scene_y - down_y);
-        let towards_end = if dx.abs() >= dy.abs() { dx > 0.0 } else { dy > 0.0 };
+        let towards_end = if dx.abs() >= dy.abs() {
+            dx > 0.0
+        } else {
+            dy > 0.0
+        };
         let edge = if towards_end { total } else { 0 };
         let s = a.min(edge);
         let e = a.max(edge);
@@ -484,7 +539,7 @@ pub(crate) fn compute_selection(
 mod tests {
     use super::*;
 
-/// End-to-end T-1 regression: a container that re-enters while its texts Skip keeps its
+    /// End-to-end T-1 regression: a container that re-enters while its texts Skip keeps its
     /// segments, and the selection still resolves.
     ///
     /// Before the fix `reset_offsets()` ran on every `GroupStatus::Enter`, so the second frame had
@@ -519,9 +574,15 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 400.0));
             let reg = seen.lock().unwrap().clone().expect("registrar captured");
             totals.push(reg.total_text_len());
-            if frame == 0 { tick.set(1); }
+            if frame == 0 {
+                tick.set(1);
+            }
         }
-        assert_eq!(totals, vec![10, 10], "the skipped texts must keep their segments");
+        assert_eq!(
+            totals,
+            vec![10, 10],
+            "the skipped texts must keep their segments"
+        );
         let reg = seen.lock().unwrap().clone().unwrap();
         reg.set_selection(0, reg.total_text_len());
         assert_eq!(
@@ -542,7 +603,9 @@ mod tests {
         assert!(LOCAL_SELECTION_REGISTRAR.try_current().is_none());
         let reg = SelectionRegistrar::new();
         LOCAL_SELECTION_REGISTRAR.provides(reg.clone(), || {
-            let current = LOCAL_SELECTION_REGISTRAR.try_current().expect("registrar should be visible inside provides");
+            let current = LOCAL_SELECTION_REGISTRAR
+                .try_current()
+                .expect("registrar should be visible inside provides");
             assert!(current.is_same(&reg));
         });
         assert!(LOCAL_SELECTION_REGISTRAR.try_current().is_none());
@@ -605,8 +668,8 @@ mod tests {
     #[test]
     fn test_slot_dedup() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, "hello");   // offset=0, next=5
-        reg.register(1, "hello world");  // same slot, NOT new → offset stays 0, next=max(5,0+11)=11
+        reg.register(1, "hello"); // offset=0, next=5
+        reg.register(1, "hello world"); // same slot, NOT new → offset stays 0, next=max(5,0+11)=11
         assert_eq!(reg.total_text_len(), 11);
         assert_eq!(reg.segment_info(1), Some((0, 11))); // preserves original offset, latest len
     }
@@ -614,9 +677,9 @@ mod tests {
     #[test]
     fn test_total_text_len_accumulation() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, "abcdefghij");  // offset=0, len=10, total=10
-        reg.register(2, "klmnopqrstuvwxy");  // offset=10, len=15, total=25
-        reg.register(3, "12345");   // offset=25, len=5, total=30
+        reg.register(1, "abcdefghij"); // offset=0, len=10, total=10
+        reg.register(2, "klmnopqrstuvwxy"); // offset=10, len=15, total=25
+        reg.register(3, "12345"); // offset=25, len=5, total=30
         assert_eq!(reg.total_text_len(), 30);
         assert_eq!(reg.segment_info(1), Some((0, 10)));
         assert_eq!(reg.segment_info(2), Some((10, 15)));
@@ -629,7 +692,9 @@ mod tests {
         let reg = SelectionRegistrar::new();
         let called = std::sync::Arc::new(Mutex::new(false));
         let c = called.clone();
-        reg.set_on_change(move |_| { *c.lock().unwrap() = true; });
+        reg.set_on_change(move |_| {
+            *c.lock().unwrap() = true;
+        });
         reg.register(1, "abcdefghij");
         reg.set_selection(2, 5);
         reg.fire_on_change();
@@ -666,16 +731,28 @@ mod tests {
         });
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
 
-        let reg = seen.lock().unwrap().clone().expect("the outer container registered");
+        let reg = seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the outer container registered");
         assert_eq!(reg.total_text_len(), "beforeafter".len());
         reg.set_selection(0, reg.total_text_len());
-        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("beforeafter".to_string()));
+        assert_eq!(
+            reg.build_selection().map(|s| s.text().to_string()),
+            Some("beforeafter".to_string())
+        );
         let disabled_nodes: Vec<_> = composer.arena_nodes().iter().filter(|n| {
             n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TextContent { content, .. } if content == "disabled text"))
                 || n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::RichTextContent { content, .. } if content == "disabled rich"))
         }).collect();
         assert_eq!(disabled_nodes.len(), 2, "both disabled nodes still render");
-        assert!(disabled_nodes.iter().all(|n| n.registrar.borrow().is_none()), "neither disabled node carries the outer registrar");
+        assert!(
+            disabled_nodes
+                .iter()
+                .all(|n| n.registrar.borrow().is_none()),
+            "neither disabled node carries the outer registrar"
+        );
     }
 
     /// Toggling the same text position disabled -> enabled clears the reused node's stale registrar
@@ -689,23 +766,28 @@ mod tests {
         let disabled = State::new(false);
         let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
         let mut composer = Composer::new();
-        let compose_frame = |composer: &mut Composer, disabled: &State<bool>, seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
-            let disabled = disabled.clone();
-            let seen = seen.clone();
-            composer.compose(move |ctx| {
-                let seen_body = seen.clone();
-                SelectionContainer::new().build(ctx, move |ctx| {
-                    *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
-                    crate::layout::components::Column::new().build(ctx, move |ctx| {
-                        let is_disabled = disabled.get();
-                        DisableSelection::new().enabled(is_disabled).build(ctx, |ctx| {
-                            crate::components::Text::new("same").build(ctx);
+        let compose_frame =
+            |composer: &mut Composer,
+             disabled: &State<bool>,
+             seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
+                let disabled = disabled.clone();
+                let seen = seen.clone();
+                composer.compose(move |ctx| {
+                    let seen_body = seen.clone();
+                    SelectionContainer::new().build(ctx, move |ctx| {
+                        *seen_body.lock().unwrap() = Some(LOCAL_SELECTION_REGISTRAR.current());
+                        crate::layout::components::Column::new().build(ctx, move |ctx| {
+                            let is_disabled = disabled.get();
+                            DisableSelection::new()
+                                .enabled(is_disabled)
+                                .build(ctx, |ctx| {
+                                    crate::components::Text::new("same").build(ctx);
+                                });
                         });
                     });
                 });
-            });
-            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
-        };
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            };
 
         compose_frame(&mut composer, &disabled, &seen);
         let reg = seen.lock().unwrap().clone().expect("registrar");
@@ -713,18 +795,23 @@ mod tests {
 
         disabled.set(true);
         compose_frame(&mut composer, &disabled, &seen);
-        assert_eq!(reg.total_text_len(), 0, "disabled text is removed from the registrar");
+        assert_eq!(
+            reg.total_text_len(),
+            0,
+            "disabled text is removed from the registrar"
+        );
         let disabled_node = composer.arena_nodes().iter().find(|n| {
             n.modifier.elements().iter().any(|e| matches!(e, crate::modifier::ModifierElement::TextContent { content, .. } if content == "same"))
         }).expect("the disabled text still renders");
-        assert!(disabled_node.registrar.borrow().is_none(), "the reused text node's old registrar was explicitly cleared");
+        assert!(
+            disabled_node.registrar.borrow().is_none(),
+            "the reused text node's old registrar was explicitly cleared"
+        );
 
         disabled.set(false);
         compose_frame(&mut composer, &disabled, &seen);
         assert_eq!(reg.total_text_len(), 4, "re-enabled text registers again");
     }
-
-
 
     /// The key map: Ctrl+A selects everything, Shift+arrows extend (Ctrl+Shift by word), Escape
     /// clears, and a bare arrow is left to focus navigation.
@@ -747,12 +834,28 @@ mod tests {
         let range = |r: &SelectionRegistrar| r.build_selection().map(|s| (s.start(), s.end()));
 
         reg.set_selection(0, 0);
-        assert!(apply_selection_key(&reg, &named(NamedKey::ArrowRight, true, false)));
-        assert_eq!(range(&reg), Some((0, 1)), "Shift+Right extends by one character");
-        assert!(apply_selection_key(&reg, &named(NamedKey::ArrowRight, true, true)));
-        assert_eq!(range(&reg), Some((0, 5)), "Ctrl+Shift+Right extends by one word");
-        assert!(!apply_selection_key(&reg, &named(NamedKey::ArrowRight, false, false)),
-            "a bare arrow belongs to focus navigation");
+        assert!(apply_selection_key(
+            &reg,
+            &named(NamedKey::ArrowRight, true, false)
+        ));
+        assert_eq!(
+            range(&reg),
+            Some((0, 1)),
+            "Shift+Right extends by one character"
+        );
+        assert!(apply_selection_key(
+            &reg,
+            &named(NamedKey::ArrowRight, true, true)
+        ));
+        assert_eq!(
+            range(&reg),
+            Some((0, 5)),
+            "Ctrl+Shift+Right extends by one word"
+        );
+        assert!(
+            !apply_selection_key(&reg, &named(NamedKey::ArrowRight, false, false)),
+            "a bare arrow belongs to focus navigation"
+        );
 
         let ctrl_a = KbEvent {
             key: Key::Character("a".into()),
@@ -766,7 +869,10 @@ mod tests {
         assert!(apply_selection_key(&reg, &ctrl_a), "Ctrl+A selects all");
         assert_eq!(range(&reg), Some((0, 11)));
 
-        assert!(apply_selection_key(&reg, &named(NamedKey::Escape, false, false)), "Escape clears");
+        assert!(
+            apply_selection_key(&reg, &named(NamedKey::Escape, false, false)),
+            "Escape clears"
+        );
         assert!(reg.build_selection().is_none());
     }
 
@@ -823,17 +929,29 @@ mod tests {
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
         let reg = seen.lock().unwrap().clone().expect("registrar");
 
-        assert!(state.selection().is_none(), "nothing is selected to begin with");
-        assert_eq!(state.selectable_texts(), vec!["hello ".to_string(), "world".to_string()]);
+        assert!(
+            state.selection().is_none(),
+            "nothing is selected to begin with"
+        );
+        assert_eq!(
+            state.selectable_texts(),
+            vec!["hello ".to_string(), "world".to_string()]
+        );
 
         reg.set_selection(6, 11);
         reg.fire_on_change();
         assert_eq!(state.selected_text(), Some("world".to_string()));
-        assert_eq!(state.selection().map(|s| (s.start(), s.end())), Some((6, 11)));
+        assert_eq!(
+            state.selection().map(|s| (s.start(), s.end())),
+            Some((6, 11))
+        );
 
         reg.clear_selection();
         reg.fire_on_change();
-        assert!(state.selection().is_none(), "a clear is published as no selection");
+        assert!(
+            state.selection().is_none(),
+            "a clear is published as no selection"
+        );
     }
 
     /// The programmatic actions drive the container, and the state follows.
@@ -877,7 +995,11 @@ mod tests {
 
         state.clear();
         assert!(state.selection().is_none());
-        assert_eq!(reg.total_text_len(), 11, "the container still knows its text");
+        assert_eq!(
+            reg.total_text_len(),
+            11,
+            "the container still knows its text"
+        );
     }
 
     /// Compose refuses to bind one state to two containers; so does this one.
@@ -892,12 +1014,16 @@ mod tests {
         let mut composer = Composer::new();
         composer.compose(move |ctx| {
             crate::layout::components::Column::new().build(ctx, move |ctx| {
-                SelectionContainer::new().state(state_a.clone()).build(ctx, |ctx| {
-                    crate::components::Text::new("one").build(ctx);
-                });
-                SelectionContainer::new().state(state_b.clone()).build(ctx, |ctx| {
-                    crate::components::Text::new("two").build(ctx);
-                });
+                SelectionContainer::new()
+                    .state(state_a.clone())
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("one").build(ctx);
+                    });
+                SelectionContainer::new()
+                    .state(state_b.clone())
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("two").build(ctx);
+                    });
             });
         });
     }
@@ -917,7 +1043,9 @@ mod tests {
         let show = State::new(true);
         let seen: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
         let mut composer = Composer::new();
-        let mut frame = |composer: &mut Composer, show: &State<bool>, seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
+        let mut frame = |composer: &mut Composer,
+                         show: &State<bool>,
+                         seen: &Arc<Mutex<Option<SelectionRegistrar>>>| {
             let show = show.clone();
             let seen = seen.clone();
             composer.compose(move |ctx| {
@@ -941,7 +1069,11 @@ mod tests {
 
         show.set(false);
         frame(&mut composer, &show, &seen);
-        assert_eq!(reg.total_text_len(), 0, "the table has to empty with the last text gone");
+        assert_eq!(
+            reg.total_text_len(),
+            0,
+            "the table has to empty with the last text gone"
+        );
     }
 
     /// D-1: clearing a selection IS a state change, and the callback has to hear about it.
@@ -956,7 +1088,9 @@ mod tests {
         let seen = std::sync::Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
         let sink = seen.clone();
         reg.set_on_change(move |sel| {
-            sink.lock().unwrap().push((sel.text().to_string(), sel.is_empty()));
+            sink.lock()
+                .unwrap()
+                .push((sel.text().to_string(), sel.is_empty()));
         });
         reg.register(1, "hello world");
         reg.set_selection(0, 5);
@@ -978,7 +1112,9 @@ mod tests {
         let reg = SelectionRegistrar::new();
         let empty = std::sync::Arc::new(Mutex::new(None::<bool>));
         let sink = empty.clone();
-        reg.set_on_change(move |sel| { *sink.lock().unwrap() = Some(sel.is_empty()); });
+        reg.set_on_change(move |sel| {
+            *sink.lock().unwrap() = Some(sel.is_empty());
+        });
         reg.fire_on_change();
         assert_eq!(*empty.lock().unwrap(), Some(true));
     }
@@ -992,7 +1128,11 @@ mod tests {
         reg.set_selection(5, 5);
         assert!(reg.selected_range(1).is_none(), "a caret is not a range");
         reg.set_selection(3, 8);
-        assert_eq!(reg.selected_range(1), Some(3..8), "a real range still answers");
+        assert_eq!(
+            reg.selected_range(1),
+            Some(3..8),
+            "a real range still answers"
+        );
     }
 
     /// S-6: the order the container stitches in is the READING order, not the tree's.
@@ -1029,8 +1169,16 @@ mod tests {
         }
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
 
-        let reg = seen.lock().unwrap().clone().expect("the container registered");
-        assert_eq!(reg.total_text_len(), 8, "two columns of two two-byte labels");
+        let reg = seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the container registered");
+        assert_eq!(
+            reg.total_text_len(),
+            8,
+            "two columns of two two-byte labels"
+        );
         reg.set_selection(0, reg.total_text_len());
         assert_eq!(
             reg.build_selection().map(|s| s.text().to_string()),
@@ -1051,7 +1199,11 @@ mod tests {
         assert_eq!(reg.total_text_len(), 25);
         // The tree reports them in the opposite order and no longer has slot 1.
         reg.reindex(&[2]);
-        assert_eq!(reg.segment_info(2), Some((0, 15)), "the survivor moves to offset 0");
+        assert_eq!(
+            reg.segment_info(2),
+            Some((0, 15)),
+            "the survivor moves to offset 0"
+        );
         assert_eq!(reg.segment_info(1), None, "a slot the tree dropped is gone");
         assert_eq!(reg.total_text_len(), 15, "no hole is left behind");
     }
@@ -1062,29 +1214,44 @@ mod tests {
         let reg = SelectionRegistrar::new();
         reg.register(1, "AAA");
         reg.register(3, "CCC");
-        assert_eq!(reg.segment_info(3), Some((3, 3)), "registered third, placed second");
+        assert_eq!(
+            reg.segment_info(3),
+            Some((3, 3)),
+            "registered third, placed second"
+        );
         reg.register(2, "BBB");
-        assert_eq!(reg.segment_info(2), Some((6, 3)), "registration order appends");
+        assert_eq!(
+            reg.segment_info(2),
+            Some((6, 3)),
+            "registration order appends"
+        );
         // Layout says the document order is 1, 2, 3.
         reg.reindex(&[1, 2, 3]);
         assert_eq!(reg.segment_info(1), Some((0, 3)));
-        assert_eq!(reg.segment_info(2), Some((3, 3)), "the inserted text sits in the middle");
+        assert_eq!(
+            reg.segment_info(2),
+            Some((3, 3)),
+            "the inserted text sits in the middle"
+        );
         assert_eq!(reg.segment_info(3), Some((6, 3)));
         reg.set_selection(0, reg.total_text_len());
-        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("AAABBBCCC".to_string()));
+        assert_eq!(
+            reg.build_selection().map(|s| s.text().to_string()),
+            Some("AAABBBCCC".to_string())
+        );
     }
 
     #[test]
     fn test_selection_across_three_segments() {
         let reg = SelectionRegistrar::new();
-        reg.register(10, &"x".repeat(100));  // offset=0
-        reg.register(20, &"y".repeat(200));  // offset=100
-        reg.register(30, &"z".repeat(50));   // offset=300
+        reg.register(10, &"x".repeat(100)); // offset=0
+        reg.register(20, &"y".repeat(200)); // offset=100
+        reg.register(30, &"z".repeat(50)); // offset=300
         // select spanning middle of 1st to middle of 3rd
         reg.set_selection(50, 320);
-        assert_eq!(reg.selected_range(10), Some(50..100));   // local 50..100
-        assert_eq!(reg.selected_range(20), Some(0..200));     // full second
-        assert_eq!(reg.selected_range(30), Some(0..20));      // first 20 of third
+        assert_eq!(reg.selected_range(10), Some(50..100)); // local 50..100
+        assert_eq!(reg.selected_range(20), Some(0..200)); // full second
+        assert_eq!(reg.selected_range(30), Some(0..20)); // first 20 of third
     }
 
     #[test]
@@ -1109,9 +1276,9 @@ mod tests {
     #[test]
     fn test_selection_single_char_last_segment() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, "abcdefghij");  // offset=0
-        reg.register(2, "12345");   // offset=10
-        reg.set_selection(13, 14);  // chars 13-14 in global = 3-4 in seg2
+        reg.register(1, "abcdefghij"); // offset=0
+        reg.register(2, "12345"); // offset=10
+        reg.set_selection(13, 14); // chars 13-14 in global = 3-4 in seg2
         assert_eq!(reg.selected_range(2), Some(3..4));
         assert!(reg.selected_range(1).is_none());
     }
@@ -1130,9 +1297,9 @@ mod tests {
     #[test]
     fn test_build_selection_cross_segments() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, "Hello! ");        // offset=0
-        reg.register(2, "Drag me ");       // offset=7
-        reg.register(3, "finish.");        // offset=15
+        reg.register(1, "Hello! "); // offset=0
+        reg.register(2, "Drag me "); // offset=7
+        reg.register(3, "finish."); // offset=15
         // Across three runs: the tail of the first, all of the second, the head of the third.
         reg.set_selection(4, 19);
         let sel = reg.build_selection().unwrap();
@@ -1187,7 +1354,6 @@ mod compute_selection_tests {
         assert_eq!((s, e), (10, 20));
     }
 
-
     #[test]
     fn test_cross_container_uses_anchor_reg() {
         let (a, b) = regs();
@@ -1209,7 +1375,11 @@ mod compute_selection_tests {
         let r = compute_selection(Some(&a), Some(40), &b, Some(0), 5, 100.0, 10.0, 208.0, 10.0);
         let (reg, s, e) = r.unwrap();
         assert!(reg.is_same(&a));
-        assert_eq!((s, e), (0, 40), "dragging left selects back to the start, not to the end");
+        assert_eq!(
+            (s, e),
+            (0, 40),
+            "dragging left selects back to the start, not to the end"
+        );
     }
 
     /// The same drag to the right reaches the END.

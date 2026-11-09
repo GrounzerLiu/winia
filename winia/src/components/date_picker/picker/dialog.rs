@@ -160,18 +160,18 @@ impl DatePickerDialog {
                                     .fill_max_width()
                                     .layout_weight_fill(1.0, false),
                             )
-                            .build(ctx, |ctx| {
-                                match content.as_ref() {
-                                    Some(content) => content(ctx),
-                                    None => DatePicker::new(state.clone())
-                                        .colors(content_colors.clone())
-                                        .build(ctx),
-                                }
+                            .build(ctx, |ctx| match content.as_ref() {
+                                Some(content) => content(ctx),
+                                None => DatePicker::new(state.clone())
+                                    .colors(content_colors.clone())
+                                    .build(ctx),
                             });
                         Row::new()
                             .modifier(
                                 Modifier::new()
-                                    .padding_bottom(DatePickerDefaults::MODAL_BUTTONS_BOTTOM_PADDING)
+                                    .padding_bottom(
+                                        DatePickerDefaults::MODAL_BUTTONS_BOTTOM_PADDING,
+                                    )
                                     .padding_end(DatePickerDefaults::MODAL_BUTTONS_END_PADDING),
                             )
                             .spacing(DatePickerDefaults::MODAL_BUTTONS_SPACING)
@@ -225,7 +225,9 @@ pub(crate) fn header(
             DatePickerDefaults::HEADLINE_DESCRIPTION,
             &[&headline_description],
         ),
-        DisplayMode::Input => format_string(DATE_INPUT_HEADLINE_DESCRIPTION, &[&headline_description]),
+        DisplayMode::Input => {
+            format_string(DATE_INPUT_HEADLINE_DESCRIPTION, &[&headline_description])
+        }
     };
     // material3 gives the header a *minimum* height of 120 dp and lets its content grow past it; winia
     // stretches an auto-height child to fill the space its parent offers, which with `SpaceBetween` would push
@@ -262,35 +264,34 @@ pub(crate) fn header(
                 .arrangement(Arrangement::SpaceBetween)
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
-                    ProvideTextStyle(WiniaTheme::typography().headline_large.clone(), ctx, |ctx| {
-                        Text::new(headline)
-                            .color(headline_color)
-                            .max_lines(1)
-                            .modifier(
-                                Modifier::new()
-                                    .padding_start(DatePickerDefaults::TITLE_START_PADDING)
-                                    .padding_end(DatePickerDefaults::TITLE_END_PADDING)
-                                    .padding_bottom(DatePickerDefaults::HEADLINE_BOTTOM_PADDING)
-                                    // The headline announces both what it reads and which mode it is
-                                    // in, politely rather than assertively, so a selection made in
-                                    // the calendar or typed in the field is picked up either way
-                                    // (`DatePicker.kt:722-725`).
-                                    .semantics(
-                                        crate::semantics::SemanticsConfig::new()
-                                            .content_description(headline_description)
-                                            .live_region(
-                                                crate::semantics::LiveRegionMode::Polite,
-                                            ),
-                                    ),
-                            )
-                            .build(ctx);
-                    });
-                    display_mode_toggle(
+                    ProvideTextStyle(
+                        WiniaTheme::typography().headline_large.clone(),
                         ctx,
-                        display_mode,
-                        on_toggle_display_mode,
-                        headline_color,
+                        |ctx| {
+                            Text::new(headline)
+                                .color(headline_color)
+                                .max_lines(1)
+                                .modifier(
+                                    Modifier::new()
+                                        .padding_start(DatePickerDefaults::TITLE_START_PADDING)
+                                        .padding_end(DatePickerDefaults::TITLE_END_PADDING)
+                                        .padding_bottom(DatePickerDefaults::HEADLINE_BOTTOM_PADDING)
+                                        // The headline announces both what it reads and which mode it is
+                                        // in, politely rather than assertively, so a selection made in
+                                        // the calendar or typed in the field is picked up either way
+                                        // (`DatePicker.kt:722-725`).
+                                        .semantics(
+                                            crate::semantics::SemanticsConfig::new()
+                                                .content_description(headline_description)
+                                                .live_region(
+                                                    crate::semantics::LiveRegionMode::Polite,
+                                                ),
+                                        ),
+                                )
+                                .build(ctx);
+                        },
                     );
+                    display_mode_toggle(ctx, display_mode, on_toggle_display_mode, headline_color);
                 });
             // material3 draws the divider when a title, a headline or a mode toggle is present
             // (`DatePicker.kt:1392-1394`); a headline is always composed here.
@@ -316,7 +317,9 @@ pub(crate) fn months_navigation(
     list: &LazyListState,
     step_in_flight: &State<Option<usize>>,
 ) {
-    let text = state.calendar_model().format_month_year(month.start_utc_time_millis);
+    let text = state
+        .calendar_model()
+        .format_month_year(month.start_utc_time_millis);
     let navigation_color = colors.navigation_content;
 
     Row::new()
@@ -347,24 +350,47 @@ pub(crate) fn months_navigation(
                         let forward_enabled = list.remember_can_scroll_forward(ctx);
                         // The last page the list can show, so a forward step cannot ask past the end
                         // and leave the arrow's own request stranded above the clamp.
-                        let last_page = CalendarModel::number_of_months_in_range(&state.year_range())
-                            .saturating_sub(1) as usize;
+                        let last_page =
+                            CalendarModel::number_of_months_in_range(&state.year_range())
+                                .saturating_sub(1) as usize;
                         let back = list.clone();
                         let back_flight = step_in_flight.clone();
                         let back_anchor = list.first_visible();
-                        step_arrow(ctx, move || {
-                            let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
-                            back_flight.set(Some(target));
-                            back.animate_scroll_to_item(target, 0.0);
-                        }, back_enabled.get(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
+                        step_arrow(
+                            ctx,
+                            move || {
+                                let target =
+                                    arrow_target(back_anchor, back_flight.get(), false, last_page);
+                                back_flight.set(Some(target));
+                                back.animate_scroll_to_item(target, 0.0);
+                            },
+                            back_enabled.get(),
+                            CHEVRON_LEFT_PATH,
+                            navigation_color,
+                            IconButtonSize::Small,
+                            true,
+                        );
                         let forward = list.clone();
                         let forward_flight = step_in_flight.clone();
                         let forward_anchor = list.first_visible();
-                        step_arrow(ctx, move || {
-                            let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
-                            forward_flight.set(Some(target));
-                            forward.animate_scroll_to_item(target, 0.0);
-                        }, forward_enabled.get(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
+                        step_arrow(
+                            ctx,
+                            move || {
+                                let target = arrow_target(
+                                    forward_anchor,
+                                    forward_flight.get(),
+                                    true,
+                                    last_page,
+                                );
+                                forward_flight.set(Some(target));
+                                forward.animate_scroll_to_item(target, 0.0);
+                            },
+                            forward_enabled.get(),
+                            CHEVRON_RIGHT_PATH,
+                            navigation_color,
+                            IconButtonSize::Small,
+                            true,
+                        );
                     });
             }
         });
@@ -435,7 +461,12 @@ pub(crate) fn step_arrow(
 /// press during a forward animation too — material3 wraps both handlers in
 /// `catch (_: IllegalArgumentException)` for exactly that (`:1571-1587`). One press for one page is fine;
 /// one DIRECTION swallowing and the other not is not, and that is what the asymmetry above amounts to.
-pub(crate) fn arrow_target(anchor: usize, in_flight: Option<usize>, forward: bool, last_page: usize) -> usize {
+pub(crate) fn arrow_target(
+    anchor: usize,
+    in_flight: Option<usize>,
+    forward: bool,
+    last_page: usize,
+) -> usize {
     let from = in_flight.unwrap_or(anchor);
     if forward {
         from.saturating_add(1).min(last_page)
@@ -477,7 +508,9 @@ pub(crate) fn year_menu_button(
                 .test_tag(tag.to_string())
                 // material3 repeats the button's text as its content description and makes it a polite live
                 // region, so a reader announces the month as the arrows move it (`DatePicker.kt:2205-2216`).
-                .semantics(crate::semantics::SemanticsConfig::new().content_description(description)),
+                .semantics(
+                    crate::semantics::SemanticsConfig::new().content_description(description),
+                ),
         )
         .build(ctx, |ctx| {
             // The wrapper fills the button's 40 dp height and centres the row in it; a wrap-content
@@ -490,18 +523,19 @@ pub(crate) fn year_menu_button(
                     // material3's `TextButtonWithIconContentPadding` (a `TextButton` holding the
                     // dropdown glyph): 12 dp at the start, 16 dp at the end (`Button.kt:515-522`).
                     Row::new()
-                        .modifier(
-                            Modifier::new()
-                                .padding_start(12.0)
-                                .padding_end(16.0),
-                        )
+                        .modifier(Modifier::new().padding_start(12.0).padding_end(16.0))
                         .arrangement(Arrangement::Start)
                         .alignment(Alignment::Center)
                         .build(ctx, |ctx| {
-                            ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
-                                Text::new(text).color(color).max_lines(1).build(ctx);
-                            });
-                            Spacer::horizontal(DatePickerDefaults::YEAR_MENU_ICON_SPACING).build(ctx);
+                            ProvideTextStyle(
+                                WiniaTheme::typography().label_large.clone(),
+                                ctx,
+                                |ctx| {
+                                    Text::new(text).color(color).max_lines(1).build(ctx);
+                                },
+                            );
+                            Spacer::horizontal(DatePickerDefaults::YEAR_MENU_ICON_SPACING)
+                                .build(ctx);
                             // Faded, not removed: dropping the glyph would shrink the button and shift the
                             // label, and the alpha reads straight into a fade animation later.
                             let mut glyph = Modifier::new();
@@ -559,9 +593,9 @@ pub(crate) fn year_panel(
 
     Column::new()
         .modifier(
-            Modifier::new()
-                .fill_max_width()
-                .height(DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS),
+            Modifier::new().fill_max_width().height(
+                DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS,
+            ),
         )
         .arrangement(Arrangement::Start)
         .build(ctx, |ctx| {
@@ -570,11 +604,10 @@ pub(crate) fn year_panel(
             Divider::horizontal().build(ctx);
             ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
                 Row::new()
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_width()
-                            .height(DatePickerDefaults::YEAR_PANEL_HEIGHT - DatePickerDefaults::DIVIDER_THICKNESS),
-                    )
+                    .modifier(Modifier::new().fill_max_width().height(
+                        DatePickerDefaults::YEAR_PANEL_HEIGHT
+                            - DatePickerDefaults::DIVIDER_THICKNESS,
+                    ))
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
                         LazyColumn::new()
@@ -591,8 +624,8 @@ pub(crate) fn year_panel(
                                         .alignment(Alignment::Center)
                                         .build(ctx, |ctx| {
                                             for column in 0..DatePickerDefaults::YEARS_PER_ROW {
-                                                let index =
-                                                    row * DatePickerDefaults::YEARS_PER_ROW + column;
+                                                let index = row * DatePickerDefaults::YEARS_PER_ROW
+                                                    + column;
                                                 if index >= count {
                                                     break;
                                                 }
@@ -615,9 +648,7 @@ pub(crate) fn year_panel(
                             .build(ctx);
                         // Always visible: the list is 2412 months tall and nothing else tells the user
                         // it scrolls (the bottom row is cut off mid-year otherwise).
-                        LazyScrollbar::new(list_state)
-                            .always_show(true)
-                            .build(ctx);
+                        LazyScrollbar::new(list_state).always_show(true).build(ctx);
                     });
             });
             Divider::horizontal().build(ctx);
@@ -653,7 +684,9 @@ pub(crate) fn year_cell(
                     DatePickerDefaults::YEAR_CELL_HEIGHT,
                 )
                 .test_tag(format!("{YEAR_CELL_TAG_PREFIX}{year}"))
-                .semantics(crate::semantics::SemanticsConfig::new().content_description(description)),
+                .semantics(
+                    crate::semantics::SemanticsConfig::new().content_description(description),
+                ),
         );
     if current_year && !selected {
         surface = surface.border(SurfaceBorder::new(
@@ -697,10 +730,12 @@ pub(crate) fn weekday_row(ctx: &mut ComposeCtx, model: &CalendarModel, colors: &
                         .build(ctx, |ctx| {
                             Text::new(narrow)
                                 .color(colors.weekday_content)
-                                .modifier(Modifier::new().semantics(
-                                    crate::semantics::SemanticsConfig::new()
-                                        .content_description(full),
-                                ))
+                                .modifier(
+                                    Modifier::new().semantics(
+                                        crate::semantics::SemanticsConfig::new()
+                                            .content_description(full),
+                                    ),
+                                )
                                 .build(ctx);
                         });
                 }
@@ -844,7 +879,11 @@ pub(crate) fn day_cell(
     // An outside cell is pinned to 0: a date selected in another month can appear here, and a context cell
     // must not claim it with a fill the user cannot tap to keep.
     let pop = ctx.animate_float_as_state(
-        if cell.is_selected && !outside { 1.0 } else { 0.0 },
+        if cell.is_selected && !outside {
+            1.0
+        } else {
+            0.0
+        },
         AnimationSpec::Tween(TweenSpec::new(
             std::time::Duration::from_millis(DAY_POP_MILLIS),
             crate::animation::interpolator::EaseOutCubic::new(),
@@ -897,4 +936,3 @@ pub(crate) fn day_cell(
             });
     });
 }
-

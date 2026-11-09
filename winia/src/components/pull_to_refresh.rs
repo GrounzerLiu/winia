@@ -9,16 +9,16 @@
 //! The nested-scroll protocol has no release event, so the settle-back is armed with a short delay
 //! and re-armed on every delta; letting go (no more deltas) returns the content to rest.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::animation::{AnimationSpec, TweenSpec};
-use crate::composable;
-use crate::components::loading_indicator::LoadingIndicator;
 use crate::animation::interpolator::EaseOutCubic;
-use crate::layout::components::{Column, Stack};
+use crate::animation::{AnimationSpec, TweenSpec};
+use crate::components::loading_indicator::LoadingIndicator;
+use crate::composable;
 use crate::layout::ContentAlignment;
+use crate::layout::components::{Column, Stack};
 use crate::modifier::Modifier;
 use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta};
 use crate::runtime::composer::ComposeCtx;
@@ -76,9 +76,10 @@ impl PullToRefreshState {
             crate::animation::push_animatable(
                 self.offset.clone(),
                 REFRESHING_OFFSET,
-                AnimationSpec::Tween(
-                    TweenSpec::new(Duration::from_millis(180), EaseOutCubic::new()),
-                ),
+                AnimationSpec::Tween(TweenSpec::new(
+                    Duration::from_millis(180),
+                    EaseOutCubic::new(),
+                )),
             );
         }
     }
@@ -91,7 +92,10 @@ impl PullToRefreshState {
         crate::animation::push_animatable(
             self.offset.clone(),
             0.0,
-            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(220), EaseOutCubic::new())),
+            AnimationSpec::Tween(TweenSpec::new(
+                Duration::from_millis(220),
+                EaseOutCubic::new(),
+            )),
         );
     }
 }
@@ -129,11 +133,7 @@ impl NestedScrollConnection for PullConnection {
     /// Swiping UP retracts the pull BEFORE the inner list scrolls down (Compose's
     /// PullToRefreshNestedScrollConnection.onPreScroll). Without this the child consumes the upward
     /// delta first, so a short pull leaves the indicator stuck above a list that has started to move.
-    fn on_pre_scroll(
-        &self,
-        available: ScrollDelta,
-        source: NestedScrollSource,
-    ) -> ScrollDelta {
+    fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
         if source != NestedScrollSource::Drag || self.state.refreshing.load(Ordering::Relaxed) {
             return ScrollDelta::ZERO;
         }
@@ -336,7 +336,10 @@ mod tests {
             ScrollDelta::new(0.0, 200.0),
             NestedScrollSource::Drag,
         );
-        assert_eq!(consumed.y, 192.0, "the pull consumes only the damped part it can take");
+        assert_eq!(
+            consumed.y, 192.0,
+            "the pull consumes only the damped part it can take"
+        );
         assert_eq!(state.pull_offset(), MAX_PULL, "the pull clamps at MAX_PULL");
         assert!(state.is_triggered());
         assert_eq!(hits.load(Ordering::Relaxed), 1);
@@ -365,16 +368,18 @@ mod tests {
             NestedScrollSource::Drag,
         );
         assert_eq!(consumed.y, 40.0);
-        assert_eq!(state.pull_offset(), 20.0, "the pull is damped by RESISTANCE");
+        assert_eq!(
+            state.pull_offset(),
+            20.0,
+            "the pull is damped by RESISTANCE"
+        );
         assert!(!state.is_triggered());
         assert_eq!(hits.load(Ordering::Relaxed), 0);
 
         // An upward drag is handled BEFORE the child scrolls (Compose's onPreScroll): after a short
         // pull, the first 40 px go to the pull and only the rest reaches the list.
-        let retract = connection.on_pre_scroll(
-            ScrollDelta::new(0.0, -80.0),
-            NestedScrollSource::Drag,
-        );
+        let retract =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, -80.0), NestedScrollSource::Drag);
         assert_eq!(retract.y, -40.0, "only what the pull still has is consumed");
         assert_eq!(state.pull_offset(), 0.0);
         crate::animation::clear_all_animations();
@@ -422,11 +427,7 @@ mod tests {
 
         let scroll = ScrollState::new();
         let mut nodes = vec![
-            LayoutNode::leaf(
-                Modifier::new()
-                    .nested_scroll(connection)
-                    .size(400.0, 400.0),
-            ),
+            LayoutNode::leaf(Modifier::new().nested_scroll(connection).size(400.0, 400.0)),
             LayoutNode::leaf(
                 Modifier::new()
                     .vertical_scroll(scroll.clone())
@@ -476,10 +477,9 @@ mod tests {
             let theme = theme.clone();
             composer.compose(move |ctx| {
                 crate::theme::WiniaTheme::with_theme(theme, ctx, move |ctx| {
-                    PullToRefreshBox::new(r.get(), || {})
-                        .build(ctx, |ctx| {
-                            crate::components::text::Text::new("row").build(ctx);
-                        });
+                    PullToRefreshBox::new(r.get(), || {}).build(ctx, |ctx| {
+                        crate::components::text::Text::new("row").build(ctx);
+                    });
                 });
             });
             composer.layout(crate::layout::Constraints::new(0.0, 320.0, 0.0, 480.0));
@@ -487,7 +487,10 @@ mod tests {
         build(&mut composer);
         build(&mut composer);
         let baseline = composer.compose_entered_count;
-        assert_eq!(composer.compose_dirty_count, 0, "a settled frame dirties nothing");
+        assert_eq!(
+            composer.compose_dirty_count, 0,
+            "a settled frame dirties nothing"
+        );
         build(&mut composer);
         assert_eq!(
             (composer.compose_entered_count, composer.compose_dirty_count),

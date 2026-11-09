@@ -32,16 +32,16 @@
 //! 无 label 时退化为垂直模式的圆形指示器（TopIconOrIconOnlyMeasurePolicy）
 
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
-use crate::layout::{Alignment, BoxLayout, LayoutDirection};
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::layout::{Alignment, BoxLayout, LayoutDirection};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 // ── Token 常量（androidx-main NavigationBarTokens / NavigationBarVerticalItemTokens /
@@ -109,7 +109,9 @@ impl NavigationBarColors {
 
     /// ContainerColor = ColorSchemeKeyTokens.SurfaceContainer
     pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
-        Self { container: theme.surface_container }
+        Self {
+            container: theme.surface_container,
+        }
     }
 }
 
@@ -136,7 +138,15 @@ impl NavigationBarItemColors {
         disabled_icon: Color,
         disabled_label: Color,
     ) -> Self {
-        Self { selected_icon, selected_label, indicator, unselected_icon, unselected_label, disabled_icon, disabled_label }
+        Self {
+            selected_icon,
+            selected_label,
+            indicator,
+            unselected_icon,
+            unselected_label,
+            disabled_icon,
+            disabled_label,
+        }
     }
 
     /// defaultNavigationBarItemColors（NavigationBar.kt ColorScheme 扩展）：
@@ -239,7 +249,11 @@ pub struct NavigationBar {
 
 impl NavigationBar {
     pub fn new(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
-        Self { content: Box::new(content), colors: None, modifier: Modifier::new() }
+        Self {
+            content: Box::new(content),
+            colors: None,
+            modifier: Modifier::new(),
+        }
     }
 
     pub fn colors(mut self, colors: NavigationBarColors) -> Self {
@@ -257,8 +271,13 @@ impl NavigationBar {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| NavigationBarDefaults::colors(&theme));
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let colors = self
+            .colors
+            .unwrap_or_else(|| NavigationBarDefaults::colors(&theme));
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let content = self.content;
         let policy = NavigationBarLayoutPolicy { direction };
@@ -305,13 +324,21 @@ impl MeasurePolicy for NavigationBarLayoutPolicy {
         let mut x = 0.0f32;
         for &child in children {
             // weight(1f)：主轴 tight；交叉轴松（item 自身 minHeight 80 决定高度）
-            let (size, _) = measure_node(nodes, policies, child, Constraints::new(item_w, item_w, 0.0, c.max_height));
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                child,
+                Constraints::new(item_w, item_w, 0.0, c.max_height),
+            );
             let px = if self.direction == LayoutDirection::Ltr {
                 x
             } else {
                 width - x - item_w
             };
-            placements.push(Placement { size, position: Offset::new(px, 0.0) });
+            placements.push(Placement {
+                size,
+                position: Offset::new(px, 0.0),
+            });
             x += item_w + NAVIGATION_BAR_ITEM_SPACING;
         }
         (Size::new(width, height), placements)
@@ -406,7 +433,9 @@ impl NavigationBarItem {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| NavigationBarDefaults::item_colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| NavigationBarDefaults::item_colors(&theme));
         let selected = self.selected;
         let enabled = self.enabled;
         let has_label = self.label.is_some();
@@ -414,15 +443,19 @@ impl NavigationBarItem {
         let horizontal = self.icon_position == NavigationItemIconPosition::Start;
 
         // 双进度动画（alphaProgress / sizeProgress 分离——见模块文档）
-        let alpha_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_alpha_spec());
-        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_size_spec());
+        let alpha_progress =
+            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_alpha_spec());
+        let size_progress =
+            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_size_spec());
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);
         // ripple 色跟随图标色（未选中 onSurfaceVariant / 选中 onSecondaryContainer）
         let ripple_color = icon_color;
 
-        let interaction = self.interaction_source.clone()
+        let interaction = self
+            .interaction_source
+            .clone()
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
 
         // 指示器背景：颜色 x alphaProgress——绘制期每帧求值（peek 不注册依赖）
@@ -463,7 +496,8 @@ impl NavigationBarItem {
         let mut item_modifier = Modifier::new();
         if enabled {
             if let Some(callback) = self.on_click.clone() {
-                item_modifier = item_modifier.clickable_with_source(&interaction, move || callback());
+                item_modifier =
+                    item_modifier.clickable_with_source(&interaction, move || callback());
             }
         }
         let item_modifier = item_modifier.then(self.modifier);
@@ -505,7 +539,8 @@ impl NavigationBarItem {
 /// 单子节点包装（保证每个逻辑槽恰好贡献一个 arena 子节点——索引稳定）。
 fn wrap_slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) {
     let key = ctx.next_key();
-    match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) {
+    match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center))
+    {
         GroupStatus::Skip => {}
         GroupStatus::Enter => content(ctx),
     }
@@ -581,7 +616,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
                 nodes,
                 policies,
                 children[ripple_idx],
-                Constraints::new(total_indicator_w, total_indicator_w, indicator_h, indicator_h),
+                Constraints::new(
+                    total_indicator_w,
+                    total_indicator_w,
+                    indicator_h,
+                    indicator_h,
+                ),
             );
             let animated_indicator_w = total_indicator_w * size_p;
             let (indicator_size, _) = measure_node(
@@ -610,8 +650,7 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
 
             // placeLabelAndStartIcon：内容组(icon+gap+label)整体水平居中、
             // 全部垂直居中；指示器居中（宽含 leading/trailing 后恰好包住内容组）
-            let content_w =
-                icon_size.width + START_ICON_TO_LABEL_PADDING + label_size.width;
+            let content_w = icon_size.width + START_ICON_TO_LABEL_PADDING + label_size.width;
             let icon_x = (container_w - content_w) / 2.0;
 
             let mut placements = Vec::with_capacity(children.len());
@@ -653,7 +692,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             nodes,
             policies,
             children[0],
-            Constraints::new(animated_indicator_w, animated_indicator_w, indicator_h, indicator_h),
+            Constraints::new(
+                animated_indicator_w,
+                animated_indicator_w,
+                indicator_h,
+                indicator_h,
+            ),
         );
 
         let label_size = if self.has_label {
@@ -668,7 +712,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             nodes,
             policies,
             children[ripple_idx],
-            Constraints::new(total_indicator_w, total_indicator_w, indicator_h, indicator_h),
+            Constraints::new(
+                total_indicator_w,
+                total_indicator_w,
+                indicator_h,
+                indicator_h,
+            ),
         );
 
         // 容器宽：有界取约束宽；无界回退 iconW + 2x44（NavigationBarItemToIconMinimumPadding）
@@ -677,12 +726,20 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         } else {
             icon_size.width + ITEM_TO_ICON_MINIMUM_PADDING * 2.0
         };
-        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX {
+            constraints.max_height
+        } else {
+            f32::MAX
+        };
 
-        let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size {
+        let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size
+        {
             // placeLabelAndIcon：
             // contentHeight = iconH + IndicatorVerticalPadding + IndicatorToLabelPadding + labelH
-            let content_h = icon_size.height + INDICATOR_VERTICAL_PADDING + INDICATOR_TO_LABEL_PADDING + label.height;
+            let content_h = icon_size.height
+                + INDICATOR_VERTICAL_PADDING
+                + INDICATOR_TO_LABEL_PADDING
+                + label.height;
             let v_pad = ((min_h - content_h) / 2.0).max(INDICATOR_VERTICAL_PADDING);
             let height = (content_h + v_pad * 2.0).min(max_h);
             let selected_icon_y = v_pad;
@@ -691,7 +748,10 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             } else {
                 (height - icon_size.height) / 2.0
             };
-            let label_y = selected_icon_y + icon_size.height + INDICATOR_VERTICAL_PADDING + INDICATOR_TO_LABEL_PADDING;
+            let label_y = selected_icon_y
+                + icon_size.height
+                + INDICATOR_VERTICAL_PADDING
+                + INDICATOR_TO_LABEL_PADDING;
             (height, selected_icon_y, unselected_icon_y, label_y)
         } else {
             // placeIcon：全部垂直居中
@@ -711,7 +771,10 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         });
         placements.push(Placement {
             size: icon_size,
-            position: Offset::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
+            position: Offset::new(
+                (container_w - icon_size.width) / 2.0,
+                selected_icon_y + offset,
+            ),
         });
         // label：alwaysShowLabel=false 且 progress=0 时 alpha 已为 0——照常放置即可
         if let Some(label) = label_size {
@@ -737,7 +800,6 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests;

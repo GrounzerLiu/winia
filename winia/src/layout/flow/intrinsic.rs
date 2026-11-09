@@ -103,7 +103,11 @@ fn cross_size(
     let mut rows = 1usize;
     let mut shown = 0usize;
     for i in 0..main_sizes.len() {
-        let need = if count > 0 { main_spacing + main_sizes[i] } else { main_sizes[i] };
+        let need = if count > 0 {
+            main_spacing + main_sizes[i]
+        } else {
+            main_sizes[i]
+        };
         let wrap = count > 0 && (count >= cap || remaining < need);
         if wrap {
             if rows >= row_cap {
@@ -167,8 +171,8 @@ fn min_main_intrinsic(
     }
     let (main_sizes, cross_sizes) = child_sizes(ctx, children, horizontal, true, cross_available);
     let low = main_sizes.iter().fold(0.0f32, |a, &b| a.max(b));
-    let high = main_sizes.iter().sum::<f32>()
-        + main_spacing * (children.len() as f32 - 1.0).max(0.0);
+    let high =
+        main_sizes.iter().sum::<f32>() + main_spacing * (children.len() as f32 - 1.0).max(0.0);
     // Compose requires the min intrinsic width to show every item the max_lines/max_items cap
     // allows; a width that merely fits the cross budget while silently dropping items is not the
     // minimum usable width. When either cap is unlimited, the requirement is all children.
@@ -236,7 +240,9 @@ pub(crate) fn max_main(
     max_items: usize,
     max_lines: usize,
 ) -> f32 {
-    max_main_without_wrapping(ctx, children, horizontal, other, spacing, max_items, max_lines)
+    max_main_without_wrapping(
+        ctx, children, horizontal, other, spacing, max_items, max_lines,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

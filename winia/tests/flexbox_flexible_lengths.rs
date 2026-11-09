@@ -7,7 +7,12 @@ use winia::layout::{
 use winia::modifier::Modifier;
 use winia::unit::Size;
 
-fn measure_two(config: FlexBoxConfig, a: (f32, f32), b: (f32, f32), base: f32) -> (Size, Vec<Size>) {
+fn measure_two(
+    config: FlexBoxConfig,
+    a: (f32, f32),
+    b: (f32, f32),
+    base: f32,
+) -> (Size, Vec<Size>) {
     let mut nodes = vec![
         LayoutNode::leaf(
             Modifier::new()
@@ -30,10 +35,7 @@ fn measure_two(config: FlexBoxConfig, a: (f32, f32), b: (f32, f32), base: f32) -
     );
     (
         size,
-        placements
-            .iter()
-            .map(|placement| placement.size)
-            .collect(),
+        placements.iter().map(|placement| placement.size).collect(),
     )
 }
 
@@ -78,6 +80,12 @@ fn growing_past_a_min_content_floor_redistributes_instead_of_squashing() {
         Constraints::new(0.0, 300.0, 0.0, 200.0),
     );
     assert_eq!(size.width, 300.0);
-    assert_eq!(placements[0].size.width, 200.0, "the floored item keeps 200");
-    assert_eq!(placements[1].size.width, 100.0, "the other item takes what is left");
+    assert_eq!(
+        placements[0].size.width, 200.0,
+        "the floored item keeps 200"
+    );
+    assert_eq!(
+        placements[1].size.width, 100.0,
+        "the other item takes what is left"
+    );
 }

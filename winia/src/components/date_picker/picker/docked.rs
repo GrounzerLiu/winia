@@ -105,7 +105,9 @@ impl DockedDatePicker {
         // The page the arrows have asked for but not reached — see the note in `DatePicker::build`.
         let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year — see the note in `DatePicker::build`.
-        let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
+        let first_month = model
+            .month_of(*state.year_range().start(), 1)
+            .start_utc_time_millis;
         let on_confirm = self.on_confirm.clone();
         let on_dismiss = self.on_dismiss.clone();
 
@@ -131,7 +133,14 @@ impl DockedDatePicker {
                         // Only while the calendar is the panel on show: an inline month or year list
                         // covers the pages, and the year panel is exactly what moves the month.
                         if current == DockedPanel::Calendar {
-                            sync_month_pages(ctx, &state, &model, &month_rows, first_month, &month_step_in_flight);
+                            sync_month_pages(
+                                ctx,
+                                &state,
+                                &model,
+                                &month_rows,
+                                first_month,
+                                &month_step_in_flight,
+                            );
                         }
                         // Diagnostic readout of the anchor the arrows compute their target from, plus
                         // the pixel offset it is derived from. It sits before the navigation row so its
@@ -150,7 +159,17 @@ impl DockedDatePicker {
                             .modifier(Modifier::new().test_tag(tag))
                             .build(ctx);
                         }
-                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows, &month_rows, &month_step_in_flight);
+                        docked_navigation(
+                            ctx,
+                            &state,
+                            &month,
+                            current,
+                            &panel,
+                            &colors,
+                            &year_rows,
+                            &month_rows,
+                            &month_step_in_flight,
+                        );
                         // The inline lists crossfade in and out of the calendar's place (material3
                         // swaps its year overlay with expand + fade; a full-bleed fade reads the same
                         // here and never moves the action row).
@@ -166,15 +185,17 @@ impl DockedDatePicker {
                             // ask for 150 ms because `Crossfade` faded the old panel out and the new
                             // one in in sequence, so 300 ms played twice (600 ms of panel switch);
                             // both generations now overlap in that single tween.
-                            .build(
-                            ctx,
-                            move |ctx, shown| match shown {
+                            .build(ctx, move |ctx, shown| match shown {
                                 DockedPanel::Calendar => {
                                     // A Column, not bare siblings: `Crossfade` wraps its content in a
                                     // Box (stacked, overlapping children), so without this the grid
                                     // starts at the same y as the weekday row (measured overlap).
                                     Column::new()
-                                        .modifier(Modifier::new().fill_max_width().test_tag(CALENDAR_PANEL_TAG))
+                                        .modifier(
+                                            Modifier::new()
+                                                .fill_max_width()
+                                                .test_tag(CALENDAR_PANEL_TAG),
+                                        )
                                         .arrangement(Arrangement::Start)
                                         .build(ctx, |ctx| {
                                             weekday_row(ctx, &cross_model, &cross_colors);
@@ -216,8 +237,7 @@ impl DockedDatePicker {
                                         },
                                     );
                                 }
-                            },
-                        );
+                            });
                         docked_action_row(ctx, on_confirm, on_dismiss);
                     });
             });
@@ -270,15 +290,26 @@ pub(crate) fn docked_navigation(
                     let back = month_rows.clone();
                     let back_flight = month_step_in_flight.clone();
                     let back_anchor = month_rows.first_visible();
-                    step_arrow(ctx, move || {
-                        let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
-                        back_flight.set(Some(target));
-                        back.animate_scroll_to_item(target, 0.0);
-                    }, back_enabled.get(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    step_arrow(
+                        ctx,
+                        move || {
+                            let target =
+                                arrow_target(back_anchor, back_flight.get(), false, last_page);
+                            back_flight.set(Some(target));
+                            back.animate_scroll_to_item(target, 0.0);
+                        },
+                        back_enabled.get(),
+                        CHEVRON_LEFT_PATH,
+                        navigation_color,
+                        IconButtonSize::XSmall,
+                        !panel_open,
+                    );
                     let panel_toggle = panel.clone();
                     let is_open = months_open;
                     // Abbreviated month ("Sep", not "September") — the M3 specs docked figure.
-                    let label = state.calendar_model().locale().month_names_short[month.month as usize - 1].clone();
+                    let label = state.calendar_model().locale().month_names_short
+                        [month.month as usize - 1]
+                        .clone();
                     year_menu_button(
                         ctx,
                         label,
@@ -296,11 +327,20 @@ pub(crate) fn docked_navigation(
                     let forward = month_rows.clone();
                     let forward_flight = month_step_in_flight.clone();
                     let forward_anchor = month_rows.first_visible();
-                    step_arrow(ctx, move || {
-                        let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
-                        forward_flight.set(Some(target));
-                        forward.animate_scroll_to_item(target, 0.0);
-                    }, forward_enabled.get(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    step_arrow(
+                        ctx,
+                        move || {
+                            let target =
+                                arrow_target(forward_anchor, forward_flight.get(), true, last_page);
+                            forward_flight.set(Some(target));
+                            forward.animate_scroll_to_item(target, 0.0);
+                        },
+                        forward_enabled.get(),
+                        CHEVRON_RIGHT_PATH,
+                        navigation_color,
+                        IconButtonSize::XSmall,
+                        !panel_open,
+                    );
                 });
             // Year group: step arrows around the year; the button swaps in the year list.
             Row::new()
@@ -387,9 +427,9 @@ pub(crate) fn month_list(
 
     Column::new()
         .modifier(
-            Modifier::new()
-                .fill_max_width()
-                .height(DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS),
+            Modifier::new().fill_max_width().height(
+                DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS,
+            ),
         )
         .arrangement(Arrangement::Start)
         .build(ctx, |ctx| {
@@ -404,11 +444,10 @@ pub(crate) fn month_list(
                 // own extra ON TOP of `spacing` (see `flex.rs`), so three 104 dp pills and two 12 dp
                 // gaps fill the 336 dp content width exactly.
                 Column::new()
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_width()
-                            .height(DatePickerDefaults::YEAR_PANEL_HEIGHT - DatePickerDefaults::DIVIDER_THICKNESS),
-                    )
+                    .modifier(Modifier::new().fill_max_width().height(
+                        DatePickerDefaults::YEAR_PANEL_HEIGHT
+                            - DatePickerDefaults::DIVIDER_THICKNESS,
+                    ))
                     .arrangement(Arrangement::SpaceEvenly)
                     .build(ctx, |ctx| {
                         for row in 0..4 {
@@ -427,14 +466,18 @@ pub(crate) fn month_list(
                                         let panel_for_close = cell_panel.clone();
                                         let surface = Surface::new()
                                             .shape(Shape::Pill)
-                                            .color(cell_colors.year_container(selected, year_enabled))
-                                            .content_color(
-                                                cell_colors.year_label(false, selected, year_enabled),
+                                            .color(
+                                                cell_colors.year_container(selected, year_enabled),
                                             )
+                                            .content_color(cell_colors.year_label(
+                                                false,
+                                                selected,
+                                                year_enabled,
+                                            ))
                                             .enabled(year_enabled)
                                             .selectable(selected, move || {
-                                                let target =
-                                                    model_for_pick.month_of(displayed_year, month_no);
+                                                let target = model_for_pick
+                                                    .month_of(displayed_year, month_no);
                                                 state_for_pick.set_displayed_month_millis(
                                                     target.start_utc_time_millis,
                                                 );

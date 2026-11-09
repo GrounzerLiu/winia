@@ -6,8 +6,8 @@
 
 use crate::runtime::composition_local::CompositionLocal;
 use parking_lot::Mutex;
-use std::ops::Range;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════
@@ -44,20 +44,34 @@ pub struct Selection {
 
 impl Selection {
     /// The start offset across the whole container, over every registered run.
-    pub fn start(&self) -> usize { self.start }
+    pub fn start(&self) -> usize {
+        self.start
+    }
     /// The end offset across the whole container.
-    pub fn end(&self) -> usize { self.end }
+    pub fn end(&self) -> usize {
+        self.end
+    }
     /// The selected text, stitched from the registered runs (safe across run boundaries and
     /// emoji graphemes).
-    pub fn text(&self) -> &str { &self.text }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
     /// No selection at all: what the callback receives when the user clears one.
     ///
     /// It is a `Selection` rather than an `Option` so the callback signature stays one type; a
     /// consumer that shows "N characters selected" resets on `is_empty()`. Before this, clearing
     /// fired NOTHING (measured: after `clear_selection()` the callback list still held only the
     /// previous selection), so such a label stayed at the old count forever.
-    pub fn is_empty(&self) -> bool { self.start == self.end && self.text.is_empty() }
-    pub(crate) fn empty() -> Self { Selection { start: 0, end: 0, text: String::new() } }
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end && self.text.is_empty()
+    }
+    pub(crate) fn empty() -> Self {
+        Selection {
+            start: 0,
+            end: 0,
+            text: String::new(),
+        }
+    }
 }
 
 /// One end of a selection: WHICH run, and where inside it.
@@ -101,7 +115,11 @@ impl RegistrarInner {
     fn anchors(&self) -> Option<(Anchor, Anchor)> {
         let (a, b) = (self.selection_start?, self.selection_end?);
         let (ia, ib) = (self.slot_index(a.slot_key)?, self.slot_index(b.slot_key)?);
-        if (ia, a.offset) <= (ib, b.offset) { Some((a, b)) } else { Some((b, a)) }
+        if (ia, a.offset) <= (ib, b.offset) {
+            Some((a, b))
+        } else {
+            Some((b, a))
+        }
     }
 
     /// Where an end sits in the CURRENT global space. The offsets move as runs come and go; the
@@ -116,12 +134,20 @@ impl RegistrarInner {
     fn anchor_at(&self, global: usize) -> Option<Anchor> {
         let mut last = None;
         for &slot_key in &self.order {
-            let Some(seg) = self.segments.get(&slot_key) else { continue };
+            let Some(seg) = self.segments.get(&slot_key) else {
+                continue;
+            };
             let end = seg.global_offset + seg.text_len;
             if global < end {
-                return Some(Anchor { slot_key, offset: global.saturating_sub(seg.global_offset) });
+                return Some(Anchor {
+                    slot_key,
+                    offset: global.saturating_sub(seg.global_offset),
+                });
             }
-            last = Some(Anchor { slot_key, offset: seg.text_len });
+            last = Some(Anchor {
+                slot_key,
+                offset: seg.text_len,
+            });
         }
         last
     }
@@ -151,7 +177,9 @@ impl RegistrarInner {
 
     /// Whether the selection covers `slot_key` at all, edges included.
     fn selection_touches(&self, slot_key: u64) -> bool {
-        let Some((a, b)) = self.anchors() else { return false };
+        let Some((a, b)) = self.anchors() else {
+            return false;
+        };
         let (Some(ia), Some(ib), Some(ik)) = (
             self.slot_index(a.slot_key),
             self.slot_index(b.slot_key),
@@ -207,34 +235,54 @@ pub enum SelectionAdjustment {
 pub(crate) fn word_range(text: &str, at: usize) -> Range<usize> {
     let at = at.min(text.len());
     // Snap to a char boundary so a mid-character offset still answers a word.
-    let at = if text.is_char_boundary(at) { at } else {
+    let at = if text.is_char_boundary(at) {
+        at
+    } else {
         let mut i = at;
-        while i > 0 && !text.is_char_boundary(i) { i -= 1; }
+        while i > 0 && !text.is_char_boundary(i) {
+            i -= 1;
+        }
         i
     };
-    if text.is_empty() { return 0..0; }
+    if text.is_empty() {
+        return 0..0;
+    }
     fn class(c: char) -> u8 {
-        if c.is_alphanumeric() || c == '_' { 0 }
-        else if c.is_whitespace() { 1 }
-        else { 2 }
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
     }
     // The character the offset points AT; at `text.len()` take the last one.
     let probe = if at < text.len() {
-        text[at..].chars().next().expect("a char starts at a boundary")
+        text[at..]
+            .chars()
+            .next()
+            .expect("a char starts at a boundary")
     } else {
         text[..at].chars().next_back().unwrap_or(' ')
     };
     let want = class(probe);
     let mut start = at;
     while start > 0 {
-        let prev = text[..start].chars().next_back().expect("start > 0 has a char");
-        if class(prev) != want { break; }
+        let prev = text[..start]
+            .chars()
+            .next_back()
+            .expect("start > 0 has a char");
+        if class(prev) != want {
+            break;
+        }
         start -= prev.len_utf8();
     }
     let mut end = at;
     while end < text.len() {
         let next = text[end..].chars().next().expect("end < len has a char");
-        if class(next) != want { break; }
+        if class(next) != want {
+            break;
+        }
         end += next.len_utf8();
     }
     start..end
@@ -256,14 +304,22 @@ pub(crate) fn next_word_end(text: &str, at: usize) -> Option<usize> {
     let mut pos = at.min(text.len());
     while pos < text.len() {
         let range = word_range(text, pos);
-        let starts_with_word = text[range.clone()].chars().next()
+        let starts_with_word = text[range.clone()]
+            .chars()
+            .next()
             .map(|c| c.is_alphanumeric() || c == '_')
             .unwrap_or(false);
-        if starts_with_word && range.end > at { return Some(range.end); }
+        if starts_with_word && range.end > at {
+            return Some(range.end);
+        }
         pos = if range.end > pos {
             range.end
         } else {
-            pos + text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
+            pos + text[pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1)
         };
     }
     None
@@ -286,11 +342,23 @@ pub(crate) fn previous_word_start(text: &str, at: usize) -> Option<usize> {
     let mut pos = at.min(text.len());
     while pos > 0 {
         let range = word_range(text, pos - 1);
-        let starts_with_word = text[range.clone()].chars().next()
+        let starts_with_word = text[range.clone()]
+            .chars()
+            .next()
             .map(|c| c.is_alphanumeric() || c == '_')
             .unwrap_or(false);
-        if starts_with_word && range.start < at { return Some(range.start); }
-        pos = if range.start < pos { range.start } else { pos - text[..pos].chars().next_back().map(|c| c.len_utf8()).unwrap_or(1) };
+        if starts_with_word && range.start < at {
+            return Some(range.start);
+        }
+        pos = if range.start < pos {
+            range.start
+        } else {
+            pos - text[..pos]
+                .chars()
+                .next_back()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1)
+        };
     }
     None
 }
@@ -317,7 +385,11 @@ impl SelectionRegistrar {
                 let changed = existing.text.as_ref() != text;
                 // Reuse the string when it did not change: a re-register happens on every entry
                 // into the run, and a fresh `Arc<str>` per frame is a per-frame allocation.
-                let stored = if changed { Arc::from(text) } else { existing.text.clone() };
+                let stored = if changed {
+                    Arc::from(text)
+                } else {
+                    existing.text.clone()
+                };
                 (existing.global_offset, stored, changed)
             }
             None => {
@@ -331,12 +403,15 @@ impl SelectionRegistrar {
         // covers longer text, the global offset advances; otherwise later runs would start inside
         // this one.
         inner.next_global_offset = inner.next_global_offset.max(offset + text_len);
-        inner.segments.insert(slot_key, RegisteredSegment {
+        inner.segments.insert(
             slot_key,
-            global_offset: offset,
-            text_len,
-            text: stored,
-        });
+            RegisteredSegment {
+                slot_key,
+                global_offset: offset,
+                text_len,
+                text: stored,
+            },
+        );
         // Compose ends the selection when the content of a selectable it covers changes
         // (`onSelectableChangeCallback` -> `onRelease(); selection = null`), because the offsets it
         // remembered no longer name the same characters. An anchor survives a sibling coming or
@@ -366,12 +441,18 @@ impl SelectionRegistrar {
 
     /// Select around `anchor_global` with a boundary adjustment (a double click asks for a word, a
     /// triple click for the line). Returns true when there is something to select.
-    pub fn set_selection_by_adjustment(&self, anchor_global: usize, adjustment: SelectionAdjustment) -> bool {
+    pub fn set_selection_by_adjustment(
+        &self,
+        anchor_global: usize,
+        adjustment: SelectionAdjustment,
+    ) -> bool {
         let mut inner = self.inner.lock();
         // The run the anchor falls in, in reading order; a past-the-end offset belongs to the last.
         let mut target: Option<(u64, usize)> = None;
         for &slot_key in &inner.order {
-            let Some(seg) = inner.segments.get(&slot_key) else { continue };
+            let Some(seg) = inner.segments.get(&slot_key) else {
+                continue;
+            };
             let end = seg.global_offset + seg.text_len;
             if anchor_global < end {
                 target = Some((slot_key, anchor_global.saturating_sub(seg.global_offset)));
@@ -379,8 +460,12 @@ impl SelectionRegistrar {
             }
             target = Some((slot_key, seg.text_len));
         }
-        let Some((slot_key, local)) = target else { return false };
-        let Some(seg) = inner.segments.get(&slot_key) else { return false };
+        let Some((slot_key, local)) = target else {
+            return false;
+        };
+        let Some(seg) = inner.segments.get(&slot_key) else {
+            return false;
+        };
         let (start, end) = match adjustment {
             SelectionAdjustment::None => (local, local),
             SelectionAdjustment::Word => {
@@ -392,9 +477,20 @@ impl SelectionRegistrar {
                 (range.start, range.end)
             }
         };
-        if start == end { return false; }
+        if start == end {
+            return false;
+        }
         let base = seg.global_offset;
-        let (a, b) = (Anchor { slot_key, offset: start }, Anchor { slot_key, offset: end });
+        let (a, b) = (
+            Anchor {
+                slot_key,
+                offset: start,
+            },
+            Anchor {
+                slot_key,
+                offset: end,
+            },
+        );
         inner.selection_start = Some(a);
         inner.selection_end = Some(b);
         let _ = base;
@@ -412,7 +508,9 @@ impl SelectionRegistrar {
     /// The order is the one `reindex` established, so it is what a select-all would produce.
     pub fn selectable_texts(&self) -> Vec<String> {
         let inner = self.inner.lock();
-        inner.order.iter()
+        inner
+            .order
+            .iter()
             .filter_map(|slot_key| inner.segments.get(slot_key))
             .map(|seg| seg.text.to_string())
             .collect()
@@ -420,7 +518,10 @@ impl SelectionRegistrar {
 
     pub fn segment_info(&self, slot_key: u64) -> Option<(usize, usize)> {
         let inner = self.inner.lock();
-        inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
+        inner
+            .segments
+            .get(&slot_key)
+            .map(|s| (s.global_offset, s.text_len))
     }
 
     /// Recompute every run's offset from the ORDER the layout tree reports, and drop the runs whose
@@ -442,7 +543,8 @@ impl SelectionRegistrar {
     pub(crate) fn reindex(&self, ordered_slots: &[u64]) {
         let mut inner = self.inner.lock();
         let mut next_offset = 0usize;
-        let mut rebuilt: HashMap<u64, RegisteredSegment> = HashMap::with_capacity(ordered_slots.len());
+        let mut rebuilt: HashMap<u64, RegisteredSegment> =
+            HashMap::with_capacity(ordered_slots.len());
         let mut order: Vec<u64> = Vec::with_capacity(ordered_slots.len());
         for &slot_key in ordered_slots {
             if let Some(mut seg) = inner.segments.remove(&slot_key) {
@@ -494,11 +596,17 @@ impl SelectionRegistrar {
         let (gs, ge) = (inner.global_of(a)?, inner.global_of(b)?);
         let (start, end) = (gs.min(ge), gs.max(ge));
         // Zero width (a click with no drag) is no selection, matching `selected_range`.
-        if start == end { return None; }
+        if start == end {
+            return None;
+        }
         let mut text = String::new();
         for &slot_key in &inner.order {
-            let Some(range) = inner.local_range(slot_key) else { continue };
-            let Some(seg) = inner.segments.get(&slot_key) else { continue };
+            let Some(range) = inner.local_range(slot_key) else {
+                continue;
+            };
+            let Some(seg) = inner.segments.get(&slot_key) else {
+                continue;
+            };
             // The offsets are meant to be character boundaries (`get_closest_*` guarantees it), but
             // a cross-run stitch uses `get` so a bad one skips its run instead of panicking on an
             // out-of-range or non-boundary slice.
@@ -520,24 +628,43 @@ impl SelectionRegistrar {
     /// run, which is what Compose does (its `SelectionLayout` is container-wide).
     pub fn extend_selection_by_word(&self) -> bool {
         let mut inner = self.inner.lock();
-        let Some((start, end)) = inner.anchors() else { return false };
-        let Some(last_index) = inner.slot_index(end.slot_key) else { return false };
+        let Some((start, end)) = inner.anchors() else {
+            return false;
+        };
+        let Some(last_index) = inner.slot_index(end.slot_key) else {
+            return false;
+        };
         // Find the first run at or after the end anchor that has a word to reach.
         let mut carried_whole = true;
         let mut new_end = end;
         for &slot_key in inner.order.iter().skip(last_index) {
-            let Some(seg) = inner.segments.get(&slot_key) else { continue };
-            let from = if slot_key == end.slot_key { end.offset } else { 0 };
+            let Some(seg) = inner.segments.get(&slot_key) else {
+                continue;
+            };
+            let from = if slot_key == end.slot_key {
+                end.offset
+            } else {
+                0
+            };
             if let Some(target) = next_word_end(&seg.text, from) {
-                new_end = Anchor { slot_key, offset: target };
+                new_end = Anchor {
+                    slot_key,
+                    offset: target,
+                };
                 carried_whole = false;
                 break;
             }
             // Nothing word-like left in this run: the next one starts from its beginning.
-            if slot_key != end.slot_key { carried_whole = false; }
+            if slot_key != end.slot_key {
+                carried_whole = false;
+            }
         }
-        if carried_whole { return false; }
-        if new_end.slot_key == end.slot_key && new_end.offset <= end.offset { return false; }
+        if carried_whole {
+            return false;
+        }
+        if new_end.slot_key == end.slot_key && new_end.offset <= end.offset {
+            return false;
+        }
         inner.selection_start = Some(start);
         inner.selection_end = Some(new_end);
         true
@@ -547,10 +674,14 @@ impl SelectionRegistrar {
     pub fn select_all(&self) -> bool {
         let total = {
             let inner = self.inner.lock();
-            if inner.segments.is_empty() { return false; }
+            if inner.segments.is_empty() {
+                return false;
+            }
             inner.next_global_offset
         };
-        if total == 0 { return false; }
+        if total == 0 {
+            return false;
+        }
         self.set_selection(0, total);
         true
     }
@@ -564,19 +695,39 @@ impl SelectionRegistrar {
             let seg = inner.segments.get(&anchor.slot_key)?;
             if forward {
                 if anchor.offset < seg.text_len {
-                    let step = seg.text[anchor.offset..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                    return Some(Anchor { slot_key: anchor.slot_key, offset: anchor.offset + step });
+                    let step = seg.text[anchor.offset..]
+                        .chars()
+                        .next()
+                        .map(|c| c.len_utf8())
+                        .unwrap_or(1);
+                    return Some(Anchor {
+                        slot_key: anchor.slot_key,
+                        offset: anchor.offset + step,
+                    });
                 }
                 let next = inner.next_slot_after(anchor.slot_key)?;
-                Some(Anchor { slot_key: next, offset: 0 })
+                Some(Anchor {
+                    slot_key: next,
+                    offset: 0,
+                })
             } else {
                 if anchor.offset > 0 {
-                    let step = seg.text[..anchor.offset].chars().next_back().map(|c| c.len_utf8()).unwrap_or(1);
-                    return Some(Anchor { slot_key: anchor.slot_key, offset: anchor.offset - step });
+                    let step = seg.text[..anchor.offset]
+                        .chars()
+                        .next_back()
+                        .map(|c| c.len_utf8())
+                        .unwrap_or(1);
+                    return Some(Anchor {
+                        slot_key: anchor.slot_key,
+                        offset: anchor.offset - step,
+                    });
                 }
                 let prev = inner.previous_slot_before(anchor.slot_key)?;
                 let prev_len = inner.segments.get(&prev)?.text_len;
-                Some(Anchor { slot_key: prev, offset: prev_len })
+                Some(Anchor {
+                    slot_key: prev,
+                    offset: prev_len,
+                })
             }
         })
     }
@@ -587,20 +738,33 @@ impl SelectionRegistrar {
             let seg = inner.segments.get(&anchor.slot_key)?;
             if forward {
                 if let Some(target) = next_word_end(&seg.text, anchor.offset) {
-                    return Some(Anchor { slot_key: anchor.slot_key, offset: target });
+                    return Some(Anchor {
+                        slot_key: anchor.slot_key,
+                        offset: target,
+                    });
                 }
                 let next = inner.next_slot_after(anchor.slot_key)?;
                 let next_len = inner.segments.get(&next)?.text_len;
                 let target = next_word_end(&inner.segments.get(&next)?.text, 0).unwrap_or(next_len);
-                Some(Anchor { slot_key: next, offset: target })
+                Some(Anchor {
+                    slot_key: next,
+                    offset: target,
+                })
             } else {
                 if let Some(target) = previous_word_start(&seg.text, anchor.offset) {
-                    return Some(Anchor { slot_key: anchor.slot_key, offset: target });
+                    return Some(Anchor {
+                        slot_key: anchor.slot_key,
+                        offset: target,
+                    });
                 }
                 let prev = inner.previous_slot_before(anchor.slot_key)?;
                 let prev_len = inner.segments.get(&prev)?.text_len;
-                let target = previous_word_start(&inner.segments.get(&prev)?.text, prev_len).unwrap_or(0);
-                Some(Anchor { slot_key: prev, offset: target })
+                let target =
+                    previous_word_start(&inner.segments.get(&prev)?.text, prev_len).unwrap_or(0);
+                Some(Anchor {
+                    slot_key: prev,
+                    offset: target,
+                })
             }
         })
     }
@@ -611,7 +775,10 @@ impl SelectionRegistrar {
             let seg = inner.segments.get(&anchor.slot_key)?;
             let range = line_range(&seg.text, anchor.offset);
             let target = if to_end { range.end } else { range.start };
-            (target != anchor.offset).then_some(Anchor { slot_key: anchor.slot_key, offset: target })
+            (target != anchor.offset).then_some(Anchor {
+                slot_key: anchor.slot_key,
+                offset: target,
+            })
         })
     }
 
@@ -626,24 +793,37 @@ impl SelectionRegistrar {
             let here = line_range(text, anchor.offset);
             let column = anchor.offset - here.start;
             let target = if down {
-                if here.end >= text.len() { return None; }
+                if here.end >= text.len() {
+                    return None;
+                }
                 let next = line_range(text, here.end + 1);
                 next.start + column.min(next.end - next.start)
             } else {
-                if here.start == 0 { return None; }
+                if here.start == 0 {
+                    return None;
+                }
                 let prev = line_range(text, here.start - 1);
                 prev.start + column.min(prev.end - prev.start)
             };
-            Some(Anchor { slot_key: anchor.slot_key, offset: target })
+            Some(Anchor {
+                slot_key: anchor.slot_key,
+                offset: target,
+            })
         })
     }
 
     /// Move the stored end anchor with `step`, then rewrite the selection.
     fn move_end(&self, step: impl FnOnce(&RegistrarInner, Anchor) -> Option<Anchor>) -> bool {
         let mut inner = self.inner.lock();
-        let Some((_, end)) = inner.anchors() else { return false };
-        let Some(target) = step(&inner, end) else { return false };
-        if target.slot_key == end.slot_key && target.offset == end.offset { return false; }
+        let Some((_, end)) = inner.anchors() else {
+            return false;
+        };
+        let Some(target) = step(&inner, end) else {
+            return false;
+        };
+        if target.slot_key == end.slot_key && target.offset == end.offset {
+            return false;
+        }
         inner.selection_end = Some(target);
         true
     }
@@ -693,7 +873,9 @@ impl SelectionRegistrar {
     }
 }
 impl Default for SelectionRegistrar {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -732,7 +914,10 @@ impl TextSelectionColors {
 impl Default for TextSelectionColors {
     fn default() -> Self {
         let base = crate::graphics::Color::from_argb(255, 0x42, 0x86, 0xF4);
-        Self { handle: base, background: crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4) }
+        Self {
+            handle: base,
+            background: crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4),
+        }
     }
 }
 
@@ -749,8 +934,23 @@ mod text_selection_colors_tests {
     #[test]
     fn the_defaults_are_composes() {
         let colors = TextSelectionColors::default();
-        assert_eq!((colors.handle.r, colors.handle.g, colors.handle.b, colors.handle.a), (0x42, 0x86, 0xF4, 255));
-        assert_eq!((colors.background.r, colors.background.g, colors.background.b), (0x42, 0x86, 0xF4));
+        assert_eq!(
+            (
+                colors.handle.r,
+                colors.handle.g,
+                colors.handle.b,
+                colors.handle.a
+            ),
+            (0x42, 0x86, 0xF4, 255)
+        );
+        assert_eq!(
+            (
+                colors.background.r,
+                colors.background.g,
+                colors.background.b
+            ),
+            (0x42, 0x86, 0xF4)
+        );
         assert_eq!(colors.background.a, 102, "0.4 * 255");
     }
 }
@@ -770,7 +970,11 @@ mod boundary_tests {
         assert_eq!(word("foo.bar", 1), "foo");
         assert_eq!(word("foo.bar", 3), ".");
         assert_eq!(word("foo.bar", 5), "bar");
-        assert_eq!(word("two  spaces", 4), "  ", "a separator run is its own word");
+        assert_eq!(
+            word("two  spaces", 4),
+            "  ",
+            "a separator run is its own word"
+        );
     }
 
     #[test]
@@ -796,9 +1000,21 @@ mod boundary_tests {
     #[test]
     fn next_word_end_skips_separators() {
         let text = "hello world";
-        assert_eq!(next_word_end(text, 0), Some(5), "from inside the first word: its end");
-        assert_eq!(next_word_end(text, 5), Some(11), "from the space: the next word's end");
-        assert_eq!(next_word_end(text, 11), None, "at the end: nothing left in this run");
+        assert_eq!(
+            next_word_end(text, 0),
+            Some(5),
+            "from inside the first word: its end"
+        );
+        assert_eq!(
+            next_word_end(text, 5),
+            Some(11),
+            "from the space: the next word's end"
+        );
+        assert_eq!(
+            next_word_end(text, 11),
+            None,
+            "at the end: nothing left in this run"
+        );
     }
 }
 #[cfg(test)]
@@ -830,7 +1046,10 @@ mod keyboard_selection_tests {
         let reg = two_runs();
         reg.set_selection(0, 6);
         assert_eq!(range(&reg), Some((0, 6)));
-        assert!(reg.extend_selection_by_character(true), "the end steps into the second run");
+        assert!(
+            reg.extend_selection_by_character(true),
+            "the end steps into the second run"
+        );
         assert_eq!(range(&reg), Some((0, 7)));
         assert!(reg.extend_selection_by_character(false));
         assert_eq!(range(&reg), Some((0, 6)));
@@ -853,7 +1072,11 @@ mod keyboard_selection_tests {
         assert!(reg.extend_selection_by_word_step(true));
         assert_eq!(range(&reg), Some((0, 11)), "then the second");
         assert!(reg.extend_selection_by_word_step(false));
-        assert_eq!(range(&reg), Some((0, 6)), "and back to the start of the second");
+        assert_eq!(
+            range(&reg),
+            Some((0, 6)),
+            "and back to the start of the second"
+        );
     }
 
     #[test]
@@ -866,7 +1089,11 @@ mod keyboard_selection_tests {
         // at 3), so Shift+Home selects from the line start to the caret.
         reg.set_selection(6, 6);
         assert!(reg.extend_selection_to_line_edge(false));
-        assert_eq!(range(&reg), Some((3, 6)), "home goes to the start of the caret's line");
+        assert_eq!(
+            range(&reg),
+            Some((3, 6)),
+            "home goes to the start of the caret's line"
+        );
     }
 
     #[test]
@@ -879,7 +1106,11 @@ mod keyboard_selection_tests {
         // onto the start anchor, which is a collapsed selection and therefore reported as none.
         reg.set_selection(1, 4);
         assert!(reg.extend_selection_by_line(false));
-        assert_eq!(range(&reg), None, "the end lands on the start: a collapsed selection");
+        assert_eq!(
+            range(&reg),
+            None,
+            "the end lands on the start: a collapsed selection"
+        );
     }
 
     #[test]
@@ -887,7 +1118,10 @@ mod keyboard_selection_tests {
         let reg = two_runs();
         assert!(reg.select_all());
         assert_eq!(range(&reg), Some((0, 11)));
-        assert_eq!(reg.build_selection().map(|s| s.text().to_string()), Some("hello world".to_string()));
+        assert_eq!(
+            reg.build_selection().map(|s| s.text().to_string()),
+            Some("hello world".to_string())
+        );
         let empty = SelectionRegistrar::new();
         assert!(!empty.select_all(), "nothing to select");
     }

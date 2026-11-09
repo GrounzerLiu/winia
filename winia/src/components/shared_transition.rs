@@ -39,21 +39,17 @@ use crate::transition::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
-use crate::animation::{
-    push_animatable, AnimatableValue, AnimationSpec, SpringSpec,
-};
+use crate::animation::{AnimatableValue, AnimationSpec, SpringSpec, push_animatable};
 // Only the tests build a tween by hand now that the default flight shaping is Compose's spring.
 #[cfg(test)]
 use crate::animation::TweenSpec;
-use crate::runtime::composer::Composer;
+use crate::components::animated_visibility::VisibilityTransition;
+use crate::layout::node::{LayoutNode, PaintDisposition};
+use crate::modifier::{Modifier, ModifierElement};
 use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composer::Composer;
 use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::state::State;
-use crate::layout::node::{
-    LayoutNode, PaintDisposition,
-};
-use crate::modifier::{Modifier, ModifierElement};
-use crate::components::animated_visibility::VisibilityTransition;
 
 /// Re-exported here (not from a child module) because both the modifiers and their tests
 /// name these types through the shared-transition vocabulary.
@@ -67,9 +63,9 @@ pub(crate) use flight::*;
 pub(crate) use state::*;
 
 pub use state::{
-    current_nav_scene, current_shared_scope, nav_scene_is_prev, nav_scene_visibility,
-    with_nav_scene, NavSceneInfo, SharedContentState, SharedTransitionDefaults,
-    SharedTransitionLayout, SharedTransitionScope,
+    NavSceneInfo, SharedContentState, SharedTransitionDefaults, SharedTransitionLayout,
+    SharedTransitionScope, current_nav_scene, current_shared_scope, nav_scene_is_prev,
+    nav_scene_visibility, with_nav_scene,
 };
 
 #[cfg(test)]

@@ -21,12 +21,42 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-const CARD_BG: Color = Color { r: 0x2A, g: 0x27, b: 0x2E, a: 255 };
-const ROW_BG: Color = Color { r: 0x35, g: 0x31, b: 0x3B, a: 255 };
-const ROW_ALT: Color = Color { r: 0x3E, g: 0x39, b: 0x45, a: 255 };
-const MUTED: Color = Color { r: 0x9E, g: 0x9A, b: 0xA6, a: 255 };
-const ACCENT: Color = Color { r: 0xD0, g: 0xBC, b: 0xFF, a: 255 };
-const WARM: Color = Color { r: 0xFF, g: 0xB4, b: 0xAB, a: 255 };
+const CARD_BG: Color = Color {
+    r: 0x2A,
+    g: 0x27,
+    b: 0x2E,
+    a: 255,
+};
+const ROW_BG: Color = Color {
+    r: 0x35,
+    g: 0x31,
+    b: 0x3B,
+    a: 255,
+};
+const ROW_ALT: Color = Color {
+    r: 0x3E,
+    g: 0x39,
+    b: 0x45,
+    a: 255,
+};
+const MUTED: Color = Color {
+    r: 0x9E,
+    g: 0x9A,
+    b: 0xA6,
+    a: 255,
+};
+const ACCENT: Color = Color {
+    r: 0xD0,
+    g: 0xBC,
+    b: 0xFF,
+    a: 255,
+};
+const WARM: Color = Color {
+    r: 0xFF,
+    g: 0xB4,
+    b: 0xAB,
+    a: 255,
+};
 
 /// One titled card with an optional caption.
 #[composable]
@@ -109,7 +139,11 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
         ctx,
         "2. always_show(true): visible at rest",
         "the same bar with the fade disabled - the thumb is there before the first scroll.",
-        |ctx| vertical_band(ctx, always.clone(), 130.0, 14, "stay", |b| b.always_show(true)),
+        |ctx| {
+            vertical_band(ctx, always.clone(), 130.0, 14, "stay", |b| {
+                b.always_show(true)
+            })
+        },
     );
 
     // 3. Horizontal bar under a wide row.
@@ -181,7 +215,9 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
                             },
                         )
                         .build(ctx);
-                    LazyScrollbar::new(lazy_state.clone()).always_show(true).build(ctx);
+                    LazyScrollbar::new(lazy_state.clone())
+                        .always_show(true)
+                        .build(ctx);
                 });
         },
     );
@@ -234,29 +270,27 @@ fn scrollbar_demo(ctx: &mut ComposeCtx) {
     );
 
     // Readouts: the numbers behind the bars above.
-    card(
-        ctx,
-        "7. Readouts",
-        "the card 1 state, live.",
-        |ctx| {
-            // `f32::MAX` is the "not measured yet" sentinel (Compose uses Int.MAX_VALUE for the same
-            // thing); printing it raw reads as a bug, so the card says so instead.
-            let limit = fading.max_value_subscribed();
-            let limit = if limit >= f32::MAX { "not measured yet".to_string() } else { format!("{limit:.0}") };
-            Text::new(format!(
-                "offset {:.0} / limit {} - scrolling {} - forward {} backward {}",
-                fading.offset.get(),
-                limit,
-                fading.is_scroll_in_progress.get(),
-                fading.can_scroll_forward(),
-                fading.can_scroll_backward(),
-            ))
-            .font_size(12.0)
-            .color(MUTED)
-            .build(ctx);
-
-        },
-    );
+    card(ctx, "7. Readouts", "the card 1 state, live.", |ctx| {
+        // `f32::MAX` is the "not measured yet" sentinel (Compose uses Int.MAX_VALUE for the same
+        // thing); printing it raw reads as a bug, so the card says so instead.
+        let limit = fading.max_value_subscribed();
+        let limit = if limit >= f32::MAX {
+            "not measured yet".to_string()
+        } else {
+            format!("{limit:.0}")
+        };
+        Text::new(format!(
+            "offset {:.0} / limit {} - scrolling {} - forward {} backward {}",
+            fading.offset.get(),
+            limit,
+            fading.is_scroll_in_progress.get(),
+            fading.can_scroll_forward(),
+            fading.can_scroll_backward(),
+        ))
+        .font_size(12.0)
+        .color(MUTED)
+        .build(ctx);
+    });
 }
 
 fn main() {

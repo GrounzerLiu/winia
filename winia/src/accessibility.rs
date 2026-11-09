@@ -31,53 +31,49 @@
 //! | *(no role, but named)* | Text | — |
 //! | the window itself | Window | — |
 
-use crate::semantics::{SemanticsNode, SemanticsRole, WindowSemantics};
 use crate::selection::ToggleableState;
+use crate::semantics::{SemanticsNode, SemanticsRole, WindowSemantics};
 use std::sync::Arc;
-use windows::core::{implement, Interface, IUnknown, Result as WinResult};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Variant::{
     InitVariantFromDoubleArray, InitVariantFromInt32Array, VARIANT, VT_BOOL, VT_BSTR, VT_I4,
 };
 use windows::Win32::UI::Accessibility::{
-    IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
-    IRawElementProviderFragment_Impl, IRawElementProviderFragmentRoot,
-    IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
+    IInvokeProvider, IInvokeProvider_Impl, IRangeValueProvider, IRangeValueProvider_Impl,
+    IRawElementProviderFragment, IRawElementProviderFragment_Impl, IRawElementProviderFragmentRoot,
+    IRawElementProviderFragmentRoot_Impl, IRawElementProviderSimple,
+    IRawElementProviderSimple_Impl, IScrollItemProvider, IScrollItemProvider_Impl,
+    ISelectionItemProvider, ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
     NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
     NavigateDirection_NextSibling, NavigateDirection_Parent, NavigateDirection_PreviousSibling,
-    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_AutomationIdPropertyId,
-    UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
-    UIA_ClassNamePropertyId, UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_FrameworkIdPropertyId,
-    UIA_HasKeyboardFocusPropertyId, UIA_ImageControlTypeId, UIA_InvokePatternId,
-    UIA_IsContentElementPropertyId, UIA_IsControlElementPropertyId, UIA_IsEnabledPropertyId,
+    ProviderOptions, ProviderOptions_ServerSideProvider, StructureChangeType_ChildrenInvalidated,
+    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, UIA_AutomationFocusChangedEventId,
+    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+    UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId, UIA_ClassNamePropertyId,
+    UIA_ControlTypePropertyId, UIA_FrameworkIdPropertyId, UIA_HasKeyboardFocusPropertyId,
+    UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_IsContentElementPropertyId,
+    UIA_IsControlElementPropertyId, UIA_IsEnabledPropertyId,
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
-    UIA_IsOffscreenPropertyId, UIA_IsScrollItemPatternAvailablePropertyId, UIA_ListItemControlTypeId,
-    UIA_ListControlTypeId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID,
-    UIA_ScrollItemPatternId, IScrollItemProvider, IScrollItemProvider_Impl,
-    UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_PROPERTY_ID,
-    IRangeValueProvider, IRangeValueProvider_Impl, ISelectionItemProvider,
-    ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
-    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On,
-    UIA_IsRangeValuePatternAvailablePropertyId, UIA_LiveRegionChangedEventId,
-    UIA_LiveSettingPropertyId, UIA_RangeValueMaximumPropertyId,
+    UIA_IsOffscreenPropertyId, UIA_IsRangeValuePatternAvailablePropertyId,
+    UIA_IsScrollItemPatternAvailablePropertyId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
+    UIA_LiveRegionChangedEventId, UIA_LiveSettingPropertyId, UIA_NamePropertyId,
+    UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_PaneControlTypeId,
+    UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId, UIA_RangeValueMaximumPropertyId,
     UIA_RangeValueMinimumPropertyId, UIA_RangeValuePatternId, UIA_RangeValueValuePropertyId,
-    UIA_RadioButtonControlTypeId, UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
-    UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
-    UIA_AutomationFocusChangedEventId, UIA_StructureChangedEventId, UIA_ToggleToggleStatePropertyId,
-    UIA_WindowControlTypeId, StructureChangeType_ChildrenInvalidated, UiaClientsAreListening,
-    UiaGetReservedNotSupportedValue,
-    UiaRootObjectId,
-    UiaHostProviderFromHwnd, UiaRaiseAutomationEvent, UiaRaiseAutomationPropertyChangedEvent,
-    UiaRaiseStructureChangedEvent, UiaRect,
-    UiaReturnRawElementProvider,
+    UIA_ScrollItemPatternId, UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
+    UIA_StructureChangedEventId, UIA_TabItemControlTypeId, UIA_TextControlTypeId,
+    UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId, UIA_WindowControlTypeId,
+    UiaClientsAreListening, UiaGetReservedNotSupportedValue, UiaHostProviderFromHwnd,
+    UiaRaiseAutomationEvent, UiaRaiseAutomationPropertyChangedEvent, UiaRaiseStructureChangedEvent,
+    UiaRect, UiaReturnRawElementProvider, UiaRootObjectId,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::WM_GETOBJECT;
+use windows::core::{IUnknown, Interface, Result as WinResult, implement};
 
 /// Our subclass id — arbitrary, but it must be unique within the window procedure.
 const SUBCLASS_ID: usize = 0x776E_6961; // "wnia"
-
 
 mod install;
 mod provider;

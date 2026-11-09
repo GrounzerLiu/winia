@@ -1,6 +1,6 @@
 use crate::text::Paragraph;
-use skia_safe::textlayout::TextDirection;
 use skia_safe::Rect;
+use skia_safe::textlayout::TextDirection;
 use std::ops::Range;
 
 /// The smallest rectangle covering every measured box, or `None` when there are none.
@@ -54,7 +54,10 @@ impl<'a> TextLayout<'a> {
         let index = index.min(self.paragraph.content_len());
         let index = self.paragraph.display_offset(index);
         let paragraph_index = self.paragraph.paragraph_byte_for_real_index(index);
-        let glyph_index = self.paragraph.byte_to_glyph_indices.get_by_left(&paragraph_index)?;
+        let glyph_index = self
+            .paragraph
+            .byte_to_glyph_indices
+            .get_by_left(&paragraph_index)?;
         // The FIRST CLUSTER, not "index 0": an offset clamped into the first character has the
         // same caret as that character's start, and the previous-cluster branch below would ask for
         // glyph index -1 and give up (this is what made a mid-character caret return None).
@@ -66,7 +69,11 @@ impl<'a> TextLayout<'a> {
                 false
             }
         } {
-            if let Some(gc) = self.paragraph.inner_paragraph().get_glyph_cluster_at(paragraph_index) {
+            if let Some(gc) = self
+                .paragraph
+                .inner_paragraph()
+                .get_glyph_cluster_at(paragraph_index)
+            {
                 if gc.position == TextDirection::LTR {
                     Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()))
                 } else {
@@ -77,10 +84,16 @@ impl<'a> TextLayout<'a> {
             }
         } else {
             let prev_glyph_index = glyph_index.checked_sub(1)?;
-            let prev_byte_index = self.paragraph.byte_to_glyph_indices
+            let prev_byte_index = self
+                .paragraph
+                .byte_to_glyph_indices
                 .get_by_right(&prev_glyph_index)?;
 
-            if let Some(gc) = self.paragraph.inner_paragraph().get_glyph_cluster_at(*prev_byte_index) {
+            if let Some(gc) = self
+                .paragraph
+                .inner_paragraph()
+                .get_glyph_cluster_at(*prev_byte_index)
+            {
                 if gc.position == TextDirection::LTR {
                     Some((gc.bounds.right, gc.bounds.top, gc.bounds.height()))
                 } else {
@@ -114,7 +127,10 @@ impl<'a> TextLayout<'a> {
     pub fn get_closest_grapheme_cluster_at(&self, point: impl Into<skia_safe::Point>) -> usize {
         let point = point.into();
         let point_clone = point.clone();
-        let glyph_info = self.paragraph.inner_paragraph().get_closest_glyph_cluster_at(point);
+        let glyph_info = self
+            .paragraph
+            .inner_paragraph()
+            .get_closest_glyph_cluster_at(point);
         if let Some(glyph_info) = glyph_info {
             let bounds = glyph_info.bounds;
             let center_x = (bounds.left + bounds.right) / 2.0;
@@ -163,13 +179,14 @@ impl<'a> TextLayout<'a> {
         0
     }
 
-
     /// Which line a CONTENT byte offset lands on (Compose's `getLineForOffset`).
     ///
     /// Offsets clamp exactly like the caret: past the end parks on the last line, mid-character
     /// parks on that character's line.
     pub fn get_line_for_offset(&self, offset: usize) -> usize {
-        let display = self.paragraph.display_offset(offset.min(self.paragraph.content_len()));
+        let display = self
+            .paragraph
+            .display_offset(offset.min(self.paragraph.content_len()));
         self.paragraph
             .inner_paragraph()
             .get_line_number_at(self.paragraph.paragraph_byte_for_real_index(display))
@@ -240,7 +257,7 @@ impl<'a> TextLayout<'a> {
 mod tests {
     use super::*;
     use crate::graphics::Color;
-/// Four line/box queries on a placeholder paragraph. `Paragraph::get_line_metrics_at` ALREADY
+    /// Four line/box queries on a placeholder paragraph. `Paragraph::get_line_metrics_at` ALREADY
     /// reports real bytes; mapping its result again as if it were a paragraph byte only works when
     /// the two spaces coincide. Measured before this fix, with an inline drawable standing in for
     /// four characters: line 0 answered `0..9` where the content is `0..8`, line 1 `10..11` where
@@ -252,7 +269,9 @@ mod tests {
         struct Box_(f32, f32);
         impl crate::text::InlineDrawable for Box_ {
             fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
-            fn size(&self) -> (f32, f32) { (self.0, self.1) }
+            fn size(&self) -> (f32, f32) {
+                (self.0, self.1)
+            }
         }
         let style = skia_safe::textlayout::ParagraphStyle::new();
         let fc = crate::text::font::get_font_collection();
@@ -267,10 +286,22 @@ mod tests {
         let mut p = b.build();
         p.layout(400.0);
         // "ab" + 4 placeholder chars + "cd" = 8 content bytes, then the newline and "ef".
-        assert_eq!(p.text_len(), 11, "the paragraph maps the placeholder's whole span");
+        assert_eq!(
+            p.text_len(),
+            11,
+            "the paragraph maps the placeholder's whole span"
+        );
         let layout = TextLayout::new(&p);
-        assert_eq!(layout.get_line_range(0), Some(0..8), "line 0 is the whole first line");
-        assert_eq!(layout.get_line_range(1), Some(9..11), "line 1 starts after the newline");
+        assert_eq!(
+            layout.get_line_range(0),
+            Some(0..8),
+            "line 0 is the whole first line"
+        );
+        assert_eq!(
+            layout.get_line_range(1),
+            Some(9..11),
+            "line 1 starts after the newline"
+        );
     }
 
     /// A truncated paragraph answers in CONTENT space, and a caret on the first visible tail byte
@@ -295,12 +326,22 @@ mod tests {
         }));
         // Head 3 + marker 3 + tail 7 ("defghij") = 13 bytes displayed; the content is
         // 3 + 11 dropped + 7 = 21.
-        assert_eq!(p.content_len(), 21, "the content length comes back out of the span");
+        assert_eq!(
+            p.content_len(),
+            21,
+            "the content length comes back out of the span"
+        );
         let layout = TextLayout::new(&p);
         // One line covers the whole display text: the kept head (content 0..13) plus the kept tail
         // (content 14..20), so the content range runs to 20 even though one byte was dropped inside it.
-        assert_eq!(layout.get_line_range(0), Some(0..21), "the line, in content bytes");
-        let marker = layout.get_cursor_rect(14).expect("a caret for the first visible byte");
+        assert_eq!(
+            layout.get_line_range(0),
+            Some(0..21),
+            "the line, in content bytes"
+        );
+        let marker = layout
+            .get_cursor_rect(14)
+            .expect("a caret for the first visible byte");
         let after = layout.get_cursor_rect(15).expect("a caret for the second");
         assert!(
             after.left > marker.left + 1.0,
@@ -311,23 +352,39 @@ mod tests {
         let dropped = layout.get_word_boundary(5);
         assert_eq!(dropped, 5..5, "a dropped offset has no word: {dropped:?}");
         let visible = layout.get_word_boundary(16);
-        assert!(visible.start >= 14 && visible.end <= 21, "the live word stays inside the tail: {visible:?}");
+        assert!(
+            visible.start >= 14 && visible.end <= 21,
+            "the live word stays inside the tail: {visible:?}"
+        );
     }
-/// The FIRST kept tail byte is not the marker. `display_offset` used `content <= tail_start_byte`
+    /// The FIRST kept tail byte is not the marker. `display_offset` used `content <= tail_start_byte`
     /// for "dropped", which put that byte on the elision marker — measured on a start-ellipsized
     /// run: content 14 (the first visible byte) reported caret x=0.0, the marker's own x.
     #[test]
     fn the_first_kept_byte_is_not_collapsed_onto_the_marker() {
-        let span = crate::text::DisplaySpan { head_bytes: 0, tail_start_byte: 14, marker_bytes: 3 };
+        let span = crate::text::DisplaySpan {
+            head_bytes: 0,
+            tail_start_byte: 14,
+            marker_bytes: 3,
+        };
         // 20 content bytes, 9 displayed (marker + 6 tail).
-        let mut p = crate::text::build_plain_paragraph("\u{2026}defghij", 16.0, Color::BLACK, 400.0);
+        let mut p =
+            crate::text::build_plain_paragraph("\u{2026}defghij", 16.0, Color::BLACK, 400.0);
         p.layout(400.0);
         p.set_display_span(Some(span));
         // Dropped: everything before the tail collapses onto the marker (display 0).
-        assert_eq!(p.display_offset(0), 0, "the dropped head collapses onto the marker");
+        assert_eq!(
+            p.display_offset(0),
+            0,
+            "the dropped head collapses onto the marker"
+        );
         assert_eq!(p.display_offset(13), 0, "still dropped");
         // Kept: the first visible byte sits AFTER the marker.
-        assert_eq!(p.display_offset(14), 3, "the first kept byte is past the marker");
+        assert_eq!(
+            p.display_offset(14),
+            3,
+            "the first kept byte is past the marker"
+        );
         assert_eq!(p.display_offset(15), 4);
         assert_eq!(p.display_offset(19), 8);
     }
@@ -349,13 +406,21 @@ mod tests {
         assert_eq!(p.text_len(), 3, "three ASCII bytes");
         let layout = TextLayout::new(&p);
         let xs: Vec<f32> = (0..=3)
-            .map(|i| layout.get_cursor_position(i).expect("a caret for every index").0)
+            .map(|i| {
+                layout
+                    .get_cursor_position(i)
+                    .expect("a caret for every index")
+                    .0
+            })
             .collect();
         assert!(
             xs.windows(2).all(|w| w[1] > w[0] + 1.0),
             "each index must advance the caret: {xs:?}"
         );
-        assert!(xs[3] > 20.0, "the end caret sits past the two glyphs: {xs:?}");
+        assert!(
+            xs[3] > 20.0,
+            "the end caret sits past the two glyphs: {xs:?}"
+        );
     }
 
     /// An offset past the end (a field that just shrank) parks at the end, like Compose.
@@ -386,7 +451,9 @@ mod tests {
         let p = paragraph("");
         assert_eq!(p.text_len(), 0);
         let layout = TextLayout::new(&p);
-        let caret = layout.get_cursor_position(0).expect("an empty field still has a caret");
+        let caret = layout
+            .get_cursor_position(0)
+            .expect("an empty field still has a caret");
         assert_eq!((caret.0, caret.1), (0.0, 0.0));
         assert!(caret.2 > 0.0, "the caret needs a line height: {caret:?}");
     }

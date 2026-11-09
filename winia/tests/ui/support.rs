@@ -81,7 +81,11 @@ impl FramePasses {
                     .collect::<Option<Vec<u8>>>()?;
             }
         }
-        Some(Self { frames: frames?, multi: multi?, passes })
+        Some(Self {
+            frames: frames?,
+            multi: multi?,
+            passes,
+        })
     }
 }
 
@@ -176,28 +180,29 @@ impl UiTest {
                 }
             });
 
-        // stderr 读线程（消费防阻塞——日志可选转发到测试 stdout）
-        if let Some(mut stderr) = child.stderr.take() {
-            std::thread::spawn(move || {
-                use std::io::Read;
-                let mut buf = [0u8; 2048];
-                loop {
-                    match stderr.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let s = String::from_utf8_lossy(&buf[..n]);
-                            if std::env::var("UI_TEST_STDERR").is_ok() {
-                                eprintln!("[demo] {s}");
+            // stderr 读线程（消费防阻塞——日志可选转发到测试 stdout）
+            if let Some(mut stderr) = child.stderr.take() {
+                std::thread::spawn(move || {
+                    use std::io::Read;
+                    let mut buf = [0u8; 2048];
+                    loop {
+                        match stderr.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let s = String::from_utf8_lossy(&buf[..n]);
+                                if std::env::var("UI_TEST_STDERR").is_ok() {
+                                    eprintln!("[demo] {s}");
+                                }
                             }
                         }
                     }
-                }
-            });
-        }
+                });
+            }
 
-        let mut child_stdin = child.stdin.take().expect("stdin piped");
+            let mut child_stdin = child.stdin.take().expect("stdin piped");
 
-            match Self::wait_for_first_frame(&mut child, &mut child_stdin, &rx, FIRST_FRAME_TIMEOUT) {
+            match Self::wait_for_first_frame(&mut child, &mut child_stdin, &rx, FIRST_FRAME_TIMEOUT)
+            {
                 Ok(tree) => {
                     // 解析窗口尺寸（根节点 size）
                     let (width, height) = tree_size(&tree);
@@ -256,7 +261,9 @@ impl UiTest {
         let mut tree_responses = 0u32;
         loop {
             if let Some(status) = child.try_wait().ok().flatten() {
-                return Err(format!("process exited early ({status}) — check the fixture build/window env"));
+                return Err(format!(
+                    "process exited early ({status}) — check the fixture build/window env"
+                ));
             }
             let (t, received) = query_tree(child_stdin, rx, Duration::from_millis(300));
             if received {
@@ -291,7 +298,11 @@ impl UiTest {
                 let alive = child.try_wait().ok().flatten().is_none();
                 return Err(format!(
                     "no first frame within {timeout:?}. alive={alive}, TREE responses={tree_responses}, stdout so far: {}",
-                    if buf.is_empty() { "(empty)" } else { &buf[..buf.len().min(300)] }
+                    if buf.is_empty() {
+                        "(empty)"
+                    } else {
+                        &buf[..buf.len().min(300)]
+                    }
                 ));
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -453,7 +464,12 @@ impl UiTest {
     }
 
     /// 查询最新树 JSON（写 t → 读 TREE: 响应；超时/无窗口返回 None）
-    pub fn tree(&mut self) -> Option<Value> {        let (t, _) = query_tree(&mut self.child_stdin, &self.stdout_rx, Duration::from_secs(2));
+    pub fn tree(&mut self) -> Option<Value> {
+        let (t, _) = query_tree(
+            &mut self.child_stdin,
+            &self.stdout_rx,
+            Duration::from_secs(2),
+        );
         if let Some(t) = t {
             // 至少一个窗口的树才视为有效（空数组 `[]` = 未渲染）
             let has_window = t
@@ -493,7 +509,9 @@ impl UiTest {
             std::thread::sleep(Duration::from_millis(120)); // let the next frame render and be captured
             self.send(&format!("px {x} {y}"));
             if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
-                if let Some((w, h, rx, ry, rgba)) = line.strip_prefix("PIXEL:").and_then(parse_pixel_line) {
+                if let Some((w, h, rx, ry, rgba)) =
+                    line.strip_prefix("PIXEL:").and_then(parse_pixel_line)
+                {
                     // The reply names the point it answered; a read that timed out leaves its line in the
                     // channel, and the next call would otherwise take that answer for its own.
                     if (rx, ry) == (x, y) {
@@ -512,7 +530,8 @@ impl UiTest {
     /// coordinates are logical.
     pub fn centre_pixel(&mut self) -> Option<(u8, u8, u8, u8)> {
         let (w, h) = self.frame_size()?;
-        self.pixel(w / 2, h / 2).map(|(_, _, r, g, b, a)| (r, g, b, a))
+        self.pixel(w / 2, h / 2)
+            .map(|(_, _, r, g, b, a)| (r, g, b, a))
     }
 
     /// The semantics snapshot of the last rendered frame — the same JSON the `sem` command answers
@@ -533,7 +552,9 @@ impl UiTest {
         loop {
             self.send("sem");
             if let Some(line) = self.read_prefixed_line("SEMANTICS:", Duration::from_millis(800)) {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim_start_matches("SEMANTICS:")) {
+                if let Ok(value) =
+                    serde_json::from_str::<serde_json::Value>(line.trim_start_matches("SEMANTICS:"))
+                {
                     if wait(&value) {
                         return Some(value);
                     }
@@ -613,7 +634,8 @@ impl UiTest {
         }
         let sx = fw as f32 / self.width;
         let sy = fh as f32 / self.height;
-        self.pixel((x * sx) as u32, (y * sy) as u32).map(|(_, _, r, g, b, a)| (r, g, b, a))
+        self.pixel((x * sx) as u32, (y * sy) as u32)
+            .map(|(_, _, r, g, b, a)| (r, g, b, a))
     }
 
     /// Several logical points from ONE captured frame: `r` once, then one `px` read per point, which
@@ -642,7 +664,10 @@ impl UiTest {
         sx: f32,
         sy: f32,
     ) -> Vec<Option<(u8, u8, u8, u8)>> {
-        let phys: Vec<(u32, u32)> = points.iter().map(|(x, y)| ((x * sx) as u32, (y * sy) as u32)).collect();
+        let phys: Vec<(u32, u32)> = points
+            .iter()
+            .map(|(x, y)| ((x * sx) as u32, (y * sy) as u32))
+            .collect();
         // Ask for the capture, then WAIT for the frame it captures to have been rendered — the frame
         // counters are the only synchronisation available. A fixed sleep here is what made a held-press
         // ripple read the previous (unpressed) frame under parallel test load.
@@ -669,12 +694,7 @@ impl UiTest {
 
     /// Like [`UiTest::pixel_at_logical`], at a logical point: `None` means no pixel could be read at all,
     /// `Some` carries the luma that satisfied `pred` or the last one seen.
-    pub fn wait_pixel_luma(
-        &mut self,
-        x: f32,
-        y: f32,
-        pred: impl Fn(f32) -> bool,
-    ) -> Option<f32> {
+    pub fn wait_pixel_luma(&mut self, x: f32, y: f32, pred: impl Fn(f32) -> bool) -> Option<f32> {
         self.wait_pixel_luma_timeout(x, y, self.default_timeout, pred)
     }
 
@@ -776,7 +796,11 @@ impl UiTest {
     pub fn window_count(&self) -> usize {
         self.tree
             .as_array()
-            .map(|arr| arr.iter().filter(|w| w.get("root").is_some() && w.get("overlay").is_none()).count())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|w| w.get("root").is_some() && w.get("overlay").is_none())
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -784,7 +808,11 @@ impl UiTest {
     pub fn overlay_count(&self) -> usize {
         self.tree
             .as_array()
-            .map(|arr| arr.iter().filter(|w| w.get("root").is_some() && w.get("overlay").is_some()).count())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|w| w.get("root").is_some() && w.get("overlay").is_some())
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -803,7 +831,9 @@ impl UiTest {
     }
 
     pub fn click_tag(&mut self, tag: &str) {
-        let (x, y, w, h) = self.find_tag(tag).unwrap_or_else(|| panic!("找不到 tag `{tag}`"));
+        let (x, y, w, h) = self
+            .find_tag(tag)
+            .unwrap_or_else(|| panic!("找不到 tag `{tag}`"));
         self.click(x + w / 2.0, y + h / 2.0);
         std::thread::sleep(Duration::from_millis(120));
     }
@@ -942,12 +972,7 @@ impl UiTest {
 
     /// 点击并在 timeout 内轮询 `until`（树最新状态）；点击丢失（debug 渲染断——
     /// RedrawRequested 偶发不来，树不刷新）时自动重试点击，最多 3 次。
-    pub fn click_until(
-        &mut self,
-        x: f32,
-        y: f32,
-        until: impl FnMut(&serde_json::Value) -> bool,
-    ) {
+    pub fn click_until(&mut self, x: f32, y: f32, until: impl FnMut(&serde_json::Value) -> bool) {
         let timeout = self.default_timeout;
         self.click_until_timeout(x, y, timeout, until);
     }
@@ -1006,7 +1031,10 @@ impl UiTest {
             if attempt == 2 {
                 panic!("`k {key}` did not produce `{expect}` in 3 attempts (rendering stalled)");
             }
-            eprintln!("[ui-test] `k {key}` did not take (attempt {}) — retrying", attempt + 1);
+            eprintln!(
+                "[ui-test] `k {key}` did not take (attempt {}) — retrying",
+                attempt + 1
+            );
         }
     }
 
@@ -1135,7 +1163,11 @@ impl UiTest {
         self.wait_for_tag_timeout(tag, self.default_timeout)
     }
 
-    pub fn wait_for_tag_timeout(&mut self, tag: &str, timeout: Duration) -> Option<(f32, f32, f32, f32)> {
+    pub fn wait_for_tag_timeout(
+        &mut self,
+        tag: &str,
+        timeout: Duration,
+    ) -> Option<(f32, f32, f32, f32)> {
         let deadline = Instant::now() + timeout;
         loop {
             self.refresh();
@@ -1165,14 +1197,14 @@ impl UiTest {
     }
 
     /// Assert a tag's rect with a per-component tolerance.
-    pub fn expect_tag_rect(
-        &mut self,
-        tag: &str,
-        expected: (f32, f32, f32, f32),
-        tolerance: f32,
-    ) {
+    pub fn expect_tag_rect(&mut self, tag: &str, expected: (f32, f32, f32, f32), tolerance: f32) {
         let actual = self.expect_tag(tag);
-        let fields = [("x", actual.0, expected.0), ("y", actual.1, expected.1), ("w", actual.2, expected.2), ("h", actual.3, expected.3)];
+        let fields = [
+            ("x", actual.0, expected.0),
+            ("y", actual.1, expected.1),
+            ("w", actual.2, expected.2),
+            ("h", actual.3, expected.3),
+        ];
         for (name, got, want) in fields {
             assert!(
                 (got - want).abs() <= tolerance,
@@ -1184,18 +1216,22 @@ impl UiTest {
     pub fn expect_tag_size(&mut self, tag: &str, expected: (f32, f32), tolerance: f32) {
         let actual = self.expect_tag(tag);
         assert!(
-            (actual.2 - expected.0).abs() <= tolerance && (actual.3 - expected.1).abs() <= tolerance,
+            (actual.2 - expected.0).abs() <= tolerance
+                && (actual.3 - expected.1).abs() <= tolerance,
             "tag {tag} size: expected {expected:?} +/-{tolerance}, got ({}, {})",
-            actual.2, actual.3
+            actual.2,
+            actual.3
         );
     }
 
     pub fn expect_tag_position(&mut self, tag: &str, expected: (f32, f32), tolerance: f32) {
         let actual = self.expect_tag(tag);
         assert!(
-            (actual.0 - expected.0).abs() <= tolerance && (actual.1 - expected.1).abs() <= tolerance,
+            (actual.0 - expected.0).abs() <= tolerance
+                && (actual.1 - expected.1).abs() <= tolerance,
             "tag {tag} position: expected {expected:?} +/-{tolerance}, got ({}, {})",
-            actual.0, actual.1
+            actual.0,
+            actual.1
         );
     }
 
@@ -1205,7 +1241,8 @@ impl UiTest {
         let needle = format!("text({text})");
         let all = self.all_texts();
         assert!(
-            all.iter().any(|m| m.split('|').any(|part| part.trim() == needle)),
+            all.iter()
+                .any(|m| m.split('|').any(|part| part.trim() == needle)),
             "exact text {text} not found; current modifiers: {}",
             all.join(" | ")
         );
@@ -1235,12 +1272,19 @@ impl UiTest {
 
     pub fn expect_focused(&mut self, tag: &str) {
         let focused = self.focused_tags();
-        assert!(focused.iter().any(|t| t == tag), "expected {tag} focused, focused: {focused:?}");
+        assert!(
+            focused.iter().any(|t| t == tag),
+            "expected {tag} focused, focused: {focused:?}"
+        );
     }
 
     pub fn expect_only_focused(&mut self, tag: &str) {
         let focused = self.focused_tags();
-        assert_eq!(focused, vec![tag.to_string()], "expected only {tag} focused, focused: {focused:?}");
+        assert_eq!(
+            focused,
+            vec![tag.to_string()],
+            "expected only {tag} focused, focused: {focused:?}"
+        );
     }
 
     pub fn expect_window_count(&mut self, count: usize) {
@@ -1255,7 +1299,9 @@ impl UiTest {
 
     /// Typed view of the semantics snapshot (main tree plus every overlay entry).
     pub fn semantics_entries(&mut self) -> Vec<SemanticsEntry> {
-        let Some(snapshot) = self.semantics() else { return Vec::new() };
+        let Some(snapshot) = self.semantics() else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         if let Some(main) = snapshot.get("main") {
             collect_semantics(main, &mut out);
@@ -1271,7 +1317,9 @@ impl UiTest {
     }
 
     pub fn find_semantics(&mut self, name: &str) -> Option<SemanticsEntry> {
-        self.semantics_entries().into_iter().find(|n| n.name.as_deref() == Some(name))
+        self.semantics_entries()
+            .into_iter()
+            .find(|n| n.name.as_deref() == Some(name))
     }
 
     pub fn expect_semantics_name(&mut self, name: &str) {
@@ -1279,22 +1327,33 @@ impl UiTest {
         assert!(
             entries.iter().any(|n| n.name.as_deref() == Some(name)),
             "semantics name {name} not found; names: {:?}",
-            entries.iter().filter_map(|n| n.name.clone()).collect::<Vec<_>>()
+            entries
+                .iter()
+                .filter_map(|n| n.name.clone())
+                .collect::<Vec<_>>()
         );
     }
 
     pub fn expect_semantics_role(&mut self, name: &str, role: &str) {
         let entries = self.semantics_entries();
         assert!(
-            entries.iter().any(|n| n.name.as_deref() == Some(name) && n.role.as_deref() == Some(role)),
+            entries
+                .iter()
+                .any(|n| n.name.as_deref() == Some(name) && n.role.as_deref() == Some(role)),
             "semantics {name} does not have role {role}; entries: {:?}",
-            entries.iter().map(|n| (&n.name, &n.role)).collect::<Vec<_>>()
+            entries
+                .iter()
+                .map(|n| (&n.name, &n.role))
+                .collect::<Vec<_>>()
         );
     }
 
     pub fn expect_no_animations(&mut self) {
         let animations = self.animations();
-        assert!(animations.is_empty(), "expected no animations, got: {animations:?}");
+        assert!(
+            animations.is_empty(),
+            "expected no animations, got: {animations:?}"
+        );
     }
 
     pub fn wait_animations_idle(&mut self) -> bool {
@@ -1327,7 +1386,9 @@ impl UiTest {
             .unwrap_or_else(|| panic!("no pixel at logical ({x}, {y})"));
         let close = |a: u8, b: u8| a.abs_diff(b) <= tolerance;
         assert!(
-            close(actual.0, expected.0) && close(actual.1, expected.1) && close(actual.2, expected.2),
+            close(actual.0, expected.0)
+                && close(actual.1, expected.1)
+                && close(actual.2, expected.2),
             "pixel at ({x}, {y}): expected {expected:?} +/-{tolerance}, got {actual:?}"
         );
     }
@@ -1391,13 +1452,19 @@ impl UiTest {
         self.expect_eventually_timeout(description, self.default_timeout, condition);
     }
 
-    pub fn expect_eventually_timeout<F>(&mut self, description: &str, timeout: Duration, condition: F)
-    where
+    pub fn expect_eventually_timeout<F>(
+        &mut self,
+        description: &str,
+        timeout: Duration,
+        condition: F,
+    ) where
         F: FnMut(&mut Self) -> bool,
     {
-        assert!(self.wait_until_timeout(timeout, condition), "timed out waiting for {description}");
+        assert!(
+            self.wait_until_timeout(timeout, condition),
+            "timed out waiting for {description}"
+        );
     }
-
 }
 
 /// One semantics node, flattened from the debug semantics JSON.
@@ -1432,16 +1499,32 @@ fn collect_semantics(value: &Value, out: &mut Vec<SemanticsEntry>) {
     };
     out.push(SemanticsEntry {
         id: value.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
-        role: value.get("role").and_then(|v| v.as_str()).map(str::to_string),
-        name: value.get("name").and_then(|v| v.as_str()).map(str::to_string),
+        role: value
+            .get("role")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        name: value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         state: value.get("state").cloned().unwrap_or(Value::Null),
         bounds: (x, y, w, h),
-        focused: value.get("focused").and_then(|v| v.as_bool()).unwrap_or(false),
-        clickable: value.get("clickable").and_then(|v| v.as_bool()).unwrap_or(false),
+        focused: value
+            .get("focused")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        clickable: value
+            .get("clickable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         actions: value
             .get("actions")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default(),
     });
     if let Some(children) = value.get("children") {
@@ -1470,40 +1553,37 @@ fn find_node_tag_id(tree: &Value, tag: &str) -> Option<u64> {
     found
 }
 
-    /// 写 `t` 命令并读 TREE: 响应（跳过污染行——demo 可能向 stdout 打印日志）。
-    /// 返回 (树 JSON, 是否收到过 TREE 前缀响应)——空 JSON 表示 DEBUG_STATE 未就绪。
-    fn query_tree(
-        stdin: &mut std::process::ChildStdin,
-        rx: &Receiver<String>,
-        timeout: Duration,
-    ) -> (Option<Value>, bool) {
-        if stdin.write_all(b"t\n").is_err() || stdin.flush().is_err() {
-            // A write fails when the child died between the caller's liveness probe and this write.
-            // Report "no response" instead of panicking: `wait_for_first_frame` then sees the exit on
-            // its next probe and hands the reason back to `launch`, which retries.
+/// 写 `t` 命令并读 TREE: 响应（跳过污染行——demo 可能向 stdout 打印日志）。
+/// 返回 (树 JSON, 是否收到过 TREE 前缀响应)——空 JSON 表示 DEBUG_STATE 未就绪。
+fn query_tree(
+    stdin: &mut std::process::ChildStdin,
+    rx: &Receiver<String>,
+    timeout: Duration,
+) -> (Option<Value>, bool) {
+    if stdin.write_all(b"t\n").is_err() || stdin.flush().is_err() {
+        // A write fails when the child died between the caller's liveness probe and this write.
+        // Report "no response" instead of panicking: `wait_for_first_frame` then sees the exit on
+        // its next probe and hands the reason back to `launch`, which retries.
+        return (None, false);
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return (None, false);
         }
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return (None, false);
-            }
-            match rx.recv_timeout(remaining) {
-                Ok(line) => {
-                    if let Some(json) = line.strip_prefix("TREE:") {
-                        return (
-                            serde_json::from_str(json).ok(),
-                            true,
-                        );
-                    }
-                    // 其他行（demo 日志）忽略
+        match rx.recv_timeout(remaining) {
+            Ok(line) => {
+                if let Some(json) = line.strip_prefix("TREE:") {
+                    return (serde_json::from_str(json).ok(), true);
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (None, false),
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return (None, false),
+                // 其他行（demo 日志）忽略
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (None, false),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return (None, false),
         }
     }
+}
 
 // ── 树 JSON 辅助 ──
 
@@ -1600,7 +1680,6 @@ fn collect_texts_of(root: &Value, out: &mut Vec<String>) {
     walk(root, out);
 }
 
-
 /// 查找 tag 精确匹配的节点，并返回绝对位置和尺寸。
 fn find_node_tag(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f32)> {
     find_node_tag_scoped(tree, tag, false)
@@ -1611,7 +1690,11 @@ fn find_node_tag_in_overlay(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f
     find_node_tag_scoped(tree, tag, true)
 }
 
-fn find_node_tag_scoped(tree: &Value, tag: &str, overlay_only: bool) -> Option<(f32, f32, f32, f32)> {
+fn find_node_tag_scoped(
+    tree: &Value,
+    tag: &str,
+    overlay_only: bool,
+) -> Option<(f32, f32, f32, f32)> {
     fn walk(n: &Value, ax: f32, ay: f32, tag: &str) -> Option<(f32, f32, f32, f32)> {
         if let Some(arr) = n.as_array() {
             return arr.iter().find_map(|child| walk(child, ax, ay, tag));
@@ -1656,7 +1739,10 @@ fn collect_focused_tags(n: &Value, out: &mut Vec<String>) {
         }
         return;
     }
-    if n.get("focused").and_then(|value| value.as_bool()).unwrap_or(false) {
+    if n.get("focused")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
         out.push(
             n.get("tag")
                 .and_then(|value| value.as_str())
@@ -1686,7 +1772,9 @@ fn node_tag_is_focused_scoped(tree: &Value, tag: &str, overlay_only: bool) -> bo
         if let Some(arr) = n.as_array() {
             return arr.iter().any(subtree_is_focused);
         }
-        n.get("focused").and_then(|value| value.as_bool()).unwrap_or(false)
+        n.get("focused")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
             || n.get("children")
                 .and_then(|value| value.as_array())
                 .is_some_and(|children| children.iter().any(subtree_is_focused))
@@ -1747,7 +1835,12 @@ fn parse_pixel_line(body: &str) -> Option<(u32, u32, u32, u32, (u8, u8, u8, u8))
             h,
             x.parse().ok()?,
             y.parse().ok()?,
-            (r.parse().ok()?, g.parse().ok()?, b.parse().ok()?, a.parse().ok()?),
+            (
+                r.parse().ok()?,
+                g.parse().ok()?,
+                b.parse().ok()?,
+                a.parse().ok()?,
+            ),
         )),
         _ => None,
     }
@@ -1758,7 +1851,8 @@ fn count_nodes(tree: &Value) -> usize {
         if let Some(arr) = n.as_array() {
             return arr.iter().map(walk).sum();
         }
-        1 + n.get("children")
+        1 + n
+            .get("children")
             .and_then(|c| c.as_array())
             .map(|cs| cs.iter().map(walk).sum())
             .unwrap_or(0)
@@ -1897,7 +1991,10 @@ mod pixel_line_parsing {
         assert_eq!(parse_pixel_line("480x330:out-of-frame"), None);
         assert_eq!(parse_pixel_line("480x330:42"), None);
         assert_eq!(parse_frame_size("480x330:out-of-frame"), Some((480, 330)));
-        assert_eq!(parse_frame_size("480x330:240 165 20 18 24 255"), Some((480, 330)));
+        assert_eq!(
+            parse_frame_size("480x330:240 165 20 18 24 255"),
+            Some((480, 330))
+        );
         assert_eq!(parse_frame_size("none"), None);
     }
 }

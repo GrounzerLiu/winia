@@ -11,18 +11,18 @@
 //! });
 //! ```
 
+use crate::components::text::LOCAL_TEXT_STYLE;
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
+use crate::graphics::Color;
 use crate::modifier::{Modifier, ModifierElement};
-use crate::text::{RichSpanStyle};
-use crate::graphics::{Color};
+use crate::runtime::composer::ComposeCtx;
 use crate::text::InlineDrawable;
-use crate::components::text::{LOCAL_TEXT_STYLE};
-use crate::text::{FontWeight, FontSlant, TextStyle};
-use crate::unit::TextUnit;
+use crate::text::RichSpanStyle;
+use crate::text::{FontSlant, FontWeight, TextStyle};
 use crate::theme::WiniaTheme;
-use std::sync::Arc;
+use crate::unit::TextUnit;
 use std::ops::Range;
+use std::sync::Arc;
 
 // ── Style: accumulates across nested scopes ──
 
@@ -55,16 +55,28 @@ pub(crate) struct Style {
 
 impl Style {
     fn is_not_default(&self) -> bool {
-        self.fs.is_some() || self.color.is_some() || self.fw.is_some()
-            || self.slant.is_some() || self.ul || self.ol || self.st
-            || self.deco_color.is_some() || self.deco_style.is_some() || self.deco_mode.is_some()
+        self.fs.is_some()
+            || self.color.is_some()
+            || self.fw.is_some()
+            || self.slant.is_some()
+            || self.ul
+            || self.ol
+            || self.st
+            || self.deco_color.is_some()
+            || self.deco_style.is_some()
+            || self.deco_mode.is_some()
             || self.baseline_shift != 0.0
             || self.letter_spacing != crate::unit::TextUnit::Sp(crate::unit::Sp(0.0))
             || self.word_spacing != 0.0
-            || self.height_multiple != 0.0 || self.half_leading
-            || !self.font_families.is_empty() || self.font_width != 5
-            || self.font_edging.is_some() || self.font_hinting.is_some() || self.subpixel
-            || self.foreground_color.is_some() || self.bg.is_some()
+            || self.height_multiple != 0.0
+            || self.half_leading
+            || !self.font_families.is_empty()
+            || self.font_width != 5
+            || self.font_edging.is_some()
+            || self.font_hinting.is_some()
+            || self.subpixel
+            || self.foreground_color.is_some()
+            || self.bg.is_some()
             || self.locale.is_some()
     }
 }
@@ -72,16 +84,29 @@ impl Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
-            fs: None, color: None, fw: None, slant: None,
-            ul: false, ol: false, st: false,
-            deco_color: None, deco_style: None, deco_mode: None,
+            fs: None,
+            color: None,
+            fw: None,
+            slant: None,
+            ul: false,
+            ol: false,
+            st: false,
+            deco_color: None,
+            deco_style: None,
+            deco_mode: None,
             baseline_shift: 0.0,
             letter_spacing: crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)),
             word_spacing: 0.0,
-            height_multiple: 0.0, half_leading: false,
-            font_families: Vec::new(), font_width: 5,
-            font_edging: None, font_hinting: None, subpixel: false,
-            foreground_color: None, bg: None, locale: None,
+            height_multiple: 0.0,
+            half_leading: false,
+            font_families: Vec::new(),
+            font_width: 5,
+            font_edging: None,
+            font_hinting: None,
+            subpixel: false,
+            foreground_color: None,
+            bg: None,
+            locale: None,
         }
     }
 }
@@ -100,15 +125,25 @@ fn resolve_base() -> Style {
         color: base.color.or(Some(theme.on_surface)),
         fw: base.font_weight,
         slant: base.font_style,
-        ul: false, ol: false, st: false,
-        deco_color: None, deco_style: None, deco_mode: None,
+        ul: false,
+        ol: false,
+        st: false,
+        deco_color: None,
+        deco_style: None,
+        deco_mode: None,
         baseline_shift: 0.0,
         letter_spacing: crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)),
         word_spacing: 0.0,
-        height_multiple: 0.0, half_leading: false,
-        font_families: Vec::new(), font_width: 5,
-        font_edging: None, font_hinting: None, subpixel: false,
-        foreground_color: None, bg: None, locale: None,
+        height_multiple: 0.0,
+        half_leading: false,
+        font_families: Vec::new(),
+        font_width: 5,
+        font_edging: None,
+        font_hinting: None,
+        subpixel: false,
+        foreground_color: None,
+        bg: None,
+        locale: None,
     }
 }
 
@@ -129,12 +164,15 @@ pub struct RichTextScope<'a> {
 impl<'a> RichTextScope<'a> {
     /// Append plain text under the style accumulated so far.
     pub fn text(&mut self, s: &str) {
-        if s.is_empty() { return; }
+        if s.is_empty() {
+            return;
+        }
         let start = self.cursor;
         self.content.push_str(s);
         self.cursor += s.chars().count();
         if self.style.is_not_default() {
-            self.annotations.push((self.style.clone(), start..self.cursor));
+            self.annotations
+                .push((self.style.clone(), start..self.cursor));
         }
     }
 
@@ -148,7 +186,9 @@ impl<'a> RichTextScope<'a> {
 
     fn apply_textstyle(&mut self, s: &TextStyle) {
         s.color.map(|v| self.style.color = Some(v));
-        s.font_size.map(|v| self.style.fs = Some(v.to_logical_px(crate::runtime::density::current_density())));
+        s.font_size.map(|v| {
+            self.style.fs = Some(v.to_logical_px(crate::runtime::density::current_density()))
+        });
         s.font_weight.map(|v| self.style.fw = Some(v));
         s.font_style.map(|v| self.style.slant = Some(v));
         if let Some(d) = s.decoration {
@@ -173,17 +213,24 @@ impl<'a> RichTextScope<'a> {
 
     /// A placeholder: the text lands in the content but is NOT drawn — the drawable replaces it
     /// visually (the same contract as winia v1).
-    pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
+    pub fn placeholder(
+        &mut self,
+        text: impl Into<String>,
+        drawable: impl Into<Arc<dyn InlineDrawable>>,
+    ) {
         let pos = self.cursor;
         let t = text.into();
         let len = t.chars().count();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
         self.content.push_str(&t);
         self.drawables.push(drawable.into());
         self.drawable_ranges.push(pos..pos + len);
         self.cursor += len;
         if self.style.is_not_default() {
-            self.annotations.push((self.style.clone(), pos..self.cursor));
+            self.annotations
+                .push((self.style.clone(), pos..self.cursor));
         }
     }
 
@@ -205,7 +252,10 @@ impl<'a> RichTextScope<'a> {
 
     pub fn font_size(&mut self, v: impl Into<crate::unit::TextUnit>, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.fs = Some(v.into().to_logical_px(crate::runtime::density::current_density()));
+        self.style.fs = Some(
+            v.into()
+                .to_logical_px(crate::runtime::density::current_density()),
+        );
         f(self);
         self.style = saved;
     }
@@ -263,7 +313,11 @@ impl<'a> RichTextScope<'a> {
 
     /// Compose's `SpanStyle.letterSpacing`: a `TextUnit`, so an `em` means a multiple of THIS
     /// span's font size (resolved when the span is expanded).
-    pub fn letter_spacing(&mut self, v: impl Into<crate::unit::TextUnit>, f: impl FnOnce(&mut Self)) {
+    pub fn letter_spacing(
+        &mut self,
+        v: impl Into<crate::unit::TextUnit>,
+        f: impl FnOnce(&mut Self),
+    ) {
         let saved = self.style.clone();
         self.style.letter_spacing = v.into();
         f(self);
@@ -320,7 +374,11 @@ impl<'a> RichTextScope<'a> {
     }
 
     /// A scope over an arbitrary style, to set several properties at once.
-    pub fn style(&mut self, modifier: impl FnOnce(StyleModifier) -> StyleModifier, f: impl FnOnce(&mut Self)) {
+    pub fn style(
+        &mut self,
+        modifier: impl FnOnce(StyleModifier) -> StyleModifier,
+        f: impl FnOnce(&mut Self),
+    ) {
         let saved = self.style.clone();
         let sm = modifier(StyleModifier(self.style.clone()));
         self.style = sm.0;
@@ -332,32 +390,110 @@ impl<'a> RichTextScope<'a> {
 pub struct StyleModifier(Style);
 
 impl StyleModifier {
-    pub fn bold(mut self) -> Self { self.0.fw = Some(FontWeight::BOLD); self }
-    pub fn italic(mut self) -> Self { self.0.slant = Some(FontSlant::Italic); self }
-    pub fn font_size(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.fs = Some(v.into().to_logical_px(crate::runtime::density::current_density())); self }
-    pub fn color(mut self, v: Color) -> Self { self.0.color = Some(v); self }
-    pub fn underline(mut self) -> Self { self.0.ul = true; self }
-    pub fn overline(mut self) -> Self { self.0.ol = true; self }
-    pub fn strikethrough(mut self) -> Self { self.0.st = true; self }
-    pub fn background(mut self, v: Color) -> Self { self.0.bg = Some(v); self }
-    pub fn decoration_color(mut self, v: Color) -> Self { self.0.deco_color = Some(v); self }
-    pub fn decoration_style(mut self, v: crate::text::DecoStyle) -> Self { self.0.deco_style = Some(v); self }
-    pub fn decoration_mode(mut self, v: crate::text::DecoMode) -> Self { self.0.deco_mode = Some(v); self }
-    pub fn subscript(mut self) -> Self { self.0.baseline_shift = -0.5; self }
-    pub fn superscript(mut self) -> Self { self.0.baseline_shift = 0.5; self }
-    pub fn baseline_shift(mut self, v: f32) -> Self { self.0.baseline_shift = v; self }
+    pub fn bold(mut self) -> Self {
+        self.0.fw = Some(FontWeight::BOLD);
+        self
+    }
+    pub fn italic(mut self) -> Self {
+        self.0.slant = Some(FontSlant::Italic);
+        self
+    }
+    pub fn font_size(mut self, v: impl Into<crate::unit::TextUnit>) -> Self {
+        self.0.fs = Some(
+            v.into()
+                .to_logical_px(crate::runtime::density::current_density()),
+        );
+        self
+    }
+    pub fn color(mut self, v: Color) -> Self {
+        self.0.color = Some(v);
+        self
+    }
+    pub fn underline(mut self) -> Self {
+        self.0.ul = true;
+        self
+    }
+    pub fn overline(mut self) -> Self {
+        self.0.ol = true;
+        self
+    }
+    pub fn strikethrough(mut self) -> Self {
+        self.0.st = true;
+        self
+    }
+    pub fn background(mut self, v: Color) -> Self {
+        self.0.bg = Some(v);
+        self
+    }
+    pub fn decoration_color(mut self, v: Color) -> Self {
+        self.0.deco_color = Some(v);
+        self
+    }
+    pub fn decoration_style(mut self, v: crate::text::DecoStyle) -> Self {
+        self.0.deco_style = Some(v);
+        self
+    }
+    pub fn decoration_mode(mut self, v: crate::text::DecoMode) -> Self {
+        self.0.deco_mode = Some(v);
+        self
+    }
+    pub fn subscript(mut self) -> Self {
+        self.0.baseline_shift = -0.5;
+        self
+    }
+    pub fn superscript(mut self) -> Self {
+        self.0.baseline_shift = 0.5;
+        self
+    }
+    pub fn baseline_shift(mut self, v: f32) -> Self {
+        self.0.baseline_shift = v;
+        self
+    }
     /// Compose's `SpanStyle.letterSpacing`, as a unit (`sp`, or an `em` of this span's size).
-    pub fn letter_spacing(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.letter_spacing = v.into(); self }
-    pub fn word_spacing(mut self, v: f32) -> Self { self.0.word_spacing = v; self }
-    pub fn height_multiple(mut self, v: f32) -> Self { self.0.height_multiple = v; self }
-    pub fn half_leading(mut self) -> Self { self.0.half_leading = true; self }
-    pub fn font_family(mut self, v: impl Into<String>) -> Self { self.0.font_families.push(v.into()); self }
-    pub fn font_width(mut self, v: i32) -> Self { self.0.font_width = v; self }
-    pub fn font_edging(mut self, v: crate::text::FontEdge) -> Self { self.0.font_edging = Some(v); self }
-    pub fn font_hinting(mut self, v: crate::text::FontHint) -> Self { self.0.font_hinting = Some(v); self }
-    pub fn subpixel(mut self) -> Self { self.0.subpixel = true; self }
-    pub fn foreground_color(mut self, v: Color) -> Self { self.0.foreground_color = Some(v); self }
-    pub fn locale(mut self, v: impl Into<String>) -> Self { self.0.locale = Some(v.into()); self }
+    pub fn letter_spacing(mut self, v: impl Into<crate::unit::TextUnit>) -> Self {
+        self.0.letter_spacing = v.into();
+        self
+    }
+    pub fn word_spacing(mut self, v: f32) -> Self {
+        self.0.word_spacing = v;
+        self
+    }
+    pub fn height_multiple(mut self, v: f32) -> Self {
+        self.0.height_multiple = v;
+        self
+    }
+    pub fn half_leading(mut self) -> Self {
+        self.0.half_leading = true;
+        self
+    }
+    pub fn font_family(mut self, v: impl Into<String>) -> Self {
+        self.0.font_families.push(v.into());
+        self
+    }
+    pub fn font_width(mut self, v: i32) -> Self {
+        self.0.font_width = v;
+        self
+    }
+    pub fn font_edging(mut self, v: crate::text::FontEdge) -> Self {
+        self.0.font_edging = Some(v);
+        self
+    }
+    pub fn font_hinting(mut self, v: crate::text::FontHint) -> Self {
+        self.0.font_hinting = Some(v);
+        self
+    }
+    pub fn subpixel(mut self) -> Self {
+        self.0.subpixel = true;
+        self
+    }
+    pub fn foreground_color(mut self, v: Color) -> Self {
+        self.0.foreground_color = Some(v);
+        self
+    }
+    pub fn locale(mut self, v: impl Into<String>) -> Self {
+        self.0.locale = Some(v.into());
+        self
+    }
 }
 
 // ── The RichText component ──
@@ -492,11 +628,18 @@ impl RichText {
         ctx.changed(&selection_disabled);
         let reg_for_node = {
             if !selection_disabled {
-                if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
+                if let Some(reg) = ctx
+                    .selection_registrar()
+                    .or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current())
+                {
                     reg.register(key, &content);
                     Some(reg)
-                } else { None }
-            } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         };
 
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
@@ -505,8 +648,20 @@ impl RichText {
             drawable_ranges,
             spans,
             align: match self.align {
-                crate::text::TextAlign::Start => if rtl { crate::text::TextAlign::Right } else { crate::text::TextAlign::Left },
-                crate::text::TextAlign::End => if rtl { crate::text::TextAlign::Left } else { crate::text::TextAlign::Right },
+                crate::text::TextAlign::Start => {
+                    if rtl {
+                        crate::text::TextAlign::Right
+                    } else {
+                        crate::text::TextAlign::Left
+                    }
+                }
+                crate::text::TextAlign::End => {
+                    if rtl {
+                        crate::text::TextAlign::Left
+                    } else {
+                        crate::text::TextAlign::Right
+                    }
+                }
                 other => other,
             },
             max_lines: self.max_lines,
@@ -518,7 +673,9 @@ impl RichText {
         });
         ctx.start_leaf(key, modifier);
         ctx.set_current_node_selection_color(
-            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS.current().background,
+            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS
+                .current()
+                .background,
         );
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
@@ -529,7 +686,11 @@ impl RichText {
     }
 }
 
-impl Default for RichText { fn default() -> Self { Self::new() } }
+impl Default for RichText {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // ── Span resolution, winia v1 style ──
 
@@ -549,14 +710,20 @@ impl Seg {
             range: 0..0,
             placeholder: false,
             style: Style {
-                fs: Some(fs), color: Some(color), fw: Some(fw), slant: Some(slant),
+                fs: Some(fs),
+                color: Some(color),
+                fw: Some(fw),
+                slant: Some(slant),
                 ..Style::default()
             },
         }
     }
 
     fn clone_at(&self, range: Range<usize>) -> Self {
-        Seg { range, ..self.clone() }
+        Seg {
+            range,
+            ..self.clone()
+        }
     }
 }
 
@@ -572,7 +739,9 @@ fn span_style_to_style(span: &crate::text::SpanStyle) -> Style {
     style.color = span.color;
     style.fw = span.font_weight;
     style.slant = span.font_style;
-    style.letter_spacing = span.letter_spacing.unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)));
+    style.letter_spacing = span
+        .letter_spacing
+        .unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)));
     style.bg = span.background;
     if let Some(decoration) = span.decoration {
         style.ul = decoration.underline;
@@ -598,7 +767,11 @@ pub(crate) fn style_for_test(font_size: f32, letter_spacing: crate::unit::TextUn
     style
 }
 
-pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
+pub(crate) fn resolve_spans(
+    content: &str,
+    drawable_ranges: &[Range<usize>],
+    annotations: &[(Style, Range<usize>)],
+) -> Vec<RichSpanStyle> {
     let base = resolve_base();
     let d_color = base.color.unwrap_or(Color::from_argb(255, 255, 255, 255));
     let d_fs = base.fs.unwrap_or(14.0);
@@ -612,7 +785,10 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
     let mut ci = 0usize;
     while ci < total {
         // Is `ci` inside the current drawable range?
-        if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
+        if di < drawable_ranges.len()
+            && ci >= drawable_ranges[di].start
+            && ci < drawable_ranges[di].end
+        {
             // The whole drawable range becomes one placeholder segment.
             let range = &drawable_ranges[di];
             let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
@@ -632,14 +808,15 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
             let run_len = ci - run_start;
             if run_len > 0 {
                 let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
-                s.range = run_start..run_start+run_len;
+                s.range = run_start..run_start + run_len;
                 segs.push(s);
             }
         }
     }
 
     // 2) v1's split pass.
-    let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
+    let resolved_annos: Vec<(Style, Range<usize>)> = annotations
+        .iter()
         .filter(|(s, r)| s.is_not_default() && r.end > r.start)
         .map(|(s, r)| (s.clone(), r.clone()))
         .collect();
@@ -651,8 +828,13 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         while i < segs.len() {
             let s_start = segs[i].range.start;
             let s_end = segs[i].range.end;
-            if s_start >= a_end { break; }
-            if segs[i].placeholder { i += 1; continue; }
+            if s_start >= a_end {
+                break;
+            }
+            if segs[i].placeholder {
+                i += 1;
+                continue;
+            }
             if a_start <= s_start && a_end >= s_end {
                 segs[i].style.apply(attr);
                 i += 1;
@@ -661,14 +843,14 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
                 mid.style.apply(attr);
                 let right = segs[i].clone_at(a_end..s_end);
                 segs[i].range.end = a_start;
-                segs.insert(i+1, mid);
-                segs.insert(i+2, right);
+                segs.insert(i + 1, mid);
+                segs.insert(i + 2, right);
                 i += 3;
             } else if a_start > s_start && a_start < s_end {
                 let mut right = segs[i].clone_at(a_start..s_end);
                 right.style.apply(attr);
                 segs[i].range.end = a_start;
-                segs.insert(i+1, right);
+                segs.insert(i + 1, right);
                 i += 2;
             } else if a_end > s_start && a_end < s_end {
                 let mut left = segs[i].clone_at(s_start..a_end);
@@ -676,35 +858,47 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
                 segs[i].range.start = a_end;
                 segs.insert(i, left);
                 i += 2;
-            } else { i += 1; }
+            } else {
+                i += 1;
+            }
         }
     }
 
     // 3) Turn them into `RichSpanStyle`.
-    segs.into_iter().filter(|s| !s.placeholder).map(|s| RichSpanStyle {
-        start: s.range.start, end: s.range.end,
-        font_size: s.style.fs.unwrap_or(d_fs),
-        color: s.style.color.unwrap_or(d_color),
-        font_weight: s.style.fw.unwrap_or(d_fw),
-        font_style: s.style.slant.unwrap_or(d_sl),
-        underline: s.style.ul, overline: s.style.ol, strikethrough: s.style.st,
-        decoration_color: s.style.deco_color,
-        decoration_style: s.style.deco_style,
-        decoration_mode: s.style.deco_mode,
-        baseline_shift: s.style.baseline_shift,
-        // Resolved against THIS span's size: an `em` is a multiple of it (Compose's semantics).
-        letter_spacing: match s.style.letter_spacing {
-            crate::unit::TextUnit::Em(em) => s.style.fs.unwrap_or(d_fs) * em,
-            other => other.to_logical_px(crate::runtime::density::current_density()),
-        },
-        word_spacing: s.style.word_spacing,
-        height_multiple: s.style.height_multiple, half_leading: s.style.half_leading,
-        font_families: s.style.font_families, font_width: s.style.font_width,
-        font_edging: s.style.font_edging, font_hinting: s.style.font_hinting,
-        subpixel: s.style.subpixel,
-        foreground_color: s.style.foreground_color, background: s.style.bg,
-        locale: s.style.locale,
-    }).collect()
+    segs.into_iter()
+        .filter(|s| !s.placeholder)
+        .map(|s| RichSpanStyle {
+            start: s.range.start,
+            end: s.range.end,
+            font_size: s.style.fs.unwrap_or(d_fs),
+            color: s.style.color.unwrap_or(d_color),
+            font_weight: s.style.fw.unwrap_or(d_fw),
+            font_style: s.style.slant.unwrap_or(d_sl),
+            underline: s.style.ul,
+            overline: s.style.ol,
+            strikethrough: s.style.st,
+            decoration_color: s.style.deco_color,
+            decoration_style: s.style.deco_style,
+            decoration_mode: s.style.deco_mode,
+            baseline_shift: s.style.baseline_shift,
+            // Resolved against THIS span's size: an `em` is a multiple of it (Compose's semantics).
+            letter_spacing: match s.style.letter_spacing {
+                crate::unit::TextUnit::Em(em) => s.style.fs.unwrap_or(d_fs) * em,
+                other => other.to_logical_px(crate::runtime::density::current_density()),
+            },
+            word_spacing: s.style.word_spacing,
+            height_multiple: s.style.height_multiple,
+            half_leading: s.style.half_leading,
+            font_families: s.style.font_families,
+            font_width: s.style.font_width,
+            font_edging: s.style.font_edging,
+            font_hinting: s.style.font_hinting,
+            subpixel: s.style.subpixel,
+            foreground_color: s.style.foreground_color,
+            background: s.style.bg,
+            locale: s.style.locale,
+        })
+        .collect()
 }
 
 impl Style {
@@ -712,34 +906,77 @@ impl Style {
     /// The old `apply_seg` copied 22 fields by hand; with `Style` embedded this is the only merge
     /// point left.
     fn apply(&mut self, other: &Style) {
-        if let Some(v) = other.fs { self.fs = Some(v); }
-        if let Some(v) = other.color { self.color = Some(v); }
-        if let Some(v) = other.fw { self.fw = Some(v); }
-        if let Some(v) = other.slant { self.slant = Some(v); }
-        if other.ul { self.ul = true; }
-        if other.ol { self.ol = true; }
-        if other.st { self.st = true; }
-        if let Some(v) = other.deco_color { self.deco_color = Some(v); }
-        if let Some(v) = other.deco_style { self.deco_style = Some(v); }
-        if let Some(v) = other.deco_mode { self.deco_mode = Some(v); }
-        if other.baseline_shift != 0.0 { self.baseline_shift = other.baseline_shift; }
+        if let Some(v) = other.fs {
+            self.fs = Some(v);
+        }
+        if let Some(v) = other.color {
+            self.color = Some(v);
+        }
+        if let Some(v) = other.fw {
+            self.fw = Some(v);
+        }
+        if let Some(v) = other.slant {
+            self.slant = Some(v);
+        }
+        if other.ul {
+            self.ul = true;
+        }
+        if other.ol {
+            self.ol = true;
+        }
+        if other.st {
+            self.st = true;
+        }
+        if let Some(v) = other.deco_color {
+            self.deco_color = Some(v);
+        }
+        if let Some(v) = other.deco_style {
+            self.deco_style = Some(v);
+        }
+        if let Some(v) = other.deco_mode {
+            self.deco_mode = Some(v);
+        }
+        if other.baseline_shift != 0.0 {
+            self.baseline_shift = other.baseline_shift;
+        }
         if other.letter_spacing != crate::unit::TextUnit::Sp(crate::unit::Sp(0.0)) {
             self.letter_spacing = other.letter_spacing;
         }
-        if other.word_spacing != 0.0 { self.word_spacing = other.word_spacing; }
-        if other.height_multiple != 0.0 { self.height_multiple = other.height_multiple; }
-        if other.half_leading { self.half_leading = true; }
-        if !other.font_families.is_empty() { self.font_families = other.font_families.clone(); }
-        if other.font_width != 5 { self.font_width = other.font_width; }
-        if let Some(v) = other.font_edging { self.font_edging = Some(v); }
-        if let Some(v) = other.font_hinting { self.font_hinting = Some(v); }
-        if other.subpixel { self.subpixel = true; }
-        if let Some(v) = other.foreground_color { self.foreground_color = Some(v); }
-        if let Some(v) = other.bg { self.bg = Some(v); }
-        if let Some(v) = &other.locale { self.locale = Some(v.clone()); }
+        if other.word_spacing != 0.0 {
+            self.word_spacing = other.word_spacing;
+        }
+        if other.height_multiple != 0.0 {
+            self.height_multiple = other.height_multiple;
+        }
+        if other.half_leading {
+            self.half_leading = true;
+        }
+        if !other.font_families.is_empty() {
+            self.font_families = other.font_families.clone();
+        }
+        if other.font_width != 5 {
+            self.font_width = other.font_width;
+        }
+        if let Some(v) = other.font_edging {
+            self.font_edging = Some(v);
+        }
+        if let Some(v) = other.font_hinting {
+            self.font_hinting = Some(v);
+        }
+        if other.subpixel {
+            self.subpixel = true;
+        }
+        if let Some(v) = other.foreground_color {
+            self.foreground_color = Some(v);
+        }
+        if let Some(v) = other.bg {
+            self.bg = Some(v);
+        }
+        if let Some(v) = &other.locale {
+            self.locale = Some(v.clone());
+        }
     }
 }
-
 
 #[cfg(test)]
 mod tests;

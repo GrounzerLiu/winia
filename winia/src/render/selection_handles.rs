@@ -15,10 +15,16 @@ pub(crate) const HANDLE_RADIUS: f32 = 5.0;
 pub(crate) fn draw(nodes: &[LayoutNode], root: usize, canvas: &Canvas) {
     let mut seen: Vec<SelectionRegistrar> = Vec::new();
     for idx in 0..nodes.len() {
-        let Some(reg) = nodes[idx].registrar.borrow().as_ref().cloned() else { continue };
-        if seen.iter().any(|r| r.is_same(&reg)) { continue; }
+        let Some(reg) = nodes[idx].registrar.borrow().as_ref().cloned() else {
+            continue;
+        };
+        if seen.iter().any(|r| r.is_same(&reg)) {
+            continue;
+        }
         seen.push(reg.clone());
-        let Some(points) = selection_handle_points(nodes, root, &reg) else { continue };
+        let Some(points) = selection_handle_points(nodes, root, &reg) else {
+            continue;
+        };
         let color = nodes[idx].selection_color.get();
         let skia_color = skia_safe::Color::from_argb(255, color.r, color.g, color.b);
         for point in points {

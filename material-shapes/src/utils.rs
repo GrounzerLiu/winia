@@ -31,7 +31,11 @@ pub fn direction_vector_from_angle(angle_radians: f32) -> Point {
 pub fn angle(x: f32, y: f32) -> f32 {
     (y.atan2(x) + TWO_PI) % TWO_PI
 }
-pub fn radial_to_cartesian(radius: f32, angle_radians: f32, center: impl Into<Option<Point>>) -> Point {
+pub fn radial_to_cartesian(
+    radius: f32,
+    angle_radians: f32,
+    center: impl Into<Option<Point>>,
+) -> Point {
     let center = center.into();
     direction_vector_from_angle(angle_radians) * radius + center.unwrap_or(ZERO)
 }

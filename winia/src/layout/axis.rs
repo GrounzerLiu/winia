@@ -51,23 +51,71 @@ impl sealed::Sealed for VerticalAxis {}
 impl sealed::Sealed for HorizontalAxis {}
 
 impl Axis for VerticalAxis {
-    #[inline] fn main_size(s: Size) -> f32 { s.height }
-    #[inline] fn cross_size(s: Size) -> f32 { s.width }
-    #[inline] fn main_max(c: &Constraints) -> f32 { c.max_height }
-    #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_width }
-    #[inline] fn main_min(c: &Constraints) -> f32 { c.min_height }
-    #[inline] fn cross_min(c: &Constraints) -> f32 { c.min_width }
-    #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(cross, main) }
-    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(cross, main) }
+    #[inline]
+    fn main_size(s: Size) -> f32 {
+        s.height
+    }
+    #[inline]
+    fn cross_size(s: Size) -> f32 {
+        s.width
+    }
+    #[inline]
+    fn main_max(c: &Constraints) -> f32 {
+        c.max_height
+    }
+    #[inline]
+    fn cross_max(c: &Constraints) -> f32 {
+        c.max_width
+    }
+    #[inline]
+    fn main_min(c: &Constraints) -> f32 {
+        c.min_height
+    }
+    #[inline]
+    fn cross_min(c: &Constraints) -> f32 {
+        c.min_width
+    }
+    #[inline]
+    fn size(main: f32, cross: f32) -> Size {
+        Size::new(cross, main)
+    }
+    #[inline]
+    fn point(main: f32, cross: f32) -> Offset {
+        Offset::new(cross, main)
+    }
 }
 
 impl Axis for HorizontalAxis {
-    #[inline] fn main_size(s: Size) -> f32 { s.width }
-    #[inline] fn cross_size(s: Size) -> f32 { s.height }
-    #[inline] fn main_max(c: &Constraints) -> f32 { c.max_width }
-    #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_height }
-    #[inline] fn main_min(c: &Constraints) -> f32 { c.min_width }
-    #[inline] fn cross_min(c: &Constraints) -> f32 { c.min_height }
-    #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(main, cross) }
-    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(main, cross) }
+    #[inline]
+    fn main_size(s: Size) -> f32 {
+        s.width
+    }
+    #[inline]
+    fn cross_size(s: Size) -> f32 {
+        s.height
+    }
+    #[inline]
+    fn main_max(c: &Constraints) -> f32 {
+        c.max_width
+    }
+    #[inline]
+    fn cross_max(c: &Constraints) -> f32 {
+        c.max_height
+    }
+    #[inline]
+    fn main_min(c: &Constraints) -> f32 {
+        c.min_width
+    }
+    #[inline]
+    fn cross_min(c: &Constraints) -> f32 {
+        c.min_height
+    }
+    #[inline]
+    fn size(main: f32, cross: f32) -> Size {
+        Size::new(main, cross)
+    }
+    #[inline]
+    fn point(main: f32, cross: f32) -> Offset {
+        Offset::new(main, cross)
+    }
 }

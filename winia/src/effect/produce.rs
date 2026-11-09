@@ -56,7 +56,10 @@ mod tests {
     /// The producer publishes into the returned state, and a new key restarts it.
     #[test]
     fn the_producer_feeds_the_state_and_a_key_change_restarts_it() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         let _entered = rt.enter();
         let starts: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
         let kept: Arc<Mutex<Option<State<u32>>>> = Arc::new(Mutex::new(None));
@@ -102,7 +105,10 @@ mod tests {
             }
         }
 
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         let _entered = rt.enter();
         let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
         let mut composer = crate::runtime::composer::Composer::new();

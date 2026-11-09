@@ -10,7 +10,10 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -29,7 +32,10 @@ pub type LocalSnapshot = Vec<(u64, Arc<dyn Any>)>;
 pub fn capture() -> LocalSnapshot {
     SLOTS.with(|s| {
         let slots = s.borrow();
-        slots.iter().map(|(id, arc)| (*id, Arc::clone(arc))).collect()
+        slots
+            .iter()
+            .map(|(id, arc)| (*id, Arc::clone(arc)))
+            .collect()
     })
 }
 
@@ -49,7 +55,10 @@ pub fn with_snapshot<R>(snapshot: &LocalSnapshot, f: impl FnOnce() -> R) -> R {
             slots.push((*id, Arc::clone(arc)));
         }
     });
-    let mut guard = SnapshotGuard { base_len, used: false };
+    let mut guard = SnapshotGuard {
+        base_len,
+        used: false,
+    };
     let result = f();
     // 正常弹栈（drop guard 兜底 panic 路径）
     SLOTS.with(|s| {
@@ -65,7 +74,9 @@ struct SnapshotGuard {
     used: bool,
 }
 impl SnapshotGuard {
-    fn disarm(&mut self) { self.used = true; }
+    fn disarm(&mut self) {
+        self.used = true;
+    }
 }
 impl Drop for SnapshotGuard {
     fn drop(&mut self) {
@@ -80,11 +91,18 @@ impl Drop for SnapshotGuard {
 }
 
 /// Panic 安全：即使闭包 panic，Drop 时也会从栈中移除对应条目。
-struct PopGuard { id: u64, used: bool }
+struct PopGuard {
+    id: u64,
+    used: bool,
+}
 
 impl PopGuard {
-    fn new(id: u64) -> Self { Self { id, used: false } }
-    fn disarm(&mut self) { self.used = true; }
+    fn new(id: u64) -> Self {
+        Self { id, used: false }
+    }
+    fn disarm(&mut self) {
+        self.used = true;
+    }
 }
 
 impl Drop for PopGuard {
@@ -109,7 +127,10 @@ pub struct CompositionLocal<T: Clone + 'static> {
 /// 确保只初始化一次（否则多次 `new()` 会产生不同的 ID）。
 impl<T: Clone + 'static> CompositionLocal<T> {
     pub fn new(default: fn() -> T) -> Self {
-        Self { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), default }
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            default,
+        }
     }
 
     /// 读取栈顶匹配的当前值，若无则返回 `default`。

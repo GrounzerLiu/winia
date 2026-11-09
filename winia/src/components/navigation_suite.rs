@@ -59,9 +59,9 @@ mod types;
 pub use layout::{NavigationSuite, NavigationSuiteScaffoldLayout};
 pub use scaffold::NavigationSuiteScaffold;
 pub use types::{
-    navigation_suite_type, remember_navigation_suite_scaffold_state, NavigationSuiteColors,
-    NavigationSuiteDefaults, NavigationSuiteItem, NavigationSuiteItemColors, NavigationSuiteItems,
-    NavigationSuiteScaffoldState, NavigationSuiteScaffoldValue, NavigationSuiteType,
+    NavigationSuiteColors, NavigationSuiteDefaults, NavigationSuiteItem, NavigationSuiteItemColors,
+    NavigationSuiteItems, NavigationSuiteScaffoldState, NavigationSuiteScaffoldValue,
+    NavigationSuiteType, navigation_suite_type, remember_navigation_suite_scaffold_state,
 };
 
 #[cfg(test)]

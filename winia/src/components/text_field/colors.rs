@@ -4,7 +4,6 @@ use super::*;
 // TextField 容器视觉（对齐 material3 TextField/OutlinedTextField 外观）
 // ═══════════════════════════════════════════════════════════
 
-
 /// M3 默认禁用降级：基色 × alpha（disabled 色 = onSurface @ alpha）
 pub(crate) fn alpha(c: crate::graphics::Color, a: f32) -> crate::graphics::Color {
     crate::graphics::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
@@ -55,18 +54,37 @@ impl TextFieldColors {
     }
 
     /// 状态解析（优先级 disabled > error > focused > unfocused——M3 同款）
-    pub fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::graphics::Color {
-        if !enabled { self.indicator_disabled }
-        else if is_error { self.indicator_error }
-        else if focused { self.indicator_focused }
-        else { self.indicator_unfocused }
+    pub fn indicator_color(
+        &self,
+        enabled: bool,
+        is_error: bool,
+        focused: bool,
+    ) -> crate::graphics::Color {
+        if !enabled {
+            self.indicator_disabled
+        } else if is_error {
+            self.indicator_error
+        } else if focused {
+            self.indicator_focused
+        } else {
+            self.indicator_unfocused
+        }
     }
 
-    pub fn label_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::graphics::Color {
-        if !enabled { self.label_disabled }
-        else if is_error { self.label_error }
-        else if focused { self.label_focused }
-        else { self.label_unfocused }
+    pub fn label_color(
+        &self,
+        enabled: bool,
+        is_error: bool,
+        focused: bool,
+    ) -> crate::graphics::Color {
+        if !enabled {
+            self.label_disabled
+        } else if is_error {
+            self.label_error
+        } else if focused {
+            self.label_focused
+        } else {
+            self.label_unfocused
+        }
     }
 }
-

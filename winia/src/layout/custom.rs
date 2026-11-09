@@ -56,8 +56,8 @@ impl<P: MeasurePolicy + 'static> Layout<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
     use crate::layout::Constraints;
+    use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
     use crate::modifier::Modifier;
     use crate::runtime::composer::Composer;
     use crate::unit::{Offset, Size};
@@ -82,7 +82,10 @@ mod tests {
                     child,
                     Constraints::new(0.0, constraints.max_width, 0.0, constraints.max_height),
                 );
-                size = Size::new(size.width.max(child_size.width), size.height.max(child_size.height));
+                size = Size::new(
+                    size.width.max(child_size.width),
+                    size.height.max(child_size.height),
+                );
                 placements.push(Placement {
                     size: child_size,
                     position: Offset::ZERO,
@@ -111,9 +114,7 @@ mod tests {
                     crate::components::Text::new("wide content")
                         .font_size(20.0)
                         .build(ctx);
-                    crate::components::Text::new("x")
-                        .font_size(10.0)
-                        .build(ctx);
+                    crate::components::Text::new("x").font_size(10.0).build(ctx);
                 });
         }));
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
@@ -121,7 +122,11 @@ mod tests {
         let children = root.children.clone();
         assert_eq!(children.len(), 2, "both children are laid out");
         let nodes = composer.arena_nodes();
-        assert_eq!(nodes[children[0]].position, Offset::ZERO, "every child sits at the origin");
+        assert_eq!(
+            nodes[children[0]].position,
+            Offset::ZERO,
+            "every child sits at the origin"
+        );
         assert_eq!(nodes[children[1]].position, Offset::ZERO);
         assert!(
             root.measured_size.width >= nodes[children[0]].measured_size.width,

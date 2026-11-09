@@ -1,13 +1,13 @@
 //! IconButton 组件 — 对标 material3 `IconButton` / `FilledIconButton` /
 //! `FilledTonalIconButton` / `OutlinedIconButton`
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
 use crate::components::button::ButtonBorder;
+use crate::composable;
+use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -202,15 +202,28 @@ impl IconButtonColors {
         disabled_container: Color,
         disabled_content: Color,
     ) -> Self {
-        Self { container, content, disabled_container, disabled_content }
+        Self {
+            container,
+            content,
+            disabled_container,
+            disabled_content,
+        }
     }
 
     pub fn container_color(&self, enabled: bool) -> Color {
-        if enabled { self.container } else { self.disabled_container }
+        if enabled {
+            self.container
+        } else {
+            self.disabled_container
+        }
     }
 
     pub fn content_color(&self, enabled: bool) -> Color {
-        if enabled { self.content } else { self.disabled_content }
+        if enabled {
+            self.content
+        } else {
+            self.disabled_content
+        }
     }
 
     /// 从主题按变体生成默认色（对标 IconButtonDefaults.*Colors）
@@ -238,9 +251,12 @@ impl IconButtonColors {
                 let content = crate::theme::WiniaTheme::content_color();
                 Self::new(transparent, content, transparent, alpha(content, 0.38))
             }
-            IconButtonStyle::Filled => {
-                Self::new(theme.primary, theme.on_primary, disabled_container, disabled_content)
-            }
+            IconButtonStyle::Filled => Self::new(
+                theme.primary,
+                theme.on_primary,
+                disabled_container,
+                disabled_content,
+            ),
             IconButtonStyle::FilledTonal => Self::new(
                 theme.secondary_container,
                 theme.on_secondary_container,
@@ -504,7 +520,11 @@ impl IconButton {
                 // at `:1576-1586` for the toggle). A spatial spring overshoots by design — at the
                 // expressive scheme's `fast_spatial` (damping 0.6) visibly.
                 let morph = ctx.animate_float_as_state(
-                    if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
+                    if interaction.state(self.enabled).pressed {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     shape_morph_spec(),
                 );
                 let rest = self.size_variant.container_radius(self.shape_family, round);
@@ -609,7 +629,6 @@ impl IconButton {
 pub(crate) fn shape_morph_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
-
 
 #[cfg(test)]
 mod tests;

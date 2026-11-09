@@ -21,10 +21,9 @@
 //! (merged + unmerged) pair, a small property set — role, name, state, and the click action that is
 //! already implied by the modifier chain — and no collections, custom actions or live regions.
 
-use crate::layout::node::{scroll_offset_for_node, LayoutNode};
+use crate::layout::node::{LayoutNode, scroll_offset_for_node};
 use crate::modifier::ModifierElement;
 use crate::selection::ToggleableState;
-
 
 mod json;
 mod registry;
@@ -35,7 +34,10 @@ pub(crate) use registry::*;
 pub(crate) use tree::*;
 
 pub use json::semantics_json;
-pub use registry::{forget, has_actions, publish, published, request_action, take_actions, OverlaySemantics, UiAction, WindowSemantics};
+pub use registry::{
+    OverlaySemantics, UiAction, WindowSemantics, forget, has_actions, publish, published,
+    request_action, take_actions,
+};
 pub use tree::{click_node_by_id, semantics_tree};
 pub use types::{
     CollectionInfo, CollectionItemInfo, IndexForKeyAction, LiveRegionMode, ScrollToIndexAction,

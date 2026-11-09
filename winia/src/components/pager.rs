@@ -333,7 +333,10 @@ impl<A: LazyAxis> Pager<A> {
     /// default is `1`). A flick above the fling floor carries as many pages as the decay estimate
     /// suggests, capped here; `1` is "a gesture moves at most one page", the pager's usual feel.
     pub fn max_pages_per_fling(mut self, pages: usize) -> Self {
-        assert!(pages >= 1, "max_pages_per_fling must be at least 1, got {pages}");
+        assert!(
+            pages >= 1,
+            "max_pages_per_fling must be at least 1, got {pages}"
+        );
         self.max_pages_per_fling = pages;
         self
     }
@@ -447,7 +450,9 @@ impl<A: LazyAxis> Pager<A> {
             .modifier(match self.page_nested_scroll_connection.clone() {
                 // Compose's `pageNestedScrollConnection` rides on the list's own modifier, so the scroll
                 // dispatch that walks the hit path finds it on the container the drags land on.
-                Some(connection) => self.modifier.then(Modifier::new().nested_scroll_arc(connection)),
+                Some(connection) => self
+                    .modifier
+                    .then(Modifier::new().nested_scroll_arc(connection)),
                 None => self.modifier,
             });
         if let Some(behavior) = self.fling_behavior.clone() {
@@ -457,8 +462,12 @@ impl<A: LazyAxis> Pager<A> {
             PageSize::Fill => list.fill_items(true),
             PageSize::Fixed(size) => list.item_main_size(size),
         };
-        list.items(count, |page| page as u64, move |ctx, page| content(ctx, page))
-            .build(ctx);
+        list.items(
+            count,
+            |page| page as u64,
+            move |ctx, page| content(ctx, page),
+        )
+        .build(ctx);
         // The counter has to follow the list WHILE it scrolls, and this call site does not re-run for
         // that (the inner list group re-enters, not the pager's build) - which is why a build-time
         // derive left the dots on the old page during a wheel or a slow drag. `remember_derived_state`
@@ -470,25 +479,27 @@ impl<A: LazyAxis> Pager<A> {
         // `PagerState` it passes at one call site would keep deriving from the old one. Keying the scope
         // by the state's identity rebuilds the derive when the state changes.
         let state_id = state.identity;
-        let _position = ctx.key(state_id, |ctx| crate::runtime::flow::remember_derived_state(ctx, move || {
-            // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
-            // value would freeze the first frame's answer - and the first frame's viewport is 0, which
-            // is exactly why the counter never moved (step 0 -> early return, forever).
-            let pad_before = mirror.pad_before.get();
-            let page_size = match mirror.page_size_spec.get() {
-                Some(size) => size,
-                // A Fill page is `viewport - before - after` - the size `build` measures and snaps by.
-                // Dividing by the raw viewport here reported the page one late and scaled the fraction
-                // by page/viewport on any padded pager (the padded test only ever sat on page 0).
-                None => (list.viewport_main_size() - 2.0 * pad_before).max(0.0),
-            };
-            let spacing = mirror.spacing.get();
-            mirror.sync_from_list(page_size, spacing, pad_before);
-            (
-                mirror.current_page.peek(),
-                mirror.current_page_offset_fraction.peek(),
-            )
-        }));
+        let _position = ctx.key(state_id, |ctx| {
+            crate::runtime::flow::remember_derived_state(ctx, move || {
+                // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
+                // value would freeze the first frame's answer - and the first frame's viewport is 0, which
+                // is exactly why the counter never moved (step 0 -> early return, forever).
+                let pad_before = mirror.pad_before.get();
+                let page_size = match mirror.page_size_spec.get() {
+                    Some(size) => size,
+                    // A Fill page is `viewport - before - after` - the size `build` measures and snaps by.
+                    // Dividing by the raw viewport here reported the page one late and scaled the fraction
+                    // by page/viewport on any padded pager (the padded test only ever sat on page 0).
+                    None => (list.viewport_main_size() - 2.0 * pad_before).max(0.0),
+                };
+                let spacing = mirror.spacing.get();
+                mirror.sync_from_list(page_size, spacing, pad_before);
+                (
+                    mirror.current_page.peek(),
+                    mirror.current_page_offset_fraction.peek(),
+                )
+            })
+        });
     }
 }
 
@@ -512,7 +523,6 @@ impl PagerState {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests;

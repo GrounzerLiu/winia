@@ -11,18 +11,20 @@ fn demo_shape_shared_hero_composable_still_opens_a_switch() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        shared_hero_box(ctx, &scope, 60.0, 60.0, Color::RED, true);
-                    } else {
-                        // Nested like the demo's Row → clipped Column.
-                        Column::new()
-                            .modifier(Modifier::new().clip(Shape::Rectangle))
-                            .build(ctx, |ctx| {
-                                shared_hero_box(ctx, &scope, 300.0, 160.0, Color::BLUE, true);
-                            });
-                    }
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        if s.get() {
+                            shared_hero_box(ctx, &scope, 60.0, 60.0, Color::RED, true);
+                        } else {
+                            // Nested like the demo's Row → clipped Column.
+                            Column::new()
+                                .modifier(Modifier::new().clip(Shape::Rectangle))
+                                .build(ctx, |ctx| {
+                                    shared_hero_box(ctx, &scope, 300.0, 160.0, Color::BLUE, true);
+                                });
+                        }
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -52,7 +54,10 @@ fn demo_shape_shared_hero_composable_still_opens_a_switch() {
         std::thread::sleep(std::time::Duration::from_millis(16));
         build(&mut composer);
     }
-    assert!(composer.shared_flights.is_empty(), "the switch flight completes");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "the switch flight completes"
+    );
     // The morph BASELINE must have tracked the flight's own layout. Otherwise it is
     // the pre-flight rect, so landing compares the hero against where it took off
     // from, opens a fresh same-screen morph, and the hero flies the whole path again
@@ -140,7 +145,11 @@ fn circle_radius_follows_the_lerped_rect_on_both_ends() {
     let (vis, box_w, box_h) = {
         let n = &composer.arena_nodes()[marked_in(&composer)[0]];
         let cb = n.content_box();
-        (n.transition.clone().expect("flight visual"), cb.width, cb.height)
+        (
+            n.transition.clone().expect("flight visual"),
+            cb.width,
+            cb.height,
+        )
     };
     let l = vis.lerped();
     let want = l.width.min(l.height) / 2.0;
@@ -270,16 +279,18 @@ fn circle_shape_fills_a_non_square_box_like_pill() {
     let _g = lock_serial();
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-            let key = ctx.next_key();
-            ctx.start_leaf(
-                key,
-                Modifier::new()
-                    .size(320.0, 170.0)
-                    .background(Color::RED, Shape::Circle),
-            );
-            ctx.end_node();
-        });
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .size(320.0, 170.0)
+                        .background(Color::RED, Shape::Circle),
+                );
+                ctx.end_node();
+            });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let mut surface = render_heads(&composer);
@@ -300,16 +311,26 @@ fn circle_shape_fills_a_non_square_box_like_pill() {
 
 #[test]
 fn corner_endpoints_are_exact_for_every_shape_pair() {
-    use crate::unit::Size;
     use crate::modifier::Modifier;
     use crate::transition::{SharedBounds, TransitionRole, TransitionVisual};
+    use crate::unit::Size;
 
     // (source shape, target shape) at 320x170 — non-square on purpose.
     let cases: [(Shape, Shape); 5] = [
         (Shape::Circle, Shape::Rectangle),
         (Shape::Rectangle, Shape::Circle),
-        (Shape::Pill, Shape::RoundedRect { corner_radius: 24.0 }),
-        (Shape::Circle, Shape::RoundedRect { corner_radius: 24.0 }),
+        (
+            Shape::Pill,
+            Shape::RoundedRect {
+                corner_radius: 24.0,
+            },
+        ),
+        (
+            Shape::Circle,
+            Shape::RoundedRect {
+                corner_radius: 24.0,
+            },
+        ),
         (Shape::TopRoundedRect { radius: 50.0 }, Shape::Circle),
     ];
     for (from_shape, to_shape) in cases {
@@ -332,8 +353,12 @@ fn corner_endpoints_are_exact_for_every_shape_pair() {
             scene_alpha: None,
             radius_from: from,
             radius_to: to,
-            radius_from_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::RED, from_shape)),
-            radius_to_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::BLUE, to_shape)),
+            radius_from_auto: shared_shape_radius_is_auto(
+                &Modifier::new().background(Color::RED, from_shape),
+            ),
+            radius_to_auto: shared_shape_radius_is_auto(
+                &Modifier::new().background(Color::BLUE, to_shape),
+            ),
             clip: false,
             link_slot: None,
             scroll: (0.0, 0.0),
@@ -341,7 +366,7 @@ fn corner_endpoints_are_exact_for_every_shape_pair() {
             path: PathMotion::Linear,
             bounds_fx: None,
             elevated: false,
-        scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
+            scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
             remeasure: false,
         };
         let at0 = mk(0.0).radii();
@@ -385,9 +410,11 @@ fn morph_detector_skips_the_decision_but_updates_the_baseline() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    shape_hero_screen(ctx, &scope, w, h, Color::RED, Shape::rounded(8.0));
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        shape_hero_screen(ctx, &scope, w, h, Color::RED, Shape::rounded(8.0));
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -403,7 +430,10 @@ fn morph_detector_skips_the_decision_but_updates_the_baseline() {
         .expect("a live scope");
     let bkey = (scope_id, "hero".to_string());
     let before = *composer.shared_last_bounds.get(&bkey).expect("baseline");
-    assert!((before.width - 120.0).abs() <= 1.0, "baseline starts at the hero ({before:?})");
+    assert!(
+        (before.width - 120.0).abs() <= 1.0,
+        "baseline starts at the hero ({before:?})"
+    );
 
     // A flight now OWNS this node's size: override attached, layout changed. No
     // compose, so the mutated tree is what the next poll sees.
@@ -416,7 +446,10 @@ fn morph_detector_skips_the_decision_but_updates_the_baseline() {
         n.measured_size = crate::unit::Size::new(300.0, 160.0);
         n.flight_measure = Some(FlightMeasure {
             frame: measure_state.clone(),
-            owner: FlightKey { cid: composer.composer_id, id: 9 },
+            owner: FlightKey {
+                cid: composer.composer_id,
+                id: 9,
+            },
         });
     }
     measure_state.set(FlightMeasureFrame {
@@ -448,7 +481,11 @@ fn skia_clamps_an_oversized_rrect_radius_to_half_the_shorter_side() {
             .x
     };
     assert_eq!(stored(10.0), 10.0, "a radius that fits is stored as asked");
-    assert_eq!(stored(50.0), 50.0, "exactly half the shorter side is allowed");
+    assert_eq!(
+        stored(50.0),
+        50.0,
+        "exactly half the shorter side is allowed"
+    );
     assert_eq!(stored(51.0), 50.0, "one past it is clamped");
     assert_eq!(stored(150.0), 50.0, "far past it is clamped too");
 }
@@ -463,7 +500,10 @@ fn morph_size_change_flies_without_slot_churn() {
     morph_compose(&mut composer, &w);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
-    assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "steady size opens nothing"
+    );
     let marked = marked_indices(&composer);
     assert_eq!(marked.len(), 1);
     let slot = composer.arena_nodes()[marked[0]].slot_key;
@@ -484,19 +524,33 @@ fn morph_size_change_flies_without_slot_churn() {
     w.set(340.0);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
-    assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "size delta opens a morph flight"
+    );
     let fid = *composer.shared_flights.keys().next().unwrap();
     {
         let a = &composer.shared_flights[&fid];
         assert!(a.source_idx.is_none(), "morph detaches nothing");
-        assert_eq!((a.flight.source_slot, a.flight.target_slot), (Some(slot), Some(slot)));
+        assert_eq!(
+            (a.flight.source_slot, a.flight.target_slot),
+            (Some(slot), Some(slot))
+        );
         assert_eq!(a.flight.phase, FlightPhase::Flying);
     }
     // Same slot, Morph role, opacity untouched.
     let marked = marked_indices(&composer);
     assert_eq!(marked.len(), 1);
-    assert_eq!(composer.arena_nodes()[marked[0]].slot_key, slot, "no slot churn");
-    let vis = composer.arena_nodes()[marked[0]].transition.clone().expect("morph visuals");
+    assert_eq!(
+        composer.arena_nodes()[marked[0]].slot_key,
+        slot,
+        "no slot churn"
+    );
+    let vis = composer.arena_nodes()[marked[0]]
+        .transition
+        .clone()
+        .expect("morph visuals");
     assert_eq!(vis.role, TransitionRole::Morph);
     assert_eq!(vis.alpha(), 1.0);
 
@@ -509,7 +563,10 @@ fn morph_size_change_flies_without_slot_churn() {
     }
     assert!(composer.shared_flights.is_empty(), "morph completes");
     for idx in marked_indices(&composer) {
-        assert!(composer.arena_nodes()[idx].transition.is_none(), "visuals cleared");
+        assert!(
+            composer.arena_nodes()[idx].transition.is_none(),
+            "visuals cleared"
+        );
     }
     // End paint: 300-wide GREEN covers x=290.
     let mut surf = render_heads(&composer);
@@ -530,7 +587,10 @@ fn morph_container_child_hittable_mid_flight() {
     morph_parent_compose(&mut composer, &w);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
-    assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "steady size opens nothing"
+    );
 
     // A morph requires a running transition (Compose semantics), so declare one before the size
     // change that is supposed to open it.
@@ -539,7 +599,11 @@ fn morph_container_child_hittable_mid_flight() {
     w.set(300.0);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
-    assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "size delta opens a morph flight"
+    );
 
     // Tap the plain child through the flight transform: at progress ~0
     // the 300-wide layout is scaled 0.4x into the 120-wide lerped rect,
@@ -583,7 +647,10 @@ fn morph_baseline_keys_on_endpoint_identity() {
     show.set(false);
     keyed_frame(&mut composer, &show);
     let slot_b = composer.arena_nodes()[marked_indices(&composer)[0]].slot_key;
-    assert_eq!(slot_a, slot_b, "same call-site slot reused across the key swap (test premise)");
+    assert_eq!(
+        slot_a, slot_b,
+        "same call-site slot reused across the key swap (test premise)"
+    );
     assert!(
         composer.shared_flights.is_empty(),
         "key swap opens no morph flight"

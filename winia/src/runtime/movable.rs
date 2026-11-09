@@ -55,14 +55,16 @@ impl MovableContent {
     }
 
     /// Stable callable identity, for diagnostics.
-    pub fn id(&self) -> u64 { self.id }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{BoxLayout, Constraints};
     use crate::layout::components::Column;
+    use crate::layout::{BoxLayout, Constraints};
     use crate::modifier::Modifier;
     use crate::runtime::composer::Composer;
     use crate::runtime::state::State;
@@ -81,11 +83,17 @@ mod tests {
     }
     fn leaf_values(composer: &Composer) -> Vec<(u64, f32)> {
         fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<(u64, f32)>) {
-            if nodes[idx].children.is_empty() { out.push((nodes[idx].id, nodes[idx].measured_size.width)); }
-            for &child in &nodes[idx].children { walk(nodes, child, out); }
+            if nodes[idx].children.is_empty() {
+                out.push((nodes[idx].id, nodes[idx].measured_size.width));
+            }
+            for &child in &nodes[idx].children {
+                walk(nodes, child, out);
+            }
         }
         let mut values = Vec::new();
-        if let Some(root) = composer.layout_root_idx() { walk(composer.arena_nodes(), root, &mut values); }
+        if let Some(root) = composer.layout_root_idx() {
+            walk(composer.arena_nodes(), root, &mut values);
+        }
         values
     }
 
@@ -93,9 +101,11 @@ mod tests {
     fn an_inlined_payload_is_a_child_of_the_invoking_component() {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| {
-                ctx.key("payload", |ctx| leaf(ctx, 30.0));
-            }));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(|ctx| {
+                    ctx.key("payload", |ctx| leaf(ctx, 30.0));
+                })
+            });
             host(ctx);
             ctx.key("own", |ctx| leaf(ctx, 20.0));
             ctx.key("invoke", |ctx| payload.compose(ctx));
@@ -105,27 +115,53 @@ mod tests {
         let nodes = composer.arena_nodes();
         let root = composer.layout_root_idx().unwrap();
         assert_eq!(nodes[root].children.len(), 2);
-        let widths: Vec<_> = nodes[root].children.iter().map(|&i| nodes[i].measured_size.width).collect();
-        assert_eq!(widths, vec![20.0, 30.0], "the payload itself, not a wrapper, must materialize");
+        let widths: Vec<_> = nodes[root]
+            .children
+            .iter()
+            .map(|&i| nodes[i].measured_size.width)
+            .collect();
+        assert_eq!(
+            widths,
+            vec![20.0, 30.0],
+            "the payload itself, not a wrapper, must materialize"
+        );
     }
 
     #[test]
     fn handles_remembered_in_a_loop_survive_being_invoked_deeper_down() {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
-            let handles: Vec<_> = (0..3).map(|index| ctx.key(index, |ctx| ctx.remember_movable_content(move |ctx| {
-                ctx.key("payload", |ctx| leaf(ctx, 10.0 + index as f32));
-            }))).collect();
-            Column::new().modifier(Modifier::new().size(200.0, 60.0)).build(ctx, |ctx| {
-                for (index, handle) in handles.into_iter().enumerate() {
-                    ctx.key(index, |ctx| Column::new().modifier(Modifier::new().size(100.0, 20.0)).build(ctx, |ctx| {
-                        handle.compose(ctx);
-                    }));
-                }
-            });
+            let handles: Vec<_> = (0..3)
+                .map(|index| {
+                    ctx.key(index, |ctx| {
+                        ctx.remember_movable_content(move |ctx| {
+                            ctx.key("payload", |ctx| leaf(ctx, 10.0 + index as f32));
+                        })
+                    })
+                })
+                .collect();
+            Column::new()
+                .modifier(Modifier::new().size(200.0, 60.0))
+                .build(ctx, |ctx| {
+                    for (index, handle) in handles.into_iter().enumerate() {
+                        ctx.key(index, |ctx| {
+                            Column::new()
+                                .modifier(Modifier::new().size(100.0, 20.0))
+                                .build(ctx, |ctx| {
+                                    handle.compose(ctx);
+                                })
+                        });
+                    }
+                });
         });
         layout(&mut composer);
-        assert_eq!(leaf_values(&composer).into_iter().map(|(_, w)| w).collect::<Vec<_>>(), vec![10.0, 11.0, 12.0]);
+        assert_eq!(
+            leaf_values(&composer)
+                .into_iter()
+                .map(|(_, w)| w)
+                .collect::<Vec<_>>(),
+            vec![10.0, 11.0, 12.0]
+        );
     }
 
     #[test]
@@ -137,14 +173,19 @@ mod tests {
             composer.compose(|ctx| {
                 let count = count.clone();
                 let inits = inits.clone();
-                let content = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                    for index in 0..count.load(Ordering::SeqCst) {
-                        ctx.key(index, |ctx| Column::new().build(ctx, |ctx| {
-                            let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
-                            leaf(ctx, 10.0 + marker.peek() as f32);
-                        }));
-                    }
-                }));
+                let content = ctx.key("owner", |ctx| {
+                    ctx.remember_movable_content(move |ctx| {
+                        for index in 0..count.load(Ordering::SeqCst) {
+                            ctx.key(index, |ctx| {
+                                Column::new().build(ctx, |ctx| {
+                                    let marker =
+                                        ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
+                                    leaf(ctx, 10.0 + marker.peek() as f32);
+                                })
+                            });
+                        }
+                    })
+                });
                 host(ctx);
                 ctx.key("invoke", |ctx| content.compose(ctx));
                 ctx.end_node();
@@ -163,7 +204,11 @@ mod tests {
         frame(&mut composer);
         let restored = leaf_values(&composer);
         assert_eq!(&restored[..2], &original[..2]);
-        assert_eq!(inits.load(Ordering::SeqCst), 4, "the actually removed child initializes anew");
+        assert_eq!(
+            inits.load(Ordering::SeqCst),
+            4,
+            "the actually removed child initializes anew"
+        );
         assert_eq!(restored[2].1, 13.0);
     }
 
@@ -176,12 +221,20 @@ mod tests {
             composer.compose(|ctx| {
                 let width = width.clone();
                 let inits = inits.clone();
-                let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| ctx.key("payload", |ctx| {
-                    let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
-                    assert_eq!(marker.peek(), 0);
-                    leaf(ctx, width.load(Ordering::SeqCst) as f32);
-                })));
-                ctx.start_container(0x8888, Modifier::new().size(host_width, 40.0), BoxLayout::new());
+                let handle = ctx.key("owner", |ctx| {
+                    ctx.remember_movable_content(move |ctx| {
+                        ctx.key("payload", |ctx| {
+                            let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
+                            assert_eq!(marker.peek(), 0);
+                            leaf(ctx, width.load(Ordering::SeqCst) as f32);
+                        })
+                    })
+                });
+                ctx.start_container(
+                    0x8888,
+                    Modifier::new().size(host_width, 40.0),
+                    BoxLayout::new(),
+                );
                 ctx.key("invoke", |ctx| handle.compose(ctx));
                 ctx.end_node();
             });
@@ -203,18 +256,25 @@ mod tests {
         let frame = |composer: &mut Composer, nested: bool| {
             composer.compose(|ctx| {
                 let source = inits.clone();
-                let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                    ctx.key("payload", |ctx| {
-                        let marker: State<usize> = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
-                        assert_eq!(marker.peek(), 0);
-                        leaf(ctx, 20.0);
-                    });
-                }));
+                let handle = ctx.key("owner", |ctx| {
+                    ctx.remember_movable_content(move |ctx| {
+                        ctx.key("payload", |ctx| {
+                            let marker: State<usize> =
+                                ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
+                            assert_eq!(marker.peek(), 0);
+                            leaf(ctx, 20.0);
+                        });
+                    })
+                });
                 host(ctx);
                 if nested {
-                    ctx.key("nested", |ctx| Column::new().modifier(Modifier::new().size(40.0, 40.0)).build(ctx, |ctx| {
-                        ctx.key("invoke-b", |ctx| handle.compose(ctx));
-                    }));
+                    ctx.key("nested", |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().size(40.0, 40.0))
+                            .build(ctx, |ctx| {
+                                ctx.key("invoke-b", |ctx| handle.compose(ctx));
+                            })
+                    });
                 } else {
                     ctx.key("invoke-a", |ctx| handle.compose(ctx));
                 }
@@ -223,9 +283,18 @@ mod tests {
             layout(composer);
             let nodes = composer.arena_nodes();
             let root = composer.layout_root_idx().unwrap();
-            let invoking_parent = if nested { nodes[root].children[0] } else { root };
+            let invoking_parent = if nested {
+                nodes[root].children[0]
+            } else {
+                root
+            };
             assert_eq!(nodes[invoking_parent].children.len(), 1);
-            assert_eq!(nodes[nodes[invoking_parent].children[0]].measured_size.width, 20.0);
+            assert_eq!(
+                nodes[nodes[invoking_parent].children[0]]
+                    .measured_size
+                    .width,
+                20.0
+            );
         };
         frame(&mut composer, false);
         let original = leaf_values(&composer);

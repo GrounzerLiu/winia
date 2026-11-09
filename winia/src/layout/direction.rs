@@ -5,10 +5,10 @@
 //! depend on the design system. `WiniaTheme` PROVIDES it (a theme is a natural place to set it), and
 //! that direction of dependency — theme provides, layout reads — is the one that holds.
 
-use crate::runtime::composition_local::CompositionLocal;
 use crate::layout::LayoutDirection;
-use std::sync::atomic::{AtomicU8, Ordering};
+use crate::runtime::composition_local::CompositionLocal;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> =
     LazyLock::new(|| CompositionLocal::new(|| LayoutDirection::Ltr));

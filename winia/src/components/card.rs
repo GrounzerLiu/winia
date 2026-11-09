@@ -9,11 +9,11 @@
 //! 内容 = 顶部对齐 Column（对标 M3 Surface { Column(content) }）；内容色经
 //! `WiniaTheme::with_content_color` 下传（Icon tint Auto 自动取卡片内容色）。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::{ComponentState, MutableInteractionSource};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════
@@ -32,7 +32,9 @@ pub enum CardStyle {
 }
 
 impl Default for CardStyle {
-    fn default() -> Self { Self::Filled }
+    fn default() -> Self {
+        Self::Filled
+    }
 }
 
 /// 卡片颜色集（对标 material3 `CardColors`）——container/content 各含
@@ -53,18 +55,31 @@ impl CardColors {
         disabled_container: Color,
         disabled_content: Color,
     ) -> Self {
-        Self { container, content, disabled_container, disabled_content }
+        Self {
+            container,
+            content,
+            disabled_container,
+            disabled_content,
+        }
     }
 
     /// 状态化容器色——仅区分 enabled/disabled（与 material3 CardColors 一致；
     /// hover/focus/press 视觉由 indication（ripple）状态层绘制，避免双重叠加）
     pub fn container_color_for(&self, state: &ComponentState) -> Color {
-        if !state.enabled { self.disabled_container } else { self.container }
+        if !state.enabled {
+            self.disabled_container
+        } else {
+            self.container
+        }
     }
 
     /// 状态化内容色（仅区分 enabled/disabled——与 material3 CardColors 一致）
     pub fn content_color_for(&self, state: &ComponentState) -> Color {
-        if state.enabled { self.content } else { self.disabled_content }
+        if state.enabled {
+            self.content
+        } else {
+            self.disabled_content
+        }
     }
 
     /// 从主题按 style 生成默认色（对标 material3 CardDefaults.cardColors/
@@ -121,8 +136,22 @@ pub struct CardElevation {
 }
 
 impl CardElevation {
-    pub fn new(default: f32, pressed: f32, focused: f32, hovered: f32, dragged: f32, disabled: f32) -> Self {
-        Self { default, pressed, focused, hovered, dragged, disabled }
+    pub fn new(
+        default: f32,
+        pressed: f32,
+        focused: f32,
+        hovered: f32,
+        dragged: f32,
+        disabled: f32,
+    ) -> Self {
+        Self {
+            default,
+            pressed,
+            focused,
+            hovered,
+            dragged,
+            disabled,
+        }
     }
 
     /// FilledCard defaults from `FilledCardTokens`, in dp: `ContainerElevation` / `PressedContainerElevation`
@@ -193,7 +222,9 @@ impl CardElevation {
 }
 
 impl Default for CardElevation {
-    fn default() -> Self { Self::default_elevation() }
+    fn default() -> Self {
+        Self::default_elevation()
+    }
 }
 
 /// 卡片边框（对标 material3 `BorderStroke`）——宽度 + 颜色；形状由
@@ -384,9 +415,12 @@ impl Card {
         let key = ctx.next_key();
         let theme = crate::theme::WiniaTheme::colors();
         // 默认颜色统一从 CardDefaults 取（对标 material3 CardDefaults.cardColors）
-        let colors = self.colors.unwrap_or_else(|| CardDefaults::card_colors(&theme, self.style));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| CardDefaults::card_colors(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Card 的 interactionSource 参数）
-        let interaction = self.interaction_source
+        let interaction = self
+            .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
         let state = interaction.state(self.enabled);
@@ -418,9 +452,14 @@ impl Card {
         } else {
             let target = elevation.for_state(&state);
             let to = state.elevation_interaction();
-            let from = if state.enabled { last_kind.peek() } else { None };
-            let spec = crate::animation::elevation_spec_for_pair(from, to)
-                .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+            let from = if state.enabled {
+                last_kind.peek()
+            } else {
+                None
+            };
+            let spec = crate::animation::elevation_spec_for_pair(from, to).unwrap_or(
+                crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()),
+            );
             last_kind.set(to);
             Some(ctx.animate_float_as_state(target, spec))
         };
@@ -428,8 +467,7 @@ impl Card {
         let shape = self.shape;
         // 容器：三种 style 都有不透明容器色（Filled=SurfaceContainerHighest、
         // Elevated=SurfaceContainerLow、Outlined=Surface——M3 Card 无透明底变体）
-        let mut modifier = Modifier::new()
-            .background(container, shape);
+        let mut modifier = Modifier::new().background(container, shape);
         // 边框：显式 border 优先，否则 Outlined 默认 1dp outline 色
         // （对标 material3 OutlinedCard = Card(border = BorderStroke(1.dp, OutlineVariant))）
         let border = self.border.or_else(|| {
@@ -478,7 +516,8 @@ impl Card {
         // its own for the reason the Button's is: winia decides a chain's size across the whole chain, so a
         // minimum inside the card's chain would fight its own background and padding. It also carries the
         // ring's shape and colour, since it is the node that takes focus.
-        let dir = modifier.get_layout_direction()
+        let dir = modifier
+            .get_layout_direction()
             .unwrap_or(crate::layout::direction::current());
         let build_card = |ctx: &mut ComposeCtx| {
             match ctx.start_restartable_group(
@@ -505,9 +544,11 @@ impl Card {
         if self.on_click.is_some() {
             crate::layout::components::build_container(
                 ctx,
-                Modifier::new()
-                    .minimum_interactive_component_size()
-                    .border(0.0, crate::graphics::Color::from_argb(0, 0, 0, 0), shape),
+                Modifier::new().minimum_interactive_component_size().border(
+                    0.0,
+                    crate::graphics::Color::from_argb(0, 0, 0, 0),
+                    shape,
+                ),
                 // `propagate_min_constraints`: the same reason the Button's wrapper sets it — a
                 // parent that FORCES a width on the card gets a card that width. Without it the
                 // wrapper reports the forced size while the surface inside it keeps hugging its own
@@ -528,17 +569,33 @@ impl Card {
     }
 
     // ── Getters（测试用）──
-    pub fn get_enabled(&self) -> bool { self.enabled }
-    pub fn get_style(&self) -> CardStyle { self.style }
-    pub fn get_colors(&self) -> Option<CardColors> { self.colors }
-    pub fn get_elevation(&self) -> Option<CardElevation> { self.elevation }
-    pub fn get_shape(&self) -> Shape { self.shape }
-    pub fn get_border(&self) -> Option<CardBorder> { self.border }
-    pub fn get_modifier(&self) -> &Modifier { &self.modifier }
+    pub fn get_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn get_style(&self) -> CardStyle {
+        self.style
+    }
+    pub fn get_colors(&self) -> Option<CardColors> {
+        self.colors
+    }
+    pub fn get_elevation(&self) -> Option<CardElevation> {
+        self.elevation
+    }
+    pub fn get_shape(&self) -> Shape {
+        self.shape
+    }
+    pub fn get_border(&self) -> Option<CardBorder> {
+        self.border
+    }
+    pub fn get_modifier(&self) -> &Modifier {
+        &self.modifier
+    }
 }
 
 impl Default for Card {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -563,7 +620,11 @@ mod tests {
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
                         let card = Card::filled();
-                        let card = if clickable { card.on_click(|| {}) } else { card };
+                        let card = if clickable {
+                            card.on_click(|| {})
+                        } else {
+                            card
+                        };
                         card.build(ctx, |ctx| {
                             crate::components::Text::new("Card")
                                 .modifier(Modifier::new().padding(8.0))
@@ -595,23 +656,40 @@ mod tests {
     #[test]
     fn the_card_elevation_spec_keys_on_the_interaction_pair() {
         use crate::animation::ElevationInteraction as I;
-        let millis = |from: Option<I>, to: Option<I>| {
-            match crate::animation::elevation_spec_for_pair(from, to) {
+        let millis =
+            |from: Option<I>, to: Option<I>| match crate::animation::elevation_spec_for_pair(
+                from, to,
+            ) {
                 Some(crate::animation::AnimationSpec::Tween(t)) => t.duration.as_millis(),
                 Some(other) => panic!("an elevation animation is a tween, got {other:?}"),
                 None => 0,
-            }
-        };
-        assert_eq!(millis(None, Some(I::Hover)), 120, "entering hover is the incoming 120 ms");
-        assert_eq!(millis(Some(I::Hover), Some(I::Press)), 120, "hover to press is incoming too");
+            };
+        assert_eq!(
+            millis(None, Some(I::Hover)),
+            120,
+            "entering hover is the incoming 120 ms"
+        );
+        assert_eq!(
+            millis(Some(I::Hover), Some(I::Press)),
+            120,
+            "hover to press is incoming too"
+        );
         assert_eq!(
             millis(Some(I::Press), Some(I::Hover)),
             120,
             "releasing into a hover is still an incoming interaction"
         );
-        assert_eq!(millis(Some(I::Press), None), 150, "back to rest is the outgoing 150 ms");
+        assert_eq!(
+            millis(Some(I::Press), None),
+            150,
+            "back to rest is the outgoing 150 ms"
+        );
         assert_eq!(millis(Some(I::Focus), None), 150, "and so is leaving focus");
-        assert_eq!(millis(Some(I::Hover), None), 120, "leaving hover is shorter");
+        assert_eq!(
+            millis(Some(I::Hover), None),
+            120,
+            "leaving hover is shorter"
+        );
         assert_eq!(millis(None, None), 0, "idle to idle snaps, as Compose does");
     }
 
@@ -651,7 +729,10 @@ mod tests {
             (theme.surface_variant.a as f32 * 0.38) as u8,
             "Filled 禁用容器 = SurfaceVariant @ 38%"
         );
-        assert_eq!(filled.disabled_content.a, (theme.on_surface.a as f32 * 0.38) as u8);
+        assert_eq!(
+            filled.disabled_content.a,
+            (theme.on_surface.a as f32 * 0.38) as u8
+        );
         // Elevated：SurfaceContainerLow 容器，禁用容器不变
         let elevated = CardDefaults::card_colors(&theme, CardStyle::Elevated);
         assert_eq!(elevated.container, theme.surface_container_low);
@@ -671,17 +752,33 @@ mod tests {
             Color::from_argb(80, 200, 200, 200),
         );
         // disabled 优先
-        assert_eq!(colors.container_color_for(&ComponentState::disabled()), colors.disabled_container);
+        assert_eq!(
+            colors.container_color_for(&ComponentState::disabled()),
+            colors.disabled_container
+        );
         // 容器色仅区分 enabled/disabled（与 material3 CardColors 一致——
         // hover/focus/press 状态层由 ripple indication 绘制，不叠加在容器色上）
-        assert_eq!(colors.container_color_for(&ComponentState::idle()), colors.container);
         assert_eq!(
-            colors.container_color_for(&ComponentState { hovered: true, pressed: true, ..ComponentState::idle() }),
+            colors.container_color_for(&ComponentState::idle()),
+            colors.container
+        );
+        assert_eq!(
+            colors.container_color_for(&ComponentState {
+                hovered: true,
+                pressed: true,
+                ..ComponentState::idle()
+            }),
             colors.container,
         );
         // 内容色只区分 enabled/disabled
-        assert_eq!(colors.content_color_for(&ComponentState::idle()), colors.content);
-        assert_eq!(colors.content_color_for(&ComponentState::disabled()), colors.disabled_content);
+        assert_eq!(
+            colors.content_color_for(&ComponentState::idle()),
+            colors.content
+        );
+        assert_eq!(
+            colors.content_color_for(&ComponentState::disabled()),
+            colors.disabled_content
+        );
     }
 
     /// A Filled card has no shadow at REST — and Compose still gives it an elevation, so hovering raises it to 1
@@ -693,7 +790,9 @@ mod tests {
     /// graphics layer would paint. The control is the same card at rest.
     #[test]
     fn a_dragged_filled_card_raises_the_shadow_it_paints() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
 
         let source = MutableInteractionSource::new();
@@ -762,13 +861,31 @@ mod tests {
         // M3 1.4.0 tokens, in DP: `ElevationTokens` maps Level1 -> 1, Level2 -> 3, Level3 -> 6, Level4 -> 8.
         // Carrying the LEVEL INDEX here is what made a dragged card lift 3 dp instead of 6 on a Filled style
         // and 4 instead of 8 on an Elevated one.
-        assert_eq!(CardElevation::default_elevation(), CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0));
-        assert_eq!(CardElevation::elevated(), CardElevation::new(1.0, 1.0, 1.0, 3.0, 8.0, 1.0));
+        assert_eq!(
+            CardElevation::default_elevation(),
+            CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0)
+        );
+        assert_eq!(
+            CardElevation::elevated(),
+            CardElevation::new(1.0, 1.0, 1.0, 3.0, 8.0, 1.0)
+        );
         // `OutlinedCardTokens.HoverContainerElevation = Level1` — an outlined card lifts on hover too.
-        assert_eq!(CardElevation::outlined(), CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0));
-        assert_eq!(CardDefaults::card_elevation(), CardElevation::default_elevation());
-        assert_eq!(CardDefaults::elevated_card_elevation(), CardElevation::elevated());
-        assert_eq!(CardDefaults::outlined_card_elevation(), CardElevation::outlined());
+        assert_eq!(
+            CardElevation::outlined(),
+            CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0)
+        );
+        assert_eq!(
+            CardDefaults::card_elevation(),
+            CardElevation::default_elevation()
+        );
+        assert_eq!(
+            CardDefaults::elevated_card_elevation(),
+            CardElevation::elevated()
+        );
+        assert_eq!(
+            CardDefaults::outlined_card_elevation(),
+            CardElevation::outlined()
+        );
     }
 
     #[test]
@@ -776,22 +893,51 @@ mod tests {
         let e = CardElevation::new(1.0, 8.0, 2.0, 2.0, 5.0, 0.0);
         assert_eq!(e.for_state(&ComponentState::disabled()), 0.0);
         assert_eq!(e.for_state(&ComponentState::idle()), 1.0);
-        assert_eq!(e.for_state(&ComponentState { pressed: true, ..ComponentState::idle() }), 8.0);
-        assert_eq!(e.for_state(&ComponentState { hovered: true, ..ComponentState::idle() }), 2.0);
-        assert_eq!(e.for_state(&ComponentState { focused: true, ..ComponentState::idle() }), 2.0);
+        assert_eq!(
+            e.for_state(&ComponentState {
+                pressed: true,
+                ..ComponentState::idle()
+            }),
+            8.0
+        );
+        assert_eq!(
+            e.for_state(&ComponentState {
+                hovered: true,
+                ..ComponentState::idle()
+            }),
+            2.0
+        );
+        assert_eq!(
+            e.for_state(&ComponentState {
+                focused: true,
+                ..ComponentState::idle()
+            }),
+            2.0
+        );
         // Order: disabled > dragged > pressed > hovered > focused > default (latest interaction wins)
         assert_eq!(
-            e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
+            e.for_state(&ComponentState {
+                pressed: true,
+                hovered: true,
+                ..ComponentState::idle()
+            }),
             8.0
         );
         // Compose takes the elevation of the LATEST interaction (`Card.kt:705-719`), so a drag outranks the
         // press that started it …
         assert_eq!(
-            e.for_state(&ComponentState { dragged: true, ..ComponentState::idle() }),
+            e.for_state(&ComponentState {
+                dragged: true,
+                ..ComponentState::idle()
+            }),
             5.0
         );
         assert_eq!(
-            e.for_state(&ComponentState { dragged: true, pressed: true, ..ComponentState::idle() }),
+            e.for_state(&ComponentState {
+                dragged: true,
+                pressed: true,
+                ..ComponentState::idle()
+            }),
             5.0,
             "a drag is always later than its own press, and it is what the `dragged` token is for"
         );
@@ -799,25 +945,38 @@ mod tests {
         // sits below `HoverContainerElevation` in every token set).
         let low_press = CardElevation::new(1.0, 1.0, 1.0, 3.0, 5.0, 0.0);
         assert_eq!(
-            low_press.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
+            low_press.for_state(&ComponentState {
+                pressed: true,
+                hovered: true,
+                ..ComponentState::idle()
+            }),
             1.0,
             "pressed, not the hover it followed — this used to take max(pressed, hovered)"
         );
         // The real Elevated tokens (1/1/1/2/4/1): a press flattens to 1 where the hover above it was 2 — the
         // M3 press feedback — and a drag carries the card up to 4.
         assert_eq!(
-            CardElevation::elevated().for_state(&ComponentState { pressed: true, ..ComponentState::idle() }),
+            CardElevation::elevated().for_state(&ComponentState {
+                pressed: true,
+                ..ComponentState::idle()
+            }),
             1.0,
             "pressed flattens below hover, as the tokens say"
         );
         assert_eq!(
-            CardElevation::elevated()
-                .for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
+            CardElevation::elevated().for_state(&ComponentState {
+                pressed: true,
+                hovered: true,
+                ..ComponentState::idle()
+            }),
             1.0,
             "and hovering before the press does not keep it up"
         );
         assert_eq!(
-            CardElevation::elevated().for_state(&ComponentState { dragged: true, ..ComponentState::idle() }),
+            CardElevation::elevated().for_state(&ComponentState {
+                dragged: true,
+                ..ComponentState::idle()
+            }),
             8.0,
             "`ElevatedCardTokens.DraggedContainerElevation` is Level4 = 8 dp"
         );
@@ -836,7 +995,11 @@ mod tests {
             "禁用边框 = Outline @ 12%"
         );
         // Outlined 变体默认带边框，Filled/Elevated 不带
-        assert_eq!(Card::outlined().get_border(), None, "边框在 build 时按 style 解析");
+        assert_eq!(
+            Card::outlined().get_border(),
+            None,
+            "边框在 build 时按 style 解析"
+        );
     }
 
     #[test]

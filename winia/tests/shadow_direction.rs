@@ -37,22 +37,22 @@ fn shadow_scene() -> skia_safe::Surface {
     let mut composer = Composer::new();
     composer.compose(|ctx| {
         ctx.key("shadow-scene", |ctx| {
-        Stack::new()
-            .modifier(Modifier::new().fill_max_size())
-            .content_alignment(ContentAlignment::CENTER)
-            .build(ctx, |ctx| {
-                Column::new()
-                    .modifier(
-                        Modifier::new()
-                            .size(60.0, 40.0)
-                            .graphics_layer(|| winia::graphics::GraphicsLayerParams {
-                                shadow_elevation: 8.0,
-                                ..Default::default()
-                            })
-                            .background(Color::WHITE, Shape::Rectangle),
-                    )
-                    .build(ctx, |_| {});
-            });
+            Stack::new()
+                .modifier(Modifier::new().fill_max_size())
+                .content_alignment(ContentAlignment::CENTER)
+                .build(ctx, |ctx| {
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(60.0, 40.0)
+                                .graphics_layer(|| winia::graphics::GraphicsLayerParams {
+                                    shadow_elevation: 8.0,
+                                    ..Default::default()
+                                })
+                                .background(Color::WHITE, Shape::Rectangle),
+                        )
+                        .build(ctx, |_| {});
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 120.0, 0.0, 120.0));

@@ -15,7 +15,12 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOnce(&mut ComposeCtx)) {
+fn card(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    title: &str,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
     Column::new()
         .modifier(
             Modifier::new()
@@ -54,7 +59,10 @@ fn block(
                 .then(extra),
         )
         .build(ctx, |ctx| {
-            Text::new(label).font_size(11.0).color(Color::WHITE).build(ctx);
+            Text::new(label)
+                .font_size(11.0)
+                .color(Color::WHITE)
+                .build(ctx);
         });
 }
 
@@ -71,7 +79,9 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
         )
         .spacing(14.0)
         .build(ctx, |ctx| {
-            Text::new("Box layout — the three review cases").font_size(18.0).build(ctx);
+            Text::new("Box layout — the three review cases")
+                .font_size(18.0)
+                .build(ctx);
 
             // 1. Per-child alignment inside one box.
             card(ctx, "box-align", "1. per-child alignment", |ctx| {
@@ -85,16 +95,29 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
                     )
                     .build(ctx, |ctx| {
                         block(
-                            ctx, "box-child-start", "start", 80.0, 32.0,
-                            Color::from_argb(255, 90, 160, 220), Modifier::new(),
+                            ctx,
+                            "box-child-start",
+                            "start",
+                            80.0,
+                            32.0,
+                            Color::from_argb(255, 90, 160, 220),
+                            Modifier::new(),
                         );
                         block(
-                            ctx, "box-child-center", "center", 80.0, 32.0,
+                            ctx,
+                            "box-child-center",
+                            "center",
+                            80.0,
+                            32.0,
                             Color::from_argb(255, 120, 200, 140),
                             Modifier::new().align_self(Alignment::Center),
                         );
                         block(
-                            ctx, "box-child-end", "bottom-end", 80.0, 32.0,
+                            ctx,
+                            "box-child-end",
+                            "bottom-end",
+                            80.0,
+                            32.0,
                             Color::from_argb(255, 220, 150, 90),
                             Modifier::new().content_align_self(ContentAlignment::BOTTOM_END),
                         );
@@ -102,42 +125,50 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
             });
 
             // 2. Overflow: the box reports its child's 500 dp width, the parent decides what to clip.
-            card(ctx, "box-overflow-card", "2. overflow reports content", |ctx| {
-                // A horizontally scrolling strip: its own box is clamped to the 408 dp viewport by the
-                // engine, while the 500 dp content inside it keeps its size. A plain Box would grow to
-                // 500 (Compose does the same — a Box never crops its child), and the card with it.
-                Row::new()
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_width()
-                            .height(90.0)
-                            .horizontal_scroll(ScrollState::new())
-                            .test_tag("box-overflow-clip")
-                            .background(Color::from_argb(30, 200, 120, 90), Shape::rounded(8.0)),
-                    )
-                    .build(ctx, |ctx| {
-                        // `required_size`, not `size`: `size` is coerced into the incoming range (Compose's
-                        // `enforceIncoming`), so 500 would come out at the card's width and there would be
-                        // nothing to overflow.
-                        Stack::new()
-                            .content_alignment(ContentAlignment::CENTER)
-                            .modifier(
-                                Modifier::new()
-                                    .required_size(500.0, 40.0)
-                                    .test_tag("box-overflow")
-                                    .background(
-                                        Color::from_argb(255, 200, 120, 90),
-                                        Shape::rounded(6.0),
-                                    ),
-                            )
-                            .build(ctx, |ctx| {
-                                Text::new("500 dp child in a narrower box")
-                                    .font_size(11.0)
-                                    .color(Color::WHITE)
-                                    .build(ctx);
-                            });
-                    });
-            });
+            card(
+                ctx,
+                "box-overflow-card",
+                "2. overflow reports content",
+                |ctx| {
+                    // A horizontally scrolling strip: its own box is clamped to the 408 dp viewport by the
+                    // engine, while the 500 dp content inside it keeps its size. A plain Box would grow to
+                    // 500 (Compose does the same — a Box never crops its child), and the card with it.
+                    Row::new()
+                        .modifier(
+                            Modifier::new()
+                                .fill_max_width()
+                                .height(90.0)
+                                .horizontal_scroll(ScrollState::new())
+                                .test_tag("box-overflow-clip")
+                                .background(
+                                    Color::from_argb(30, 200, 120, 90),
+                                    Shape::rounded(8.0),
+                                ),
+                        )
+                        .build(ctx, |ctx| {
+                            // `required_size`, not `size`: `size` is coerced into the incoming range (Compose's
+                            // `enforceIncoming`), so 500 would come out at the card's width and there would be
+                            // nothing to overflow.
+                            Stack::new()
+                                .content_alignment(ContentAlignment::CENTER)
+                                .modifier(
+                                    Modifier::new()
+                                        .required_size(500.0, 40.0)
+                                        .test_tag("box-overflow")
+                                        .background(
+                                            Color::from_argb(255, 200, 120, 90),
+                                            Shape::rounded(6.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new("500 dp child in a narrower box")
+                                        .font_size(11.0)
+                                        .color(Color::WHITE)
+                                        .build(ctx);
+                                });
+                        });
+                },
+            );
 
             // 3. BoxWithConstraints: the alignment places the content inside the forced box.
             card(ctx, "bwc-card", "3. BoxWithConstraints alignment", |ctx| {
@@ -163,8 +194,13 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
                             .font_size(11.0)
                             .build(ctx);
                         block(
-                            ctx, "bwc-child", "bottom-end", 100.0, 40.0,
-                            Color::from_argb(255, 120, 90, 200), Modifier::new(),
+                            ctx,
+                            "bwc-child",
+                            "bottom-end",
+                            100.0,
+                            40.0,
+                            Color::from_argb(255, 120, 90, 200),
+                            Modifier::new(),
                         );
                     });
             });
@@ -183,8 +219,13 @@ fn box_layout_demo(ctx: &mut ComposeCtx) {
                     )
                     .build(ctx, |ctx| {
                         block(
-                            ctx, "box-match-anchor", "sizes the box", 120.0, 40.0,
-                            Color::from_argb(255, 90, 160, 220), Modifier::new(),
+                            ctx,
+                            "box-match-anchor",
+                            "sizes the box",
+                            120.0,
+                            40.0,
+                            Color::from_argb(255, 90, 160, 220),
+                            Modifier::new(),
                         );
                         Stack::new()
                             .modifier(

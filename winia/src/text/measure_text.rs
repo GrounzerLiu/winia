@@ -58,7 +58,6 @@ impl<'a> TextMeasureSpec<'a> {
     }
 }
 
-
 // ── The measurer's cache ──
 
 /// A key that covers every field `TextMeasureSpec` lays out with.
@@ -105,7 +104,10 @@ impl MeasureKey {
             && self.line_height_bits == spec.line_height.map(|v| v.to_bits())
             && self.min_lines == spec.min_lines
             && self.font_family.as_deref() == spec.font_family
-            && self.transform_bits == spec.transform.map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits()))
+            && self.transform_bits
+                == spec
+                    .transform
+                    .map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits()))
             && self.line_height_style == spec.line_height_style
     }
 
@@ -125,7 +127,9 @@ impl MeasureKey {
             line_height_bits: spec.line_height.map(|v| v.to_bits()),
             min_lines: spec.min_lines,
             font_family: spec.font_family.map(|f| f.to_string()),
-            transform_bits: spec.transform.map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits())),
+            transform_bits: spec
+                .transform
+                .map(|t| (t.scale_x.to_bits(), t.skew_x.to_bits())),
             line_height_style: spec.line_height_style,
         }
     }
@@ -144,7 +148,13 @@ struct MeasureCache {
 }
 
 impl MeasureCache {
-    const fn new() -> Self { MeasureCache { entries: Vec::new(), capacity: DEFAULT_CAPACITY, stats: (0, 0) } }
+    const fn new() -> Self {
+        MeasureCache {
+            entries: Vec::new(),
+            capacity: DEFAULT_CAPACITY,
+            stats: (0, 0),
+        }
+    }
 
     /// A hit compares the stored key against the SPEC, so the content is compared as a `&str` and
     /// no allocation happens on the hit path. Building a `MeasureKey` first copied the whole content
@@ -169,7 +179,9 @@ impl MeasureCache {
         self.entries.push((key, value));
     }
 
-    fn clear(&mut self) { self.entries.clear(); }
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 thread_local! {
@@ -249,7 +261,9 @@ fn measure_text_uncached(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
 
     let scale_x = spec.transform.map(|t| t.scale_x).unwrap_or(1.0).max(0.0001);
     let text_size = Size::new(
-        (para.max_intrinsic_width() * scale_x).ceil().min(spec.max_width),
+        (para.max_intrinsic_width() * scale_x)
+            .ceil()
+            .min(spec.max_width),
         para.height().ceil(),
     );
     let line_count = para.inner_paragraph().line_number();
@@ -283,7 +297,10 @@ fn measure_text_uncached(spec: &TextMeasureSpec<'_>) -> TextLayoutResult {
     let last_baseline = if line_count <= 1 {
         first_baseline
     } else {
-        para.get_line_metrics().last().map(|m| m.baseline as f32).unwrap_or(first_baseline)
+        para.get_line_metrics()
+            .last()
+            .map(|m| m.baseline as f32)
+            .unwrap_or(first_baseline)
     };
     let longest_line = para.longest_line() * scale_x;
     TextLayoutResult {
@@ -316,9 +333,18 @@ mod tests {
         let spec = TextMeasureSpec::new("Hi", 16.0, 300.0);
         let result = measure_text(&spec);
         assert_eq!(result.line_count, 1);
-        assert!(result.size.width > 0.0 && result.size.height > 0.0, "{result:?}");
-        assert!(result.first_baseline > 0.0, "a line has a baseline: {result:?}");
-        assert_eq!(result.last_baseline, result.first_baseline, "one line is both first and last");
+        assert!(
+            result.size.width > 0.0 && result.size.height > 0.0,
+            "{result:?}"
+        );
+        assert!(
+            result.first_baseline > 0.0,
+            "a line has a baseline: {result:?}"
+        );
+        assert_eq!(
+            result.last_baseline, result.first_baseline,
+            "one line is both first and last"
+        );
         assert!(!result.has_visual_overflow());
     }
 
@@ -349,8 +375,14 @@ mod tests {
         spec.soft_wrap = false;
         let result = measure_text(&spec);
         assert_eq!(result.line_count, 1);
-        assert_eq!(result.text_size.width, 40.0, "the box clamps the reported width: {result:?}");
-        assert!(result.did_overflow_width, "the line itself is wider than the box: {result:?}");
+        assert_eq!(
+            result.text_size.width, 40.0,
+            "the box clamps the reported width: {result:?}"
+        );
+        assert!(
+            result.did_overflow_width,
+            "the line itself is wider than the box: {result:?}"
+        );
         assert!(result.has_visual_overflow());
     }
 
@@ -380,7 +412,11 @@ mod tests {
         let mut scaled = TextMeasureSpec::new("Hi", 16.0, 300.0);
         scaled.transform = Some(crate::text::TextGeometricTransform::new(2.0, 0.0));
         let _ = measure_text(&scaled);
-        assert_eq!((hits(), misses()), (1, 3), "a different transform is a miss");
+        assert_eq!(
+            (hits(), misses()),
+            (1, 3),
+            "a different transform is a miss"
+        );
 
         clear_measure_cache();
         set_measure_cache_capacity(2);
@@ -412,7 +448,11 @@ mod tests {
             let d = Density::from_density_and_font_scale(1.0, scale);
             with_density(d, || {
                 let mut c = crate::runtime::composer::Composer::new();
-                c.compose(|ctx| { crate::components::Text::new("Ag").font_size(14.0).build(ctx); });
+                c.compose(|ctx| {
+                    crate::components::Text::new("Ag")
+                        .font_size(14.0)
+                        .build(ctx);
+                });
                 c.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
                 let root = c.layout_root_idx().unwrap();
                 let mut found = None;
@@ -427,27 +467,43 @@ mod tests {
         let small = payload_font_size(1.0);
         let big = payload_font_size(2.0);
         assert_eq!(small, 14.0, "14 sp at scale 1 is 14 px");
-        assert_eq!(big, 28.0, "and 28 px at scale 2, resolved BEFORE the measurer sees it");
+        assert_eq!(
+            big, 28.0,
+            "and 28 px at scale 2, resolved BEFORE the measurer sees it"
+        );
 
         // The two specs differ, so the second is a miss rather than a stale hit.
         clear_measure_cache();
         let base = measure_cache_stats();
         let _ = measure_text(&TextMeasureSpec::new("Ag", small, 300.0));
         let _ = measure_text(&TextMeasureSpec::new("Ag", big, 300.0));
-        assert_eq!(measure_cache_stats().1 - base.1, 2, "two pixel sizes are two entries");
+        assert_eq!(
+            measure_cache_stats().1 - base.1,
+            2,
+            "two pixel sizes are two entries"
+        );
 
         // And the measurer itself ignores the ambient density.
         let spec = TextMeasureSpec::new("Ag", 14.0, 300.0);
-        let one = with_density(Density::from_density_and_font_scale(1.0, 1.0), || measure_text(&spec));
-        let three = with_density(Density::from_density_and_font_scale(3.0, 2.0), || measure_text(&spec));
-        assert_eq!(one.size, three.size, "no density input, so no density output");
+        let one = with_density(Density::from_density_and_font_scale(1.0, 1.0), || {
+            measure_text(&spec)
+        });
+        let three = with_density(Density::from_density_and_font_scale(3.0, 2.0), || {
+            measure_text(&spec)
+        });
+        assert_eq!(
+            one.size, three.size,
+            "no density input, so no density output"
+        );
     }
 
     /// `measure_text` must answer what the leaf measures, for the two options that change the BOX:
     /// a geometric transform widens it, a line-height trim shortens it.
     #[test]
     fn the_measurer_honours_the_transform_and_the_line_height_trim() {
-        use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T, TextGeometricTransform};
+        use crate::text::{
+            LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T, TextGeometricTransform,
+        };
         let plain = measure_text(&TextMeasureSpec::new("Ag", 16.0, 200.0));
         let mut scaled_spec = TextMeasureSpec::new("Ag", 16.0, 200.0);
         scaled_spec.transform = Some(TextGeometricTransform::new(2.0, 0.0));
@@ -458,7 +514,10 @@ mod tests {
             plain.text_size.width,
             scaled.text_size.width
         );
-        assert!((scaled.text_size.height - plain.text_size.height).abs() < 0.5, "the height is untouched");
+        assert!(
+            (scaled.text_size.height - plain.text_size.height).abs() < 0.5,
+            "the height is untouched"
+        );
 
         let mut tall_spec = TextMeasureSpec::new("Ag", 16.0, 200.0);
         tall_spec.line_height = Some(34.0);
@@ -485,9 +544,18 @@ mod tests {
         spec.line_height = Some(34.0);
         spec.line_height_style = Some(LineHeightStyle::new(A::Center, T::Both));
         let trimmed = measure_text(&spec);
-        assert!(trimmed.size.height < trimmed.text_size.height, "the box was trimmed: {trimmed:?}");
-        assert!(!trimmed.did_overflow_height, "a trim is not an overflow: {trimmed:?}");
-        assert!(!trimmed.has_visual_overflow(), "nothing was cut off: {trimmed:?}");
+        assert!(
+            trimmed.size.height < trimmed.text_size.height,
+            "the box was trimmed: {trimmed:?}"
+        );
+        assert!(
+            !trimmed.did_overflow_height,
+            "a trim is not an overflow: {trimmed:?}"
+        );
+        assert!(
+            !trimmed.has_visual_overflow(),
+            "nothing was cut off: {trimmed:?}"
+        );
     }
 
     #[test]
@@ -497,6 +565,9 @@ mod tests {
         spec.min_lines = 3;
         let three = measure_text(&spec);
         assert_eq!(three.text_size, one.text_size);
-        assert!((three.size.height - one.size.height * 3.0).abs() < 1.5, "{three:?} vs {one:?}");
+        assert!(
+            (three.size.height - one.size.height * 3.0).abs() < 1.5,
+            "{three:?} vs {one:?}"
+        );
     }
 }

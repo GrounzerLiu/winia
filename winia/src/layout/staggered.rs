@@ -91,14 +91,23 @@ mod tests {
     #[test]
     fn the_spacing_counts_between_items_of_one_lane_only() {
         let (slots, extent) = assign_lanes(2, &[10.0, 10.0, 10.0], 4.0);
-        assert_eq!(slots[2].main_start, 14.0, "item 2 follows item 0 with one gap");
-        assert_eq!(extent, 24.0, "lane 0 holds two items: 10 + 4 + 10, and the trailing gap does not count");
+        assert_eq!(
+            slots[2].main_start, 14.0,
+            "item 2 follows item 0 with one gap"
+        );
+        assert_eq!(
+            extent, 24.0,
+            "lane 0 holds two items: 10 + 4 + 10, and the trailing gap does not count"
+        );
     }
 
     #[test]
     fn ties_go_to_the_leftmost_lane() {
         let (slots, _) = assign_lanes(3, &[5.0, 5.0, 5.0], 0.0);
-        assert_eq!(slots.iter().map(|s| s.lane).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(
+            slots.iter().map(|s| s.lane).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
@@ -120,8 +129,16 @@ mod tests {
         let (slots, _) = assign_lanes(2, &[10.0, 10.0, 10.0, 10.0], 0.0);
         // lane 0 holds items 0 and 2 (at 0 and 10), lane 1 items 1 and 3.
         let anchors = lane_anchors(&slots, 2, 5.0);
-        assert_eq!(anchors, vec![Some(0), Some(1)], "both lanes still show their first item");
+        assert_eq!(
+            anchors,
+            vec![Some(0), Some(1)],
+            "both lanes still show their first item"
+        );
         let anchors = lane_anchors(&slots, 2, 10.0);
-        assert_eq!(anchors, vec![Some(2), Some(3)], "both lanes have scrolled to their second item");
+        assert_eq!(
+            anchors,
+            vec![Some(2), Some(3)],
+            "both lanes have scrolled to their second item"
+        );
     }
 }

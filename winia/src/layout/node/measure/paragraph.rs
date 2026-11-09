@@ -56,9 +56,15 @@ pub(crate) fn build_plain_paragraph(
     // instead: see the text branch in `render::pass`.
     if width_matters {
         match align {
-            crate::text::TextAlign::Center => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Center); }
-            crate::text::TextAlign::Right => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Right); }
-            crate::text::TextAlign::Justify => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify); }
+            crate::text::TextAlign::Center => {
+                para_style.set_text_align(skia_safe::textlayout::TextAlign::Center);
+            }
+            crate::text::TextAlign::Right => {
+                para_style.set_text_align(skia_safe::textlayout::TextAlign::Right);
+            }
+            crate::text::TextAlign::Justify => {
+                para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+            }
             // `Start`/`End` never reach a built paragraph (`Text::build` resolves them), but a
             // caller can hand one straight to the builder, so treat them as the physical default.
             crate::text::TextAlign::Left
@@ -80,7 +86,9 @@ pub(crate) fn build_plain_paragraph(
     text_style.set_font_size(font_size);
     // IMPORTANT: set the text colour (Skia's TextStyle defaults to white, which is invisible on a
     // white background)
-    text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+    text_style.set_color(skia_safe::Color::from_argb(
+        color.a, color.r, color.g, color.b,
+    ));
     // Letter spacing (Compose's TextStyle.letterSpacing, in logical pixels)
     if letter_spacing != 0.0 {
         text_style.set_letter_spacing(letter_spacing);
@@ -117,9 +125,11 @@ pub(crate) fn build_plain_paragraph(
         text_style.set_decoration_type(decoration);
     }
     // Weight and slant
-    if font_weight != crate::text::FontWeight::NORMAL || font_style != crate::text::FontSlant::Upright {
-        use skia_safe::FontStyle;
+    if font_weight != crate::text::FontWeight::NORMAL
+        || font_style != crate::text::FontSlant::Upright
+    {
         use crate::text::FontSlant;
+        use skia_safe::FontStyle;
         let slant = match font_style {
             FontSlant::Upright => skia_safe::font_style::Slant::Upright,
             FontSlant::Italic => skia_safe::font_style::Slant::Italic,
@@ -131,7 +141,12 @@ pub(crate) fn build_plain_paragraph(
     // metrics (a shadow never grows the measured box — measured in the same run that added it).
     if let Some(shadow) = paint.as_ref().and_then(|p| p.shadow) {
         text_style.add_shadow(skia_safe::textlayout::TextShadow::new(
-            skia_safe::Color::from_argb(shadow.color.a, shadow.color.r, shadow.color.g, shadow.color.b),
+            skia_safe::Color::from_argb(
+                shadow.color.a,
+                shadow.color.r,
+                shadow.color.g,
+                shadow.color.b,
+            ),
             (shadow.offset.0, shadow.offset.1),
             shadow.blur_sigma(),
         ));
@@ -154,20 +169,23 @@ pub(crate) fn build_plain_paragraph(
             let mut glyph_paint = skia_safe::Paint::default();
             glyph_paint.set_anti_alias(true);
             if let Some(brush) = brush {
-                use skia_safe::gradient::{Gradient, Interpolation};
                 use skia_safe::gradient::Colors;
+                use skia_safe::gradient::{Gradient, Interpolation};
                 let colors: Vec<skia_safe::Color4f> = brush
                     .colors
                     .iter()
-                    .map(|c| skia_safe::Color4f::new(
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        c.a as f32 / 255.0,
-                    ))
+                    .map(|c| {
+                        skia_safe::Color4f::new(
+                            c.r as f32 / 255.0,
+                            c.g as f32 / 255.0,
+                            c.b as f32 / 255.0,
+                            c.a as f32 / 255.0,
+                        )
+                    })
                     .collect();
                 if colors.len() >= 2 {
-                    let gradient_colors = Colors::new_evenly_spaced(&colors, skia_safe::TileMode::Clamp, None);
+                    let gradient_colors =
+                        Colors::new_evenly_spaced(&colors, skia_safe::TileMode::Clamp, None);
                     let gradient = Gradient::new(gradient_colors, Interpolation::default());
                     if let Some(shader) = skia_safe::shaders::linear_gradient(
                         (brush.start, brush.end),
@@ -178,7 +196,9 @@ pub(crate) fn build_plain_paragraph(
                     }
                 }
             } else {
-                glyph_paint.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+                glyph_paint.set_color(skia_safe::Color::from_argb(
+                    color.a, color.r, color.g, color.b,
+                ));
             }
             if let Some(width) = stroke {
                 glyph_paint.set_style(skia_safe::PaintStyle::Stroke);
@@ -196,7 +216,11 @@ pub(crate) fn build_plain_paragraph(
         crate::text::TextOverflow::StartEllipsis | crate::text::TextOverflow::MiddleEllipsis
     ) {
         match truncate_for_ellipsis(content, max_width, &text_style, &fc, overflow) {
-            Some((text, span)) => { truncated = (text, span); display_span = Some(truncated.1); truncated.0.as_str() }
+            Some((text, span)) => {
+                truncated = (text, span);
+                display_span = Some(truncated.1);
+                truncated.0.as_str()
+            }
             None => content,
         }
     } else {
@@ -242,7 +266,9 @@ pub(crate) fn line_geometry_from(
     style: Option<crate::text::LineHeightStyle>,
     natural_line_height: f32,
 ) -> LineGeometry {
-    let Some(style) = style else { return LineGeometry::default() };
+    let Some(style) = style else {
+        return LineGeometry::default();
+    };
     if style.is_noop() {
         return LineGeometry::default();
     }
@@ -255,7 +281,9 @@ pub(crate) fn line_geometry_from(
     }
     let ratio = style.alignment.top_ratio();
     let trim_top = match style.trim {
-        crate::text::LineHeightTrim::FirstLineTop | crate::text::LineHeightTrim::Both => ratio * extra,
+        crate::text::LineHeightTrim::FirstLineTop | crate::text::LineHeightTrim::Both => {
+            ratio * extra
+        }
         _ => 0.0,
     };
     let trim_bottom = match style.trim {
@@ -280,13 +308,19 @@ pub(crate) fn line_geometry(node: &LayoutNode, para: &crate::text::Paragraph) ->
     if style.is_noop() {
         return LineGeometry::default();
     }
-    line_geometry_from(text_line_height_px(node), Some(style), para.natural_line_height())
+    line_geometry_from(
+        text_line_height_px(node),
+        Some(style),
+        para.natural_line_height(),
+    )
 }
 
 /// The `LineHeightStyle` this node carries, copied out without touching the rest of the element.
 pub(crate) fn line_height_style_of(node: &LayoutNode) -> Option<crate::text::LineHeightStyle> {
     node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { line_height_style, .. } => *line_height_style,
+        ModifierElement::TextPaint {
+            line_height_style, ..
+        } => *line_height_style,
         _ => None,
     })
 }
@@ -303,24 +337,33 @@ pub(crate) fn text_line_height_px(node: &LayoutNode) -> Option<f32> {
 pub(crate) fn text_transform(node: &LayoutNode) -> Option<crate::text::TextGeometricTransform> {
     // Read the element directly: `text_paint` CLONES the brush and the feature string, and this is
     // called per measure, per paint and per pointer event.
-    node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { transform, .. } => *transform,
-        _ => None,
-    }).filter(|t| !t.is_identity())
+    node.modifier
+        .elements()
+        .iter()
+        .find_map(|el| match el {
+            ModifierElement::TextPaint { transform, .. } => *transform,
+            _ => None,
+        })
+        .filter(|t| !t.is_identity())
 }
 
 pub(crate) fn text_paint(node: &LayoutNode) -> Option<TextPaintSpec> {
     node.modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextPaint { shadow, font_feature_settings, draw_style, brush, transform, line_height_style } => {
-            Some(TextPaintSpec {
-                shadow: *shadow,
-                font_feature_settings: font_feature_settings.clone(),
-                draw_style: *draw_style,
-                brush: brush.clone(),
-                transform: *transform,
-                line_height_style: *line_height_style,
-            })
-        }
+        ModifierElement::TextPaint {
+            shadow,
+            font_feature_settings,
+            draw_style,
+            brush,
+            transform,
+            line_height_style,
+        } => Some(TextPaintSpec {
+            shadow: *shadow,
+            font_feature_settings: font_feature_settings.clone(),
+            draw_style: *draw_style,
+            brush: brush.clone(),
+            transform: *transform,
+            line_height_style: *line_height_style,
+        }),
         _ => None,
     })
 }
@@ -422,7 +465,10 @@ fn truncate_for_ellipsis(
 /// `measure_and_cache_text` and the intrinsic probes both go through this. A probe must not leave
 /// a paragraph laid out at its own width in `cached_paragraph` — the renderer reads that cache,
 /// and a probe runs with the intrinsic query's width, not the frame's.
-pub(crate) fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<crate::text::Paragraph> {
+pub(crate) fn build_text_paragraph(
+    node: &LayoutNode,
+    max_width: f32,
+) -> Option<crate::text::Paragraph> {
     build_text_paragraph_at(node, max_width, None)
 }
 
@@ -435,9 +481,23 @@ pub(crate) fn build_text_paragraph_at(
 ) -> Option<crate::text::Paragraph> {
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
-            content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
-            letter_spacing, line_height, underline, line_through, font_family, ..
-        } = el {
+            content,
+            font_size,
+            color,
+            font_weight,
+            font_style,
+            max_lines,
+            align,
+            overflow,
+            soft_wrap,
+            letter_spacing,
+            line_height,
+            underline,
+            line_through,
+            font_family,
+            ..
+        } = el
+        {
             return Some(build_plain_paragraph(
                 content.as_str(),
                 font_size_override.unwrap_or(*font_size),
@@ -465,12 +525,15 @@ pub(crate) fn build_text_paragraph_at(
 /// is drawn 4dp below the container and is 16dp tall). Shared by the measure pass and the
 /// intrinsic probes so both reserve the same box.
 pub(crate) fn supporting_text_height(node: &LayoutNode) -> f32 {
-    if node
-        .modifier
-        .elements()
-        .iter()
-        .any(|el| matches!(el, ModifierElement::TextFieldVisual { supporting: Some(_), .. }))
-    {
+    if node.modifier.elements().iter().any(|el| {
+        matches!(
+            el,
+            ModifierElement::TextFieldVisual {
+                supporting: Some(_),
+                ..
+            }
+        )
+    }) {
         4.0 + 16.0
     } else {
         0.0
@@ -500,10 +563,13 @@ pub(crate) struct TextMeasure {
     /// The first and last alphabetic baselines relative to the box top.
     pub first_baseline: f32,
     pub last_baseline: f32,
-    pub on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
+    pub on_text_layout:
+        Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
     /// The richer sink: the same snapshot plus the paragraph, for Compose's per-line queries.
     pub on_text_layout_layout: Option<
-        std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>,
+        std::sync::Arc<
+            dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync,
+        >,
     >,
 }
 
@@ -521,7 +587,9 @@ pub(crate) fn measure_and_cache_text_at(
     // A horizontal transform widens what the run DRAWS, so the paragraph is laid out in its own
     // (unscaled) space and the measured box is the scaled one. Compose does the same: the transform
     // is applied to the glyph run, not to the paragraph's layout width.
-    let scale_x = text_transform(node).map(|t| t.scale_x.max(0.0001)).unwrap_or(1.0);
+    let scale_x = text_transform(node)
+        .map(|t| t.scale_x.max(0.0001))
+        .unwrap_or(1.0);
     let sink = text_layout_layout_sink(node);
     let layout_width = max_width / scale_x;
     let Some(para) = build_text_paragraph_at(node, layout_width, font_size_override) else {
@@ -571,7 +639,10 @@ pub(crate) fn measure_and_cache_text_at(
     let last_baseline = if line_count <= 1 {
         first_baseline
     } else {
-        para.get_line_metrics().last().map(|m| m.baseline as f32).unwrap_or(first_baseline)
+        para.get_line_metrics()
+            .last()
+            .map(|m| m.baseline as f32)
+            .unwrap_or(first_baseline)
     };
 
     *node.cached_paragraph.borrow_mut() = Some(para);
@@ -612,7 +683,11 @@ fn text_layout_extras(
 /// The richer `onTextLayout` sink, if the leaf carries one.
 fn text_layout_layout_sink(
     node: &LayoutNode,
-) -> Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>> {
+) -> Option<
+    std::sync::Arc<
+        dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync,
+    >,
+> {
     for el in node.modifier.elements() {
         if let ModifierElement::TextLayoutCallback { callback } = el {
             return Some(callback.clone());
@@ -637,8 +712,16 @@ fn remap_rich_range(
     let in_tail = |i: usize| i >= tail_start && i <= total;
     if in_head(range.start) {
         // Starts in the head: keep it there, and let the end follow whichever side it is on.
-        let end = if range.end <= head { range.end } else { head + 1 };
-        return if end > range.start { Some(range.start..end) } else { None };
+        let end = if range.end <= head {
+            range.end
+        } else {
+            head + 1
+        };
+        return if end > range.start {
+            Some(range.start..end)
+        } else {
+            None
+        };
     }
     if in_tail(range.start) {
         let shift = head + 1;
@@ -657,16 +740,24 @@ fn remap_rich_range(
 /// span's style and caches the Paragraph and the drawables for the render pass.
 pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     use skia_safe::textlayout::{ParagraphStyle, PlaceholderAlignment, TextBaseline};
-    
-    
+
     let fc = crate::text::font::get_font_collection();
 
     for el in node.modifier.elements() {
         if let ModifierElement::RichTextContent {
-            content, drawables, drawable_ranges, spans,
-            align, max_lines, overflow, soft_wrap, line_height, min_lines,
+            content,
+            drawables,
+            drawable_ranges,
+            spans,
+            align,
+            max_lines,
+            overflow,
+            soft_wrap,
+            line_height,
+            min_lines,
             line_height_style,
-        } = el {
+        } = el
+        {
             // Compose hands `BasicText` the same paragraph parameters whether the string is
             // annotated or not; this path used to build a bare `ParagraphStyle` and ignore every
             // one of them, so a rich block could only wrap. The rules below are the text leaf's
@@ -674,8 +765,11 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             // one-line ellipsis, and a nowrap paragraph is laid out at an infinite width so
             // nothing wraps.
             let width_matters = *soft_wrap || overflow.is_ellipsis();
-            let effective_max_lines =
-                if !*soft_wrap && overflow.is_ellipsis() { 1 } else { *max_lines };
+            let effective_max_lines = if !*soft_wrap && overflow.is_ellipsis() {
+                1
+            } else {
+                *max_lines
+            };
             let mut para_style = ParagraphStyle::new();
             if effective_max_lines < usize::MAX {
                 para_style.set_max_lines(effective_max_lines);
@@ -691,15 +785,25 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             // both would double-apply the shift).
             if width_matters {
                 match align {
-                    crate::text::TextAlign::Center => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Center); }
-                    crate::text::TextAlign::Right => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Right); }
-                    crate::text::TextAlign::Justify => { para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify); }
+                    crate::text::TextAlign::Center => {
+                        para_style.set_text_align(skia_safe::textlayout::TextAlign::Center);
+                    }
+                    crate::text::TextAlign::Right => {
+                        para_style.set_text_align(skia_safe::textlayout::TextAlign::Right);
+                    }
+                    crate::text::TextAlign::Justify => {
+                        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+                    }
                     crate::text::TextAlign::Left
                     | crate::text::TextAlign::Start
                     | crate::text::TextAlign::End => {}
                 }
             }
-            let layout_width = if width_matters { max_width.min(f32::MAX) } else { f32::MAX };
+            let layout_width = if width_matters {
+                max_width.min(f32::MAX)
+            } else {
+                f32::MAX
+            };
             // Start/middle ellipsis on RICH text: truncate the CONTENT first, then remap the spans
             // and the drawable ranges onto the shortened string, so every offset the paragraph sees
             // (spans, placeholder positions) still describes the text it actually lays out. The plain
@@ -712,7 +816,8 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             let mut rich_ranges: Vec<std::ops::Range<usize>> = drawable_ranges.clone();
             if matches!(
                 overflow,
-                crate::text::TextOverflow::StartEllipsis | crate::text::TextOverflow::MiddleEllipsis
+                crate::text::TextOverflow::StartEllipsis
+                    | crate::text::TextOverflow::MiddleEllipsis
             ) {
                 let build_chars = |kept: usize| -> (String, usize, usize) {
                     let chars: Vec<char> = content.chars().collect();
@@ -720,7 +825,14 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     match overflow {
                         crate::text::TextOverflow::StartEllipsis => {
                             let tail_start = n - kept;
-                            (format!("\u{2026}{}", chars[tail_start..].iter().collect::<String>()), 0, tail_start)
+                            (
+                                format!(
+                                    "\u{2026}{}",
+                                    chars[tail_start..].iter().collect::<String>()
+                                ),
+                                0,
+                                tail_start,
+                            )
                         }
                         _ => {
                             let head = kept / 2;
@@ -757,7 +869,11 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     let (mut lo, mut hi) = (0usize, original_chars);
                     while lo < hi {
                         let mid = (lo + hi + 1) / 2;
-                        if probe_width(&build_chars(mid).0) <= max_width { lo = mid; } else { hi = mid - 1; }
+                        if probe_width(&build_chars(mid).0) <= max_width {
+                            lo = mid;
+                        } else {
+                            hi = mid - 1;
+                        }
                     }
                     build_chars(lo)
                 };
@@ -765,19 +881,25 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                     rich_text = text;
                     rich_display = Some(crate::text::DisplaySpan {
                         head_bytes: content.chars().take(head).map(|c| c.len_utf8()).sum(),
-                        tail_start_byte: content.chars().take(tail_start).map(|c| c.len_utf8()).sum(),
+                        tail_start_byte: content
+                            .chars()
+                            .take(tail_start)
+                            .map(|c| c.len_utf8())
+                            .sum(),
                         marker_bytes: "\u{2026}".len(),
                     });
                 }
                 rich_spans = spans
                     .iter()
                     .filter_map(|s| {
-                        remap_rich_range(&(s.start..s.end), head, tail_start, original_chars).map(|r| {
-                            let mut c = s.clone();
-                            c.start = r.start;
-                            c.end = r.end;
-                            c
-                        })
+                        remap_rich_range(&(s.start..s.end), head, tail_start, original_chars).map(
+                            |r| {
+                                let mut c = s.clone();
+                                c.start = r.start;
+                                c.end = r.end;
+                                c
+                            },
+                        )
                     })
                     .collect();
                 rich_ranges = drawable_ranges
@@ -798,7 +920,10 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             let mut ci = 0usize;
             while ci < total {
                 // Whether this character belongs to a drawable
-                if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
+                if di < drawable_ranges.len()
+                    && ci >= drawable_ranges[di].start
+                    && ci < drawable_ranges[di].end
+                {
                     // Placeholder: add it once at the start of the range and skip the rest of it.
                     //
                     // The string handed to `add_placeholder` is NOT drawn (Skia sees one U+FFFC), but
@@ -814,19 +939,32 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
                             builder.push_style(&styled_for_span(s, *line_height));
                         }
                         let d = drawables[di].clone();
-                        let placeholder_text: String =
-                            chars[drawable_ranges[di].start..drawable_ranges[di].end.min(total)].iter().collect();
-                        builder.add_placeholder(&placeholder_text, d, &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
-                        if let Some(_s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
+                        let placeholder_text: String = chars
+                            [drawable_ranges[di].start..drawable_ranges[di].end.min(total)]
+                            .iter()
+                            .collect();
+                        builder.add_placeholder(
+                            &placeholder_text,
+                            d,
+                            &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)),
+                        );
+                        if let Some(_s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
+                            builder.pop();
+                        }
                     }
                     ci += 1;
-                    if ci >= drawable_ranges[di].end { di += 1; }
+                    if ci >= drawable_ranges[di].end {
+                        di += 1;
+                    }
                     continue;
                 }
 
                 // Text: look the span up first
-                while span_idx < spans.len() && spans[span_idx].end <= ci { span_idx += 1; }
-                if span_idx < spans.len() && spans[span_idx].start <= ci && ci < spans[span_idx].end {
+                while span_idx < spans.len() && spans[span_idx].end <= ci {
+                    span_idx += 1;
+                }
+                if span_idx < spans.len() && spans[span_idx].start <= ci && ci < spans[span_idx].end
+                {
                     let run_end = spans[span_idx].end.min(total);
                     let text: String = chars[ci..run_end].iter().collect();
                     if !text.is_empty() {
@@ -855,7 +993,8 @@ pub(crate) fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> S
             let line_count = para.inner_paragraph().line_number();
             let mut size = text_size;
             // Compose's `lineHeightStyle.Trim`: the extra leading at the ends comes off the box.
-            let geometry = line_geometry_from(*line_height, *line_height_style, para.natural_line_height());
+            let geometry =
+                line_geometry_from(*line_height, *line_height_style, para.natural_line_height());
             if geometry.trim_top > 0.0 || geometry.trim_bottom > 0.0 {
                 size.height = (size.height - geometry.trim_top - geometry.trim_bottom).max(0.0);
             }
@@ -896,7 +1035,9 @@ fn styled_for_span(s: &RichSpanStyle, line_height: Option<f32>) -> SkTextStyle {
 pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     let mut ts = SkTextStyle::new();
     ts.set_font_size(s.font_size);
-    ts.set_color(skia_safe::Color::from_argb(s.color.a, s.color.r, s.color.g, s.color.b));
+    ts.set_color(skia_safe::Color::from_argb(
+        s.color.a, s.color.r, s.color.g, s.color.b,
+    ));
 
     // Weight, slant, width
     let slant = match s.font_style {
@@ -904,13 +1045,24 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         FontSlant::Italic => skia_safe::font_style::Slant::Italic,
         FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
     };
-    ts.set_font_style(SkFontStyle::new(s.font_weight.value().into(), s.font_width.into(), slant));
+    ts.set_font_style(SkFontStyle::new(
+        s.font_weight.value().into(),
+        s.font_width.into(),
+        slant,
+    ));
 
     // Decoration
-    let mut deco: skia_safe::textlayout::TextDecoration = skia_safe::textlayout::TextDecoration::default();
-    if s.underline { deco |= skia_safe::textlayout::TextDecoration::UNDERLINE; }
-    if s.overline { deco |= skia_safe::textlayout::TextDecoration::OVERLINE; }
-    if s.strikethrough { deco |= skia_safe::textlayout::TextDecoration::LINE_THROUGH; }
+    let mut deco: skia_safe::textlayout::TextDecoration =
+        skia_safe::textlayout::TextDecoration::default();
+    if s.underline {
+        deco |= skia_safe::textlayout::TextDecoration::UNDERLINE;
+    }
+    if s.overline {
+        deco |= skia_safe::textlayout::TextDecoration::OVERLINE;
+    }
+    if s.strikethrough {
+        deco |= skia_safe::textlayout::TextDecoration::LINE_THROUGH;
+    }
     ts.set_decoration_type(deco);
     if let Some(c) = &s.decoration_color {
         ts.set_decoration_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
@@ -941,14 +1093,28 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     }
 
     // Spacing
-    if s.letter_spacing != 0.0 { ts.set_letter_spacing(s.letter_spacing); }
-    if s.word_spacing != 0.0 { ts.set_word_spacing(s.word_spacing); }
-    if s.height_multiple != 0.0 { ts.set_height(s.height_multiple); ts.set_height_override(true); }
-    if s.half_leading { ts.set_half_leading(true); }
+    if s.letter_spacing != 0.0 {
+        ts.set_letter_spacing(s.letter_spacing);
+    }
+    if s.word_spacing != 0.0 {
+        ts.set_word_spacing(s.word_spacing);
+    }
+    if s.height_multiple != 0.0 {
+        ts.set_height(s.height_multiple);
+        ts.set_height_override(true);
+    }
+    if s.half_leading {
+        ts.set_half_leading(true);
+    }
 
     // Font family
     if !s.font_families.is_empty() {
-        ts.set_font_families(&s.font_families.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        ts.set_font_families(
+            &s.font_families
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+        );
     }
 
     // Render hinting
@@ -971,7 +1137,9 @@ pub(crate) fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         };
         ts.set_font_hinting(sk);
     }
-    if s.subpixel { ts.set_subpixel(true); }
+    if s.subpixel {
+        ts.set_subpixel(true);
+    }
 
     // Foreground and background
     if let Some(fg) = &s.foreground_color {
@@ -1044,7 +1212,9 @@ fn relative_spacing(
         crate::layout::Arrangement::Absolute(absolute) => {
             relative_spacing(absolute.relative(), remaining, gap_count)
         }
-        crate::layout::Arrangement::Aligned(alignment) => (0.0, aligned_leading(alignment, remaining)),
+        crate::layout::Arrangement::Aligned(alignment) => {
+            (0.0, aligned_leading(alignment, remaining))
+        }
         crate::layout::Arrangement::Start => (0.0, 0.0),
         crate::layout::Arrangement::End => (0.0, remaining),
         crate::layout::Arrangement::Center => (0.0, remaining / 2.0),
@@ -1094,7 +1264,14 @@ mod truncate_tests {
         let head = 0usize;
         let tail_start = 6usize;
         let total = 10usize;
-        let remap = |s: usize, e: usize| crate::layout::node::measure::paragraph::remap_rich_range(&(s..e), head, tail_start, total);
+        let remap = |s: usize, e: usize| {
+            crate::layout::node::measure::paragraph::remap_rich_range(
+                &(s..e),
+                head,
+                tail_start,
+                total,
+            )
+        };
         // Inside the kept tail: shifts by head + marker = 1.
         assert_eq!(remap(6, 8), Some(1..3));
         assert_eq!(remap(6, 10), Some(1..5));
@@ -1103,10 +1280,20 @@ mod truncate_tests {
         // Straddling the marker: collapses onto it.
         assert_eq!(remap(2, 7), None, "starts in the gap, so nothing visible");
         // A middle ellipsis: head 4 kept, tail from 8.
-        let middle = |s: usize, e: usize| crate::layout::node::measure::paragraph::remap_rich_range(&(s..e), 4, 8, total);
+        let middle = |s: usize, e: usize| {
+            crate::layout::node::measure::paragraph::remap_rich_range(&(s..e), 4, 8, total)
+        };
         assert_eq!(middle(0, 2), Some(0..2), "inside the head");
-        assert_eq!(middle(2, 5), Some(2..5), "straddles into the marker, kept as head up to the marker");
-        assert_eq!(middle(8, 10), Some(5..7), "inside the tail, shifted by head + marker");
+        assert_eq!(
+            middle(2, 5),
+            Some(2..5),
+            "straddles into the marker, kept as head up to the marker"
+        );
+        assert_eq!(
+            middle(8, 10),
+            Some(5..7),
+            "inside the tail, shifted by head + marker"
+        );
         assert_eq!(middle(5, 7), None, "inside the dropped gap");
         let _ = TextOverflow::MiddleEllipsis;
     }
@@ -1123,10 +1310,16 @@ mod truncate_tests {
             crate::text::TextOverflow::StartEllipsis,
             crate::text::TextOverflow::MiddleEllipsis,
         ] {
-            let (out, span) = truncate_for_ellipsis_probe(&text, 40.0, overflow).expect("it must truncate");
+            let (out, span) =
+                truncate_for_ellipsis_probe(&text, 40.0, overflow).expect("it must truncate");
             // The span must describe the string that was actually returned.
             assert!(
-                out == format!("{}{}{}", &text[..span.head_bytes], "\u{2026}", &text[span.tail_start_byte..]),
+                out == format!(
+                    "{}{}{}",
+                    &text[..span.head_bytes],
+                    "\u{2026}",
+                    &text[span.tail_start_byte..]
+                ),
                 "the span rebuilds the display text: {out:?} {span:?}"
             );
             let marker = out.find('\u{2026}').expect("the marker is in the result");
@@ -1147,7 +1340,9 @@ mod truncate_tests {
     /// A string that already fits is left alone (no marker, no truncation).
     #[test]
     fn a_fitting_string_is_not_truncated() {
-        assert!(truncate_for_ellipsis_probe("ok", 400.0, crate::text::TextOverflow::StartEllipsis).is_none());
+        assert!(
+            truncate_for_ellipsis_probe("ok", 400.0, crate::text::TextOverflow::StartEllipsis)
+                .is_none()
+        );
     }
 }
-

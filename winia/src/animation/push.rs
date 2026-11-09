@@ -55,15 +55,21 @@ impl DurationSpec {
 }
 
 impl From<TweenSpec> for DurationSpec {
-    fn from(spec: TweenSpec) -> Self { Self::Tween(spec) }
+    fn from(spec: TweenSpec) -> Self {
+        Self::Tween(spec)
+    }
 }
 
 impl From<KeyframesSpec> for DurationSpec {
-    fn from(spec: KeyframesSpec) -> Self { Self::Keyframes(spec) }
+    fn from(spec: KeyframesSpec) -> Self {
+        Self::Keyframes(spec)
+    }
 }
 
 impl From<SnapSpec> for DurationSpec {
-    fn from(spec: SnapSpec) -> Self { Self::Snap(spec) }
+    fn from(spec: SnapSpec) -> Self {
+        Self::Snap(spec)
+    }
 }
 
 impl DurationSpec {
@@ -80,7 +86,9 @@ impl DurationSpec {
     pub(super) fn value_at<T: AnimatableValue>(&self, from: &T, to: &T, t: f32) -> T {
         match self {
             DurationSpec::Tween(tween) => from.lerp(to, tween.interpolator.interpolate(t)),
-            DurationSpec::Keyframes(keyframes) => from.lerp(to, interpolate_keyframes(&keyframes.frames, t)),
+            DurationSpec::Keyframes(keyframes) => {
+                from.lerp(to, interpolate_keyframes(&keyframes.frames, t))
+            }
             DurationSpec::Snap(_) => to.clone(),
         }
     }
@@ -98,7 +106,11 @@ impl DurationSpec {
     pub(super) fn kind(&self) -> String {
         match self {
             DurationSpec::Tween(t) => format!("tween({}ms)", t.duration.as_millis()),
-            DurationSpec::Keyframes(k) => format!("keyframes({}ms, {} frames)", k.duration.as_millis(), k.frames.len()),
+            DurationSpec::Keyframes(k) => format!(
+                "keyframes({}ms, {} frames)",
+                k.duration.as_millis(),
+                k.frames.len()
+            ),
             DurationSpec::Snap(s) => format!("snap(delay={}ms)", s.delay.as_millis()),
         }
     }
@@ -122,10 +134,22 @@ pub struct InfiniteRepeatableSpec {
 
 impl InfiniteRepeatableSpec {
     pub fn restart(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Restart, base: None, start_offset: Duration::ZERO, start_offset_type: StartOffsetType::Delay }
+        Self {
+            duration,
+            mode: RepeatMode::Restart,
+            base: None,
+            start_offset: Duration::ZERO,
+            start_offset_type: StartOffsetType::Delay,
+        }
     }
     pub fn reverse(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Reverse, base: None, start_offset: Duration::ZERO, start_offset_type: StartOffsetType::Delay }
+        Self {
+            duration,
+            mode: RepeatMode::Reverse,
+            base: None,
+            start_offset: Duration::ZERO,
+            start_offset_type: StartOffsetType::Delay,
+        }
     }
     /// Sample a tween curve within each cycle (Compose's `infiniteRepeatable(tween(...))`).
     pub fn restart_tween(duration: Duration, tween: TweenSpec) -> Self {
@@ -215,9 +239,15 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
         }
         true // Runs forever.
     }
-    fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
-    fn state_id(&self) -> StateId { self.state.state_id() }
-    fn last_velocity(&self) -> f32 { 0.0 } // A loop has no velocity-continuity semantics.
+    fn same_target(&self, _target: &dyn std::any::Any) -> bool {
+        false
+    }
+    fn state_id(&self) -> StateId {
+        self.state.state_id()
+    }
+    fn last_velocity(&self) -> f32 {
+        0.0
+    } // A loop has no velocity-continuity semantics.
     fn describe(&self) -> String {
         format!(
             "state={:?} spec=infinite({}ms, {}, offset {}ms {}) value={:.3}->{:.3}",
@@ -241,7 +271,10 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
 /// Register an infinite loop (shared by f32/Color and other `AnimatableValue`s — one generic
 /// registry, no separate third table).
 pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
-    state: State<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
+    state: State<T>,
+    from: T,
+    to: T,
+    spec: InfiniteRepeatableSpec,
 ) {
     push_infinite_visual(state.into_visual(), from, to, spec);
 }
@@ -249,16 +282,31 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 /// Visual-handle entry of `push_infinite` (skips the State round-trip when an
 /// InfiniteTransition already holds the Visual).
 pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
-    visual: crate::runtime::state::Visual<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
+    visual: crate::runtime::state::Visual<T>,
+    from: T,
+    to: T,
+    spec: InfiniteRepeatableSpec,
 ) {
     let sid = visual.state_id();
-    if has_animation_for_state(sid) { return; } // Dedup across lists.
-    let anim = Infinite { state: visual, from, to, spec, start: now() };
+    if has_animation_for_state(sid) {
+        return;
+    } // Dedup across lists.
+    let anim = Infinite {
+        state: visual,
+        from,
+        to,
+        spec,
+        start: now(),
+    };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
 /// Register a `Motion<T>` in the global active list (called by `animate_*_as_state`).
-pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
+pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+) {
     push_animatable_handle(state.into_animating(), target, spec);
 }
 
@@ -352,7 +400,10 @@ pub fn push_animatable_with_velocity_and_done<
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) {
+        if list
+            .iter()
+            .any(|anim| anim.state_id() == sid && anim.same_target(&target))
+        {
             // The same motion is already running and owns its own callback; this one would never fire.
             done();
             return;
@@ -372,7 +423,11 @@ pub fn push_animatable_with_velocity_and_done<
 
 /// Animating-handle entry of `push_animatable` (skips the State round-trip when the caller
 /// already holds an Animating; identical semantics).
-pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::runtime::state::Animating<T>, target: T, spec: AnimationSpec) {
+pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: crate::runtime::state::Animating<T>,
+    target: T,
+    spec: AnimationSpec,
+) {
     push_animatable_handle_inner(state, target, spec, false);
 }
 
@@ -391,7 +446,8 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
         // it finally writes the container back to 2 while the state is already true).
         let conflicting = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
-            list.iter().any(|a| a.state_id() == sid && !a.same_target(&target))
+            list.iter()
+                .any(|a| a.state_id() == sid && !a.same_target(&target))
         };
         if !conflicting && !restart {
             return;
@@ -421,14 +477,23 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
         // Same state, same target already running → skip (no per-frame restart or double drive).
         // The imperative path (`restart`) replaces it instead: re-targeting with a new spec is a
         // deliberate request, and silence there is a bug, not a guard.
-        if !restart && list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        if !restart
+            && list
+                .iter()
+                .any(|anim| anim.state_id() == sid && anim.same_target(&target))
+        {
+            return;
+        }
         // Same state, different target → remove the old animation (the user retargeted mid-flight;
         // letting the old one run would compete with the new target and strand the value on the old
         // path). P2-9: inherit the old velocity before removing it (an interrupted Spring/Decay
         // continues from its current velocity, physically continuous).
         // Each component inherits its own velocity — see `RetargetVelocity`.
-        inherited_velocity = list.iter().find(|a| a.state_id() == sid)
-            .map(|a| a.retarget_velocity()).unwrap_or(RetargetVelocity::ZERO);
+        inherited_velocity = list
+            .iter()
+            .find(|a| a.state_id() == sid)
+            .map(|a| a.retarget_velocity())
+            .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
     } // Lock released; the anim.update() below runs user code without holding it.
     let mut anim = Motion::from_animating(state);
@@ -474,8 +539,11 @@ fn normalise_target_spec(spec: AnimationSpec) -> AnimationSpec {
 /// 300 ms linear tween — the caller asked for a spring and got a different motion (measured on
 /// `Tab`'s content colour, whose `SpringSpec` never ran). A `Decay` is the one spec that still cannot
 /// run here: see `normalise_target_spec`.
-pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
-    
+pub fn push_animatable_color(
+    state: State<crate::graphics::Color>,
+    target: crate::graphics::Color,
+    spec: AnimationSpec,
+) {
     if state.peek() == target {
         // As in `push_animatable`: a stale colour animation with a different target must be
         // cancelled, otherwise it keeps pulling the value towards the old target.
@@ -484,13 +552,20 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
             let list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
             list.iter().any(|anim| {
                 anim.state.state_id() == sid
-                    && !anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)
+                    && !anim
+                        .anim_state
+                        .as_ref()
+                        .map(|s| s.to == target)
+                        .unwrap_or(false)
             })
         };
         if !conflicting {
             return;
         }
-        ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| anim.state.state_id() != sid);
+        ACTIVE_COLOR_ANIMATIONS
+            .lock()
+            .unwrap()
+            .retain(|anim| anim.state.state_id() != sid);
         return;
     }
     let sid = state.state_id();
@@ -499,8 +574,19 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
     let inherited_velocity: RetargetVelocity;
     {
         let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|anim| anim.state.state_id() == sid && anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)) { return; }
-        inherited_velocity = list.iter().find(|anim| anim.state.state_id() == sid)
+        if list.iter().any(|anim| {
+            anim.state.state_id() == sid
+                && anim
+                    .anim_state
+                    .as_ref()
+                    .map(|s| s.to == target)
+                    .unwrap_or(false)
+        }) {
+            return;
+        }
+        inherited_velocity = list
+            .iter()
+            .find(|anim| anim.state.state_id() == sid)
             .map(|anim| anim.retarget_velocity())
             .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state.state_id() != sid);
@@ -537,22 +623,38 @@ impl DecaySpec {
     /// never stop — a misconfiguration surfaces immediately (the `max(0.001)` in update is a second
     /// safety net, not a replacement for validation).
     pub fn new(friction: f32, threshold: f32) -> Self {
-        assert!(friction > 0.0, "DecaySpec::new: friction must be > 0 (got {friction})");
-        assert!(threshold > 0.0, "DecaySpec::new: threshold must be > 0 (got {threshold})");
-        Self { friction, threshold }
+        assert!(
+            friction > 0.0,
+            "DecaySpec::new: friction must be > 0 (got {friction})"
+        );
+        assert!(
+            threshold > 0.0,
+            "DecaySpec::new: threshold must be > 0 (got {threshold})"
+        );
+        Self {
+            friction,
+            threshold,
+        }
     }
 
     /// How far a fling started at `initial_velocity` would travel: the asymptote `v0 / friction` of
     /// `value(t) = v0/friction · (1 - e^(-friction·t))`. This is where the motion goes ignoring the
     /// velocity threshold, and it is what a pager estimates "how many pages would this flick carry" from.
     pub fn target_value(&self, initial_velocity: f32) -> f32 {
-        if self.friction > 0.0 { initial_velocity / self.friction } else { 0.0 }
+        if self.friction > 0.0 {
+            initial_velocity / self.friction
+        } else {
+            0.0
+        }
     }
 }
 
 impl Default for DecaySpec {
     fn default() -> Self {
-        Self { friction: 4.2, threshold: 0.1 }
+        Self {
+            friction: 4.2,
+            threshold: 0.1,
+        }
     }
 }
 
@@ -636,7 +738,14 @@ pub fn push_fling_with_boundary(
     on_boundary: impl FnOnce(f32) + Send + 'static,
     on_finish: impl FnOnce() + Send + 'static,
 ) {
-    push_fling_internal(state, initial_velocity, spec, clamp, Some(Box::new(on_boundary)), on_finish);
+    push_fling_internal(
+        state,
+        initial_velocity,
+        spec,
+        clamp,
+        Some(Box::new(on_boundary)),
+        on_finish,
+    );
 }
 
 fn push_fling_internal(
@@ -738,7 +847,9 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
 /// — Compose's `AnimationResult` handed to the block of `Animatable.animateTo`. The reason separates a
 /// motion that arrived (`Finished`) from one a value range stopped (`BoundReached`) and from one the
 /// engine's overrun guard cut short (`Forced`), which the plain callback cannot tell apart.
-pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+pub fn push_animatable_with_result<
+    T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
+>(
     state: State<T>,
     target: T,
     spec: AnimationSpec,
@@ -760,7 +871,9 @@ pub fn push_animatable_restart_with_result<
     push_animatable_with_result_inner(state, target, spec, done, true);
 }
 
-fn push_animatable_with_result_inner<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+fn push_animatable_with_result_inner<
+    T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
+>(
     state: State<T>,
     target: T,
     spec: AnimationSpec,
@@ -798,7 +911,13 @@ fn push_animatable_with_result_inner<T: Clone + PartialEq + AnimatableValue + Se
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        if !restart && list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        if !restart
+            && list
+                .iter()
+                .any(|anim| anim.state_id() == sid && anim.same_target(&target))
+        {
+            return;
+        }
         inherited_velocity = list
             .iter()
             .find(|a| a.state_id() == sid)
@@ -818,7 +937,9 @@ fn push_animatable_with_result_inner<T: Clone + PartialEq + AnimatableValue + Se
 }
 
 /// AnimationInstance for Motion<f32> (and every other value type it is instantiated with)
-impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Motion<T> {
+impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance
+    for Motion<T>
+{
     fn update(&mut self) -> bool {
         Motion::update(self)
     }
@@ -826,20 +947,31 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
         self.state.state_id()
     }
     fn same_target(&self, target: &dyn std::any::Any) -> bool {
-        target.downcast_ref::<T>()
-            .map(|t| self.anim_state.as_ref().map(|s| s.to == *t).unwrap_or(false))
+        target
+            .downcast_ref::<T>()
+            .map(|t| {
+                self.anim_state
+                    .as_ref()
+                    .map(|s| s.to == *t)
+                    .unwrap_or(false)
+            })
             .unwrap_or(false)
     }
     fn last_velocity(&self) -> f32 {
-        self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0)
+        self.anim_state
+            .as_ref()
+            .map(|s| s.last_velocity)
+            .unwrap_or(0.0)
     }
     fn retarget_velocity(&self) -> RetargetVelocity {
         Motion::retarget_velocity(self)
     }
     fn set_value_bounds(&mut self, bounds: Option<(f32, f32)>) {
-        self.set_clamp_opt(bounds.map(|(lo, hi)| -> Box<dyn Fn(f32) -> f32 + Send + Sync> {
-            Box::new(move |v| v.clamp(lo.min(hi), hi.max(lo)))
-        }));
+        self.set_clamp_opt(
+            bounds.map(|(lo, hi)| -> Box<dyn Fn(f32) -> f32 + Send + Sync> {
+                Box::new(move |v| v.clamp(lo.min(hi), hi.max(lo)))
+            }),
+        );
     }
     fn target_value(&self) -> Option<&dyn std::any::Any> {
         self.anim_state

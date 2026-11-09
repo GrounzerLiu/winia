@@ -2,13 +2,13 @@
 //!
 //! 不涉及渲染，纯测试 compose → layout 在 state 变更后的行为。
 
-use winia::runtime::composer::Composer;
-use winia::runtime::state::State;
+use winia::components::Text;
+use winia::layout::Column;
 use winia::layout::constraints::Constraints;
 use winia::modifier::Modifier;
-use winia::components::{Text};
-use winia::layout::{Column};
 use winia::runtime::composer::ComposeCtx;
+use winia::runtime::composer::Composer;
+use winia::runtime::state::State;
 
 fn compose_and_layout(composer: &mut Composer, w: f32, h: f32, ui: impl FnOnce(&mut ComposeCtx)) {
     composer.compose(|ctx| ui(ctx));
@@ -22,11 +22,16 @@ fn state_change_triggers_recomposition() {
     let holder = std::cell::RefCell::new(None::<State<i32>>);
 
     // 首次 compose
-    compose_and_layout(&mut composer, 200.0, 40.0, winia::app_root!(|ctx| {
-        let count = ctx.remember(|| 0i32);
-        *holder.borrow_mut() = Some(count.clone());
-        Text::new(format!("Count: {}", count.get())).build(ctx);
-    }));
+    compose_and_layout(
+        &mut composer,
+        200.0,
+        40.0,
+        winia::app_root!(|ctx| {
+            let count = ctx.remember(|| 0i32);
+            *holder.borrow_mut() = Some(count.clone());
+            Text::new(format!("Count: {}", count.get())).build(ctx);
+        }),
+    );
     assert!(composer.layout_root().is_some());
 
     // 记住首次的 measured 尺寸
@@ -44,8 +49,12 @@ fn state_change_triggers_recomposition() {
 
     let second_w = composer.layout_root().unwrap().measured_size.width;
     // "Count: 42" 比 "Count: 0" 宽
-    assert!(second_w > first_w,
-        "text with larger number should be wider: {} → {}", first_w, second_w);
+    assert!(
+        second_w > first_w,
+        "text with larger number should be wider: {} → {}",
+        first_w,
+        second_w
+    );
 }
 
 #[test]
@@ -54,21 +63,26 @@ fn conditional_node_appears_after_state_change() {
     let holder = std::cell::RefCell::new(None::<State<bool>>);
 
     // 首次：不显示额外节点
-    compose_and_layout(&mut composer, 200.0, 60.0, winia::app_root!(|ctx| {
-        let show = ctx.remember(|| false);
-        *holder.borrow_mut() = Some(show.clone());
-        Column::new().build(ctx, |ctx| {
-            let k1 = ctx.next_key();
-            ctx.start_leaf(k1, Modifier::new().size(100.0, 20.0));
-            ctx.end_node();
-
-            if show.get() {
-                let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().size(100.0, 20.0));
+    compose_and_layout(
+        &mut composer,
+        200.0,
+        60.0,
+        winia::app_root!(|ctx| {
+            let show = ctx.remember(|| false);
+            *holder.borrow_mut() = Some(show.clone());
+            Column::new().build(ctx, |ctx| {
+                let k1 = ctx.next_key();
+                ctx.start_leaf(k1, Modifier::new().size(100.0, 20.0));
                 ctx.end_node();
-            }
-        });
-    }));
+
+                if show.get() {
+                    let k2 = ctx.next_key();
+                    ctx.start_leaf(k2, Modifier::new().size(100.0, 20.0));
+                    ctx.end_node();
+                }
+            });
+        }),
+    );
 
     let root_idx = composer.layout_root_idx().unwrap();
     let nodes = composer.arena_nodes();
@@ -98,10 +112,21 @@ fn conditional_node_appears_after_state_change() {
     let root_idx = composer.layout_root_idx().unwrap();
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];
-    assert_eq!(root.children.len(), 2, "after show=true, should have 2 children");
+    assert_eq!(
+        root.children.len(),
+        2,
+        "after show=true, should have 2 children"
+    );
     // 总高度增加
-    let total_h: f32 = root.children.iter().map(|&ci| nodes[ci].measured_size.height).sum();
-    assert!(total_h > 35.0, "total height should increase with second child");
+    let total_h: f32 = root
+        .children
+        .iter()
+        .map(|&ci| nodes[ci].measured_size.height)
+        .sum();
+    assert!(
+        total_h > 35.0,
+        "total height should increase with second child"
+    );
 }
 
 #[test]
@@ -136,12 +161,17 @@ fn multiple_state_changes_in_one_frame() {
     let holder = std::cell::RefCell::new(None::<(State<i32>, State<i32>)>);
 
     // 首次 compose
-    compose_and_layout(&mut composer, 200.0, 40.0, winia::app_root!(|ctx| {
-        let a = ctx.remember(|| 1i32);
-        let b = ctx.remember(|| 10i32);
-        *holder.borrow_mut() = Some((a.clone(), b.clone()));
-        Text::new(format!("{} + {}", a.get(), b.get())).build(ctx);
-    }));
+    compose_and_layout(
+        &mut composer,
+        200.0,
+        40.0,
+        winia::app_root!(|ctx| {
+            let a = ctx.remember(|| 1i32);
+            let b = ctx.remember(|| 10i32);
+            *holder.borrow_mut() = Some((a.clone(), b.clone()));
+            Text::new(format!("{} + {}", a.get(), b.get())).build(ctx);
+        }),
+    );
 
     // 修改两个 state
     let (a, b) = holder.into_inner().unwrap();
@@ -158,8 +188,11 @@ fn multiple_state_changes_in_one_frame() {
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];
     // 新文本更长："100 + 200" > "1 + 10"
-    assert!(root.measured_size.width > 60.0,
-        "wider text after larger numbers, got {}", root.measured_size.width);
+    assert!(
+        root.measured_size.width > 60.0,
+        "wider text after larger numbers, got {}",
+        root.measured_size.width
+    );
 }
 
 #[test]
@@ -168,11 +201,16 @@ fn recompose_skips_when_no_changes() {
     let holder = std::cell::RefCell::new(None::<State<i32>>);
 
     // 首次 compose
-    compose_and_layout(&mut composer, 200.0, 40.0, winia::app_root!(|ctx| {
-        let count = ctx.remember(|| 0i32);
-        *holder.borrow_mut() = Some(count.clone());
-        Text::new(format!("Count: {}", count.get())).build(ctx);
-    }));
+    compose_and_layout(
+        &mut composer,
+        200.0,
+        40.0,
+        winia::app_root!(|ctx| {
+            let count = ctx.remember(|| 0i32);
+            *holder.borrow_mut() = Some(count.clone());
+            Text::new(format!("Count: {}", count.get())).build(ctx);
+        }),
+    );
     let w1 = composer.layout_root().unwrap().measured_size.width;
     let count = holder.into_inner().unwrap();
 
@@ -195,21 +233,29 @@ fn nested_state_propagates_layout_recalculation() {
     let mut composer = Composer::new();
     let holder = std::cell::RefCell::new(None::<State<bool>>);
 
-    compose_and_layout(&mut composer, 300.0, 100.0, winia::app_root!(|ctx| {
-        let show_extra = ctx.remember(|| false);
-        *holder.borrow_mut() = Some(show_extra.clone());
-        Column::new().build(ctx, |ctx| {
-            let k1 = ctx.next_key();
-            ctx.start_leaf(k1, Modifier::new().size(200.0, 30.0));
-            ctx.end_node();
-
-            if show_extra.get() {
-                let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0));
+    compose_and_layout(
+        &mut composer,
+        300.0,
+        100.0,
+        winia::app_root!(|ctx| {
+            let show_extra = ctx.remember(|| false);
+            *holder.borrow_mut() = Some(show_extra.clone());
+            Column::new().build(ctx, |ctx| {
+                let k1 = ctx.next_key();
+                ctx.start_leaf(k1, Modifier::new().size(200.0, 30.0));
                 ctx.end_node();
-            }
-        });
-    }));
+
+                if show_extra.get() {
+                    let k2 = ctx.next_key();
+                    ctx.start_leaf(
+                        k2,
+                        Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0),
+                    );
+                    ctx.end_node();
+                }
+            });
+        }),
+    );
 
     use winia::layout::SizeValue;
     let root_idx = composer.layout_root_idx().unwrap();
@@ -229,7 +275,10 @@ fn nested_state_propagates_layout_recalculation() {
 
             if show_extra.get() {
                 let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0));
+                ctx.start_leaf(
+                    k2,
+                    Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0),
+                );
                 ctx.end_node();
             }
         });

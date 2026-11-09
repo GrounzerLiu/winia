@@ -1,36 +1,40 @@
 //! 文本处理基础设施 — 索引映射、Paragraph 封装、TextLayout、内联元素
 
-pub mod style;
 pub mod font;
-pub use font::{register_font, register_font_bytes, FontError};
+pub mod style;
+pub use font::{FontError, register_font, register_font_bytes};
 pub mod annotated;
 pub mod decor;
 pub mod transformation;
 pub use decor::{DecoMode, DecoStyle, FontEdge, FontHint, RichSpanStyle};
-pub mod selection;
 pub mod field;
-mod layout_result;
 mod index_bimap;
+mod inline_drawable;
+mod layout_result;
+mod measure_text;
 mod paragraph;
 mod paragraph_builder;
+pub mod selection;
 mod text_layout;
-mod inline_drawable;
-mod measure_text;
 
 pub use annotated::{AnnotatedString, SpanStyle};
-pub use style::{
-    FontSlant, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextAlign, TextBrush,
-    TextDecoration, TextDrawStyle, TextGeometricTransform, TextOverflow, TextShadow, TextStyle,
-};
-pub use layout_result::TextLayoutResult;
-pub use measure_text::{measure_text, TextMeasureSpec};
-pub use index_bimap::IndexBiMap;
-pub use paragraph::{build_plain_paragraph, DisplaySpan, Paragraph};
-pub use paragraph_builder::ParagraphBuilder;
-pub use text_layout::TextLayout;
-pub use inline_drawable::{InlineDrawable, ImageDrawable, SvgDrawable};
-pub use selection::{Selection, SelectionAdjustment, SelectionRegistrar, TextSelectionColors, LOCAL_TEXT_SELECTION_COLORS};
 pub use field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
+pub use index_bimap::IndexBiMap;
+pub use inline_drawable::{ImageDrawable, InlineDrawable, SvgDrawable};
+pub use layout_result::TextLayoutResult;
+pub use measure_text::{TextMeasureSpec, measure_text};
+pub use paragraph::{DisplaySpan, Paragraph, build_plain_paragraph};
+pub use paragraph_builder::ParagraphBuilder;
+pub use selection::{
+    LOCAL_TEXT_SELECTION_COLORS, Selection, SelectionAdjustment, SelectionRegistrar,
+    TextSelectionColors,
+};
+pub use style::{
+    FontSlant, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextAlign,
+    TextBrush, TextDecoration, TextDrawStyle, TextGeometricTransform, TextOverflow, TextShadow,
+    TextStyle,
+};
+pub use text_layout::TextLayout;
 pub use transformation::{
     IdentityMapping, IdentityTransformation, OffsetMapping, PasswordTransformation,
     TransformedText, VisualTransformation,

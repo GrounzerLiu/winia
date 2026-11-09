@@ -1,8 +1,8 @@
-use std::f32::consts::PI;
-use std::ops::{Index, IndexMut, MulAssign};
 use crate::offset::Offset;
 use crate::point::Point;
 use crate::rect::Rect;
+use std::f32::consts::PI;
+use std::ops::{Index, IndexMut, MulAssign};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Matrix {
@@ -13,11 +13,8 @@ impl Default for Matrix {
     fn default() -> Self {
         Self {
             values: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
-            ]
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
         }
     }
 }
@@ -51,7 +48,7 @@ impl Matrix {
 
         Point(
             p_z * (v00 * x + v10 * y + v30),
-            p_z * (v01 * x + v11 * y + v31)
+            p_z * (v01 * x + v11 * y + v31),
         )
     }
     /** Does a 3D transform on [rect] and returns its bounds after the transform. */
@@ -180,10 +177,7 @@ impl Matrix {
 
     pub fn reset(&mut self) {
         self.values = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]
     }
 
@@ -318,7 +312,7 @@ impl Matrix {
         &mut self,
         x: impl Into<Option<f32>>,
         y: impl Into<Option<f32>>,
-        z: impl Into<Option<f32>>
+        z: impl Into<Option<f32>>,
     ) {
         let x = x.into().unwrap_or(0.0);
         let y = y.into().unwrap_or(0.0);
@@ -378,10 +372,10 @@ impl MulAssign<&Matrix> for Matrix {
 
 #[inline]
 fn dot(m1: &Matrix, row: usize, m2: &Matrix, column: usize) -> f32 {
-    m1[(row, 0)] * m2[(0, column)] +
-    m1[(row, 1)] * m2[(1, column)] +
-    m1[(row, 2)] * m2[(2, column)] +
-    m1[(row, 3)] * m2[(3, column)]
+    m1[(row, 0)] * m2[(0, column)]
+        + m1[(row, 1)] * m2[(1, column)]
+        + m1[(row, 2)] * m2[(2, column)]
+        + m1[(row, 3)] * m2[(3, column)]
 }
 
 impl Index<(usize, usize)> for Matrix {

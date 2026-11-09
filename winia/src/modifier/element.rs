@@ -74,7 +74,10 @@ impl<C: Send + Sync + 'static> DrawNode for DrawCacheNode<C> {
             density: crate::runtime::density::current_density().density,
         };
         let mut cache = self.cache.lock().expect("draw cache");
-        let rebuild = cache.as_ref().map(|(cached, _)| *cached != scope).unwrap_or(true);
+        let rebuild = cache
+            .as_ref()
+            .map(|(cached, _)| *cached != scope)
+            .unwrap_or(true);
         if rebuild {
             *cache = Some((scope, (self.build)(scope)));
         }
@@ -260,11 +263,20 @@ pub enum InsetSizeSide {
 pub(crate) enum SizeStep {
     /// A `Size` element: resolved fixed axes. `None` is Auto/Intrinsic — those say nothing here
     /// (an intrinsic axis is resolved after the walk, by `intrinsic_*_request`).
-    Size { width: Option<f32>, height: Option<f32> },
+    Size {
+        width: Option<f32>,
+        height: Option<f32>,
+    },
     /// A `RequiredSize` element: resolved numeric axes; the intrinsic overloads are handled later.
-    RequiredSize { width: Option<f32>, height: Option<f32> },
+    RequiredSize {
+        width: Option<f32>,
+        height: Option<f32>,
+    },
     /// A `fillMax*` element, applied where it stands: the share of the CURRENT maximum.
-    Fill { width: Option<f32>, height: Option<f32> },
+    Fill {
+        width: Option<f32>,
+        height: Option<f32>,
+    },
     MinWidth(f32),
     MaxWidth(f32),
     MinHeight(f32),
@@ -285,16 +297,27 @@ pub(crate) enum SizeStep {
     /// A `width/height(IntrinsicSize)` request, kept in chain order so the measure pipeline can
     /// snapshot the constraints the request saw. A `fillMax` outside the request tightens those
     /// constraints (and the intrinsic answer honours them); a `fillMax` inside it does not.
-    Intrinsic { width: bool, height: bool },
+    Intrinsic {
+        width: bool,
+        height: bool,
+    },
     /// `aspectRatio` — Compose's `AspectRatioNode`: derive a size from the constraints at THIS
     /// position and fix what follows to it (`Constraints.fixed`). Emitted in chain order so the
     /// derivation sees exactly the constraints the aspect modifier would.
-    AspectRatio { ratio: f32, match_height_first: bool },
+    AspectRatio {
+        ratio: f32,
+        match_height_first: bool,
+    },
     /// A `padding` element, resolved. Compose's padding node deflates the constraints at ITS position,
     /// so this is a step too: `.padding(8).size(300)` must fix 300 inside a range already 16 smaller,
     /// and `.size(300).padding(8)` must deflate afterwards. Emitted in chain order; the node's
     /// OUTER size still adds the total padding at the end.
-    Padding { start: f32, top: f32, end: f32, bottom: f32 },
+    Padding {
+        start: f32,
+        top: f32,
+        end: f32,
+        bottom: f32,
+    },
     /// A `windowInsetsPadding` element: the inset is resolved from the window state DURING the walk,
     /// at this element's chain position (it is consumed for the subtree there). The payload is an
     /// INDEX into `Modifier::elements` (the controller is not `Copy`), and `size_steps` emits exactly
@@ -321,12 +344,19 @@ pub(crate) enum ModifierElement {
     /// A size.
     /// A size: a static `Dimension`, or a `SizeValue` evaluated at layout time (a State or closure,
     /// which is how a layout property animates).
-    Size { width: SizeValue, height: SizeValue },
+    Size {
+        width: SizeValue,
+        height: SizeValue,
+    },
     /// A minimum width (Compose's `Modifier.widthIn(min=...)`): it only raises an incoming min
     /// constraint, the max still clamps, and a dynamic value lets an animation drive the min.
-    MinWidth { value: Dimension },
+    MinWidth {
+        value: Dimension,
+    },
     /// A minimum height (Compose's `Modifier.heightIn(min=...)`).
-    MinHeight { value: Dimension },
+    MinHeight {
+        value: Dimension,
+    },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
     /// constraint, so content that would be wider is constrained to it, and is then held at or
     /// above the min. Supports a dynamic value.
@@ -334,9 +364,13 @@ pub(crate) enum ModifierElement {
     /// A min and a max on the same axis may conflict; which one wins is Compose's chain-order rule,
     /// replayed by [`Modifier::size_steps`] — the max written first yields the max, the min
     /// written first yields the min.
-    MaxWidth { value: Dimension },
+    MaxWidth {
+        value: Dimension,
+    },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
-    MaxHeight { value: Dimension },
+    MaxHeight {
+        value: Dimension,
+    },
     /// Padding on each of the four edges, each one a dynamic `SizeValue` so it can animate.
     PaddingSides {
         start: Dimension,
@@ -365,11 +399,17 @@ pub(crate) enum ModifierElement {
     },
     /// Fill the incoming maximum width — Compose `fillMaxWidth`. `fraction < 1` takes that share
     /// of the maximum; an unbounded maximum is a no-op (Compose's `FillNode`).
-    FillMaxWidth { fraction: f32 },
+    FillMaxWidth {
+        fraction: f32,
+    },
     /// Fill the incoming maximum height (see `FillMaxWidth` for the fraction rules).
-    FillMaxHeight { fraction: f32 },
+    FillMaxHeight {
+        fraction: f32,
+    },
     /// Fill the incoming maximum on both axes.
-    FillMaxSize { fraction: f32 },
+    FillMaxSize {
+        fraction: f32,
+    },
     /// A size RANGE on one or both axes — Compose's `widthIn`/`heightIn`/`sizeIn`
     /// (`enforce_incoming = true`) and `requiredWidthIn`/`requiredSizeIn` (`false`). Bounds are
     /// resolved during measure, so a `Dimension::Dynamic` animates through layout.
@@ -395,20 +435,32 @@ pub(crate) enum ModifierElement {
     },
     /// A positional offset that does not change the layout size, only where the node paints; x
     /// mirrors under RTL. Compose's `Modifier.offset`, with a dynamic value so it can animate.
-    Offset { x: Dimension, y: Dimension },
+    Offset {
+        x: Dimension,
+        y: Dimension,
+    },
     /// An absolute offset, which does NOT mirror under RTL — Compose's `Modifier.absoluteOffset`.
-    AbsoluteOffset { x: Dimension, y: Dimension },
+    AbsoluteOffset {
+        x: Dimension,
+        y: Dimension,
+    },
     /// How the child aligns on the parent's cross axis, overriding the parent's default.
-    AlignSelf { alignment: crate::layout::Alignment },
+    AlignSelf {
+        alignment: crate::layout::Alignment,
+    },
     /// A child's own alignment inside a `Box`/`Stack`, on BOTH axes — Compose's
     /// `BoxScope.Modifier.align(Alignment.TopEnd)`, which a one-axis `Alignment` cannot express.
-    ContentAlignSelf { alignment: crate::layout::ContentAlignment },
+    ContentAlignSelf {
+        alignment: crate::layout::ContentAlignment,
+    },
     /// Compose's `BoxScope.matchParentSize`: the child does NOT take part in sizing its box and is
     /// then measured at the box's size. Only a `Box`/`Stack` reads it.
     MatchParentSize,
     /// A grid item placed into a NAMED area — Compose's `GridScope.Modifier.gridItem(areaId)`
     /// (`Grid.kt:226`). Only `Grid` reads it; an unknown id falls back to auto-placement.
-    GridItemArea { area_id: u64 },
+    GridItemArea {
+        area_id: u64,
+    },
     /// A grid item's span and cell alignment — Compose's `GridScope.Modifier.gridItem`
     /// (`Grid.kt:158-230`). Only `Grid` reads it.
     /// A flex item's share of its FlexBox — Compose's Modifier.flex(FlexConfig)
@@ -422,16 +474,24 @@ pub(crate) enum ModifierElement {
     /// Compose's `Modifier.visible` (`Visible.kt:51`): while `false` the node is measured and keeps
     /// its space, but it is not painted, not hit-tested, not focusable and invisible to
     /// accessibility — `View.INVISIBLE`, not `View.GONE`.
-    Visible { visible: bool },
+    Visible {
+        visible: bool,
+    },
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
-    AlignBy { line: crate::layout::AlignmentLine },
+    AlignBy {
+        line: crate::layout::AlignmentLine,
+    },
     /// FlowRowScope's `fillMaxRowHeight`: fill this child to a fraction of the tallest item in its
     /// flow row. Only the flow row reads it.
-    FillMaxRowHeight { fraction: f32 },
+    FillMaxRowHeight {
+        fraction: f32,
+    },
     /// FlowColumnScope's `fillMaxColumnWidth`: fill this child to a fraction of the widest item in
     /// its flow column. Only the flow column reads it.
-    FillMaxColumnWidth { fraction: f32 },
+    FillMaxColumnWidth {
+        fraction: f32,
+    },
     /// A line a node reports, computed from its measured size — see
     /// [`Modifier::alignment_line`]. Compose's `layout(alignmentLines = …)` in modifier form.
     AlignmentLineValue {
@@ -440,7 +500,9 @@ pub(crate) enum ModifierElement {
     },
     /// Reserve a touch target of at least this many logical pixels on BOTH axes, centring the content
     /// inside it — Compose's `Modifier.minimumInteractiveComponentSize`. `size <= 0` is off.
-    MinimumInteractiveSize { size: f32 },
+    MinimumInteractiveSize {
+        size: f32,
+    },
     /// Pad this node so its content's alignment line sits `before` from the near edge and `after`
     /// from the far one (Compose's `Modifier.paddingFrom`). `None` is Compose's
     /// `Dp.Unspecified` — that side is not constrained.
@@ -470,27 +532,48 @@ pub(crate) enum ModifierElement {
     /// into it, because a `Size` is clamped into the incoming range (`layout/node.rs`'s measure, the
     /// same rule `Modifier::size` documents) before anything flex computes. `Modifier::required_size`
     /// is the escape hatch for a child that must leave the share on purpose.
-    LayoutWeight { weight: f32, fill: bool },
+    LayoutWeight {
+        weight: f32,
+        fill: bool,
+    },
     /// An aspect ratio — Compose's `Modifier.aspectRatio`, where the ratio is width over height.
-    AspectRatio { ratio: f32, match_height_first: bool },
+    AspectRatio {
+        ratio: f32,
+        match_height_first: bool,
+    },
     /// A required size (Compose's `Modifier.requiredSize`): the incoming constraints are ignored
     /// rather than shrunk to, so the node may overflow its parent.
-    RequiredSize { width: Option<SizeValue>, height: Option<SizeValue> },
+    RequiredSize {
+        width: Option<SizeValue>,
+        height: Option<SizeValue>,
+    },
     /// A size report (Compose's `Modifier.onSizeChanged`): once the node is measured, the size in
     /// logical pixels. The element dedupes, so an unchanged size does not call back again.
-    OnSizeChanged { callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync> },
+    OnSizeChanged {
+        callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync>,
+    },
     /// Fires with the placed box, in window coordinates, when it changes — Compose's
     /// `onGloballyPositioned`. Delivered after `OnPlaced` for the same pass.
-    OnGloballyPositioned { callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync> },
+    OnGloballyPositioned {
+        callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync>,
+    },
     /// Compose's `onPlaced`: the same box, delivered before the `OnGloballyPositioned` callbacks.
-    OnPlaced { callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync> },
+    OnPlaced {
+        callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync>,
+    },
     /// Compose's `layoutId`: a tag for this layout node, visible in the debug tree.
-    LayoutId { id: std::sync::Arc<str> },
+    LayoutId {
+        id: std::sync::Arc<str>,
+    },
     /// Compose's `bringIntoViewRequester`: this node's requests are served after the layout pass.
-    BringIntoViewRequester { requester: crate::layout::BringIntoViewRequester },
+    BringIntoViewRequester {
+        requester: crate::layout::BringIntoViewRequester,
+    },
     /// A test tag — Compose's `Modifier.testTag`, which UI tests target and the debug tree exposes
     /// in its JSON.
-    TestTag { tag: String },
+    TestTag {
+        tag: String,
+    },
     /// Accessibility declaration (role / name / state) — resolved into the semantics tree by
     /// `crate::semantics`. A node with this element still does layout as usual; the element exists
     /// only to be read (like `TestTag`), so it is a no-op for layout, drawing and input.
@@ -501,10 +584,14 @@ pub(crate) enum ModifierElement {
     /// Compose's `focusGroup()`: the node is a traversal group that remembers which child had focus.
     FocusGroup,
     /// Compose's `focusProperties { canFocus = … }` — the part that gates focus eligibility.
-    FocusProperties { can_focus: Option<bool> },
+    FocusProperties {
+        can_focus: Option<bool>,
+    },
     /// Compose's `onFocusChanged`: the callback receives `true` when the node gains focus, `false`
     /// when it loses it. Dispatched when the flag changes, including a loss caused by removal.
-    OnFocusChanged { callback: std::sync::Arc<dyn Fn(bool) + Send + Sync> },
+    OnFocusChanged {
+        callback: std::sync::Arc<dyn Fn(bool) + Send + Sync>,
+    },
     /// The layout direction that resolves this node's start/end padding. A Row/Column reads this
     /// element on itself first, then the CompositionLocal. It does NOT inherit into a subtree: the
     /// subtree-level direction Compose offers is `WiniaTheme::with_theme_and_direction` (a
@@ -518,7 +605,9 @@ pub(crate) enum ModifierElement {
     /// A text-field child's role marker. The container's own measure policy places each role
     /// (leading, label, placeholder, prefix, input, suffix, trailing); it is a marker only and takes
     /// no part in measure or paint.
-    TextFieldSlot { role: crate::text::field::TextFieldSlotRole },
+    TextFieldSlot {
+        role: crate::text::field::TextFieldSlotRole,
+    },
     /// A shadow — Compose's `Modifier.shadow`: a blurred elevation plus clipping the content.
     /// A shadow with single-layer parameters. The elevation shortcut expands into two elements,
     /// ambient and spot.
@@ -531,7 +620,10 @@ pub(crate) enum ModifierElement {
     // ── Draw ──
     /// Background colour + shape. The colour is a [`Dyn`](crate::graphics::Dyn): a literal is stored
     /// inline, a closure is evaluated per paint.
-    Background { color: crate::graphics::Dyn<Color>, shape: crate::graphics::Dyn<Shape> },
+    Background {
+        color: crate::graphics::Dyn<Color>,
+        shape: crate::graphics::Dyn<Shape>,
+    },
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
@@ -546,13 +638,19 @@ pub(crate) enum ModifierElement {
         shape: crate::graphics::Dyn<Shape>,
     },
     /// A clip.
-    Clip { shape: crate::graphics::Dyn<Shape> },
+    Clip {
+        shape: crate::graphics::Dyn<Shape>,
+    },
     /// A content blur (native GPU, nothing read back). The radius is a carrier: a state or closure
     /// is read per paint.
-    Blur { radius: crate::graphics::Dyn<f32> },
+    Blur {
+        radius: crate::graphics::Dyn<f32>,
+    },
     /// A background blur (frosted glass, one snapshot shared across nodes). Same carrier radius as
     /// `Blur`.
-    BackdropBlur { radius: crate::graphics::Dyn<f32> },
+    BackdropBlur {
+        radius: crate::graphics::Dyn<f32>,
+    },
     /// The text-field container's visuals (internal to `TextField`): the M3 Filled/Outlined
     /// background, indicator, outline, label and supporting text. Every visual state (enabled,
     /// focused, in-error, label floated) is resolved at compose time and painted statically at
@@ -593,12 +691,33 @@ pub(crate) enum ModifierElement {
 
     // ── Content ──
     /// Text content, set by the `Text` component and consumed at render time.
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32>, min_lines: usize, underline: bool, line_through: bool, font_family: Option<String>, on_text_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>, auto_size: Option<(f32, f32)> },
+    TextContent {
+        content: String,
+        font_size: f32,
+        color: Color,
+        font_weight: crate::text::FontWeight,
+        font_style: crate::text::FontSlant,
+        max_lines: usize,
+        align: crate::text::TextAlign,
+        overflow: crate::text::TextOverflow,
+        soft_wrap: bool,
+        letter_spacing: f32,
+        line_height: Option<f32>,
+        min_lines: usize,
+        underline: bool,
+        line_through: bool,
+        font_family: Option<String>,
+        on_text_layout:
+            Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
+        auto_size: Option<(f32, f32)>,
+    },
     /// Compose's richer `onTextLayout` sink: the snapshot plus the paragraph, so the per-line queries
     /// (`getLineForOffset`, `getBoundingBox`, …) can answer. Its own element, because the callback
     /// type would otherwise grow every hand-written `TextContent { .. }` literal in the suite.
     TextLayoutCallback {
-        callback: std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>,
+        callback: std::sync::Arc<
+            dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync,
+        >,
     },
     /// How the glyphs are PAINTED, kept beside `TextContent` instead of inside it: a shadow and an
     /// OpenType feature string change the shaped paragraph without changing any of the measure-time
@@ -639,25 +758,44 @@ pub(crate) enum ModifierElement {
     // ── Input ──
     /// Clickable. With a `Some(interaction)` it emits press/focus/hover itself, like Compose's
     /// `clickable(interactionSource)`.
-    Clickable { on_click: Arc<dyn Fn() + Send + Sync>, interaction: Option<MutableInteractionSource> },
+    Clickable {
+        on_click: Arc<dyn Fn() + Send + Sync>,
+        interaction: Option<MutableInteractionSource>,
+    },
     /// The tap callback (Compose's `onTap` in `detectTapGestures`); the position is in the
     /// component's local coordinates.
-    TapOnTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    TapOnTap {
+        cb: Arc<dyn Fn((f32, f32)) + Send + Sync>,
+    },
     /// The double-tap callback.
-    TapOnDoubleTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    TapOnDoubleTap {
+        cb: Arc<dyn Fn((f32, f32)) + Send + Sync>,
+    },
     /// The long-press callback. It fires on pointer up here, where Compose fires immediately — a
     /// known difference.
-    TapOnLongPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    TapOnLongPress {
+        cb: Arc<dyn Fn((f32, f32)) + Send + Sync>,
+    },
     /// The press callback, fired on down.
-    TapOnPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    TapOnPress {
+        cb: Arc<dyn Fn((f32, f32)) + Send + Sync>,
+    },
     /// Drag start, once the touch slop is first exceeded.
-    DragOnStart { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    DragOnStart {
+        cb: Arc<dyn Fn((f32, f32)) + Send + Sync>,
+    },
     /// Drag move: the current position and the delta.
-    DragOnMove { cb: Arc<dyn Fn((f32, f32), (f32, f32)) + Send + Sync> },
+    DragOnMove {
+        cb: Arc<dyn Fn((f32, f32), (f32, f32)) + Send + Sync>,
+    },
     /// Drag end.
-    DragOnEnd { cb: Arc<dyn Fn() + Send + Sync> },
+    DragOnEnd {
+        cb: Arc<dyn Fn() + Send + Sync>,
+    },
     /// Drag cancel (the gesture was interrupted).
-    DragOnCancel { cb: Arc<dyn Fn() + Send + Sync> },
+    DragOnCancel {
+        cb: Arc<dyn Fn() + Send + Sync>,
+    },
     /// This node's drag OUTRANKS a surrounding scroll container on every axis.
     ///
     /// The default arbitration is by dominant axis (a horizontal slider inside a vertical list keeps
@@ -667,9 +805,13 @@ pub(crate) enum ModifierElement {
     /// gesture pipeline; winia needs the marker to keep `detectDragGestures` components working.
     DragPreemptsScroll,
     /// Focusable. With a `Some(interaction)` it emits Focus/Unfocus as focus changes.
-    Focusable { interaction: Option<MutableInteractionSource> },
+    Focusable {
+        interaction: Option<MutableInteractionSource>,
+    },
     /// Hover: pointer enter and exit emit Hover Enter/Exit (Compose's `hoverable`).
-    Hoverable { interaction: MutableInteractionSource },
+    Hoverable {
+        interaction: MutableInteractionSource,
+    },
     /// The cursor this node asks for while hovered — Compose Desktop's `pointerHoverIcon`.
     /// `override_descendants` makes this node's icon win over any icon on a descendant.
     PointerHoverIcon {
@@ -694,11 +836,15 @@ pub(crate) enum ModifierElement {
         state_layer_diameter: Option<crate::graphics::Dyn<f32>>,
     },
     /// Icon drawing (internal to `Icon`): source, tint, auto-mirror and the variable axes.
-    CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
+    CustomDraw {
+        f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync>,
+    },
     /// Suppress the framework's focus ring, for a component that draws its own (a Slider rings the
     /// thumb rather than the whole component).
     NoFocusRing,
-    DrawIcon { spec: crate::graphics::IconSpec },
+    DrawIcon {
+        spec: crate::graphics::IconSpec,
+    },
     /// Picture content (`Image`): a bitmap or SVG with a `ContentScale`, an alignment and an alpha.
     /// Unlike DrawIcon it does not tint, it scales by `ContentScale`, and the alignment is the
     /// caller's.
@@ -713,7 +859,9 @@ pub(crate) enum ModifierElement {
         filter_quality: FilterQuality,
     },
     /// The focus requester's id, tying the node to a `FocusRequester`.
-    FocusRequesterId { id: u64 },
+    FocusRequesterId {
+        id: u64,
+    },
     /// Key events.
     KbEvent {
         on_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
@@ -727,7 +875,10 @@ pub(crate) enum ModifierElement {
     /// Vertical scrolling, bound to an offset State.
     /// The whole `ScrollState` (offset, is_scroll_in_progress, fling_limit). The input path (drag
     /// and wheel in the app) reads it through the node to run a fling and to clamp at the limit.
-    VerticalScroll { state: ScrollState, reverse: bool },
+    VerticalScroll {
+        state: ScrollState,
+        reverse: bool,
+    },
     /// The scroll container at this node keeps its clip and its viewport, but the GESTURE paths skip
     /// it: what a lazy list with `user_scroll(false)` needs. Dropping the container instead (the old
     /// behaviour) also dropped the clip, so the list painted its items outside its own box.
@@ -735,7 +886,10 @@ pub(crate) enum ModifierElement {
     /// The lazy list's content-height marker (used by LazyColumn to compute `max_offset` in
     /// `apply_scroll_delta`). The node's own height is the viewport; the content's total height is
     /// written back into this State by the measure pass.
-    LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
+    LazyScroll {
+        content_height: crate::runtime::state::Backchannel<f32>,
+        reverse: bool,
+    },
     /// The item's placement/fade contract. Lazy lists and flow layouts read it; the renderer applies
     /// the host's paint channels. Inert outside an item-aware layout.
     AnimateItem(crate::animation::item::ItemAnimationSpec),
@@ -743,7 +897,10 @@ pub(crate) enum ModifierElement {
     /// container's scroll clip/translate, so a ghost cannot land outside the viewport.
     ItemAnimationHost(crate::layout::item_animation::ItemAnimationHost),
     /// Horizontal scrolling.
-    HorizontalScroll { state: ScrollState, reverse: bool },
+    HorizontalScroll {
+        state: ScrollState,
+        reverse: bool,
+    },
     /// Compose's inner shadow: a rim drawn inside the shape, above the content.
     InnerShadow {
         shape: crate::graphics::Dyn<Shape>,
@@ -754,16 +911,24 @@ pub(crate) enum ModifierElement {
     },
     /// Compose's `clipScrollableContainer(orientation)`: the main axis is clipped to the container,
     /// the cross axis keeps 30 dp of slack so a shadow there is not cut off.
-    ClipScrollableContainer { vertical: bool },
+    ClipScrollableContainer {
+        vertical: bool,
+    },
     /// Compose's `overscroll(effect)`: the container absorbs the delta it cannot scroll into the
     /// effect instead of letting it fall through.
-    Overscroll { effect: crate::overscroll::OverscrollEffect },
+    Overscroll {
+        effect: crate::overscroll::OverscrollEffect,
+    },
     /// A nested-scroll connection: an ancestor may consume part of the delta/velocity before or
     /// after the child does.
-    NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
+    NestedScroll {
+        connection: Arc<dyn crate::nested_scroll::NestedScrollConnection>,
+    },
     /// A graphic-layer transform (scale, alpha, rotation, translation): it repaints without
     /// relayouting.
-    GraphicsLayer { params: crate::graphics::Dyn<GraphicsLayerParams> },
+    GraphicsLayer {
+        params: crate::graphics::Dyn<GraphicsLayerParams>,
+    },
     /// A shared-element transition marker (pure data: the pairing identity plus the morph spec). The
     /// endpoint registers at compose time; render ignores it. Bounds never enter the modifier — the
     /// flight is a render-phase behaviour, so a bounds change never forces a re-entry.
@@ -818,4 +983,3 @@ pub(crate) enum ModifierElement {
         id: u64,
     },
 }
-

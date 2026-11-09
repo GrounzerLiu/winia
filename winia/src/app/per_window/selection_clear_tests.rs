@@ -10,8 +10,11 @@ use crate::theme::ThemeColors;
 use std::sync::{Arc, Mutex};
 
 /// Two containers stacked (each 300x60, one text each) and a plain Text below them.
-fn two_containers_and_a_plain_text()
-    -> (PerWindow, Arc<Mutex<Option<SelectionRegistrar>>>, Arc<Mutex<Option<SelectionRegistrar>>>) {
+fn two_containers_and_a_plain_text() -> (
+    PerWindow,
+    Arc<Mutex<Option<SelectionRegistrar>>>,
+    Arc<Mutex<Option<SelectionRegistrar>>>,
+) {
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 400.0, ThemeColors::default_light());
     let a: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
     let b: Arc<Mutex<Option<SelectionRegistrar>>> = Default::default();
@@ -23,7 +26,8 @@ fn two_containers_and_a_plain_text()
             SelectionContainer::new()
                 .modifier(Modifier::new().size(300.0, 60.0))
                 .build(ctx, move |ctx| {
-                    *an.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                    *an.lock().unwrap() =
+                        Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                     crate::components::Text::new("aaaa bbbb")
                         .modifier(Modifier::new().width(300.0))
                         .build(ctx);
@@ -32,7 +36,8 @@ fn two_containers_and_a_plain_text()
             SelectionContainer::new()
                 .modifier(Modifier::new().size(300.0, 60.0))
                 .build(ctx, move |ctx| {
-                    *bn.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                    *bn.lock().unwrap() =
+                        Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                     crate::components::Text::new("cccc dddd")
                         .modifier(Modifier::new().width(300.0))
                         .build(ctx);
@@ -53,7 +58,9 @@ fn press(pw: &mut PerWindow, at: (f32, f32)) -> bool {
     super::pointer::handle_pointer_down(
         pw,
         at,
-        crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary },
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
         &winit::keyboard::ModifiersState::empty(),
         true,
     )
@@ -75,10 +82,16 @@ fn pressing_outside_the_container_leaves_its_selection_alone() {
     let (mut pw, a, _b) = two_containers_and_a_plain_text();
     let reg = a.lock().unwrap().clone().expect("A registered");
     select_all_in(&reg);
-    assert!(reg.build_selection().is_some(), "precondition: A has a selection");
+    assert!(
+        reg.build_selection().is_some(),
+        "precondition: A has a selection"
+    );
 
     // y 130 is the plain Text under both containers (each 60 tall).
-    assert!(press(&mut pw, (20.0, 130.0)), "the press has to hit something");
+    assert!(
+        press(&mut pw, (20.0, 130.0)),
+        "the press has to hit something"
+    );
     assert!(
         reg.build_selection().is_some(),
         "a press outside the container never reaches it, so the selection stands"
@@ -103,6 +116,12 @@ fn pressing_another_container_leaves_the_first_alone() {
         reg_a.build_selection().is_some(),
         "a press inside B does not end A's selection"
     );
-    assert!(reg_b.build_selection().is_none(), "and B has nothing selected");
-    assert!(!reg_a.is_same(&reg_b), "different containers, different registrars");
+    assert!(
+        reg_b.build_selection().is_none(),
+        "and B has nothing selected"
+    );
+    assert!(
+        !reg_a.is_same(&reg_b),
+        "different containers, different registrars"
+    );
 }

@@ -154,4 +154,3 @@ pub(crate) fn modal_rail_container_spec() -> crate::animation::AnimationSpec {
 pub(crate) fn wide_rail_item_morph_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
-

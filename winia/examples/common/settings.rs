@@ -180,7 +180,10 @@ fn settings_sheet(
                     Text::new("Settings").font_size(20.0).build(ctx);
                     Divider::horizontal().build(ctx);
 
-                    Text::new("Theme").font_size(12.0).color(label_color).build(ctx);
+                    Text::new("Theme")
+                        .font_size(12.0)
+                        .color(label_color)
+                        .build(ctx);
                     SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
                         for (index, option) in ThemeMode::ALL.iter().enumerate() {
                             let option = *option;
@@ -191,7 +194,10 @@ fn settings_sheet(
                                     mode.set(option);
                                 }
                             })
-                            .shape(SegmentedButtonDefaults::item_shape(index, ThemeMode::ALL.len()))
+                            .shape(SegmentedButtonDefaults::item_shape(
+                                index,
+                                ThemeMode::ALL.len(),
+                            ))
                             .build(ctx, |ctx| {
                                 Text::new(option.label()).build(ctx);
                             });
@@ -210,7 +216,10 @@ fn settings_sheet(
                                 clone!(direction);
                                 move || direction.set(option)
                             })
-                            .shape(SegmentedButtonDefaults::item_shape(index, Direction::ALL.len()))
+                            .shape(SegmentedButtonDefaults::item_shape(
+                                index,
+                                Direction::ALL.len(),
+                            ))
                             .build(ctx, |ctx| {
                                 Text::new(option.label()).build(ctx);
                             });

@@ -72,7 +72,9 @@ fn a_config_for_resolver_sees_a_state_change() {
     }
     let row = cells(&composer);
     assert!(
-        (row[0].0 - 0.0).abs() < 0.5 && (row[1].0 - 20.0).abs() < 0.5 && (row[1].1 - 0.0).abs() < 0.5,
+        (row[0].0 - 0.0).abs() < 0.5
+            && (row[1].0 - 20.0).abs() < 0.5
+            && (row[1].1 - 0.0).abs() < 0.5,
         "the default direction lays the cells out in a row: {row:?}"
     );
 

@@ -34,11 +34,11 @@
 //! component's own key. It is a working facility, not an optimized one, and it is deliberately not
 //! used by any shipped component yet.
 
-use crate::runtime::composer::ComposeCtx;
-use crate::runtime::composer::Composer;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, NodeArena, NodeMarks};
-use crate::unit::{Size};
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composer::Composer;
+use crate::unit::Size;
 
 thread_local! {
     /// The node index currently being measured, or `None`. Set by `measure_node` around a real
@@ -107,7 +107,9 @@ pub(crate) fn subcomposition_count() -> usize {
 /// The outer composer's compose count, or `None` outside a layout pass. A subcomposing policy uses it
 /// to distinguish a second measurement of the SAME frame from a measurement in a later one.
 pub(crate) fn compose_generation() -> Option<u64> {
-    LAYOUT_HOST.with(|h| h.get()).map(|host| unsafe { (*host).compose_generation() })
+    LAYOUT_HOST
+        .with(|h| h.get())
+        .map(|host| unsafe { (*host).compose_generation() })
 }
 
 /// The node index being measured right now, if the caller is inside a `measure` call.
@@ -161,10 +163,7 @@ impl Subcomposition {
 ///
 /// Call it at most once per `measure` call — each call would park a second composition against the
 /// same node and only the last would be adopted.
-pub fn subcompose(
-    constraints: Constraints,
-    content: impl Fn(&mut ComposeCtx),
-) -> Size {
+pub fn subcompose(constraints: Constraints, content: impl Fn(&mut ComposeCtx)) -> Size {
     subcompose_sized(constraints, true, content)
 }
 
@@ -175,10 +174,7 @@ pub fn subcompose(
 /// a window, `TabRow`'s own node came out `[0,4]` — the indicator's box, `4.0` being the bar's height —
 /// while the tabs inside it were still `[122,48]`, and a zero-wide row paints nothing, so the tabs and
 /// the bar both disappeared.
-pub fn subcompose_overlay(
-    constraints: Constraints,
-    content: impl Fn(&mut ComposeCtx),
-) -> Size {
+pub fn subcompose_overlay(constraints: Constraints, content: impl Fn(&mut ComposeCtx)) -> Size {
     subcompose_sized(constraints, false, content)
 }
 
@@ -265,7 +261,11 @@ fn subcompose_sized(
         Some(root) => inner.arena_nodes()[root].measured_size,
         None => Size::new(0.0, 0.0),
     };
-    let entry = Subcomposition { composer: *inner, constraints, sized_by_content };
+    let entry = Subcomposition {
+        composer: *inner,
+        constraints,
+        sized_by_content,
+    };
     match current_measuring_node() {
         Some(node) => {
             // Park it on the composer whose layout is running. `LAYOUT_HOST` is armed by
@@ -320,7 +320,8 @@ pub(crate) fn adopt_parked(
             // while the node is: an entry is replaced when the node measures again, and the cache holds
             // at most one composer per subcomposing node.
             SUBCOMPOSITION_CACHE.with(|c| {
-                c.borrow_mut().insert((host_uid, node_idx), Box::new(composer));
+                c.borrow_mut()
+                    .insert((host_uid, node_idx), Box::new(composer));
             });
         }
     }
@@ -416,7 +417,10 @@ fn adopt_one(
     // The frame path cannot be relied on to have re-run the policy at the moment the tree is read:
     // measured in the app frame, the box node read [0,0] while its adopted child read [192,19].
     // Writing the root's measurement here keeps the two in step whenever the subcomposition is adopted.
-    let inner_root_size = measurements.first().map(|(_, s)| *s).unwrap_or(Size::new(0.0, 0.0));
+    let inner_root_size = measurements
+        .first()
+        .map(|(_, s)| *s)
+        .unwrap_or(Size::new(0.0, 0.0));
     arena.add_child(parent, adopted_root);
     arena.nodes[parent].subcomposed_child = Some(adopted_root);
     if sized_by_content {
@@ -460,7 +464,9 @@ fn measurements_from(nodes: &[LayoutNode], root: usize) -> Vec<(usize, Size)> {
         // The arena refills from a LIFO free list, so a node re-allocated into a freed slot can sit
         // BELOW its root. An underflow here would be a debug panic and a huge offset in release
         // (which materialize then skips silently), so skip such a node instead.
-        let Some(offset) = index.checked_sub(root) else { return };
+        let Some(offset) = index.checked_sub(root) else {
+            return;
+        };
         out.push((offset, nodes[index].measured_size));
         for &c in &nodes[index].children {
             walk(nodes, root, c, out);
@@ -476,8 +482,8 @@ fn measurements_from(nodes: &[LayoutNode], root: usize) -> Vec<(usize, Size)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::node::{Alignment, MeasurePolicy, Placement};
+    use crate::runtime::composer::Composer;
     use skia_safe::surfaces;
 
     /// A minimal subcomposing policy: composes a single `Text` with the constraints it was measured
@@ -555,9 +561,16 @@ mod tests {
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let root = composer.arena.root.expect("root");
         let first = composer.arena.nodes[root].measured_size;
-        let child = composer.arena.nodes[root].children.first().copied().expect("adopted child");
+        let child = composer.arena.nodes[root]
+            .children
+            .first()
+            .copied()
+            .expect("adopted child");
         let child_first = composer.arena.nodes[child].measured_size;
-        assert!(child_first.height > 0.0, "the content composed and measured: {child_first:?}");
+        assert!(
+            child_first.height > 0.0,
+            "the content composed and measured: {child_first:?}"
+        );
         assert!(first.height > 0.0, "and the parent reports it: {first:?}");
 
         // Frame 2 — a real second measurement of the same node, which is what the app's frame path does
@@ -572,10 +585,13 @@ mod tests {
             second.height > 0.0,
             "the parent is still sized on the second frame: {second:?}"
         );
-        let child = composer.arena.nodes[root].children.first().copied().expect("adopted child");
+        let child = composer.arena.nodes[root]
+            .children
+            .first()
+            .copied()
+            .expect("adopted child");
         assert_eq!(
-            composer.arena.nodes[child].measured_size.height,
-            second.height,
+            composer.arena.nodes[child].measured_size.height, second.height,
             "the parent's size IS its content's size on the second frame too"
         );
         let runs = *runs.lock().unwrap();
@@ -590,7 +606,10 @@ mod tests {
             ctx.start_container(
                 key,
                 crate::modifier::Modifier::new().size(120.0, 30.0),
-                TextSubcomposePolicy { text: "subcomposed".to_string(), runs: None },
+                TextSubcomposePolicy {
+                    text: "subcomposed".to_string(),
+                    runs: None,
+                },
             );
             ctx.end_node();
         };
@@ -665,7 +684,13 @@ mod tests {
                 });
                 (size, Vec::new())
             }
-            fn place(&self, _nodes: &mut Vec<LayoutNode>, _children: &[usize], _placements: &[Placement]) {}
+            fn place(
+                &self,
+                _nodes: &mut Vec<LayoutNode>,
+                _children: &[usize],
+                _placements: &[Placement],
+            ) {
+            }
         }
 
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

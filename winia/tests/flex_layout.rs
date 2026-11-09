@@ -38,7 +38,9 @@ fn weighted_column(max_h: f32) -> (f32, f32) {
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, max_h));
     let root = composer.layout_root().unwrap();
-    let weighted = composer.arena_nodes()[root.children[1]].measured_size.height;
+    let weighted = composer.arena_nodes()[root.children[1]]
+        .measured_size
+        .height;
     (root.measured_size.height, weighted)
 }
 
@@ -48,7 +50,10 @@ fn weighted_column(max_h: f32) -> (f32, f32) {
 fn a_weighted_child_on_the_f32_max_axis_keeps_the_axis_content_sized() {
     let (column, weighted) = weighted_column(f32::MAX);
     assert_eq!(column, 20.0, "the column is its content, not 3.4e38");
-    assert_eq!(weighted, 0.0, "an unbounded main axis gives a weighted child nothing");
+    assert_eq!(
+        weighted, 0.0,
+        "an unbounded main axis gives a weighted child nothing"
+    );
 }
 
 /// The other sentinel, `f32::INFINITY`, already behaved; pin it so the two stay together.
@@ -74,7 +79,11 @@ fn a_weighted_child_in_a_scrolling_column_does_not_inflate_the_content() {
     let mut composer = Composer::new();
     composer.compose(winia::compose!(|ctx| {
         Column::new()
-            .modifier(Modifier::new().fill_max_height().vertical_scroll(ScrollState::new()))
+            .modifier(
+                Modifier::new()
+                    .fill_max_height()
+                    .vertical_scroll(ScrollState::new()),
+            )
             .build(ctx, |ctx| {
                 Column::new().build(ctx, |ctx| {
                     Text::new("hi").modifier(fixed(50.0, 20.0)).build(ctx);
@@ -86,10 +95,14 @@ fn a_weighted_child_in_a_scrolling_column_does_not_inflate_the_content() {
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 300.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(root.measured_size.height, 300.0, "the scroll container keeps its viewport");
+    assert_eq!(
+        root.measured_size.height, 300.0,
+        "the scroll container keeps its viewport"
+    );
     let content = composer.layout_root().unwrap().children[0];
     assert_eq!(
-        composer.arena_nodes()[content].measured_size.height, 20.0,
+        composer.arena_nodes()[content].measured_size.height,
+        20.0,
         "the scrolling content is its content"
     );
 }
@@ -100,7 +113,11 @@ fn a_weighted_child_in_a_horizontally_scrolling_row_does_not_inflate_the_content
     let mut composer = Composer::new();
     composer.compose(winia::compose!(|ctx| {
         Row::new()
-            .modifier(Modifier::new().fill_max_width().horizontal_scroll(ScrollState::new()))
+            .modifier(
+                Modifier::new()
+                    .fill_max_width()
+                    .horizontal_scroll(ScrollState::new()),
+            )
             .build(ctx, |ctx| {
                 Row::new().build(ctx, |ctx| {
                     Text::new("hi").modifier(fixed(20.0, 50.0)).build(ctx);
@@ -112,10 +129,14 @@ fn a_weighted_child_in_a_horizontally_scrolling_row_does_not_inflate_the_content
     }));
     composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(root.measured_size.width, 300.0, "the scroll container keeps its viewport");
+    assert_eq!(
+        root.measured_size.width, 300.0,
+        "the scroll container keeps its viewport"
+    );
     let content = composer.layout_root().unwrap().children[0];
     assert_eq!(
-        composer.arena_nodes()[content].measured_size.width, 20.0,
+        composer.arena_nodes()[content].measured_size.width,
+        20.0,
         "the scrolling content is its content"
     );
 }
@@ -169,7 +190,12 @@ fn a_zero_weight_child_is_measured_like_an_unweighted_one() {
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 300.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(composer.arena_nodes()[root.children[0]].measured_size.height, 100.0);
+    assert_eq!(
+        composer.arena_nodes()[root.children[0]]
+            .measured_size
+            .height,
+        100.0
+    );
     assert_eq!(root.measured_size.height, 150.0);
 }
 
@@ -183,14 +209,23 @@ fn an_overflowing_column_reports_its_content_height() {
     let mut composer = Composer::new();
     composer.compose(winia::compose!(|ctx| {
         Column::new().build(ctx, |ctx| {
-            Text::new("a").modifier(Modifier::new().required_size(50.0, 60.0)).build(ctx);
-            Text::new("b").modifier(Modifier::new().required_size(50.0, 60.0)).build(ctx);
-            Text::new("c").modifier(Modifier::new().required_size(50.0, 60.0)).build(ctx);
+            Text::new("a")
+                .modifier(Modifier::new().required_size(50.0, 60.0))
+                .build(ctx);
+            Text::new("b")
+                .modifier(Modifier::new().required_size(50.0, 60.0))
+                .build(ctx);
+            Text::new("c")
+                .modifier(Modifier::new().required_size(50.0, 60.0))
+                .build(ctx);
         });
     }));
     composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(root.measured_size.height, 180.0, "content, not the 100 the parent offered");
+    assert_eq!(
+        root.measured_size.height, 180.0,
+        "content, not the 100 the parent offered"
+    );
 }
 
 /// The cross axis follows the same rule: a child that does not wrap overflows the container rather
@@ -200,7 +235,9 @@ fn an_overflowing_cross_axis_reports_the_child_size() {
     let mut composer = Composer::new();
     composer.compose(winia::compose!(|ctx| {
         Column::new().build(ctx, |ctx| {
-            Text::new("x").modifier(Modifier::new().required_size(150.0, 20.0)).build(ctx);
+            Text::new("x")
+                .modifier(Modifier::new().required_size(150.0, 20.0))
+                .build(ctx);
         });
     }));
     composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
@@ -233,9 +270,18 @@ fn a_weighted_child_keeps_its_share_under_rtl() {
     let root = composer.layout_root().unwrap();
     let fixed = &composer.arena_nodes()[root.children[0]];
     let weighted = &composer.arena_nodes()[root.children[1]];
-    assert_eq!(weighted.measured_size.width, 80.0, "the share, not the whole axis");
-    assert_eq!(weighted.position.x, 0.0, "the weighted child starts at the left edge in RTL");
-    assert_eq!(fixed.position.x, 80.0, "the fixed sibling mirrors to the right");
+    assert_eq!(
+        weighted.measured_size.width, 80.0,
+        "the share, not the whole axis"
+    );
+    assert_eq!(
+        weighted.position.x, 0.0,
+        "the weighted child starts at the left edge in RTL"
+    );
+    assert_eq!(
+        fixed.position.x, 80.0,
+        "the fixed sibling mirrors to the right"
+    );
 }
 
 /// Cross-axis `End` mirrors too: in RTL it is the LEFT edge of a Column.
@@ -255,8 +301,16 @@ fn rtl_mirrors_the_cross_axis_alignment() {
         let root = composer.layout_root().unwrap();
         composer.arena_nodes()[root.children[0]].position.x
     };
-    assert_eq!(column(LayoutDirection::Ltr), 80.0, "End is the right edge in LTR");
-    assert_eq!(column(LayoutDirection::Rtl), 0.0, "and the left edge in RTL");
+    assert_eq!(
+        column(LayoutDirection::Ltr),
+        80.0,
+        "End is the right edge in LTR"
+    );
+    assert_eq!(
+        column(LayoutDirection::Rtl),
+        0.0,
+        "and the left edge in RTL"
+    );
 }
 
 /// `SpaceBetween` with two children mirrors its gap: LTR puts them at 0 / 70, RTL at 80 / 0.
@@ -287,8 +341,12 @@ fn an_overflowing_rtl_row_mirrors_its_content() {
         Row::new()
             .modifier(Modifier::new().layout_direction(LayoutDirection::Rtl))
             .build(ctx, |ctx| {
-                Text::new("a").modifier(Modifier::new().required_size(70.0, 10.0)).build(ctx);
-                Text::new("b").modifier(Modifier::new().required_size(70.0, 10.0)).build(ctx);
+                Text::new("a")
+                    .modifier(Modifier::new().required_size(70.0, 10.0))
+                    .build(ctx);
+                Text::new("b")
+                    .modifier(Modifier::new().required_size(70.0, 10.0))
+                    .build(ctx);
             });
     }));
     composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
@@ -315,7 +373,10 @@ fn a_weighted_child_shares_the_minimum_on_an_unbounded_axis() {
     composer.layout(Constraints::new(0.0, 200.0, 200.0, f32::MAX));
     let root = composer.layout_root().unwrap();
     assert_eq!(
-        composer.arena_nodes()[root.children[1]].measured_size.height, 150.0,
+        composer.arena_nodes()[root.children[1]]
+            .measured_size
+            .height,
+        150.0,
         "the share is the 200 dp minimum less the fixed child"
     );
     assert_eq!(root.measured_size.height, 200.0);
@@ -336,7 +397,12 @@ fn an_infinite_weight_is_coerced_instead_of_poisoning_the_share() {
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 300.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(composer.arena_nodes()[root.children[1]].measured_size.height, 250.0);
+    assert_eq!(
+        composer.arena_nodes()[root.children[1]]
+            .measured_size
+            .height,
+        250.0
+    );
     assert_eq!(root.measured_size.height, 300.0);
 }
 
@@ -354,9 +420,15 @@ fn a_gap_that_does_not_fit_is_capped_at_the_axis() {
     }));
     composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
     let root = composer.layout_root().unwrap();
-    assert_eq!(root.measured_size.height, 100.0, "the gap is capped, not charged in full");
     assert_eq!(
-        composer.arena_nodes()[root.children[1]].measured_size.height, 0.0,
+        root.measured_size.height, 100.0,
+        "the gap is capped, not charged in full"
+    );
+    assert_eq!(
+        composer.arena_nodes()[root.children[1]]
+            .measured_size
+            .height,
+        0.0,
         "the capped gap leaves the second child nothing to measure into"
     );
 }
@@ -367,11 +439,13 @@ fn a_gap_that_does_not_fit_is_capped_at_the_axis() {
 fn stretch_keeps_an_overflowing_child_in_the_reported_cross_size() {
     let mut composer = Composer::new();
     composer.compose(winia::compose!(|ctx| {
-        Column::new().alignment(Alignment::Stretch).build(ctx, |ctx| {
-            Text::new("wide")
-                .modifier(Modifier::new().required_size(150.0, 20.0))
-                .build(ctx);
-        });
+        Column::new()
+            .alignment(Alignment::Stretch)
+            .build(ctx, |ctx| {
+                Text::new("wide")
+                    .modifier(Modifier::new().required_size(150.0, 20.0))
+                    .build(ctx);
+            });
     }));
     composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
     let root = composer.layout_root().unwrap();

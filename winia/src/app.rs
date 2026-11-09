@@ -4,29 +4,28 @@ pub mod gesture;
 pub mod overlay_host;
 
 use gesture::{
-    GestureState, PtrDownState,    drag_scroll_up, fire_gesture_action, fire_in_gesture_arena, gesture_down,
-    gesture_move, gesture_up, inner_component_drag, path_drag_idx, path_scroll_idx,
+    GestureState, PtrDownState, drag_scroll_up, fire_gesture_action, fire_in_gesture_arena,
+    gesture_down, gesture_move, gesture_up, inner_component_drag, path_drag_idx, path_scroll_idx,
     press_gesture_target, process_pending_taps_on_down,
 };
 use overlay_host::{
-    OverlayHost,
-    begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click, focus_scope_is_open, hit_overlay, keyboard_scope,
-    layout_overlays, overlay_down, overlay_drag_up, overlay_exit_hover_at,
-    overlay_update_hover, render_overlays, sync_overlays,
+    OverlayHost, begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click,
+    focus_scope_is_open, hit_overlay, keyboard_scope, layout_overlays, overlay_down,
+    overlay_drag_up, overlay_exit_hover_at, overlay_update_hover, render_overlays, sync_overlays,
 };
 pub mod scroll;
 pub mod window;
 
 use scroll::{
-    dispatch_nested_scroll_delta, dispatch_nested_scroll_fling,
-    find_scroll_target, scroll_delta_with_shift, DragScroll,
+    DragScroll, dispatch_nested_scroll_delta, dispatch_nested_scroll_fling, find_scroll_target,
+    scroll_delta_with_shift,
 };
 
-use crate::runtime::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{hit_test_with_flights, focus_next, focus_prev, LayoutNode};
+use crate::layout::node::{LayoutNode, focus_next, focus_prev, hit_test_with_flights};
 use crate::render;
+use crate::runtime::composer::{ComposeCtx, Composer};
 
 /// Drag/nested-scroll debug trace switch (debug_assertions builds plus the WINIA_DRAG_TRACE env var).
 /// Consolidates seven repeated checks (review E1); a release build pays nothing.
@@ -107,7 +106,9 @@ pub(crate) fn set_ime_enabled(sw: &SkiaWindow, enabled: bool) {
 /// coordinates, which is what the composed tree knows and the OS does not.
 fn ime_enable_request() -> ImeRequest {
     use winit::window::{ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequestData};
-    let capabilities = ImeCapabilities::new().with_hint_and_purpose().with_cursor_area();
+    let capabilities = ImeCapabilities::new()
+        .with_hint_and_purpose()
+        .with_cursor_area();
     let data = ImeRequestData::default()
         .with_hint_and_purpose(ImeHint::NONE, ImePurpose::Normal)
         .with_cursor_area(
@@ -122,16 +123,24 @@ fn ime_enable_request() -> ImeRequest {
 
 /// Arrow-key focus navigation direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FocusDir { Left, Right, Up, Down }
+pub(crate) enum FocusDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 
 /// Queries the refresh rate of the monitor the window is on and returns the frame interval (mHz:
 /// 300000 = 300 Hz). None when the query fails; the caller keeps the old value (creation falls back to 16 ms).
 fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
-    let mhz = sw.current_monitor()
+    let mhz = sw
+        .current_monitor()
         .and_then(|m| m.current_video_mode())
         .and_then(|v| v.refresh_rate_millihertz())
         .map(|m| m.get())?;
-    Some(std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
+    Some(std::time::Duration::from_nanos(
+        1_000_000_000_000 / mhz as u64,
+    ))
 }
 
 // ── WindowThemeState ──
@@ -208,7 +217,6 @@ impl Default for FrameClock {
     }
 }
 
-
 // ── Public API ──
 
 // ── Public API ──
@@ -231,8 +239,26 @@ fn take_redraw_requests() -> Vec<u64> {
     std::mem::take(&mut *PENDING_REDRAW.lock().unwrap())
 }
 
-pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
-    open_window_with_saveable_key(width, height, title, WindowOptions::default(), content, on_close, created_id, None, theme);
+pub fn open_window_with_title(
+    width: f32,
+    height: f32,
+    title: String,
+    content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
+    on_close: Option<Box<dyn FnMut() + Send>>,
+    created_id: Option<u64>,
+    theme: Option<crate::theme::WindowTheme>,
+) {
+    open_window_with_saveable_key(
+        width,
+        height,
+        title,
+        WindowOptions::default(),
+        content,
+        on_close,
+        created_id,
+        None,
+        theme,
+    );
 }
 
 /// [`open_window_with_title`] plus a STABLE key for saveable state.
@@ -240,8 +266,28 @@ pub fn open_window_with_title(width: f32, height: f32, title: String, content: O
 /// The key has to survive a close: it is what a re-opened window is matched against. `created_id`
 /// cannot do that job (a fresh one is minted per window), so the declarative `Window` passes the
 /// salted key of its own call site.
-pub fn open_window_with_saveable_key(width: f32, height: f32, title: String, options: WindowOptions, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, saveable_key: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
-    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, options, content, on_close, created_id, saveable_key, theme });
+pub fn open_window_with_saveable_key(
+    width: f32,
+    height: f32,
+    title: String,
+    options: WindowOptions,
+    content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
+    on_close: Option<Box<dyn FnMut() + Send>>,
+    created_id: Option<u64>,
+    saveable_key: Option<u64>,
+    theme: Option<crate::theme::WindowTheme>,
+) {
+    GLOBAL_PENDING.lock().unwrap().push(PendingWindow {
+        width,
+        height,
+        title,
+        options,
+        content,
+        on_close,
+        created_id,
+        saveable_key,
+        theme,
+    });
     wake_impl();
 }
 
@@ -257,7 +303,6 @@ fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
-
 /// Apply a change of this window's theme: re-resolve it, and when what was drawn is now wrong, re-run the
 /// tree — no component looks at the theme by itself, they resolved their colours, type scale and direction
 /// when they composed.
@@ -267,9 +312,6 @@ fn take_pending_windows() -> Vec<PendingWindow> {
 /// sub-window of a tree that switched its own theme node — on its old palette). A `Fixed` window with the
 /// default type scale resolves the same values again and stops here, so a system theme change costs it
 /// nothing.
-
-
-
 
 /// Which node a press lands on, measured — the rule material3's `SecondaryEditable` anchor depends on.
 ///
@@ -335,7 +377,9 @@ pub fn run_app_android(
     run_app_with_event_loop(
         event_loop,
         app,
-        PlatformState { android_app: Some(ui_android_app) },
+        PlatformState {
+            android_app: Some(ui_android_app),
+        },
     );
 }
 
@@ -364,7 +408,9 @@ fn run_app_with_event_loop(
     debug::set_event_loop_proxy(proxy.clone());
     let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
-    crate::runtime::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
+    crate::runtime::state::set_wake_fn(move || {
+        let _ = proxy2.wake_up();
+    });
     #[cfg(not(target_os = "android"))]
     debug::start_stdin_channel();
     debug::start_ws_server();
@@ -381,7 +427,20 @@ fn run_app_with_event_loop(
     debug::end_session();
 }
 
-
+#[cfg(test)]
+mod drag_target_selection_tests;
+#[cfg(test)]
+mod frame_throttle_tests;
+#[cfg(test)]
+mod key_node_dual_track_tests;
+#[cfg(test)]
+mod pointer_dispatch_coord_tests;
+#[cfg(test)]
+mod pointer_icon_tests;
+#[cfg(test)]
+mod press_target_tests;
+#[cfg(test)]
+mod wheel_paging_tests;
 /// The wheel's page step: one notch pages, a stream of tiny high-resolution events has to bank a notch's
 /// worth of travel before any of them may, and a plain list never pages at all.
 ///
@@ -390,25 +449,8 @@ fn run_app_with_event_loop(
 /// flick); without the shared finder, the overlay layers could not page at all and a HorizontalPager
 /// could not be moved by a plain wheel.
 
-
-
-
 #[cfg(test)]
 mod window_theme_tests;
-#[cfg(test)]
-mod frame_throttle_tests;
-#[cfg(test)]
-mod press_target_tests;
-#[cfg(test)]
-mod pointer_dispatch_coord_tests;
-#[cfg(test)]
-mod key_node_dual_track_tests;
-#[cfg(test)]
-mod drag_target_selection_tests;
-#[cfg(test)]
-mod wheel_paging_tests;
-#[cfg(test)]
-mod pointer_icon_tests;
 
 mod app_state;
 mod per_window;

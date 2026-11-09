@@ -13,7 +13,13 @@ pub fn semantics_tree(nodes: &[LayoutNode], root: usize) -> Vec<SemanticsNode> {
     out
 }
 
-pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: &mut Vec<SemanticsNode>) {
+pub(crate) fn collect(
+    nodes: &[LayoutNode],
+    idx: usize,
+    parent_x: f32,
+    parent_y: f32,
+    out: &mut Vec<SemanticsNode>,
+) {
     let node = &nodes[idx];
     // Compose's `Modifier.visible(false)`: "invisible to accessibility services" (`Visible.kt:36-38`),
     // so the node and everything below it stays out of the tree a screen reader descends.
@@ -110,9 +116,13 @@ pub(crate) fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y:
             focused: node.focused,
             // An absorbed live region stays live: a snackbar wrapping its message is one element, and
             // the mode came from the wrapper.
-            live_region: config
-                .live_region_mode()
-                .max(absorbed.iter().map(|child| child.live_region).max().unwrap_or_default()),
+            live_region: config.live_region_mode().max(
+                absorbed
+                    .iter()
+                    .map(|child| child.live_region)
+                    .max()
+                    .unwrap_or_default(),
+            ),
             selectable_group: config.is_selectable_group(),
             collection: config.collection_info_value(),
             collection_item: config.collection_item_info_value(),
@@ -207,7 +217,10 @@ pub(crate) fn walk_with_paths(
 
 /// The names an absorbed subtree contributes, in tree order.
 pub(crate) fn joined_name(absorbed: &[SemanticsNode]) -> Option<String> {
-    let names: Vec<String> = absorbed.iter().filter_map(|node| node.effective_name()).collect();
+    let names: Vec<String> = absorbed
+        .iter()
+        .filter_map(|node| node.effective_name())
+        .collect();
     if names.is_empty() {
         None
     } else {
@@ -233,4 +246,3 @@ pub fn click_node_by_id(nodes: &[LayoutNode], node_id: u64) -> bool {
     }
     false
 }
-

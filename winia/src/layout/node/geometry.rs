@@ -110,26 +110,62 @@ pub struct ContentAlignment {
 }
 
 impl ContentAlignment {
-    pub const TOP_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Start };
-    pub const TOP_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Start };
-    pub const TOP_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Start };
-    pub const CENTER_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Center };
-    pub const CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Center };
-    pub const CENTER_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Center };
-    pub const BOTTOM_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::End };
-    pub const BOTTOM_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::End };
-    pub const BOTTOM_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::End };
+    pub const TOP_START: Self = Self {
+        horizontal: Alignment::Start,
+        vertical: Alignment::Start,
+    };
+    pub const TOP_CENTER: Self = Self {
+        horizontal: Alignment::Center,
+        vertical: Alignment::Start,
+    };
+    pub const TOP_END: Self = Self {
+        horizontal: Alignment::End,
+        vertical: Alignment::Start,
+    };
+    pub const CENTER_START: Self = Self {
+        horizontal: Alignment::Start,
+        vertical: Alignment::Center,
+    };
+    pub const CENTER: Self = Self {
+        horizontal: Alignment::Center,
+        vertical: Alignment::Center,
+    };
+    pub const CENTER_END: Self = Self {
+        horizontal: Alignment::End,
+        vertical: Alignment::Center,
+    };
+    pub const BOTTOM_START: Self = Self {
+        horizontal: Alignment::Start,
+        vertical: Alignment::End,
+    };
+    pub const BOTTOM_CENTER: Self = Self {
+        horizontal: Alignment::Center,
+        vertical: Alignment::End,
+    };
+    pub const BOTTOM_END: Self = Self {
+        horizontal: Alignment::End,
+        vertical: Alignment::End,
+    };
     /// Both axes stretched to the box — winia's addition, since Compose stretches with
     /// `fillMaxSize()` instead.
-    pub const STRETCH: Self = Self { horizontal: Alignment::Stretch, vertical: Alignment::Stretch };
+    pub const STRETCH: Self = Self {
+        horizontal: Alignment::Stretch,
+        vertical: Alignment::Stretch,
+    };
 
     pub fn new(horizontal: Alignment, vertical: Alignment) -> Self {
-        Self { horizontal, vertical }
+        Self {
+            horizontal,
+            vertical,
+        }
     }
 
     /// The same value on both axes, which is what the one-axis builder means.
     pub fn both(a: Alignment) -> Self {
-        Self { horizontal: a, vertical: a }
+        Self {
+            horizontal: a,
+            vertical: a,
+        }
     }
 
     /// Compose's `Alignment.align(size, space, layoutDirection)`: the offset for a child of `child`
@@ -165,8 +201,16 @@ impl ContentAlignment {
     /// The size the child gets: its own, except on an axis that stretches to the box.
     pub fn child_size(&self, child: Size, space: Size) -> Size {
         Size::new(
-            if self.horizontal == Alignment::Stretch { space.width } else { child.width },
-            if self.vertical == Alignment::Stretch { space.height } else { child.height },
+            if self.horizontal == Alignment::Stretch {
+                space.width
+            } else {
+                child.width
+            },
+            if self.vertical == Alignment::Stretch {
+                space.height
+            } else {
+                child.height
+            },
         )
     }
 }
@@ -202,7 +246,12 @@ pub struct GlobalPosition {
 
 impl GlobalPosition {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Top-left corner, in window coordinates.

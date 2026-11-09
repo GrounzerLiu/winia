@@ -20,11 +20,20 @@ impl Flight {
     /// coordinator may deliver late events from a previous generation).
     pub(crate) fn on_event(&mut self, ev: FlightEvent) -> Vec<FlightAction> {
         match (&self.phase, ev) {
-            (FlightPhase::Idle, FlightEvent::CounterpartAppeared { source_slot, target_slot }) => {
+            (
+                FlightPhase::Idle,
+                FlightEvent::CounterpartAppeared {
+                    source_slot,
+                    target_slot,
+                },
+            ) => {
                 self.phase = FlightPhase::AwaitingBounds;
                 self.source_slot = Some(source_slot);
                 self.target_slot = Some(target_slot);
-                vec![FlightAction::CollectBounds { source_slot, target_slot }]
+                vec![FlightAction::CollectBounds {
+                    source_slot,
+                    target_slot,
+                }]
             }
             (FlightPhase::AwaitingBounds, FlightEvent::BoundsReady { start, end }) => {
                 self.phase = FlightPhase::Flying;
@@ -50,7 +59,9 @@ impl Flight {
                 self.phase = FlightPhase::Finishing;
                 self.progress = 1.0;
                 vec![
-                    FlightAction::ReleaseRetained { source_slot: self.source_slot.unwrap_or(0) },
+                    FlightAction::ReleaseRetained {
+                        source_slot: self.source_slot.unwrap_or(0),
+                    },
                     FlightAction::FinishFlight,
                 ]
             }
@@ -229,8 +240,16 @@ impl TransitionVisual {
         let t = self.progress;
         let l = self.lerped();
         let percent = [l.width.min(l.height) / 2.0; 4];
-        let from = if self.radius_from_auto { percent } else { self.radius_from };
-        let to = if self.radius_to_auto { percent } else { self.radius_to };
+        let from = if self.radius_from_auto {
+            percent
+        } else {
+            self.radius_from
+        };
+        let to = if self.radius_to_auto {
+            percent
+        } else {
+            self.radius_to
+        };
         [0, 1, 2, 3].map(|i| (from[i] + (to[i] - from[i]) * t).max(0.0))
     }
 
@@ -340,8 +359,16 @@ impl TransitionVisual {
             false,
         );
         (
-            if sx.abs() > f32::EPSILON { ox / sx } else { 0.0 },
-            if sy.abs() > f32::EPSILON { oy / sy } else { 0.0 },
+            if sx.abs() > f32::EPSILON {
+                ox / sx
+            } else {
+                0.0
+            },
+            if sy.abs() > f32::EPSILON {
+                oy / sy
+            } else {
+                0.0
+            },
         )
     }
 
@@ -380,4 +407,3 @@ impl TransitionVisual {
         ]
     }
 }
-

@@ -21,14 +21,7 @@ const BACKDROP_BLUR_MARGIN: f32 = 3.0;
 /// 已知限制（与 v1 一致）：blur 绘制在 graphicsLayer 变换/alpha 之前——
 /// 节点自身 alpha/scale/rotation 不作用于模糊层；旋转祖先下画回仅
 /// translate+scale 为近似。这些场景未在 demo 覆盖。
-pub(super) fn draw_backdrop_blur(
-    canvas: &Canvas,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    radius: f32,
-) {
+pub(super) fn draw_backdrop_blur(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, radius: f32) {
     if w <= 0.0 || h <= 0.0 {
         return;
     }
@@ -56,7 +49,9 @@ pub(super) fn draw_backdrop_blur(
     // 采样区）跨出顶/左边缘，返回图像锚定在相交原点 (0,0)，画回若按未
     // clamp 的 (left,top) 锚定会整体偏移 (-left,-top) 物理像素（回归：
     // 旧两阶段实现有 `.max(0.0)`）。clamp 后以 clamp 原点锚定即对齐。
-    let Some(surface) = (unsafe { canvas.surface() }) else { return; };
+    let Some(surface) = (unsafe { canvas.surface() }) else {
+        return;
+    };
     let (sw_s, sh_s) = (surface.width(), surface.height());
     let Some(bounds) = backdrop_snapshot_irect(sx0, sy0, sx1, sy1, margin, sw_s, sh_s) else {
         return;
@@ -92,12 +87,13 @@ pub(super) fn draw_backdrop_blur(
     if !det.is_finite() || det.abs() < 1e-9 {
         return;
     }
-    let (sc_x, sc_y) = if rc01.abs() < 1e-4 && rc10.abs() < 1e-4 && rc00.abs() > 1e-4 && rc11.abs() > 1e-4 {
-        (1.0 / rc00, 1.0 / rc11)
-    } else {
-        let s = 1.0 / det.abs().sqrt();
-        (s, s)
-    };
+    let (sc_x, sc_y) =
+        if rc01.abs() < 1e-4 && rc10.abs() < 1e-4 && rc00.abs() > 1e-4 && rc11.abs() > 1e-4 {
+            (1.0 / rc00, 1.0 / rc11)
+        } else {
+            let s = 1.0 / det.abs().sqrt();
+            (s, s)
+        };
 
     canvas.save();
     // clip 到节点矩形（逻辑坐标——被画布矩阵自动变换）
@@ -130,8 +126,10 @@ pub(super) fn backdrop_snapshot_irect(
     }
 }
 
-
-pub(super) fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_safe::Image> {
+pub(super) fn surface_snapshot(
+    canvas: &Canvas,
+    bounds: skia_safe::IRect,
+) -> Option<skia_safe::Image> {
     let surface = unsafe { canvas.surface() }?;
     let mut surface = surface.clone();
     surface.image_snapshot_with_bounds(bounds)

@@ -1,16 +1,16 @@
+use crate::feature::{Feature, FeatureTrait};
+use crate::float_mapping::{DoubleMapper, progress_in_range};
+use crate::point::Point;
+use crate::utils::{DISTANCE_EPSILON, require};
 use std::collections::HashSet;
 use std::hash::Hash;
-use crate::float_mapping::{progress_in_range, DoubleMapper};
-use crate::feature::{Feature, FeatureTrait};
-use crate::point::Point;
-use crate::utils::{require, DISTANCE_EPSILON};
 
 /// [`MeasuredFeatures`] contains a list of all features in a polygon along with the [0..1] progress at
 /// that feature
 pub type MeasuredFeatures = Vec<ProgressableFeature>;
 
 #[derive(Clone, Debug)]
-pub struct ProgressableFeature{
+pub struct ProgressableFeature {
     pub progress: f32,
     pub feature: Feature,
 }
@@ -32,21 +32,22 @@ impl Eq for ProgressableFeature {}
 
 /// [`feature_apper`] creates a mapping between the "features" (rounded corners) of two shapes
 pub fn feature_mapper(features1: &MeasuredFeatures, features2: &MeasuredFeatures) -> DoubleMapper {
-    let filtered_features1: MeasuredFeatures =
-        features1.iter().filter(|f1|
-            matches!(f1.feature, Feature::Corner(_))
-        ).cloned().collect();
-    let filtered_features2: MeasuredFeatures =
-        features2.iter().filter(|f2|
-            matches!(f2.feature, Feature::Corner(_))
-        ).cloned().collect();
+    let filtered_features1: MeasuredFeatures = features1
+        .iter()
+        .filter(|f1| matches!(f1.feature, Feature::Corner(_)))
+        .cloned()
+        .collect();
+    let filtered_features2: MeasuredFeatures = features2
+        .iter()
+        .filter(|f2| matches!(f2.feature, Feature::Corner(_)))
+        .cloned()
+        .collect();
 
-    let feature_progress_mapping =
-        do_mapping(&filtered_features1, &filtered_features2);
+    let feature_progress_mapping = do_mapping(&filtered_features1, &filtered_features2);
     DoubleMapper::new(&feature_progress_mapping)
 }
 
-pub struct  DistanceVertex {
+pub struct DistanceVertex {
     pub distance: f32,
     pub f1: ProgressableFeature,
     pub f2: ProgressableFeature,
@@ -65,22 +66,17 @@ pub struct  DistanceVertex {
 ///       element of each pair, this means that the second elements of each pair are monotonically
 ///       increasing, except maybe one time (counting all pairs of consecutive elements, and the
 ///       last element to first element).
-fn do_mapping(
-    features1: &MeasuredFeatures,
-    features2: &MeasuredFeatures
-) -> Vec<(f32, f32)> {
+fn do_mapping(features1: &MeasuredFeatures, features2: &MeasuredFeatures) -> Vec<(f32, f32)> {
     let mut distance_vertex_list = Vec::new();
     for f1 in features1.iter() {
         for f2 in features2.iter() {
             let d = feature_dist_squared(&f1.feature, &f2.feature);
             if d != f32::MAX {
-                distance_vertex_list.push(
-                    DistanceVertex {
-                        distance: d,
-                        f1: f1.clone(),
-                        f2: f2.clone(),
-                    }
-                );
+                distance_vertex_list.push(DistanceVertex {
+                    distance: d,
+                    f1: f1.clone(),
+                    f2: f2.clone(),
+                });
             }
         }
     }
@@ -119,42 +115,34 @@ impl MappingHelper {
         }
     }
 
-    pub fn add_mapping(
-        &mut self,
-        f1: &ProgressableFeature,
-        f2: &ProgressableFeature
-    ) {
+    pub fn add_mapping(&mut self, f1: &ProgressableFeature, f2: &ProgressableFeature) {
         if self.used_f1.contains(f1) || self.used_f2.contains(f2) {
             return;
         }
-        let index = self.mapping.binary_search_by(
-            |(p1, _)| p1.partial_cmp(&f1.progress).unwrap()
-        );
+        let index = self
+            .mapping
+            .binary_search_by(|(p1, _)| p1.partial_cmp(&f1.progress).unwrap());
         let insertion_index = match index {
-            Ok(i) => panic!(
-                "There can't be two features with the same progress"
-            ),
+            Ok(i) => panic!("There can't be two features with the same progress"),
             Err(i) => i,
         };
         let n = self.mapping.len();
         if n >= 1 {
             let (before_1, before_2) = self.mapping[(insertion_index + n - 1) % n];
             let (after_1, after_2) = self.mapping[insertion_index % n];
-            if progress_distance(f1.progress, before_1) < DISTANCE_EPSILON ||
-                progress_distance(f1.progress, after_1) < DISTANCE_EPSILON ||
-                progress_distance(f2.progress, before_2) < DISTANCE_EPSILON ||
-                progress_distance(f2.progress, after_2) < DISTANCE_EPSILON {
+            if progress_distance(f1.progress, before_1) < DISTANCE_EPSILON
+                || progress_distance(f1.progress, after_1) < DISTANCE_EPSILON
+                || progress_distance(f2.progress, before_2) < DISTANCE_EPSILON
+                || progress_distance(f2.progress, after_2) < DISTANCE_EPSILON
+            {
                 return;
             }
-            if n > 1 && !progress_in_range(
-                f2.progress,
-                before_2,
-                after_2
-            ) {
+            if n > 1 && !progress_in_range(f2.progress, before_2, after_2) {
                 return;
             }
         }
-        self.mapping.insert(insertion_index, (f1.progress, f2.progress));
+        self.mapping
+            .insert(insertion_index, (f1.progress, f2.progress));
         self.used_f1.insert(f1.clone());
         self.used_f2.insert(f2.clone());
     }
@@ -165,8 +153,10 @@ impl MappingHelper {
 pub fn feature_dist_squared(f1: &Feature, f2: &Feature) -> f32 {
     // TODO: We might want to enable concave-convex matching in some situations. If so, the
     //  approach below will not work
-    if let Feature::Corner(c1) = f1 && let Feature::Corner(c2) = f2
-        && c1.convex != c2.convex {
+    if let Feature::Corner(c1) = f1
+        && let Feature::Corner(c2) = f2
+        && c1.convex != c2.convex
+    {
         return f32::MAX;
     }
     (feature_representative_point(f1) - feature_representative_point(f2)).get_distance_squared()
@@ -188,17 +178,17 @@ fn validate_progresses(p: &Vec<f32>) {
         let curr = &p[i];
         require(
             *curr >= 0.0 && *curr < 1.0,
-            format!("FeatureMapping - Progress outside of range: {:?}", p)
+            format!("FeatureMapping - Progress outside of range: {:?}", p),
         );
         require(
             progress_distance(*curr, prev) > DISTANCE_EPSILON,
-            format!("FeatureMapping - Progress repeats a value: {:?}", p)
+            format!("FeatureMapping - Progress repeats a value: {:?}", p),
         );
         if curr < &prev {
             wraps += 1;
             require(
                 wraps <= 1,
-                format!("FeatureMapping - Progress wraps more than once: {:?}", p)
+                format!("FeatureMapping - Progress wraps more than once: {:?}", p),
             );
         }
         prev = *curr;
@@ -212,15 +202,17 @@ fn progress_distance(p1: f32, p2: f32) -> f32 {
 
 #[cfg(test)]
 mod feature_mapping_tests {
-    use std::rc::Rc;
-    use lazy_static::lazy_static;
     use crate::assert_equalish;
     use crate::corner_rounding::CornerRounding;
     use crate::feature_mapping::{do_mapping, feature_dist_squared};
     use crate::polygon_measure::{LengthMeasurer, MeasuredPolygon};
     use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
     use crate::shapes::StarBuilder;
+    use lazy_static::lazy_static;
+    use std::rc::Rc;
 
+    // Parenthesised on purpose: rustfmt would rewrite it into a braced form the macro rejects.
+    #[rustfmt::skip]
     lazy_static!(
         static ref TRIANGLE_WITH_ROUNDINGS: RoundedPolygon = RoundedPolygonBuilder::from_num_vertices(3)
         .rounding(CornerRounding::new(0.2, None)).build();
@@ -230,66 +222,42 @@ mod feature_mapping_tests {
 
     #[test]
     fn feature_mapping_triangle() {
-        verify_mapping(
-            &TRIANGLE_WITH_ROUNDINGS,
-            &TRIANGLE,
-            |distances| {
-                distances.iter().for_each(|&d| assert!(d < 0.1f32));
-            }
-        );
+        verify_mapping(&TRIANGLE_WITH_ROUNDINGS, &TRIANGLE, |distances| {
+            distances.iter().for_each(|&d| assert!(d < 0.1f32));
+        });
     }
 
     #[test]
     fn feature_mapping_triangle_to_square() {
-        verify_mapping(
-            &TRIANGLE,
-            &SQUARE,
-            |distances| {
-                // We have one exact match (both have points at 0 degrees), and 2 close ones
-                assert_eq!(3, distances.len());
-                assert_equalish!(distances[0], distances[1]);
-                assert!(distances[0] < 0.3f32);
-                assert!(distances[2] < 1e-6f32);
-            }
-        );
+        verify_mapping(&TRIANGLE, &SQUARE, |distances| {
+            // We have one exact match (both have points at 0 degrees), and 2 close ones
+            assert_eq!(3, distances.len());
+            assert_equalish!(distances[0], distances[1]);
+            assert!(distances[0] < 0.3f32);
+            assert!(distances[2] < 1e-6f32);
+        });
     }
 
     #[test]
     fn feature_mapping_square_to_triangle() {
-        verify_mapping(
-            &SQUARE,
-            &TRIANGLE,
-            |distances| {
-                // We have one exact match (both have points at 0 degrees), and 2 close ones
-                assert_eq!(3, distances.len());
-                assert_equalish!(distances[0], distances[1]);
-                assert!(distances[0] < 0.3f32);
-                assert!(distances[2] < 1e-6f32);
-            }
-        );
+        verify_mapping(&SQUARE, &TRIANGLE, |distances| {
+            // We have one exact match (both have points at 0 degrees), and 2 close ones
+            assert_eq!(3, distances.len());
+            assert_equalish!(distances[0], distances[1]);
+            assert!(distances[0] < 0.3f32);
+            assert!(distances[2] < 1e-6f32);
+        });
     }
 
     #[test]
     fn feature_mapping_does_not_crash() {
         // Verify that complicated shapes can be matched (this used to crash before).
-        let checkmark = RoundedPolygonBuilder::from_vertices(
-            &vec![
-                400.0,
-                -304.0,
-                240.0,
-                -464.0,
-                296.0,
-                -520.0,
-                400.0,
-                -416.0,
-                664.0,
-                -680.0,
-                720.0,
-                -624.0,
-                400.0,
-                -304.0,
-            ]
-        ).build().normalized();
+        let checkmark = RoundedPolygonBuilder::from_vertices(&vec![
+            400.0, -304.0, 240.0, -464.0, 296.0, -520.0, 400.0, -416.0, 664.0, -680.0, 720.0,
+            -624.0, 400.0, -304.0,
+        ])
+        .build()
+        .normalized();
         let very_sunny = StarBuilder::new(8)
             .inner_radius(0.65)
             .rounding(CornerRounding::new(0.15, None))
@@ -304,11 +272,7 @@ mod feature_mapping_tests {
         });
     }
 
-    fn verify_mapping(
-        p1: &RoundedPolygon,
-        p2: &RoundedPolygon,
-        validator: impl Fn(&[f32])
-    ) {
+    fn verify_mapping(p1: &RoundedPolygon, p2: &RoundedPolygon, validator: impl Fn(&[f32])) {
         let measurer = Rc::new(LengthMeasurer::new());
         let f1 = MeasuredPolygon::measured_polygon(measurer.clone(), p1).features;
         let f2 = MeasuredPolygon::measured_polygon(measurer.clone(), p2).features;

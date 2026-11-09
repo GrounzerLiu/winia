@@ -55,13 +55,23 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         let mut natural_widths = Vec::with_capacity(tab_count);
         for i in 0..tab_count {
             let h = intrinsic_size_of(
-                nodes, policies, children[i], IntrinsicQuery::MaxHeight, tab_width,
+                nodes,
+                policies,
+                children[i],
+                IntrinsicQuery::MaxHeight,
+                tab_width,
             );
-            if h > tab_row_height { tab_row_height = h; }
+            if h > tab_row_height {
+                tab_row_height = h;
+            }
         }
         for i in 0..tab_count {
             natural_widths.push(intrinsic_size_of(
-                nodes, policies, children[i], IntrinsicQuery::MaxWidth, tab_row_height,
+                nodes,
+                policies,
+                children[i],
+                IntrinsicQuery::MaxWidth,
+                tab_row_height,
             ));
         }
 
@@ -79,12 +89,17 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             let content_width = (natural_widths[i].min(tab_width) - HORIZONTAL_TEXT_PADDING * 2.0)
                 .max(MIN_INDICATOR_WIDTH);
             positions.push(TabPosition::new(x, tab_width, content_width));
-            placements.push(Placement { size, position: Offset::new(x, 0.0) });
+            placements.push(Placement {
+                size,
+                position: Offset::new(x, 0.0),
+            });
         }
 
         // 分隔线
         let (div_size, _) = measure_node(
-            nodes, policies, children[n - 2],
+            nodes,
+            policies,
+            children[n - 2],
             Constraints::new(0.0, row_width, 0.0, f32::MAX),
         );
         placements.push(Placement {
@@ -95,7 +110,11 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         // 指示条
         let (target_offset, target_width) = if self.selected_tab_index < tab_count {
             let pos = &positions[self.selected_tab_index];
-            let w = if self.follow_content_size { pos.content_width } else { pos.width };
+            let w = if self.follow_content_size {
+                pos.content_width
+            } else {
+                pos.width
+            };
             // 指示器居中于 tab slot（对齐 M3 规范——scrollable 版本也显式居中）
             (pos.left + (pos.width - w) / 2.0, w)
         } else {
@@ -143,7 +162,11 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             self.initialized.store(true, Ordering::Relaxed);
         } else {
             let spec = indicator_spring();
-            crate::animation::push_animatable(self.offset_state.clone(), target_offset, spec.clone());
+            crate::animation::push_animatable(
+                self.offset_state.clone(),
+                target_offset,
+                spec.clone(),
+            );
             crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
         }
 
@@ -261,7 +284,11 @@ pub(crate) fn tabs_intrinsic_width(
 
 /// The row is as tall as the TALLEST tab's max intrinsic height AT the width every tab gets — the
 /// measure's own first pass.
-pub(crate) fn tabs_intrinsic_height(ctx: &mut IntrinsicCtx<'_>, children: &[usize], width: f32) -> f32 {
+pub(crate) fn tabs_intrinsic_height(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    width: f32,
+) -> f32 {
     let tab_count = tab_count_of(children);
     if tab_count == 0 {
         return 0.0;
@@ -287,4 +314,3 @@ pub(crate) fn strip_intrinsic_height(ctx: &mut IntrinsicCtx<'_>, children: &[usi
         .map(|i| ctx.child_intrinsic(children[i], IntrinsicQuery::MaxHeight, f32::MAX))
         .fold(0.0, f32::max)
 }
-

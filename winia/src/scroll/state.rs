@@ -25,7 +25,8 @@ pub struct ScrollState {
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// The overscroll effect this state resolved for an ambient factory, kept per factory identity so
     /// a rebuild hands the scroll container the SAME effect (a fresh one would drop an in-flight pull).
-    pub(crate) overscroll_cache: std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::overscroll::OverscrollEffect)>>>,
+    pub(crate) overscroll_cache:
+        std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::overscroll::OverscrollEffect)>>>,
     /// The offset `last_scrolled_forward` saw last, so it can answer "which way" without a write hook.
     pub(crate) last_read_offset: std::sync::Arc<std::sync::Mutex<f32>>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
@@ -84,7 +85,10 @@ impl ScrollState {
     /// direction actually needs. A caller that never reads it gets no cost beyond one float.
     pub fn last_scrolled_forward(&self) -> bool {
         let current = self.offset.peek();
-        let mut last = self.last_read_offset.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last = self
+            .last_read_offset
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let forward = current > *last;
         *last = current;
         forward
@@ -103,7 +107,11 @@ impl ScrollState {
     /// and changes whenever the limit stops mattering - which is what `scroll_demo` does.
     pub fn max_value(&self) -> f32 {
         let limit = self.fling_limit.peek();
-        if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
+        if limit.is_finite() && limit >= 0.0 {
+            limit
+        } else {
+            f32::MAX
+        }
     }
 
     /// The limit as a SUBSCRIBABLE value: reading it in composition re-runs the reader when the
@@ -112,12 +120,20 @@ impl ScrollState {
     /// read `max_value()` showed the `f32::MAX` sentinel until its own state happened to change.
     pub fn max_value_subscribed(&self) -> f32 {
         let limit = self.fling_limit.get();
-        if limit.is_finite() && limit >= 0.0 { limit } else { f32::MAX }
+        if limit.is_finite() && limit >= 0.0 {
+            limit
+        } else {
+            f32::MAX
+        }
     }
 
     /// Whether anything is left to scroll toward the end / toward the start.
-    pub fn can_scroll_forward(&self) -> bool { self.offset.peek() < self.max_value() - 0.5 }
-    pub fn can_scroll_backward(&self) -> bool { self.offset.peek() > 0.5 }
+    pub fn can_scroll_forward(&self) -> bool {
+        self.offset.peek() < self.max_value() - 0.5
+    }
+    pub fn can_scroll_backward(&self) -> bool {
+        self.offset.peek() > 0.5
+    }
 
     /// Scroll by `delta` pixels (positive = toward the end, the sign Compose uses) and return how
     /// much was actually consumed — the movement is clamped to `[0, max_value]`, so a caller that
@@ -131,11 +147,15 @@ impl ScrollState {
     ///
     /// Unlike `scroll_to`, this CANCELS a fling or a page step in flight: the caller is taking over.
     pub fn scroll_by(&self, delta: f32) -> f32 {
-        if !delta.is_finite() || delta == 0.0 { return 0.0; }
+        if !delta.is_finite() || delta == 0.0 {
+            return 0.0;
+        }
         self.cancel_fling();
         let current = self.offset.peek();
         let next = (current + delta).clamp(0.0, self.max_value());
-        if next == current { return 0.0; }
+        if next == current {
+            return 0.0;
+        }
         self.offset.set(next);
         next - current
     }
@@ -143,7 +163,10 @@ impl ScrollState {
     /// A state whose offset is an EXTERNALLY owned handle — what the saveable constructor needs,
     /// and what a caller driving the offset from outside (a shared page scroll) already does by hand.
     pub fn with_offset(offset: crate::runtime::state::State<f32>) -> Self {
-        Self { offset, ..Self::new() }
+        Self {
+            offset,
+            ..Self::new()
+        }
     }
 
     /// A scroll state whose position survives a saveable restore: window recreate, a navigation
@@ -161,7 +184,11 @@ impl ScrollState {
 
     /// The effect this state uses for an ambient factory: created on first use and reused after that,
     /// so a rebuild does not hand the container a fresh effect (which would drop a pull in flight).
-    pub(crate) fn overscroll_for(&self, factory_id: u64, create: impl FnOnce() -> crate::overscroll::OverscrollEffect) -> crate::overscroll::OverscrollEffect {
+    pub(crate) fn overscroll_for(
+        &self,
+        factory_id: u64,
+        create: impl FnOnce() -> crate::overscroll::OverscrollEffect,
+    ) -> crate::overscroll::OverscrollEffect {
         if let Some(cached) = self.cached_overscroll(factory_id) {
             return cached;
         }
@@ -169,7 +196,10 @@ impl ScrollState {
         // lets it be anything), so running it under the cache mutex would deadlock the day it
         // touched this state - and it costs nothing to keep user code out of a lock.
         let fresh = create();
-        let mut cache = self.overscroll_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self
+            .overscroll_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some((_, effect)) = cache.iter().find(|(id, _)| *id == factory_id) {
             return effect.clone();
         }
@@ -184,15 +214,23 @@ impl ScrollState {
     }
 
     fn cached_overscroll(&self, factory_id: u64) -> Option<crate::overscroll::OverscrollEffect> {
-        let cache = self.overscroll_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.iter().find(|(id, _)| *id == factory_id).map(|(_, effect)| effect.clone())
+        let cache = self
+            .overscroll_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        cache
+            .iter()
+            .find(|(id, _)| *id == factory_id)
+            .map(|(_, effect)| effect.clone())
     }
 
     /// Jump to `value` immediately.
     pub fn scroll_to(&self, value: f32, max_offset: f32) {
         // A non-finite target would poison the offset (NaN compares false against every limit, so
         // nothing clamps it out later and the render translates by NaN).
-        if !value.is_finite() { return; }
+        if !value.is_finite() {
+            return;
+        }
         // Compose's `scrollTo` runs through `scrollableState.scroll`, which cancels a fling; without
         // this the decay kept writing its own trajectory and the jump was overwritten next frame
         // (measured: `scroll_to(0)` during a fling left 260.26 on the next frame).
@@ -203,8 +241,15 @@ impl ScrollState {
     /// Animate to `value` (Compose's `animateScrollTo`): a spring drives the offset, and the target is
     /// clamped to `[0, max_offset]`. `is_scroll_in_progress` is true while it runs and false once the
     /// animation finishes.
-    pub fn animate_scroll_to(&self, value: f32, max_offset: f32, spec: crate::animation::AnimationSpec) {
-        if !value.is_finite() { return; }
+    pub fn animate_scroll_to(
+        &self,
+        value: f32,
+        max_offset: f32,
+        spec: crate::animation::AnimationSpec,
+    ) {
+        if !value.is_finite() {
+            return;
+        }
         let target = value.clamp(0.0, max_offset.max(0.0));
         if (self.offset.peek() - target).abs() < 0.5 {
             return;
@@ -212,14 +257,9 @@ impl ScrollState {
         self.is_scroll_in_progress.set(true);
         let off = self.offset.clone();
         let done_flag = self.is_scroll_in_progress.clone();
-        crate::animation::push_animatable_with_done(
-            off,
-            target,
-            spec,
-            move || {
-                let _ = done_flag.set(false);
-            },
-        );
+        crate::animation::push_animatable_with_done(off, target, spec, move || {
+            let _ = done_flag.set(false);
+        });
     }
 
     /// A fling (Compose's `flingBehavior`): exponential decay from `velocity` (px/s) that stops as soon
@@ -236,7 +276,9 @@ impl ScrollState {
     /// snap branch of [`Self::fling_with_boundary`], so the two can never disagree about what "snapping"
     /// means.
     pub(crate) fn snaps(&self) -> bool {
-        self.snap.peek().is_some_and(|s| s.step.is_finite() && s.step > 0.0)
+        self.snap
+            .peek()
+            .is_some_and(|s| s.step.is_finite() && s.step > 0.0)
     }
 
     /// Whether a release is worth asking a strategy about: the container snaps, or it carries a
@@ -269,7 +311,11 @@ impl ScrollState {
             return false;
         };
         let raw_limit = self.fling_limit.peek();
-        let limit = if raw_limit.is_finite() && raw_limit >= 0.0 { raw_limit } else { f32::MAX };
+        let limit = if raw_limit.is_finite() && raw_limit >= 0.0 {
+            raw_limit
+        } else {
+            f32::MAX
+        };
         // `reverseLayout` mirrors the scroll direction (the pixel and fling paths do the same), so a
         // "forward" notch on a reversed container steps back.
         let forward = forward != reverse;
@@ -325,7 +371,11 @@ impl ScrollState {
 
     /// Start a fling and hand the caller the instantaneous remaining velocity when the child hits a
     /// boundary.
-    pub fn fling_with_boundary(&self, velocity: f32, on_boundary: impl FnOnce(f32) + Send + 'static) {
+    pub fn fling_with_boundary(
+        &self,
+        velocity: f32,
+        on_boundary: impl FnOnce(f32) + Send + 'static,
+    ) {
         if !velocity.is_finite() {
             return;
         }
@@ -441,9 +491,10 @@ impl ScrollState {
 }
 
 impl Default for ScrollState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
-
 
 #[cfg(test)]
 mod scroll_by_tests {
@@ -471,7 +522,11 @@ mod scroll_by_tests {
     #[test]
     fn scroll_by_clamps_at_both_ends_and_says_so() {
         let s = state(290.0, 300.0);
-        assert_eq!(s.scroll_by(50.0), 10.0, "only the last 10 px were available");
+        assert_eq!(
+            s.scroll_by(50.0),
+            10.0,
+            "only the last 10 px were available"
+        );
         assert_eq!(s.offset.peek(), 300.0);
         assert_eq!(s.scroll_by(50.0), 0.0, "at the end nothing moves");
         assert_eq!(s.scroll_by(-400.0), -300.0);
@@ -506,8 +561,11 @@ mod scroll_by_tests {
             ..crate::fling::SnapInfo::default()
         }));
         assert!(state.snap_page(true, false), "a notch starts a step");
-        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(100.0),
-            "forward goes to the next page");
+        assert_eq!(
+            crate::animation::animation_target::<f32>(state.offset.state_id()),
+            Some(100.0),
+            "forward goes to the next page"
+        );
         crate::animation::clear_all_animations();
 
         // At the last page there is nothing forward: the call refuses, so the caller falls back to a
@@ -515,7 +573,10 @@ mod scroll_by_tests {
         state.offset.set(400.0);
         assert!(!state.snap_page(true, false), "no page past the end");
         assert!(state.snap_page(false, false), "but back is fine");
-        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(300.0));
+        assert_eq!(
+            crate::animation::animation_target::<f32>(state.offset.state_id()),
+            Some(300.0)
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -529,7 +590,10 @@ mod scroll_by_tests {
             ..crate::fling::SnapInfo::default()
         }));
         assert!(state.snap_page(true, true));
-        assert_eq!(crate::animation::animation_target::<f32>(state.offset.state_id()), Some(100.0));
+        assert_eq!(
+            crate::animation::animation_target::<f32>(state.offset.state_id()),
+            Some(100.0)
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -547,7 +611,10 @@ mod scroll_by_tests {
         scroll.offset.set(240.0);
 
         let saved = first.perform_save();
-        assert_eq!(saved.get("page"), Some(&crate::runtime::saveable::SavedValue::F64(240.0)));
+        assert_eq!(
+            saved.get("page"),
+            Some(&crate::runtime::saveable::SavedValue::F64(240.0))
+        );
 
         let second = crate::runtime::saveable::SaveableStateRegistry::new(saved);
         let mut next = crate::runtime::composer::Composer::new();
@@ -555,7 +622,11 @@ mod scroll_by_tests {
         crate::runtime::saveable::with_saveable_registry(second, || {
             next.compose(|ctx| restored = Some(ScrollState::remember_saveable(ctx, "page")));
         });
-        assert_eq!(restored.expect("composed").offset.peek(), 240.0, "the list opens where it was");
+        assert_eq!(
+            restored.expect("composed").offset.peek(),
+            240.0,
+            "the list opens where it was"
+        );
     }
 
     /// A restored offset can outlive its content: clamping happens during measure, the way Compose
@@ -579,7 +650,11 @@ mod scroll_by_tests {
         crate::animation::update_animations();
         clock.advance(std::time::Duration::from_millis(16));
         crate::animation::update_animations();
-        assert_eq!(state.offset.peek(), 0.0, "the jump sticks: the fling was cancelled");
+        assert_eq!(
+            state.offset.peek(),
+            0.0,
+            "the jump sticks: the fling was cancelled"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -594,8 +669,15 @@ mod scroll_by_tests {
         state.scroll_to(10.0, 100.0);
         assert_eq!(state.scroll_by(f32::NAN), 0.0, "NaN scroll_by is a no-op");
         assert_eq!(state.offset.peek(), 10.0, "and leaves the offset alone");
-        state.animate_scroll_to(f32::NAN, 100.0, crate::animation::AnimationSpec::Tween(Default::default()));
-        assert!(!crate::animation::has_animation_for_state(state.offset.state_id()), "no NaN animation starts");
+        state.animate_scroll_to(
+            f32::NAN,
+            100.0,
+            crate::animation::AnimationSpec::Tween(Default::default()),
+        );
+        assert!(
+            !crate::animation::has_animation_for_state(state.offset.state_id()),
+            "no NaN animation starts"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -621,7 +703,11 @@ mod scroll_by_tests {
                 let scroll = ScrollState::remember_saveable(ctx, "page");
                 restored = Some(scroll.clone());
                 crate::layout::Column::new()
-                    .modifier(crate::modifier::Modifier::new().height(100.0).vertical_scroll(scroll))
+                    .modifier(
+                        crate::modifier::Modifier::new()
+                            .height(100.0)
+                            .vertical_scroll(scroll),
+                    )
                     .build(ctx, |ctx| {
                         crate::components::Text::new("only 60 tall")
                             .modifier(crate::modifier::Modifier::new().size(100.0, 60.0))
@@ -631,7 +717,11 @@ mod scroll_by_tests {
         });
         next.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
         let scroll = restored.expect("composed");
-        assert_eq!(scroll.offset.peek(), 0.0, "the content does not scroll, so the offset is 0");
+        assert_eq!(
+            scroll.offset.peek(),
+            0.0,
+            "the content does not scroll, so the offset is 0"
+        );
     }
 
     #[test]
@@ -639,7 +729,10 @@ mod scroll_by_tests {
         let s = state(100.0, 300.0);
         s.offset.set(140.0);
         assert!(s.last_scrolled_forward(), "moved toward the end");
-        assert!(!s.last_scrolled_forward(), "nothing moved since the last read");
+        assert!(
+            !s.last_scrolled_forward(),
+            "nothing moved since the last read"
+        );
         s.offset.set(120.0);
         assert!(!s.last_scrolled_forward(), "moved back toward the start");
     }
@@ -647,13 +740,16 @@ mod scroll_by_tests {
     #[test]
     fn an_unmeasured_limit_is_open_ended_and_then_settles() {
         let s = ScrollState::new();
-        assert_eq!(s.max_value(), f32::MAX, "until the layout measures, everything is reachable");
+        assert_eq!(
+            s.max_value(),
+            f32::MAX,
+            "until the layout measures, everything is reachable"
+        );
         assert!(s.can_scroll_forward());
         s.fling_limit.set(120.0);
         assert_eq!(s.max_value(), 120.0);
     }
 }
-
 
 #[cfg(test)]
 mod limit_subscription_tests {
@@ -676,7 +772,11 @@ mod limit_subscription_tests {
             let seen_in = seen_in.clone();
             composer.compose(crate::compose!(|ctx| {
                 crate::layout::Column::new()
-                    .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .modifier(
+                        crate::modifier::Modifier::new()
+                            .size(100.0, 100.0)
+                            .vertical_scroll(s.clone()),
+                    )
                     .build(ctx, |ctx| {
                         let value = s.max_value_subscribed();
                         seen_in.set(value);
@@ -692,7 +792,14 @@ mod limit_subscription_tests {
         composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
         build(&mut composer);
         let second = seen.get();
-        assert_eq!(first, f32::MAX, "before the first measure the limit is the sentinel");
-        assert!(second.is_finite() && second > 0.0, "the measured limit must reach the reader, got {second}");
+        assert_eq!(
+            first,
+            f32::MAX,
+            "before the first measure the limit is the sentinel"
+        );
+        assert!(
+            second.is_finite() && second > 0.0,
+            "the measured limit must reach the reader, got {second}"
+        );
     }
 }

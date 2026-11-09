@@ -16,12 +16,42 @@ mod settings;
 
 fn palette(i: usize) -> Color {
     const COLORS: [Color; 6] = [
-        Color { r: 0x4C, g: 0xAF, b: 0x50, a: 255 },
-        Color { r: 0x21, g: 0x96, b: 0xF3, a: 255 },
-        Color { r: 0xFF, g: 0x98, b: 0x00, a: 255 },
-        Color { r: 0x9C, g: 0x27, b: 0xB0, a: 255 },
-        Color { r: 0x00, g: 0xBC, b: 0xD4, a: 255 },
-        Color { r: 0xE9, g: 0x1E, b: 0x63, a: 255 },
+        Color {
+            r: 0x4C,
+            g: 0xAF,
+            b: 0x50,
+            a: 255,
+        },
+        Color {
+            r: 0x21,
+            g: 0x96,
+            b: 0xF3,
+            a: 255,
+        },
+        Color {
+            r: 0xFF,
+            g: 0x98,
+            b: 0x00,
+            a: 255,
+        },
+        Color {
+            r: 0x9C,
+            g: 0x27,
+            b: 0xB0,
+            a: 255,
+        },
+        Color {
+            r: 0x00,
+            g: 0xBC,
+            b: 0xD4,
+            a: 255,
+        },
+        Color {
+            r: 0xE9,
+            g: 0x1E,
+            b: 0x63,
+            a: 255,
+        },
     ];
     COLORS[i % COLORS.len()]
 }
@@ -77,7 +107,9 @@ fn grid_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("Grid — every knob live").font_size(18.0).build(ctx);
+            Text::new("Grid — every knob live")
+                .font_size(18.0)
+                .build(ctx);
             Text::new(format!(
                 "tracks {} | gap {:.0} | flow {} | span {} | align {} | areas {} | {} | {} cells",
                 preset.get() % 4,
@@ -173,14 +205,16 @@ fn grid_demo(ctx: &mut ComposeCtx) {
                 // parameter, so the grid's Skip decision cannot see it — the modifier is part of that
                 // decision, so keying it on the switches forces the re-entry a real app would get from
                 // its own data signature.
-                .modifier(Modifier::new()
-                    .fill_max_width()
-                    .test_tag(format!("grid-shape-{}-{}", span.get(), area.get()))
-                    .layout_direction(if rtl.get() {
-                    LayoutDirection::Rtl
-                } else {
-                    LayoutDirection::Ltr
-                }))
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .test_tag(format!("grid-shape-{}-{}", span.get(), area.get()))
+                        .layout_direction(if rtl.get() {
+                            LayoutDirection::Rtl
+                        } else {
+                            LayoutDirection::Ltr
+                        }),
+                )
                 .build(ctx, |ctx| {
                     for index in 0..count.get() {
                         // The cells take their cell's width explicitly: a Grid places the child, it does

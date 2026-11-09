@@ -85,9 +85,13 @@ mod tests {
             Row::new()
                 .modifier(Modifier::new().fill_max_width().height(100.0))
                 .build(ctx, |ctx| {
-                    Text::new("a").modifier(Modifier::new().size(50.0, 20.0)).build(ctx);
+                    Text::new("a")
+                        .modifier(Modifier::new().size(50.0, 20.0))
+                        .build(ctx);
                     spacer.build(ctx);
-                    Text::new("b").modifier(Modifier::new().size(50.0, 20.0)).build(ctx);
+                    Text::new("b")
+                        .modifier(Modifier::new().size(50.0, 20.0))
+                        .build(ctx);
                 });
         }));
         composer.layout(row_constraints());

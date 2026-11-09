@@ -13,7 +13,6 @@ pub enum FlexDirection {
     RowReverse,
     Column,
     ColumnReverse,
-
 }
 
 impl FlexDirection {
@@ -24,7 +23,10 @@ impl FlexDirection {
 
     /// Whether items are laid out from the main-END towards the main-start.
     pub const fn is_reverse(self) -> bool {
-        matches!(self, FlexDirection::RowReverse | FlexDirection::ColumnReverse)
+        matches!(
+            self,
+            FlexDirection::RowReverse | FlexDirection::ColumnReverse
+        )
     }
 }
 
@@ -258,12 +260,20 @@ impl FlexBoxConfig {
 
     /// The gap between two items of one line: CSS column-gap for a row, row-gap for a column.
     pub(super) fn main_gap(&self, horizontal: bool) -> f32 {
-        if horizontal { self.column_gap } else { self.row_gap }
+        if horizontal {
+            self.column_gap
+        } else {
+            self.row_gap
+        }
     }
 
     /// The gap between two lines: the other axis of main_gap.
     pub(super) fn cross_gap(&self, horizontal: bool) -> f32 {
-        if horizontal { self.row_gap } else { self.column_gap }
+        if horizontal {
+            self.row_gap
+        } else {
+            self.column_gap
+        }
     }
 }
 

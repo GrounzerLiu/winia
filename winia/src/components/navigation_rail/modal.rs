@@ -1,6 +1,5 @@
 use super::*;
 
-
 // ── ModalWideNavigationRail（M3 Expressive 模态宽轨）──
 //
 // 对齐 androidx-main `WideNavigationRail.kt` 的 `ModalWideNavigationRail`：
@@ -178,7 +177,9 @@ impl ModalWideNavigationRail {
 
         // Expanded: a layer above the page. `modal: true` is what draws the scrim, and a dismiss request
         // (scrim click or Escape) arrives as `on_dismiss`.
-        let modal_color = self.modal_container_color.unwrap_or(theme.surface_container);
+        let modal_color = self
+            .modal_container_color
+            .unwrap_or(theme.surface_container);
         let modal_shape = self.expanded_shape;
         let outer = self.modifier;
         let dismiss_state = self.state.clone();
@@ -229,8 +230,12 @@ impl ModalWideNavigationRail {
             // Fade with the scrim. The panel ALSO animates its width and shape out of the collapsed rail
             // (see the content closure below): that is winia's stand-in for upstream's `positionProgress` +
             // `modalState` driving the container out of its collapsed position.
-            enter_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
-            exit_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
+            enter_anim: Some(OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(200),
+            )),
+            exit_anim: Some(OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(200),
+            )),
             local_snapshot: Vec::new(),
             content: Box::new(move |ctx| {
                 // The container hugs the leading edge and fills the height; its width is the layout
@@ -245,7 +250,11 @@ impl ModalWideNavigationRail {
                 // (`composer.rs`: `Animating::new(target.clone())`), so its first frame would be at rest.
                 let progress: State<f32> = ctx.remember(|| 0.0_f32);
                 let target = if panel_state.is_expanded() { 1.0 } else { 0.0 };
-                crate::animation::push_animatable(progress.clone(), target, modal_rail_container_spec());
+                crate::animation::push_animatable(
+                    progress.clone(),
+                    target,
+                    modal_rail_container_spec(),
+                );
                 let panel = outer
                     .clone()
                     .fill_max_size()
@@ -290,4 +299,3 @@ impl ModalWideNavigationRail {
         });
     }
 }
-

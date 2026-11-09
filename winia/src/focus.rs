@@ -4,4 +4,4 @@
 mod requester;
 
 pub use requester::FocusRequester;
-pub(crate) use requester::{focus_window, take_focus_requests, FocusWindowGuard};
+pub(crate) use requester::{FocusWindowGuard, focus_window, take_focus_requests};

@@ -79,7 +79,7 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub snap_max_pages: usize,
     /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
     pub beyond_bounds: usize,
-    pub state: LazyListState,  // derived anchor, written back after the measure (exact values)
+    pub state: LazyListState, // derived anchor, written back after the measure (exact values)
 }
 
 impl<A: LazyAxis> std::fmt::Debug for LazyListPolicy<A> {
@@ -149,7 +149,6 @@ impl<A: LazyAxis> LazyListPolicy<A> {
             spacing: self.spacing,
         }
     }
-
 }
 impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     fn measure(
@@ -201,7 +200,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         let mut placements = Vec::with_capacity(children.len());
         let mut measured: Vec<(f32, f32)> = Vec::with_capacity(children.len());
         for &c in children.iter() {
-            let (size, _) = crate::layout::node::measure_node(nodes, policies, c, child_constraints);
+            let (size, _) =
+                crate::layout::node::measure_node(nodes, policies, c, child_constraints);
             measured.push((A::main_size(size), A::cross_size(size)));
         }
 
@@ -334,7 +334,9 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             && self.total >= 2
             && uniform_page_size.is_some()
             && page_size > 0.0
-            && measured.iter().all(|(size, _)| (size - page_size).abs() < 0.5)
+            && measured
+                .iter()
+                .all(|(size, _)| (size - page_size).abs() < 0.5)
         {
             Some(crate::fling::SnapInfo {
                 step: page_size + self.spacing,
@@ -384,8 +386,15 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // changed": a frame where the viewport is unchanged and the window still covers asks for
         // nothing, so a scrolling frame stays at one compose+layout pass.
         {
-            let (need_start, need_end) =
-                visible_range(&cache, real_first, real_off, vh, self.spacing, self.total, self.beyond_bounds);
+            let (need_start, need_end) = visible_range(
+                &cache,
+                real_first,
+                real_off,
+                vh,
+                self.spacing,
+                self.total,
+                self.beyond_bounds,
+            );
             // `globals` is the composed window in registration order (sticky items are appended last,
             // so min/max — not first/last — give the range).
             let composed_start = self.globals.iter().copied().min().unwrap_or(usize::MAX);
@@ -417,7 +426,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // WIDEST CHILD instead, floored by the incoming minimum and widened by the cross content
         // padding, which is the same box a filling child would occupy.
         let cross_max = A::cross_max(&constraints);
-        let widest_cross = measured.iter().map(|(_, cross)| *cross).fold(0.0f32, f32::max);
+        let widest_cross = measured
+            .iter()
+            .map(|(_, cross)| *cross)
+            .fold(0.0f32, f32::max);
         let cross_extent = if cross_max < f32::MAX {
             cross_max
         } else {
@@ -445,7 +457,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 Some(f) => *f + offset,
                 None => {
                     if !main_init {
-                        main_pos = pad_before + prefix_height(&cache, self.globals[i], self.spacing);
+                        main_pos =
+                            pad_before + prefix_height(&cache, self.globals[i], self.spacing);
                         main_init = true;
                     }
                     // The snap offset moves every item forward, which is what makes a page smaller
@@ -459,7 +472,11 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             // Reverse layout: mirrored coordinates (accumulated from the bottom) → content
             // coordinate = content_h - pos - h (index 0 sits at the content's bottom; anchors,
             // visible ranges and the pin walk keep their formulas in mirrored coordinates).
-            let content_pos = if self.reverse { content_h - pos - h } else { pos };
+            let content_pos = if self.reverse {
+                content_h - pos - h
+            } else {
+                pos
+            };
             placements.push(crate::layout::node::Placement {
                 // The cross axis starts at `cross_before` — the START padding, so under RTL the item
                 // is mirrored to the far edge (Compose's `contentPadding` start/end follow the layout
@@ -488,7 +505,12 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         (A::size(vh, cross_extent), placements)
     }
 
-    fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
+    fn place(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        children: &[usize],
+        placements: &[crate::layout::node::Placement],
+    ) {
         self.state.item_animations.begin_frame();
         // A data change can move the VIEWPORT by as much as it moves the rows (the anchor correction),
         // and a move that cancels out on screen must not animate. The correction leaves the key it kept
@@ -563,4 +585,3 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         self.state.item_animations.finish_frame(Some(&self.key_set));
     }
 }
-

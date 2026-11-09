@@ -4,7 +4,6 @@ use super::*;
 // SharedBounds — exact animatable rect
 // ═══════════════════════════════════════════════════════════
 
-
 impl AnimatableValue for SharedBounds {
     fn lerp(&self, to: &Self, t: f32) -> Self {
         SharedBounds::lerp(self, to, t.clamp(0.0, 1.0))
@@ -22,14 +21,18 @@ impl AnimatableValue for SharedBounds {
     /// Scalar-engine placeholder (square at origin). See `to_f32`.
     fn from_f32(v: f32) -> Self {
         let s = v.max(0.0).sqrt();
-        Self { x: 0.0, y: 0.0, width: s, height: s }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: s,
+            height: s,
+        }
     }
 }
 
 // ═══════════════════════════════════════════════════════════
 // Flight shaping vocabulary (frozen API)
 // ═══════════════════════════════════════════════════════════
-
 
 impl Default for BoundsTransform {
     /// Compose's default flight shaping: `SharedTransitionDefaults.BoundsTransform` is
@@ -87,7 +90,6 @@ impl SharedTransitionDefaults {
 }
 
 /// The scaling model a `ScaleToBounds` end uses is Compose's `ContentScale` —
-
 
 // ═══════════════════════════════════════════════════════════
 // Matching layer: scope, content state, registry
@@ -164,7 +166,10 @@ impl SharedTransitionScope {
     /// Pairing handle for one shared element (Compose
     /// `rememberSharedContentState`). Stable for the scope's lifetime.
     pub fn shared_content_state(&self, key: impl Into<String>) -> SharedContentState {
-        SharedContentState { scope_id: self.scope_id, key: key.into() }
+        SharedContentState {
+            scope_id: self.scope_id,
+            key: key.into(),
+        }
     }
 
     /// Whether any flight in this scope is currently non-terminal (Compose
@@ -267,7 +272,10 @@ pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
             }
         }
     }
-    let mut guard = SceneGuard { id: scene.id, pushed: false };
+    let mut guard = SceneGuard {
+        id: scene.id,
+        pushed: false,
+    };
     NAV_SCENE_STACK.with(|s| s.borrow_mut().push(scene.clone()));
     guard.pushed = true;
     NAV_SCENE_VIS.with(|v| {
@@ -305,8 +313,7 @@ pub fn nav_scene_is_prev(id: u64) -> Option<bool> {
 /// LEAVING scene, so the two live ends could not be told apart and the flight paired the leaving hero
 /// with itself (both 96x96, alpha-only crossfade, no growth).
 pub(crate) fn scene_of_node(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<u64> {
-    let id_to_idx: HashMap<u64, usize> =
-        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let id_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     scene_of_node_with(nodes, &id_to_idx, idx)
 }
 
@@ -332,7 +339,10 @@ pub(crate) fn scene_of_node_with(
         }) {
             return Some(id);
         }
-        cur = nodes.get(i)?.parent_id.and_then(|pid| id_to_idx.get(&pid).copied());
+        cur = nodes
+            .get(i)?
+            .parent_id
+            .and_then(|pid| id_to_idx.get(&pid).copied());
     }
     None
 }
@@ -388,7 +398,9 @@ pub(crate) fn prune_scene_registry_window(all: &[&Composer]) {
     let busy = all.iter().any(|c| {
         c.paint_dirty
             || !c.scope_overlay_roots.is_empty()
-            || c.shared_flights.values().any(|a| !is_terminal(a.flight.phase))
+            || c.shared_flights
+                .values()
+                .any(|a| !is_terminal(a.flight.phase))
     });
     if !busy && len <= NAV_SCENE_PRUNE_THRESHOLD {
         return;
@@ -452,7 +464,9 @@ impl SharedTransitionLayout {
     /// [`current_shared_scope`].
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let scope_id = ctx.next_key();
-        let scope = ctx.remember_at_key(scope_id, || SharedTransitionScope::new(scope_id)).get();
+        let scope = ctx
+            .remember_at_key(scope_id, || SharedTransitionScope::new(scope_id))
+            .get();
         LOCAL_SHARED_SCOPE.provides(Some(scope), || content(ctx));
     }
 }

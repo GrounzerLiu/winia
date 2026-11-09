@@ -5,30 +5,32 @@
 //! - A dedicated parameter (`font_size` and friends) beats the same field on `style`.
 
 use crate::composable;
+use crate::graphics::Color;
+use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
-use crate::modifier::Modifier;
-use crate::graphics::{Color};
-use crate::unit::TextUnit;
 use crate::text::{
     FontSlant, FontWeight, LineHeightStyle, TextAlign, TextBrush, TextDecoration, TextDrawStyle,
     TextGeometricTransform, TextLayoutResult, TextOverflow, TextShadow, TextStyle,
 };
+use crate::unit::TextUnit;
 use std::sync::{Arc, LazyLock};
-
 
 // ═══════════════════════════════════════════════════════════
 // LocalTextStyle — the subtree's default text style.
 // ═══════════════════════════════════════════════════════════
 
-pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|| {
-    CompositionLocal::new(|| TextStyle::default())
-});
+pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> =
+    LazyLock::new(|| CompositionLocal::new(|| TextStyle::default()));
 
 /// Provide a default text style to a subtree, MERGED with the inherited one rather than replacing
 /// it — Compose's `ProvideTextStyle`.
 #[allow(non_snake_case)]
-pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+pub fn ProvideTextStyle(
+    style: TextStyle,
+    ctx: &mut ComposeCtx,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
     LOCAL_TEXT_STYLE.provides(merged, || {
         content(ctx);
@@ -49,13 +51,19 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         letter_spacing: override_.letter_spacing.or(base.letter_spacing),
         line_height: override_.line_height.or(base.line_height),
         min_lines: override_.min_lines.or(base.min_lines),
-        font_family: override_.font_family.clone().or_else(|| base.font_family.clone()),
+        font_family: override_
+            .font_family
+            .clone()
+            .or_else(|| base.font_family.clone()),
         // Compose's `TextStyle.merge` REPLACES the decoration when the child specifies one, so a
         // child that says `TextDecoration.NONE` clears an inherited underline (D-1).
         decoration: override_.decoration.or(base.decoration),
         background: override_.background.or(base.background),
         shadow: override_.shadow.or(base.shadow),
-        font_feature_settings: override_.font_feature_settings.clone().or_else(|| base.font_feature_settings.clone()),
+        font_feature_settings: override_
+            .font_feature_settings
+            .clone()
+            .or_else(|| base.font_feature_settings.clone()),
         draw_style: override_.draw_style.or(base.draw_style),
         brush: override_.brush.clone().or_else(|| base.brush.clone()),
         text_geometric_transform: override_
@@ -90,7 +98,8 @@ pub struct Text {
     /// Compose's `onTextLayout`: called after every measure with the layout the text produced.
     on_text_layout: Option<Arc<dyn Fn(&TextLayoutResult) + Send + Sync>>,
     /// The richer sink: the snapshot plus the paragraph, for the per-line queries.
-    on_text_layout_layout: Option<Arc<dyn Fn(&TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>>,
+    on_text_layout_layout:
+        Option<Arc<dyn Fn(&TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>>,
     /// Compose's `autoSize`: the (min, max) logical-pixel window the fit search runs in.
     auto_size: Option<(f32, f32)>,
     /// Compose's `TextStyle.shadow`.
@@ -151,29 +160,65 @@ impl Text {
         }
     }
 
-    pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
 
     // The options follow Compose's parameter order (`material3/Text.kt:40-58`): colour, size, the face,
     // letter spacing, alignment, line height, overflow, wrapping, the line cap, then the style.
 
     /// Compose's `color` parameter — it beats the style and the content colour.
-    pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
-    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self { self.font_size = Some(size.into()); self }
-    pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
-    pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
-    pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
-    pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self {
+        self.font_size = Some(size.into());
+        self
+    }
+    pub fn font_weight(mut self, w: FontWeight) -> Self {
+        self.font_weight = Some(w);
+        self
+    }
+    pub fn bold(mut self) -> Self {
+        self.font_weight = Some(FontWeight::BOLD);
+        self
+    }
+    pub fn italic(mut self) -> Self {
+        self.font_style = Some(FontSlant::Italic);
+        self
+    }
+    pub fn oblique(mut self) -> Self {
+        self.font_style = Some(FontSlant::Oblique);
+        self
+    }
 
     /// Compose's `fontFamily`: a family name resolved against the platform's font collection.
-    pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(family.into());
+        self
+    }
     /// Compose's `TextStyle.shadow`: a colour, an offset and a blur radius, drawn under the glyphs.
-    pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
+    pub fn shadow(mut self, shadow: TextShadow) -> Self {
+        self.shadow = Some(shadow);
+        self
+    }
     /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
-    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
+    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self {
+        self.font_feature_settings = Some(settings.into());
+        self
+    }
     /// Compose's `TextStyle.drawStyle` — `Fill` or an outline `Stroke { width }`.
-    pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
+    pub fn draw_style(mut self, style: TextDrawStyle) -> Self {
+        self.draw_style = Some(style);
+        self
+    }
     /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
-    pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
+    pub fn brush(mut self, brush: TextBrush) -> Self {
+        self.brush = Some(brush);
+        self
+    }
     /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew of the glyph run.
     pub fn text_geometry(mut self, transform: TextGeometricTransform) -> Self {
         self.text_geometry = Some(transform);
@@ -200,7 +245,10 @@ impl Text {
         self
     }
 
-    pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
+    pub fn align(mut self, align: TextAlign) -> Self {
+        self.text_align = Some(align);
+        self
+    }
 
     /// Compose's `autoSize`: shrink the font from `max` towards `min` until the text fits the box.
     ///
@@ -212,14 +260,29 @@ impl Text {
     }
 
     /// Line height, a `TextUnit` (a bare `f32` means `sp`) — Compose's `TextStyle.lineHeight`.
-    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
+    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self {
+        self.line_height = Some(height.into());
+        self
+    }
 
-    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
-    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
-    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self {
+        self.overflow = Some(overflow);
+        self
+    }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self {
+        self.soft_wrap = Some(wrap);
+        self
+    }
+    pub fn max_lines(mut self, lines: usize) -> Self {
+        self.max_lines = Some(lines);
+        self
+    }
 
     /// Compose's `minLines`: the box reserves at least this many lines even when the text is shorter.
-    pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
+    pub fn min_lines(mut self, lines: usize) -> Self {
+        self.min_lines = Some(lines);
+        self
+    }
 
     /// Compose's `onTextLayout`: called after every measure with what the text laid out to.
     ///
@@ -263,7 +326,10 @@ impl Text {
     }
 
     /// A base style; a dedicated parameter still wins over the same field here.
-    pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
+    pub fn style(mut self, style: TextStyle) -> Self {
+        self.style = Some(style);
+        self
+    }
 
     /// Background colour and shape, delegated to `Modifier::background`.
     pub fn background(
@@ -277,16 +343,24 @@ impl Text {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        #[cfg(debug_assertions)] {
+        #[cfg(debug_assertions)]
+        {
             if std::env::var("WINIA_TEXT_TRACE").is_ok() {
-                eprintln!("[text-build] content={:?}", self.content.get(..16.min(self.content.len())));
+                eprintln!(
+                    "[text-build] content={:?}",
+                    self.content.get(..16.min(self.content.len()))
+                );
             }
         }
         ctx.changed(&self.content);
         let key = ctx.next_key();
 
         let base = LOCAL_TEXT_STYLE.current();
-        let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
+        let style = self
+            .style
+            .as_ref()
+            .map(|s| merge_text_styles(&base, s))
+            .unwrap_or(base);
 
         // Compose's `TextUnitType.Em`: a multiple of the ENCLOSING size, so it resolves against
         // whatever `ProvideTextStyle` supplied (14 sp when nobody did), not against itself.
@@ -302,13 +376,35 @@ impl Text {
         let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
         let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
-        let final_align = self.text_align.or(style.text_align).map(|a| match a {
-            // Compose's `TextAlign.Start` / `End` are direction-relative; the measurement and paint
-            // layers only understand physical edges, and the direction is known here.
-            TextAlign::Start => if rtl { TextAlign::Right } else { TextAlign::Left },
-            TextAlign::End => if rtl { TextAlign::Left } else { TextAlign::Right },
-            other => other,
-        }).unwrap_or_else(|| if rtl { TextAlign::Right } else { TextAlign::Left });
+        let final_align = self
+            .text_align
+            .or(style.text_align)
+            .map(|a| match a {
+                // Compose's `TextAlign.Start` / `End` are direction-relative; the measurement and paint
+                // layers only understand physical edges, and the direction is known here.
+                TextAlign::Start => {
+                    if rtl {
+                        TextAlign::Right
+                    } else {
+                        TextAlign::Left
+                    }
+                }
+                TextAlign::End => {
+                    if rtl {
+                        TextAlign::Left
+                    } else {
+                        TextAlign::Right
+                    }
+                }
+                other => other,
+            })
+            .unwrap_or_else(|| {
+                if rtl {
+                    TextAlign::Right
+                } else {
+                    TextAlign::Left
+                }
+            });
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
         let final_soft_wrap = self.soft_wrap.or(style.soft_wrap).unwrap_or(true);
@@ -342,16 +438,17 @@ impl Text {
             .text_decoration
             .or(style.decoration)
             .unwrap_or(TextDecoration::NONE);
-        let final_font_family = self.font_family.clone().or_else(|| style.font_family.clone());
+        let final_font_family = self
+            .font_family
+            .clone()
+            .or_else(|| style.font_family.clone());
         let final_shadow = self.shadow.or(style.shadow);
         let final_font_features = self
             .font_feature_settings
             .clone()
             .or_else(|| style.font_feature_settings.clone());
         let final_draw_style = self.draw_style.or(style.draw_style);
-        let final_transform = self
-            .text_geometry
-            .or(style.text_geometric_transform);
+        let final_transform = self.text_geometry.or(style.text_geometric_transform);
         let final_line_height_style = self.line_height_style.or(style.line_height_style);
         let final_brush = self.brush.clone().or_else(|| style.brush.clone());
 
@@ -360,7 +457,8 @@ impl Text {
         // `with_content_color` carries into a subtree) > the theme's on_surface. The content-colour
         // step was missing: a Tooltip supplies `with_content_color(inverse_on_surface)` and the
         // Text still fell through to on_surface, and the same was true of Button/Chip.
-        let final_color = self.color
+        let final_color = self
+            .color
             .or(style.color)
             .unwrap_or_else(|| crate::theme::WiniaTheme::content_color());
 
@@ -370,11 +468,18 @@ impl Text {
         // Register with the enclosing container unless DisableSelection is in scope.
         let (reg_for_node, registered_off) = {
             if !selection_disabled {
-                if let Some(reg) = ctx.selection_registrar().or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current()) {
+                if let Some(reg) = ctx
+                    .selection_registrar()
+                    .or_else(|| crate::text::selection::LOCAL_SELECTION_REGISTRAR.try_current())
+                {
                     let off = reg.register(key, &self.content);
                     (Some(reg), Some((key, content_len, off)))
-                } else { (None, None) }
-            } else { (None, None) }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            }
         };
         // Declared parameters, one per visual input: Colour, size, weight, slant, family, spacing,
         // line height, the line caps, alignment, overflow, wrapping, decoration and the auto-size
@@ -435,7 +540,9 @@ impl Text {
         ctx.start_leaf(key, modifier);
         // The highlight colour, from the nearest provider (Compose's `LocalTextSelectionColors`).
         ctx.set_current_node_selection_color(
-            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS.current().background,
+            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS
+                .current()
+                .background,
         );
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
@@ -443,22 +550,47 @@ impl Text {
             ctx.clear_current_node_registrar();
         }
         if let Some((_k, _len, _off)) = registered_off {
-            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", _k, _len, _off);
+            debug_log!(
+                "[selection] Text registered: slot_key={} len={} global_off={}",
+                _k,
+                _len,
+                _off
+            );
         }
         ctx.end_node();
     }
 
     // ── Getters ──
-    pub fn get_content(&self) -> &str { &self.content }
-    pub fn get_font_size(&self) -> Option<TextUnit> { self.font_size }
-    pub fn get_color(&self) -> Option<Color> { self.color }
-    pub fn get_text_align(&self) -> Option<TextAlign> { self.text_align }
-    pub fn get_overflow(&self) -> Option<TextOverflow> { self.overflow }
-    pub fn get_max_lines(&self) -> Option<usize> { self.max_lines }
-    pub fn get_min_lines(&self) -> Option<usize> { self.min_lines }
-    pub fn get_font_family(&self) -> Option<&str> { self.font_family.as_deref() }
-    pub fn get_text_decoration(&self) -> Option<TextDecoration> { self.text_decoration }
-    pub fn get_modifier(&self) -> &Modifier { &self.modifier }
+    pub fn get_content(&self) -> &str {
+        &self.content
+    }
+    pub fn get_font_size(&self) -> Option<TextUnit> {
+        self.font_size
+    }
+    pub fn get_color(&self) -> Option<Color> {
+        self.color
+    }
+    pub fn get_text_align(&self) -> Option<TextAlign> {
+        self.text_align
+    }
+    pub fn get_overflow(&self) -> Option<TextOverflow> {
+        self.overflow
+    }
+    pub fn get_max_lines(&self) -> Option<usize> {
+        self.max_lines
+    }
+    pub fn get_min_lines(&self) -> Option<usize> {
+        self.min_lines
+    }
+    pub fn get_font_family(&self) -> Option<&str> {
+        self.font_family.as_deref()
+    }
+    pub fn get_text_decoration(&self) -> Option<TextDecoration> {
+        self.text_decoration
+    }
+    pub fn get_modifier(&self) -> &Modifier {
+        &self.modifier
+    }
 }
 
 #[cfg(test)]
@@ -466,13 +598,15 @@ mod tests {
     use super::*;
     use crate::modifier::ModifierElement;
 
-/// A plain `Text` must not carry the paint element: it says nothing, and an always-present
+    /// A plain `Text` must not carry the paint element: it says nothing, and an always-present
     /// element costs a parameter comparison on every recomposition and a slot on every text node.
     #[test]
     fn a_plain_text_carries_no_paint_element() {
         fn has_paint(text: Text) -> bool {
             let mut composer = crate::runtime::composer::Composer::new();
-            composer.compose(move |ctx| { text.build(ctx); });
+            composer.compose(move |ctx| {
+                text.build(ctx);
+            });
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
             let root = composer.layout_root_idx().unwrap();
             composer.arena_nodes()[root]
@@ -481,8 +615,14 @@ mod tests {
                 .iter()
                 .any(|el| matches!(el, ModifierElement::TextPaint { .. }))
         }
-        assert!(!has_paint(Text::new("plain")), "a plain text carries only its content element");
-        assert!(has_paint(Text::new("shadowed").shadow(TextShadow::new(Color::BLACK, (1.0, 1.0), 2.0))), "a shadow needs the element");
+        assert!(
+            !has_paint(Text::new("plain")),
+            "a plain text carries only its content element"
+        );
+        assert!(
+            has_paint(Text::new("shadowed").shadow(TextShadow::new(Color::BLACK, (1.0, 1.0), 2.0))),
+            "a shadow needs the element"
+        );
         assert!(
             has_paint(Text::new("scaled").text_geometry(TextGeometricTransform::new(2.0, 0.0))),
             "a transform needs the element"
@@ -511,7 +651,10 @@ mod tests {
             .modifier(Modifier::new().padding(8.0));
 
         assert_eq!(text.get_content(), "hello world");
-        assert_eq!(text.get_font_size(), Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
+        assert_eq!(
+            text.get_font_size(),
+            Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0)))
+        );
         assert_eq!(text.get_color(), Some(Color::RED));
         assert_eq!(text.get_text_align(), Some(TextAlign::Center));
         assert_eq!(text.get_overflow(), Some(TextOverflow::Ellipsis));
@@ -532,22 +675,32 @@ mod tests {
                 ctx,
                 |ctx| {
                     ProvideTextStyle(TextStyle::new().letter_spacing(0.2), ctx, |ctx| {
-                        Text::new("styled")
-                            .letter_spacing(1.0)
-                            .build(ctx);
+                        Text::new("styled").letter_spacing(1.0).build(ctx);
                     });
                 },
             );
         });
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
-        let (font_size, soft_wrap, letter_spacing, line_height) = nodes[root].modifier.elements().iter().find_map(|el| {
-            if let ModifierElement::TextContent { font_size, soft_wrap, letter_spacing, line_height, .. } = el {
-                Some((*font_size, *soft_wrap, *letter_spacing, *line_height))
-            } else {
-                None
-            }
-        }).unwrap();
+        let (font_size, soft_wrap, letter_spacing, line_height) = nodes[root]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| {
+                if let ModifierElement::TextContent {
+                    font_size,
+                    soft_wrap,
+                    letter_spacing,
+                    line_height,
+                    ..
+                } = el
+                {
+                    Some((*font_size, *soft_wrap, *letter_spacing, *line_height))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert_eq!(font_size, 16.0, "子 provider 应继承父级字号");
         assert!(!soft_wrap, "子 provider 应继承父级 soft_wrap");
         assert_eq!(letter_spacing, 1.0, "Text builder 字距优先级最高");
@@ -556,10 +709,7 @@ mod tests {
 
     #[test]
     fn test_text_bold_italic() {
-        let text = Text::new("bold italic")
-            .bold()
-            .italic()
-            .font_size(16.0);
+        let text = Text::new("bold italic").bold().italic().font_size(16.0);
         assert!(text.font_weight.is_some());
         assert_eq!(text.font_weight.unwrap(), FontWeight::BOLD);
         assert!(text.font_style.is_some());
@@ -569,9 +719,14 @@ mod tests {
     #[test]
     fn test_text_letter_spacing_and_line_height() {
         let text = Text::new("spacing").letter_spacing(2.0).line_height(28.0);
-        assert_eq!(text.letter_spacing, Some(TextUnit::Sp(crate::unit::Sp(2.0))));
+        assert_eq!(
+            text.letter_spacing,
+            Some(TextUnit::Sp(crate::unit::Sp(2.0)))
+        );
         // The same knob in `em`: a multiple of the leaf's own font size, resolved at build time.
-        let em = Text::new("x").font_size(20.0).letter_spacing(TextUnit::Em(0.1));
+        let em = Text::new("x")
+            .font_size(20.0)
+            .letter_spacing(TextUnit::Em(0.1));
         assert_eq!(em.letter_spacing, Some(TextUnit::Em(0.1)));
         assert_eq!(text.line_height, Some(TextUnit::Sp(crate::unit::Sp(28.0))));
     }
@@ -581,18 +736,30 @@ mod tests {
         use crate::modifier::ModifierElement;
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
-            Text::new("styled").letter_spacing(1.5).line_height(30.0).build(ctx);
+            Text::new("styled")
+                .letter_spacing(1.5)
+                .line_height(30.0)
+                .build(ctx);
         });
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
         let m = &nodes[root].modifier;
-        let (ls, lh) = m.elements().iter().find_map(|el| {
-            if let ModifierElement::TextContent { letter_spacing, line_height, .. } = el {
-                Some((*letter_spacing, *line_height))
-            } else {
-                None
-            }
-        }).unwrap();
+        let (ls, lh) = m
+            .elements()
+            .iter()
+            .find_map(|el| {
+                if let ModifierElement::TextContent {
+                    letter_spacing,
+                    line_height,
+                    ..
+                } = el
+                {
+                    Some((*letter_spacing, *line_height))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert_eq!(ls, 1.5, "letter_spacing 传入 TextContent 元素");
         assert_eq!(lh, Some(30.0), "line_height 传入 TextContent 元素");
     }
@@ -617,7 +784,8 @@ mod tests {
         assert!(
             h12 < h16 && (h12 / h16 - 0.75).abs() < 0.15,
             "12sp 高度应约为 16sp 的 3/4（实际 h16={} h12={}）",
-            h16, h12
+            h16,
+            h12
         );
     }
 
@@ -627,7 +795,10 @@ mod tests {
         let measure = |lines: usize| {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
-                Text::new("Name").font_size(20.0).min_lines(lines).build(ctx);
+                Text::new("Name")
+                    .font_size(20.0)
+                    .min_lines(lines)
+                    .build(ctx);
             });
             composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 500.0));
             let root = composer.layout_root_idx().unwrap();
@@ -657,10 +828,19 @@ mod tests {
                 .build(ctx);
         });
         composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 500.0));
-        let result = seen.lock().unwrap().expect("the callback ran during measure");
+        let result = seen
+            .lock()
+            .unwrap()
+            .expect("the callback ran during measure");
         assert_eq!(result.line_count, 1, "one line of text: {result:?}");
-        assert!(result.size.height > 0.0 && result.size.width > 0.0, "{result:?}");
-        assert!(!result.has_visual_overflow(), "nothing was cut off: {result:?}");
+        assert!(
+            result.size.height > 0.0 && result.size.width > 0.0,
+            "{result:?}"
+        );
+        assert!(
+            !result.has_visual_overflow(),
+            "nothing was cut off: {result:?}"
+        );
     }
 
     /// Compose's `TextLayoutResult.size` is the CONSTRAINED box, not the paragraph's own width.
@@ -684,12 +864,18 @@ mod tests {
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 400.0));
         let root = composer.layout_root_idx().unwrap();
         let measured = composer.arena_nodes()[root].measured_size;
-        let result = seen.lock().unwrap().expect("the callback ran during measure");
+        let result = seen
+            .lock()
+            .unwrap()
+            .expect("the callback ran during measure");
         assert!(
             (result.size.width - measured.width).abs() < 0.01,
             "the callback reports the box the node measured: result={result:?} node={measured:?}"
         );
-        assert_eq!(result.size.width, 300.0, "fill_max_width fills the constraint: {result:?}");
+        assert_eq!(
+            result.size.width, 300.0,
+            "fill_max_width fills the constraint: {result:?}"
+        );
         assert_eq!(
             result.text_size.width, 12.0,
             "text_size stays the paragraph's own width: {result:?}"
@@ -719,7 +905,10 @@ mod tests {
         }
         let plain = measure(false);
         let shadowed = measure(true);
-        assert_eq!(plain, shadowed, "a shadow is paint-only: plain={plain:?} shadowed={shadowed:?}");
+        assert_eq!(
+            plain, shadowed,
+            "a shadow is paint-only: plain={plain:?} shadowed={shadowed:?}"
+        );
     }
 
     /// A shadow change is a changed parameter, so the leaf re-enters and the cached paragraph (which
@@ -727,8 +916,17 @@ mod tests {
     #[test]
     fn a_shadow_and_a_feature_string_are_part_of_the_skip_parameter_comparison() {
         let base = Modifier::new().text_content_full(
-            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
-            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            "x".to_string(),
+            16.0,
+            Color::BLACK,
+            FontWeight::NORMAL,
+            FontSlant::Upright,
+            1,
+            TextAlign::Left,
+            TextOverflow::Clip,
+            true,
+            0.0,
+            None,
             crate::modifier::TextExtras {
                 shadow: None,
                 font_feature_settings: None,
@@ -736,8 +934,17 @@ mod tests {
             },
         );
         let shadow = Modifier::new().text_content_full(
-            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
-            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            "x".to_string(),
+            16.0,
+            Color::BLACK,
+            FontWeight::NORMAL,
+            FontSlant::Upright,
+            1,
+            TextAlign::Left,
+            TextOverflow::Clip,
+            true,
+            0.0,
+            None,
             crate::modifier::TextExtras {
                 shadow: Some(TextShadow::new(Color::BLACK, (1.0, 1.0), 0.0)),
                 font_feature_settings: None,
@@ -745,17 +952,35 @@ mod tests {
             },
         );
         let features = Modifier::new().text_content_full(
-            "x".to_string(), 16.0, Color::BLACK, FontWeight::NORMAL, FontSlant::Upright,
-            1, TextAlign::Left, TextOverflow::Clip, true, 0.0, None,
+            "x".to_string(),
+            16.0,
+            Color::BLACK,
+            FontWeight::NORMAL,
+            FontSlant::Upright,
+            1,
+            TextAlign::Left,
+            TextOverflow::Clip,
+            true,
+            0.0,
+            None,
             crate::modifier::TextExtras {
                 shadow: None,
                 font_feature_settings: Some("smcp".to_string()),
                 ..Default::default()
             },
         );
-        assert!(base.param_eq(&base), "identical modifiers are the same parameter set");
-        assert!(!base.param_eq(&shadow), "a new shadow must re-enter the leaf");
-        assert!(!base.param_eq(&features), "a new feature string must re-enter the leaf");
+        assert!(
+            base.param_eq(&base),
+            "identical modifiers are the same parameter set"
+        );
+        assert!(
+            !base.param_eq(&shadow),
+            "a new shadow must re-enter the leaf"
+        );
+        assert!(
+            !base.param_eq(&features),
+            "a new feature string must re-enter the leaf"
+        );
     }
 
     /// Compose's `textGeometricTransform` — the horizontal mapping is an invertible pair, and a
@@ -787,17 +1012,26 @@ mod tests {
             let para = para.as_ref().expect("measured");
             (node.measured_size, para.max_intrinsic_width())
         };
-        assert_eq!(plain.height, scaled.0.height, "a horizontal transform leaves the height alone");
+        assert_eq!(
+            plain.height, scaled.0.height,
+            "a horizontal transform leaves the height alone"
+        );
         assert!(
             (scaled.0.width - plain.width * 2.0).abs() <= 2.0,
             "scale 2 doubles the measured box: plain={:?} scaled={:?} (paragraph at {:.1})",
-            plain, scaled.0, scaled.1
+            plain,
+            scaled.0,
+            scaled.1
         );
-        let t = TextGeometricTransform::new(2.0, 0.3);        for x in [0.0, 5.0, 40.0] {
+        let t = TextGeometricTransform::new(2.0, 0.3);
+        for x in [0.0, 5.0, 40.0] {
             for y in [0.0, 8.0, 20.0] {
                 let mapped = t.map_x(x, y);
                 let back = t.unmap_x(mapped, y);
-                assert!((back - x).abs() < 0.001, "map/unmap must invert: x={x} y={y} back={back}");
+                assert!(
+                    (back - x).abs() < 0.001,
+                    "map/unmap must invert: x={x} y={y} back={back}"
+                );
             }
         }
         assert!(t.is_identity() == false);
@@ -823,12 +1057,24 @@ mod tests {
             let node = &composer.arena_nodes()[root];
             let para = node.cached_paragraph.borrow();
             let geo = crate::layout::node::line_geometry(node, para.as_ref().unwrap());
-            (geo.paint_dy, geo.trim_top, geo.trim_bottom, node.measured_size.height)
+            (
+                geo.paint_dy,
+                geo.trim_top,
+                geo.trim_bottom,
+                node.measured_size.height,
+            )
         }
         let (centre_dy, centre_top, centre_bottom, centre_h) =
             geometry(LineHeightStyle::new(A::Center, T::None));
-        assert_eq!((centre_dy, centre_top, centre_bottom), (0.0, 0.0, 0.0), "the default is the centred build");
-        assert!((centre_h - 24.0).abs() < 1.0, "an untrimmed line keeps its line height: {centre_h}");
+        assert_eq!(
+            (centre_dy, centre_top, centre_bottom),
+            (0.0, 0.0, 0.0),
+            "the default is the centred build"
+        );
+        assert!(
+            (centre_h - 24.0).abs() < 1.0,
+            "an untrimmed line keeps its line height: {centre_h}"
+        );
         let (_, _, _, trimmed_h) = geometry(LineHeightStyle::new(A::Center, T::Both));
         assert!(
             trimmed_h < centre_h - 2.0,
@@ -837,18 +1083,42 @@ mod tests {
 
         let (top_dy, _, _, _) = geometry(LineHeightStyle::new(A::Top, T::None));
         let (bottom_dy, _, _, _) = geometry(LineHeightStyle::new(A::Bottom, T::None));
-        assert!(top_dy < 0.0 && bottom_dy > 0.0, "Top lifts, Bottom drops: {top_dy} {bottom_dy}");
-        assert!((top_dy + bottom_dy).abs() < 0.01, "the two are symmetric about centre: {top_dy} {bottom_dy}");
+        assert!(
+            top_dy < 0.0 && bottom_dy > 0.0,
+            "Top lifts, Bottom drops: {top_dy} {bottom_dy}"
+        );
+        assert!(
+            (top_dy + bottom_dy).abs() < 0.01,
+            "the two are symmetric about centre: {top_dy} {bottom_dy}"
+        );
 
-        let (both_dy, both_top, both_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::Both));
-        assert!(both_top > 0.0 && both_bottom > 0.0, "Both trims each end: {both_top} {both_bottom}");
-        assert!((both_dy + both_top).abs() < 0.01, "the paint follows the top trim: {both_dy} {both_top}");
-        assert!((both_top + both_bottom - (centre_top + centre_bottom + both_top + both_bottom)).abs() < 0.01);
+        let (both_dy, both_top, both_bottom, _) =
+            geometry(LineHeightStyle::new(A::Center, T::Both));
+        assert!(
+            both_top > 0.0 && both_bottom > 0.0,
+            "Both trims each end: {both_top} {both_bottom}"
+        );
+        assert!(
+            (both_dy + both_top).abs() < 0.01,
+            "the paint follows the top trim: {both_dy} {both_top}"
+        );
+        assert!(
+            (both_top + both_bottom - (centre_top + centre_bottom + both_top + both_bottom)).abs()
+                < 0.01
+        );
 
-        let (_, first_top, first_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::FirstLineTop));
-        assert!(first_top > 0.0 && first_bottom == 0.0, "only the top end: {first_top} {first_bottom}");
-        let (_, last_top, last_bottom, _) = geometry(LineHeightStyle::new(A::Center, T::LastLineBottom));
-        assert!(last_top == 0.0 && last_bottom > 0.0, "only the bottom end: {last_top} {last_bottom}");
+        let (_, first_top, first_bottom, _) =
+            geometry(LineHeightStyle::new(A::Center, T::FirstLineTop));
+        assert!(
+            first_top > 0.0 && first_bottom == 0.0,
+            "only the top end: {first_top} {first_bottom}"
+        );
+        let (_, last_top, last_bottom, _) =
+            geometry(LineHeightStyle::new(A::Center, T::LastLineBottom));
+        assert!(
+            last_top == 0.0 && last_bottom > 0.0,
+            "only the bottom end: {last_top} {last_bottom}"
+        );
     }
 
     /// The hit test and the paint must agree about where the glyphs are: a click lands in the
@@ -874,13 +1144,23 @@ mod tests {
         let para = node.cached_paragraph.borrow();
         let para = para.as_ref().unwrap();
         let dy = crate::layout::node::line_geometry(node, para).paint_dy;
-        assert!(dy > 1.0, "Bottom alignment drops the run inside the box: dy={dy}");
+        assert!(
+            dy > 1.0,
+            "Bottom alignment drops the run inside the box: dy={dy}"
+        );
         let layout = crate::text::TextLayout::new(para);
         let click_y = 34.0;
-        let mapped = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, click_y - dy));
+        let mapped =
+            layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, click_y - dy));
         let unmapped = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, click_y));
-        assert!(mapped < 4, "with the offset removed the click stays on the first line: {mapped}");
-        assert!(unmapped >= 4, "without it the same click jumps a line: {unmapped}");
+        assert!(
+            mapped < 4,
+            "with the offset removed the click stays on the first line: {mapped}"
+        );
+        assert!(
+            unmapped >= 4,
+            "without it the same click jumps a line: {unmapped}"
+        );
     }
 
     /// The fallback path (no cached paragraph) must agree with the measured one about the
@@ -889,17 +1169,60 @@ mod tests {
     fn the_line_height_arithmetic_is_one_function() {
         use crate::text::{LineHeightAlignment as A, LineHeightStyle, LineHeightTrim as T};
         let natural = 21.0;
-        let centre = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Center, T::None)), natural);
+        let centre = crate::layout::node::line_geometry_from(
+            Some(24.0),
+            Some(LineHeightStyle::new(A::Center, T::None)),
+            natural,
+        );
         assert_eq!(centre.paint_dy, 0.0, "centred is the build's own position");
-        let top = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Top, T::None)), natural);
-        assert!((top.paint_dy + 1.5).abs() < 0.01, "Top lifts by half the extra: {}", top.paint_dy);
-        let both = crate::layout::node::line_geometry_from(Some(24.0), Some(LineHeightStyle::new(A::Center, T::Both)), natural);
-        assert!((both.trim_top - 1.5).abs() < 0.01 && (both.trim_bottom - 1.5).abs() < 0.01, "Both trims half each end");
-        assert!((both.paint_dy + 1.5).abs() < 0.01, "and the paint follows the top trim: {}", both.paint_dy);
+        let top = crate::layout::node::line_geometry_from(
+            Some(24.0),
+            Some(LineHeightStyle::new(A::Top, T::None)),
+            natural,
+        );
+        assert!(
+            (top.paint_dy + 1.5).abs() < 0.01,
+            "Top lifts by half the extra: {}",
+            top.paint_dy
+        );
+        let both = crate::layout::node::line_geometry_from(
+            Some(24.0),
+            Some(LineHeightStyle::new(A::Center, T::Both)),
+            natural,
+        );
+        assert!(
+            (both.trim_top - 1.5).abs() < 0.01 && (both.trim_bottom - 1.5).abs() < 0.01,
+            "Both trims half each end"
+        );
+        assert!(
+            (both.paint_dy + 1.5).abs() < 0.01,
+            "and the paint follows the top trim: {}",
+            both.paint_dy
+        );
         // The guards: no style, a no-op style, no line height, or a line height under the font.
-        assert_eq!(crate::layout::node::line_geometry_from(Some(24.0), None, natural).paint_dy, 0.0);
-        assert_eq!(crate::layout::node::line_geometry_from(None, Some(LineHeightStyle::new(A::Top, T::None)), natural).paint_dy, 0.0);
-        assert_eq!(crate::layout::node::line_geometry_from(Some(20.0), Some(LineHeightStyle::new(A::Top, T::None)), natural).paint_dy, 0.0, "a line height below the font has no extra leading");
+        assert_eq!(
+            crate::layout::node::line_geometry_from(Some(24.0), None, natural).paint_dy,
+            0.0
+        );
+        assert_eq!(
+            crate::layout::node::line_geometry_from(
+                None,
+                Some(LineHeightStyle::new(A::Top, T::None)),
+                natural
+            )
+            .paint_dy,
+            0.0
+        );
+        assert_eq!(
+            crate::layout::node::line_geometry_from(
+                Some(20.0),
+                Some(LineHeightStyle::new(A::Top, T::None)),
+                natural
+            )
+            .paint_dy,
+            0.0,
+            "a line height below the font has no extra leading"
+        );
     }
 
     /// An EMPTY paragraph has no glyphs, so `get_font_at(0)` is the only thing that can answer —
@@ -918,11 +1241,13 @@ mod tests {
         let root = composer.layout_root_idx().unwrap();
         let node = &composer.arena_nodes()[root];
         let para = node.cached_paragraph.borrow();
-        let geo = para.as_ref().map(|p| crate::layout::node::line_geometry(node, p));
+        let geo = para
+            .as_ref()
+            .map(|p| crate::layout::node::line_geometry(node, p));
         assert!(geo.is_some(), "an empty text still measures");
         assert!(node.measured_size.height >= 0.0);
     }
-/// A truncated paragraph answers hit tests in DISPLAY bytes; the consumers that store content
+    /// A truncated paragraph answers hit tests in DISPLAY bytes; the consumers that store content
     /// offsets (caret, drag selection) have to translate. Measured before the fix on a 20-byte
     /// content truncated to 16: the left edge answered 0 where the content offset is 4, and the right
     /// edge answered 16 where the content offset is 20.
@@ -944,19 +1269,33 @@ mod tests {
         let para = node.cached_paragraph.borrow();
         let para = para.as_ref().unwrap();
         let span = para.display_span().expect("the run was truncated");
-        assert!(span.head_bytes == 0, "start ellipsis keeps no head: {span:?}");
-        assert!(para.text_len() < content.len(), "the paragraph holds the truncated text");
+        assert!(
+            span.head_bytes == 0,
+            "start ellipsis keeps no head: {span:?}"
+        );
+        assert!(
+            para.text_len() < content.len(),
+            "the paragraph holds the truncated text"
+        );
         let layout = crate::text::TextLayout::new(para);
         let left = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(2.0, 10.0));
         let right = layout.get_closest_grapheme_cluster_at(skia_safe::Point::new(110.0, 10.0));
         assert_eq!(left, 0, "the display offset at the left edge");
-        assert_eq!(para.content_offset(left), span.tail_start_byte, "the marker means the tail start");
-        assert_eq!(para.content_offset(right), content.len(), "the right edge is the content end");
+        assert_eq!(
+            para.content_offset(left),
+            span.tail_start_byte,
+            "the marker means the tail start"
+        );
+        assert_eq!(
+            para.content_offset(right),
+            content.len(),
+            "the right edge is the content end"
+        );
         // Identity when nothing was truncated.
-        let plain = crate::text::build_plain_paragraph("abc", 16.0, crate::graphics::Color::BLACK, 400.0);
+        let plain =
+            crate::text::build_plain_paragraph("abc", 16.0, crate::graphics::Color::BLACK, 400.0);
         assert_eq!(plain.content_offset(2), 2);
     }
-
 
     /// Compose's `TextAlign.Start` / `End` are direction-relative: the resolution happens in
     /// `Text::build`, where the layout direction is known, because the measure and paint layers only
@@ -967,7 +1306,9 @@ mod tests {
         fn align_of(align: TextAlign, direction: LayoutDirection) -> TextAlign {
             crate::layout::direction::provides(direction, || {
                 let mut composer = crate::runtime::composer::Composer::new();
-                composer.compose(move |ctx| { Text::new("x").align(align).build(ctx); });
+                composer.compose(move |ctx| {
+                    Text::new("x").align(align).build(ctx);
+                });
                 composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
                 let root = composer.layout_root_idx().unwrap();
                 let node = &composer.arena_nodes()[root];
@@ -981,11 +1322,27 @@ mod tests {
                     .expect("the leaf carries its alignment")
             })
         }
-        assert_eq!(align_of(TextAlign::Start, LayoutDirection::Ltr), TextAlign::Left);
-        assert_eq!(align_of(TextAlign::Start, LayoutDirection::Rtl), TextAlign::Right);
-        assert_eq!(align_of(TextAlign::End, LayoutDirection::Ltr), TextAlign::Right);
-        assert_eq!(align_of(TextAlign::End, LayoutDirection::Rtl), TextAlign::Left);
-        assert_eq!(align_of(TextAlign::Center, LayoutDirection::Rtl), TextAlign::Center, "an explicit physical value survives");
+        assert_eq!(
+            align_of(TextAlign::Start, LayoutDirection::Ltr),
+            TextAlign::Left
+        );
+        assert_eq!(
+            align_of(TextAlign::Start, LayoutDirection::Rtl),
+            TextAlign::Right
+        );
+        assert_eq!(
+            align_of(TextAlign::End, LayoutDirection::Ltr),
+            TextAlign::Right
+        );
+        assert_eq!(
+            align_of(TextAlign::End, LayoutDirection::Rtl),
+            TextAlign::Left
+        );
+        assert_eq!(
+            align_of(TextAlign::Center, LayoutDirection::Rtl),
+            TextAlign::Center,
+            "an explicit physical value survives"
+        );
     }
 
     /// The user's text-size setting (`Density.font_scale`) must grow the GLYPHS and not the boxes:
@@ -996,21 +1353,28 @@ mod tests {
         use crate::runtime::density::with_density;
         use crate::unit::Density;
         fn measure(font_scale: f32) -> (f32, f32, f32) {
-            with_density(Density::from_density_and_font_scale(1.0, font_scale), || {
-                let mut composer = crate::runtime::composer::Composer::new();
-                composer.compose(|ctx| {
-                    Text::new("Ag")
-                        .font_size(14.0)
-                        .modifier(Modifier::new().size(40.0, 20.0))
-                        .build(ctx);
-                });
-                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
-                let root = composer.layout_root_idx().unwrap();
-                let node = &composer.arena_nodes()[root];
-                let para = node.cached_paragraph.borrow();
-                let para = para.as_ref().unwrap();
-                (node.measured_size.width, node.measured_size.height, para.height())
-            })
+            with_density(
+                Density::from_density_and_font_scale(1.0, font_scale),
+                || {
+                    let mut composer = crate::runtime::composer::Composer::new();
+                    composer.compose(|ctx| {
+                        Text::new("Ag")
+                            .font_size(14.0)
+                            .modifier(Modifier::new().size(40.0, 20.0))
+                            .build(ctx);
+                    });
+                    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                    let root = composer.layout_root_idx().unwrap();
+                    let node = &composer.arena_nodes()[root];
+                    let para = node.cached_paragraph.borrow();
+                    let para = para.as_ref().unwrap();
+                    (
+                        node.measured_size.width,
+                        node.measured_size.height,
+                        para.height(),
+                    )
+                },
+            )
         }
         let (small_w, small_h, small_para) = measure(1.0);
         let (big_w, big_h, big_para) = measure(2.0);
@@ -1021,7 +1385,10 @@ mod tests {
             "the paragraph grows with the scale: {small_para} -> {big_para}"
         );
         // The measured BOX does not, because it was pinned in dp.
-        assert!(small_h < big_para, "the unresolved box stays at its dp height: {small_h} vs {big_para}");
+        assert!(
+            small_h < big_para,
+            "the unresolved box stays at its dp height: {small_h} vs {big_para}"
+        );
         assert_eq!(small_w, 40.0, "the 40 dp width is a dp, not an sp");
         assert_eq!(big_w, 40.0, "and it does not grow with the text scale");
         assert_eq!(small_h, 20.0);
@@ -1040,22 +1407,44 @@ mod tests {
         let previous = system_font_scale();
         // Whatever this machine reports, a REPEAT is not a change and a different factor is.
         let _ = install_measured_text_scale(1.5);
-        assert!(!install_measured_text_scale(1.5), "installing the same factor reports nothing");
-        assert!(install_measured_text_scale(2.0), "a different factor reports a change");
-        assert_eq!(density_with_system_font_scale(1.5).font_scale, 2.0, "the window density carries it");
-        assert_eq!(density_with_system_font_scale(1.5).density, 1.5, "the pixel density is untouched");
+        assert!(
+            !install_measured_text_scale(1.5),
+            "installing the same factor reports nothing"
+        );
+        assert!(
+            install_measured_text_scale(2.0),
+            "a different factor reports a change"
+        );
+        assert_eq!(
+            density_with_system_font_scale(1.5).font_scale,
+            2.0,
+            "the window density carries it"
+        );
+        assert_eq!(
+            density_with_system_font_scale(1.5).density,
+            1.5,
+            "the pixel density is untouched"
+        );
         let height_at = |scale: f32| {
-            with_density(crate::unit::Density::from_density_and_font_scale(1.0, scale), || {
-                let mut composer = crate::runtime::composer::Composer::new();
-                composer.compose(|ctx| { Text::new("Ag").font_size(14.0).build(ctx); });
-                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
-                let root = composer.layout_root_idx().unwrap();
-                composer.arena_nodes()[root].measured_size.height
-            })
+            with_density(
+                crate::unit::Density::from_density_and_font_scale(1.0, scale),
+                || {
+                    let mut composer = crate::runtime::composer::Composer::new();
+                    composer.compose(|ctx| {
+                        Text::new("Ag").font_size(14.0).build(ctx);
+                    });
+                    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                    let root = composer.layout_root_idx().unwrap();
+                    composer.arena_nodes()[root].measured_size.height
+                },
+            )
         };
         let plain = height_at(1.0);
         let doubled = height_at(2.0);
-        assert!(doubled > plain * 1.8, "14 sp at scale 2 is 28 px of type: {plain} -> {doubled}");
+        assert!(
+            doubled > plain * 1.8,
+            "14 sp at scale 2 is 28 px of type: {plain} -> {doubled}"
+        );
         let _ = install_measured_text_scale(previous);
     }
 
@@ -1070,7 +1459,10 @@ mod tests {
             with_density(Density::from_density_and_font_scale(1.0, scale), || {
                 let mut composer = crate::runtime::composer::Composer::new();
                 composer.compose(move |ctx| {
-                    Text::new("x").font_size(font_size).letter_spacing(spacing).build(ctx);
+                    Text::new("x")
+                        .font_size(font_size)
+                        .letter_spacing(spacing)
+                        .build(ctx);
                 });
                 composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
                 let root = composer.layout_root_idx().unwrap();
@@ -1079,7 +1471,9 @@ mod tests {
                     .elements()
                     .iter()
                     .find_map(|el| match el {
-                        ModifierElement::TextContent { letter_spacing, .. } => Some(*letter_spacing),
+                        ModifierElement::TextContent { letter_spacing, .. } => {
+                            Some(*letter_spacing)
+                        }
                         _ => None,
                     })
                     .unwrap()
@@ -1089,8 +1483,12 @@ mod tests {
         assert!((payload_spacing(20.0, TextUnit::Em(0.1), 1.0) - 2.0).abs() < 0.01);
         assert!((payload_spacing(40.0, TextUnit::Em(0.1), 1.0) - 4.0).abs() < 0.01);
         // 2 sp at a 1.5 text scale is 3 px, and at 1.0 it is 2 px.
-        assert!((payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.5) - 3.0).abs() < 0.01);
-        assert!((payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.0) - 2.0).abs() < 0.01);
+        assert!(
+            (payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.5) - 3.0).abs() < 0.01
+        );
+        assert!(
+            (payload_spacing(20.0, TextUnit::Sp(crate::unit::Sp(2.0)), 1.0) - 2.0).abs() < 0.01
+        );
         // A bare f32 is an `sp`, so the old call shape still means the same thing at scale 1.
         assert!((payload_spacing(20.0, 2.0.into(), 1.0) - 2.0).abs() < 0.01);
     }
@@ -1148,11 +1546,18 @@ mod tests {
         assert_eq!(last.line_count, 2, "two lines: {last:?}");
         assert_eq!(last.line_of_0, 0, "offset 0 is on the first line: {last:?}");
         assert_eq!(last.line_of_3, 1, "offset 3 is past the newline: {last:?}");
-        assert_eq!(last.line0, Some(0..2), "line 0 runs to the newline: {last:?}");
+        assert_eq!(
+            last.line0,
+            Some(0..2),
+            "line 0 runs to the newline: {last:?}"
+        );
         assert!(last.box0.is_some(), "the range has a box: {last:?}");
         assert!(last.caret0.is_some(), "the caret has a rect: {last:?}");
         assert_eq!(last.word0, 0..2, "the word at 0 is `ab`: {last:?}");
-        assert!(last.hit <= 2, "a click at the top-left answers the first characters: {last:?}");
+        assert!(
+            last.hit <= 2,
+            "a click at the top-left answers the first characters: {last:?}"
+        );
     }
     /// Compose's `autoSize`: the font shrinks until the text fits the box.
     ///
@@ -1164,12 +1569,19 @@ mod tests {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 let text = Text::new("The quick brown fox jumps over the lazy dog").font_size(24.0);
-                let text = if auto { text.auto_size(8.0, 24.0) } else { text };
+                let text = if auto {
+                    text.auto_size(8.0, 24.0)
+                } else {
+                    text
+                };
                 text.modifier(Modifier::new().size(120.0, 40.0)).build(ctx);
             });
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
             let nodes = composer.arena_nodes();
-            let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+            let node = nodes
+                .iter()
+                .find(|n| n.has_text_content)
+                .expect("a text node");
             let paragraph = node.cached_paragraph.borrow();
             let paragraph = paragraph.as_ref().expect("measured");
             (paragraph.height(), node.measured_size.height)
@@ -1197,9 +1609,12 @@ mod tests {
     /// `Option` now so that "none" is a value the child can state.
     #[test]
     fn a_child_style_can_clear_an_inherited_decoration() {
-        let base = crate::text::TextStyle::new()
-            .text_decoration(crate::text::TextDecoration::UNDERLINE);
-        let cleared = merge_text_styles(&base, &crate::text::TextStyle::new().text_decoration(crate::text::TextDecoration::NONE));
+        let base =
+            crate::text::TextStyle::new().text_decoration(crate::text::TextDecoration::UNDERLINE);
+        let cleared = merge_text_styles(
+            &base,
+            &crate::text::TextStyle::new().text_decoration(crate::text::TextDecoration::NONE),
+        );
         assert!(
             !cleared.decoration().underline,
             "an explicit NONE must clear the inherited underline: {:?}",
@@ -1235,12 +1650,23 @@ mod tests {
             );
         });
         let nodes = composer.arena_nodes();
-        let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
-        let size = node.modifier.elements().iter().find_map(|el| match el {
-            crate::modifier::ModifierElement::TextContent { font_size, .. } => Some(*font_size),
-            _ => None,
-        }).expect("the payload carries a size");
-        assert!((size - 32.0).abs() < 0.01, "2 em of 16 sp is 32 logical px, got {size}");
+        let node = nodes
+            .iter()
+            .find(|n| n.has_text_content)
+            .expect("a text node");
+        let size = node
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::TextContent { font_size, .. } => Some(*font_size),
+                _ => None,
+            })
+            .expect("the payload carries a size");
+        assert!(
+            (size - 32.0).abs() < 0.01,
+            "2 em of 16 sp is 32 logical px, got {size}"
+        );
     }
     /// Compose's `validateMinMaxLines` (`HeightInLinesModifier.kt:454-461`): a non-positive cap is a
     /// bad parameter, not a silent one.
@@ -1271,7 +1697,10 @@ mod tests {
         let payload_shared = |callback: std::sync::Arc<dyn Fn(&TextLayoutResult) + Send + Sync>| {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
-                Text::new("x").font_size(14.0).on_text_layout_shared(callback).build(ctx);
+                Text::new("x")
+                    .font_size(14.0)
+                    .on_text_layout_shared(callback)
+                    .build(ctx);
             });
             let root = composer.layout_root_idx().unwrap();
             composer.arena_nodes()[root].modifier.clone()
@@ -1279,7 +1708,10 @@ mod tests {
         let payload_closure = || {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
-                Text::new("x").font_size(14.0).on_text_layout(|_: &TextLayoutResult| {}).build(ctx);
+                Text::new("x")
+                    .font_size(14.0)
+                    .on_text_layout(|_: &TextLayoutResult| {})
+                    .build(ctx);
             });
             let root = composer.layout_root_idx().unwrap();
             composer.arena_nodes()[root].modifier.clone()

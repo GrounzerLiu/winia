@@ -10,7 +10,12 @@ pub struct SharedBounds {
 
 impl SharedBounds {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Component-wise interpolation (origin and size independently).
@@ -52,7 +57,12 @@ pub struct FlightEdges {
 
 impl FlightEdges {
     pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self { left, top, right, bottom }
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     /// The edges of a rect (`right`/`bottom` are edge coordinates, like Compose's `Rect`).
@@ -95,10 +105,10 @@ impl FlightEdges {
                 None
             }
         }
-        let horizontal =
-            axis(start.left, end.left, self.left).or_else(|| axis(start.right, end.right, self.right));
-        let vertical =
-            axis(start.top, end.top, self.top).or_else(|| axis(start.bottom, end.bottom, self.bottom));
+        let horizontal = axis(start.left, end.left, self.left)
+            .or_else(|| axis(start.right, end.right, self.right));
+        let vertical = axis(start.top, end.top, self.top)
+            .or_else(|| axis(start.bottom, end.bottom, self.bottom));
         match (horizontal, vertical) {
             (Some(h), Some(v)) => 0.5 * (h + v),
             (Some(h), None) => h,
@@ -128,7 +138,10 @@ impl crate::animation::AnimatableValue for FlightEdges {
         true
     }
 
-    fn write_components(&self, out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS]) -> usize {
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
         out[0] = self.left;
         out[1] = self.top;
         out[2] = self.right;
@@ -168,7 +181,9 @@ impl BoundsTransform {
     }
 
     pub fn keyframes(spec: KeyframesSpec) -> Self {
-        Self { spec: AnimationSpec::Keyframes(spec) }
+        Self {
+            spec: AnimationSpec::Keyframes(spec),
+        }
     }
 
     /// The spec for the flight's progress CLOCK — the scalar 0→1 the content crossfade rides.
@@ -216,18 +231,21 @@ impl ResizeMode {
     }
 
     /// Compose `scaleToBounds(contentScale, alignment)`.
-    pub fn scale_to_bounds_with(
-        content_scale: ContentScale,
-        alignment: ImageAlignment,
-    ) -> Self {
-        ResizeMode::ScaleToBounds { content_scale, alignment }
+    pub fn scale_to_bounds_with(content_scale: ContentScale, alignment: ImageAlignment) -> Self {
+        ResizeMode::ScaleToBounds {
+            content_scale,
+            alignment,
+        }
     }
 
     /// `ContentScale`/`ImageAlignment` of a scaling end; `None` for `RemeasureToBounds`
     /// (it never scales).
     pub(crate) fn scale_to_bounds_parts(self) -> Option<(ContentScale, ImageAlignment)> {
         match self {
-            ResizeMode::ScaleToBounds { content_scale, alignment } => Some((content_scale, alignment)),
+            ResizeMode::ScaleToBounds {
+                content_scale,
+                alignment,
+            } => Some((content_scale, alignment)),
             ResizeMode::RemeasureToBounds => None,
         }
     }
@@ -278,7 +296,9 @@ pub enum PathMotion {
 /// to register the endpoint; render ignores it via the `_ =>` fallback).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SharedKind {
-    Element { placeholder: PlaceHolderSize },
+    Element {
+        placeholder: PlaceHolderSize,
+    },
     Bounds {
         resize: ResizeMode,
         placeholder: PlaceHolderSize,
@@ -314,7 +334,10 @@ pub(crate) enum FlightEvent {
     /// Matching pair complete, bounds pending.
     CounterpartAppeared { source_slot: u64, target_slot: u64 },
     /// Both bounds known (app-loop filled them).
-    BoundsReady { start: SharedBounds, end: SharedBounds },
+    BoundsReady {
+        start: SharedBounds,
+        end: SharedBounds,
+    },
     /// Scalar progress reached 1.0.
     ProgressDone,
     // NOTE (dead-code allowed): Retarget/ScopeDisposed/WindowClosed are the
@@ -335,12 +358,22 @@ pub(crate) enum FlightEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FlightAction {
     /// Entry of `AwaitingBounds`: ask the app loop to fill both bounds.
-    CollectBounds { source_slot: u64, target_slot: u64 },
+    CollectBounds {
+        source_slot: u64,
+        target_slot: u64,
+    },
     /// Begin the dual render (same-composer Tier 0 in Phase 2; tier selection
     /// moves into the actuator in Phase 4).
-    StartFlight { source_slot: u64, target_slot: u64, start: SharedBounds, end: SharedBounds },
+    StartFlight {
+        source_slot: u64,
+        target_slot: u64,
+        start: SharedBounds,
+        end: SharedBounds,
+    },
     /// Free the retained source node (invisible at alpha 0 — glitch-free).
-    ReleaseRetained { source_slot: u64 },
+    ReleaseRetained {
+        source_slot: u64,
+    },
     /// Clear transition visuals, drop the flight.
     FinishFlight,
     /// Atomic cleanup after dispose/close.
@@ -366,4 +399,3 @@ pub(crate) struct Flight {
     pub source_slot: Option<u64>,
     pub target_slot: Option<u64>,
 }
-

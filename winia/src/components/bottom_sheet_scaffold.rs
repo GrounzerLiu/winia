@@ -57,14 +57,14 @@
 //! - The drag handle's `semantics` actions (expand/collapse/dismiss, `:350-385`) are not ported; the click
 //!   behaviour is.
 
+use crate::components::sheet_state::{SheetState, SheetValue};
 use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::layout::node::ContentAlignment;
+use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
 use crate::unit::Dp;
-use crate::components::sheet_state::{SheetState, SheetValue};
-use crate::layout::node::ContentAlignment;
 
 pub const SCAFFOLD_SHEET_PEEK_HEIGHT: Dp = Dp(56.0);
 pub const SCAFFOLD_SHEET_SHAPE_RADIUS: f32 = 28.0;
@@ -261,8 +261,10 @@ impl BottomSheetScaffold {
         // Same geometry as the modal sheet (and the same unit rule — see the helper).
         // Only the width: the box's centring supplies the inset now, so the padding the geometry
         // hands back is not used here (the modal sheet still applies it itself).
-        let (sheet_w, _sheet_pad_x) =
-            crate::components::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::layout::window_size().0);
+        let (sheet_w, _sheet_pad_x) = crate::components::bottom_sheet::sheet_panel_geometry(
+            self.sheet_max_width,
+            crate::layout::window_size().0,
+        );
         let container_color = self.container_color;
         // The sheet's own colours, resolved once: the container (Compose's
         // `SheetBottomTokens.DockedContainerColor` = `surfaceContainerLow`), its tonal overlay, and the
@@ -318,309 +320,327 @@ impl BottomSheetScaffold {
             anchors_input: anchors_input.clone(),
         };
         crate::layout::components::build_container(ctx, root_mod, root_policy, |ctx| {
-                // The page: Compose measures the top bar first and gives the body what is left below it
-                // (`BottomSheetScaffold.kt:427-431`). A Column with a weighted body does exactly that —
-                // the bar takes its natural height, the body takes the rest — and the body keeps the peek
-                // inset of `PaddingValues(bottom = sheetPeekHeight)` (`:143`).
-                // Same unit rule: `padding_bottom` takes a layout length, so the dp value is
-                // the logical value (the sheet's own height is reported in logical px too).
-                let peek_px_pre = peek.to_logical();
-                crate::layout::components::Column::new()
-                    .modifier(Modifier::new().fill_max_size())
-                    .build(ctx, |ctx| {
-                        if let Some(bar) = &top_bar {
-                            bar(ctx);
-                        }
-                        crate::layout::components::Column::new()
-                            .modifier(Modifier::new().fill_max_size().layout_weight(1.0))
-                            .build(ctx, |ctx| {
-                                crate::layout::components::Stack::new()
-                                    .modifier(
-                                        Modifier::new().fill_max_size().padding_bottom(peek_px_pre),
-                                    )
-                                    .build(ctx, |ctx| {
-                                        content(ctx);
-                                    });
-                            });
-                    });
-
-                // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
-                // The anchors themselves are computed in `ScaffoldStackPolicy`, from the height this
-                // scaffold's own layout was handed (Compose's `layoutHeight`, `BottomSheetScaffold.kt:275-276`)
-                // — that is what makes a scaffold in a box that is not the window anchor from its own box
-                // (measured in `a_nested_scaffold_anchors_from_its_own_height`: the first layout's partial
-                // anchor is 344 for a 400-tall box where the window's height would put it at 664).
-                //
-                // Read the TRACKED copy first: the rules below run in the BUILD, so they need a dependency on
-                // the layout's height — the backchannel is the same number without one, and the window is the
-                // frame before any layout has run.
-                let tracked_h = layout_h_state.get();
-                let layout_h = if tracked_h > 0.0 {
-                    tracked_h
-                } else {
-                    measured_layout_h
-                        .peek()
-                        .unwrap_or_else(|| crate::layout::window_size().1)
-                };
-                let peek_px = peek.to_logical();
-                // The snackbar rule reads the sheet state after the handle closure has taken a clone.
-                let st_for_snackbar_snapshot = sheet_state.clone();
-
-                let st_for_offset = sheet_state.clone();
-                let is_full = sheet_h.get() >= layout_h - 1.0;
-                let from = if st_for_offset.has_partially_expanded_state() {
-                    SheetValue::PartiallyExpanded
-                } else {
-                    SheetValue::Hidden
-                };
-                let p = st_for_offset.progress(from, SheetValue::Expanded);
-                let off = st_for_offset.offset();
-                let cur_radius = if is_full {
-                    if off.is_nan() { radius } else { radius * (1.0 - p.clamp(0.0, 1.0)) }
-                } else {
-                    radius
-                };
-                let cur_shape = explicit_shape.unwrap_or(Shape::TopRoundedRect { radius: cur_radius });
-
-                // The x/y pair must go through ONE element: `get_offset` and
-                // `get_absolute_offset` both return only the FIRST element of their kind, so
-                // chaining `offset_x(..).offset_y(..)` silently drops the y and pins the sheet
-                // to the top of the window. `absolute_offset` rather than `offset` because the
-                // x is a CENTRING inset, which is direction-independent, while a plain offset
-                // mirrors its x under RTL (`layout/node.rs` placement) — that put the sheet at
-                // -pad_x in RTL, with as much clipped off the left as left dead on the right.
-                let sheet_mod = Modifier::new()
-                    .width(sheet_w)
-                    // At least as tall as the peek: Compose's `requiredHeightIn(min = peekHeight)` on the
-                    // sheet's Surface (`BottomSheetScaffold.kt:262-264`). Without it a content shorter than
-                    // the peek left the sheet only as tall as that content while its anchor still put the
-                    // TOP at `layoutHeight - peek`, so the page showed through the strip under the
-                    // collapsed sheet (measured: an 11 px text and a 96 px peek left an 85 px gap).
-                    .min_height(peek_px)
-                    // x = 0: the box's centre alignment owns the horizontal placement now.
-                    .absolute_offset(0.0, st_for_offset.offset_state())
-                    .shadow(
-                        sheet_shadow_elevation,
-                        cur_shape,
-                        false,
-                        Color::from_argb(40, 0, 0, 0),
-                    )
-                    .background(sheet_bg, cur_shape)
-                    .on_size_changed({
-                        let sheet_h_for_cb = sheet_h.clone();
-                        // The panel's height only: the ANCHORS belong to `ScaffoldStackPolicy`, which computes
-                        // them from the height this scaffold's layout was handed. This callback used to
-                        // recompute them from `window_size().1` as well, and it runs AFTER the policy (the
-                        // children are measured inside it), so it put the window's answer back on top — the
-                        // reason a scaffold inside a 400-tall box still anchored at 664, and why the demo's
-                        // numbers never moved when the policy was introduced.
-                        move |_w, h| {
-                            sheet_h_for_cb.set(h);
-                        }
-                    });
-
-                let mut sheet_mod_with_nested = sheet_mod;
-                if swipe {
-                    #[derive(Clone)]
-                    struct SheetNested {
-                        st: SheetState,
+            // The page: Compose measures the top bar first and gives the body what is left below it
+            // (`BottomSheetScaffold.kt:427-431`). A Column with a weighted body does exactly that —
+            // the bar takes its natural height, the body takes the rest — and the body keeps the peek
+            // inset of `PaddingValues(bottom = sheetPeekHeight)` (`:143`).
+            // Same unit rule: `padding_bottom` takes a layout length, so the dp value is
+            // the logical value (the sheet's own height is reported in logical px too).
+            let peek_px_pre = peek.to_logical();
+            crate::layout::components::Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if let Some(bar) = &top_bar {
+                        bar(ctx);
                     }
-                    impl SheetNested {
-                        /// How much of `delta_y` the sheet actually took, measured as the offset's change:
-                        /// `scroll_delta` clamps to the anchors' [min, max], so a sheet already at
-                        /// `Expanded` consumes 0 and the list gets the rest.
-                        /// `scroll_delta`, not `drag_delta`: a list scrolling inside the sheet is not a
-                        /// gesture on the sheet, and marking it as one left `is_dragging` set after any
-                        /// scroll that started no fling — after which a resize never moved the sheet again.
-                        fn consume(
-                            st: &SheetState,
-                            delta_y: f32,
-                        ) -> crate::nested_scroll::ScrollDelta {
-                            if delta_y == 0.0 {
-                                return crate::nested_scroll::ScrollDelta::ZERO;
-                            }
-                            let before = st.offset();
-                            st.anchored_draggable().scroll_delta(delta_y);
-                            let consumed = st.offset() - before;
-                            crate::nested_scroll::ScrollDelta::new(0.0, consumed)
-                        }
-                    }
-                    impl crate::nested_scroll::NestedScrollConnection for SheetNested {
-                        fn on_pre_scroll(
-                            &self,
-                            available: crate::nested_scroll::ScrollDelta,
-                            source: crate::nested_scroll::NestedScrollSource,
-                        ) -> crate::nested_scroll::ScrollDelta {
-                            // Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection`
-                            // (`SheetDefaults.kt:454-470`): the sheet answers USER INPUT only, and only an
-                            // upward delta in the pre-scroll phase. A wheel counts as user input there — it
-                            // is dispatched with `NestedScrollSource.UserInput`
-                            // (`MouseWheelScrollingLogic.kt:303-307`) — so an upward wheel expands the sheet
-                            // first, exactly like a finger; a fling or an animation must not move it.
-                            if !source.is_user_input() || available.y >= 0.0 {
-                                return crate::nested_scroll::ScrollDelta::ZERO;
-                            }
-                            Self::consume(&self.st, available.y)
-                        }
-                        fn on_post_scroll(
-                            &self,
-                            _consumed: crate::nested_scroll::ScrollDelta,
-                            available: crate::nested_scroll::ScrollDelta,
-                            source: crate::nested_scroll::NestedScrollSource,
-                        ) -> crate::nested_scroll::ScrollDelta {
-                            if !source.is_user_input() {
-                                return crate::nested_scroll::ScrollDelta::ZERO;
-                            }
-                            Self::consume(&self.st, available.y)
-                        }
-                        fn on_post_fling(
-                            &self,
-                            _consumed: crate::nested_scroll::ScrollVelocity,
-                            available: crate::nested_scroll::ScrollVelocity,
-                        ) -> crate::nested_scroll::ScrollVelocity {
-                            // 向下滑松手：available.y = -vy（向下→负）。折叠需正 velocity，故取反。
-                            self.st.settle_with_velocity(-available.y);
-                            crate::nested_scroll::ScrollVelocity::default()
-                        }
-                        fn on_pre_fling(
-                            &self,
-                            available: crate::nested_scroll::ScrollVelocity,
-                        ) -> crate::nested_scroll::ScrollVelocity {
-                            // 方向约定：dispatch 传 available.y = -vy（手指向上→正）。
-                            // sheet 展开需 velocity<0，故取反。向上拖且未到 Expanded → 吸附展开并消费。
-                            if available.y <= 0.0 {
-                                return crate::nested_scroll::ScrollVelocity::default();
-                            }
-                            let expanded_pos = self.st.anchored_draggable().position_of(&SheetValue::Expanded);
-                            if !expanded_pos.is_nan() && self.st.offset() <= expanded_pos {
-                                return crate::nested_scroll::ScrollVelocity::default();
-                            }
-                            self.st.settle_with_velocity(-available.y);
-                            crate::nested_scroll::ScrollVelocity { x: 0.0, y: available.y }
-                        }
-                    }
-                    let sheet_conn = SheetNested { st: sheet_state.clone() };
-                    sheet_mod_with_nested = sheet_mod_with_nested.nested_scroll(sheet_conn);
-                }
-                // 面板任意位置可拖（对齐 Compose BottomSheetScaffold——整面板 Surface 可拖，
-                // 不只把手）。背景/文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
-                //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
-                let s_d = sheet_state.clone();
-                let s_e = sheet_state.clone();
-                let sheet_mod_with_panel_drag = sheet_mod_with_nested
-                    .on_drag(move |_pos, (_dx, dy)| s_d.drag_delta(dy))
-                    .on_drag_end(move || {
-                        s_e.settle_with_velocity(s_e.last_velocity());
-                    });
-                crate::layout::components::Column::new()
-                    .modifier(sheet_mod_with_panel_drag)
-                    .build(ctx, move |ctx| {
-                        // The sheet's content colour, as a scope the whole panel inherits from.
-                        crate::theme::WiniaTheme::with_content_color(sheet_content_colour, ctx, |ctx| {
-                        // A caller-supplied handle replaces the built-in one, exactly as Compose's
-                        // composable `sheetDragHandle` slot does.
-                        if let Some(slot) = &sheet_drag_handle_content_slot {
-                            slot(ctx);
-                        } else if drag_handle {
-                            // The handle is CLICKABLE in Compose (`StandardBottomSheet`, the
-                            // `DragHandleWithTooltip { Box(Modifier.clickable { … }) }`): a click expands
-                            // a peeking sheet, collapses an expanded one (or hides it when the hidden
-                            // state is allowed), and shows a hidden one. `semantics` actions
-                            // (expand/collapse/dismiss) are not ported — winia's semantics API has no
-                            // custom-action channel yet, which the module doc records.
-                            let handle_state = sheet_state.clone();
-                            crate::layout::components::Row::new()
-                                .modifier(
-                                    Modifier::new()
-                                        .fill_max_width()
-                                        // Compose's `DragHandleVerticalPadding = 22.dp`
-                                        // (`SheetDefaults.kt:543`) — winia used 12, which made the collapsed
-                                        // sheet 20 px shorter than Compose's.
-                                        .padding_vertical(SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING)
-                                        // Compose's drag handle reads `currentValue`, which is the state the
-                                        // sheet's POSITION is closest to during an animation
-                                        // (`AnchoredDraggableState.updateIfNeeded`), so a click mid-flight
-                                        // asks for the state it is already heading to and does nothing. With
-                                        // `current_value()` (which flips when the animation is requested)
-                                        // the click reversed the animation instead.
-                                        .clickable(move || match handle_state.value_for_offset() {
-                                            SheetValue::Expanded => {
-                                                if handle_state.skip_hidden_state() {
-                                                    handle_state.partial_expand();
-                                                } else {
-                                                    handle_state.hide();
-                                                }
-                                            }
-                                            SheetValue::PartiallyExpanded => handle_state.expand(),
-                                            _ => handle_state.show(),
-                                        }),
-                                )
-                                .arrangement(crate::layout::Arrangement::Center)
-                                .build(ctx, |ctx| {
-                                    crate::layout::components::Stack::new()
-                                        .modifier(Modifier::new().size(32.0, 4.0).background(
-                                            // `SheetBottomTokens.DockedDragHandleColor` = `OnSurfaceVariant`
-                                            // (winia painted it with `outline_variant`, a dimmer token).
-                                            crate::theme::WiniaTheme::colors().on_surface_variant,
-                                            Shape::RoundedRect { corner_radius: 2.0 },
-                                        ))
-                                        .build(ctx, |_| {});
-                                });
-                        }
-                        sheet_content(ctx);
-                        });
-                    });
-
-                // The snackbar: centred, just above the sheet while it is partially expanded, on the bottom
-                // edge otherwise — Compose's rule (`BottomSheetScaffold.kt:441-446`). Compose knows the
-                // snackbar's height because its layout measures every child before placing any; here the
-                // height is remembered from the previous frame, so the first frame of a snackbar's life
-                // places it by its bottom edge. The rule reads the state that drives the sheet, so it
-                // re-runs as the sheet moves.
-                if let Some(host) = &snackbar {
-                    let snack_h: State<f32> = ctx.remember(|| 0.0);
-                    // Compose's rule reads `currentValue` (`BottomSheetScaffold.kt:441-446`), which during an
-                    // animation is the state the sheet's POSITION is closest to — so the snackbar stays on the
-                    // panel's top edge until the panel has actually travelled past the midpoint between two
-                    // anchors. `current_value()` flips at the request instead, which put the snackbar on the
-                    // window's bottom edge while the panel was still where it started (measured: panel at
-                    // 663.7 of 664 while the snackbar had already moved).
-                    //
-                    // The offset is resolved AT LAYOUT TIME from the height the slot has just measured, instead
-                    // of from a value read in this build. Reading it here left the placement on the first
-                    // frame's value (0, before the slot had ever been measured) with nothing to re-run this
-                    // build afterwards — traced `h=96 y=528` here while the DRAWN card sat at the panel's top
-                    // edge, confirmed by a pixel probe. The slot is measured and placed in the same pass, so the
-                    // fresh height is available by placement time.
-                    let snack_h_for_offset = snack_h.clone();
-                    let st_for_offset = st_for_snackbar_snapshot.clone();
-                    // The scaffold's own height comes from the policy, which writes it before measuring the
-                    // children — so this closure reads the CURRENT pass's number (traced: `h=0 y=624` on the
-                    // first frames, `h=96 y=528` once the slot measured 96, `h=96 y=408` as the sheet moved),
-                    // and takes the window only until the first layout has run.
-                    let h_for_offset = measured_layout_h.clone();
-                    let y = move || {
-                        let h_self = h_for_offset.peek().unwrap_or(layout_h);
-                        match st_for_offset.value_for_offset() {
-                            SheetValue::PartiallyExpanded => {
-                                st_for_offset.offset() - snack_h_for_offset.get()
-                            }
-                            _ => h_self - snack_h_for_offset.get(),
-                        }
-                    };
-                    let snack_mod = Modifier::new()
-                        .absolute_offset(0.0, y)
-                        .on_size_changed({
-                            let h = snack_h.clone();
-                            move |_w, height| h.set(height)
-                        });
-                    crate::layout::components::Stack::new()
-                        .modifier(snack_mod)
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().fill_max_size().layout_weight(1.0))
                         .build(ctx, |ctx| {
-                            host(ctx);
+                            crate::layout::components::Stack::new()
+                                .modifier(
+                                    Modifier::new().fill_max_size().padding_bottom(peek_px_pre),
+                                )
+                                .build(ctx, |ctx| {
+                                    content(ctx);
+                                });
                         });
+                });
+
+            // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
+            // The anchors themselves are computed in `ScaffoldStackPolicy`, from the height this
+            // scaffold's own layout was handed (Compose's `layoutHeight`, `BottomSheetScaffold.kt:275-276`)
+            // — that is what makes a scaffold in a box that is not the window anchor from its own box
+            // (measured in `a_nested_scaffold_anchors_from_its_own_height`: the first layout's partial
+            // anchor is 344 for a 400-tall box where the window's height would put it at 664).
+            //
+            // Read the TRACKED copy first: the rules below run in the BUILD, so they need a dependency on
+            // the layout's height — the backchannel is the same number without one, and the window is the
+            // frame before any layout has run.
+            let tracked_h = layout_h_state.get();
+            let layout_h = if tracked_h > 0.0 {
+                tracked_h
+            } else {
+                measured_layout_h
+                    .peek()
+                    .unwrap_or_else(|| crate::layout::window_size().1)
+            };
+            let peek_px = peek.to_logical();
+            // The snackbar rule reads the sheet state after the handle closure has taken a clone.
+            let st_for_snackbar_snapshot = sheet_state.clone();
+
+            let st_for_offset = sheet_state.clone();
+            let is_full = sheet_h.get() >= layout_h - 1.0;
+            let from = if st_for_offset.has_partially_expanded_state() {
+                SheetValue::PartiallyExpanded
+            } else {
+                SheetValue::Hidden
+            };
+            let p = st_for_offset.progress(from, SheetValue::Expanded);
+            let off = st_for_offset.offset();
+            let cur_radius = if is_full {
+                if off.is_nan() {
+                    radius
+                } else {
+                    radius * (1.0 - p.clamp(0.0, 1.0))
                 }
-            });
+            } else {
+                radius
+            };
+            let cur_shape = explicit_shape.unwrap_or(Shape::TopRoundedRect { radius: cur_radius });
+
+            // The x/y pair must go through ONE element: `get_offset` and
+            // `get_absolute_offset` both return only the FIRST element of their kind, so
+            // chaining `offset_x(..).offset_y(..)` silently drops the y and pins the sheet
+            // to the top of the window. `absolute_offset` rather than `offset` because the
+            // x is a CENTRING inset, which is direction-independent, while a plain offset
+            // mirrors its x under RTL (`layout/node.rs` placement) — that put the sheet at
+            // -pad_x in RTL, with as much clipped off the left as left dead on the right.
+            let sheet_mod = Modifier::new()
+                .width(sheet_w)
+                // At least as tall as the peek: Compose's `requiredHeightIn(min = peekHeight)` on the
+                // sheet's Surface (`BottomSheetScaffold.kt:262-264`). Without it a content shorter than
+                // the peek left the sheet only as tall as that content while its anchor still put the
+                // TOP at `layoutHeight - peek`, so the page showed through the strip under the
+                // collapsed sheet (measured: an 11 px text and a 96 px peek left an 85 px gap).
+                .min_height(peek_px)
+                // x = 0: the box's centre alignment owns the horizontal placement now.
+                .absolute_offset(0.0, st_for_offset.offset_state())
+                .shadow(
+                    sheet_shadow_elevation,
+                    cur_shape,
+                    false,
+                    Color::from_argb(40, 0, 0, 0),
+                )
+                .background(sheet_bg, cur_shape)
+                .on_size_changed({
+                    let sheet_h_for_cb = sheet_h.clone();
+                    // The panel's height only: the ANCHORS belong to `ScaffoldStackPolicy`, which computes
+                    // them from the height this scaffold's layout was handed. This callback used to
+                    // recompute them from `window_size().1` as well, and it runs AFTER the policy (the
+                    // children are measured inside it), so it put the window's answer back on top — the
+                    // reason a scaffold inside a 400-tall box still anchored at 664, and why the demo's
+                    // numbers never moved when the policy was introduced.
+                    move |_w, h| {
+                        sheet_h_for_cb.set(h);
+                    }
+                });
+
+            let mut sheet_mod_with_nested = sheet_mod;
+            if swipe {
+                #[derive(Clone)]
+                struct SheetNested {
+                    st: SheetState,
+                }
+                impl SheetNested {
+                    /// How much of `delta_y` the sheet actually took, measured as the offset's change:
+                    /// `scroll_delta` clamps to the anchors' [min, max], so a sheet already at
+                    /// `Expanded` consumes 0 and the list gets the rest.
+                    /// `scroll_delta`, not `drag_delta`: a list scrolling inside the sheet is not a
+                    /// gesture on the sheet, and marking it as one left `is_dragging` set after any
+                    /// scroll that started no fling — after which a resize never moved the sheet again.
+                    fn consume(st: &SheetState, delta_y: f32) -> crate::nested_scroll::ScrollDelta {
+                        if delta_y == 0.0 {
+                            return crate::nested_scroll::ScrollDelta::ZERO;
+                        }
+                        let before = st.offset();
+                        st.anchored_draggable().scroll_delta(delta_y);
+                        let consumed = st.offset() - before;
+                        crate::nested_scroll::ScrollDelta::new(0.0, consumed)
+                    }
+                }
+                impl crate::nested_scroll::NestedScrollConnection for SheetNested {
+                    fn on_pre_scroll(
+                        &self,
+                        available: crate::nested_scroll::ScrollDelta,
+                        source: crate::nested_scroll::NestedScrollSource,
+                    ) -> crate::nested_scroll::ScrollDelta {
+                        // Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection`
+                        // (`SheetDefaults.kt:454-470`): the sheet answers USER INPUT only, and only an
+                        // upward delta in the pre-scroll phase. A wheel counts as user input there — it
+                        // is dispatched with `NestedScrollSource.UserInput`
+                        // (`MouseWheelScrollingLogic.kt:303-307`) — so an upward wheel expands the sheet
+                        // first, exactly like a finger; a fling or an animation must not move it.
+                        if !source.is_user_input() || available.y >= 0.0 {
+                            return crate::nested_scroll::ScrollDelta::ZERO;
+                        }
+                        Self::consume(&self.st, available.y)
+                    }
+                    fn on_post_scroll(
+                        &self,
+                        _consumed: crate::nested_scroll::ScrollDelta,
+                        available: crate::nested_scroll::ScrollDelta,
+                        source: crate::nested_scroll::NestedScrollSource,
+                    ) -> crate::nested_scroll::ScrollDelta {
+                        if !source.is_user_input() {
+                            return crate::nested_scroll::ScrollDelta::ZERO;
+                        }
+                        Self::consume(&self.st, available.y)
+                    }
+                    fn on_post_fling(
+                        &self,
+                        _consumed: crate::nested_scroll::ScrollVelocity,
+                        available: crate::nested_scroll::ScrollVelocity,
+                    ) -> crate::nested_scroll::ScrollVelocity {
+                        // 向下滑松手：available.y = -vy（向下→负）。折叠需正 velocity，故取反。
+                        self.st.settle_with_velocity(-available.y);
+                        crate::nested_scroll::ScrollVelocity::default()
+                    }
+                    fn on_pre_fling(
+                        &self,
+                        available: crate::nested_scroll::ScrollVelocity,
+                    ) -> crate::nested_scroll::ScrollVelocity {
+                        // 方向约定：dispatch 传 available.y = -vy（手指向上→正）。
+                        // sheet 展开需 velocity<0，故取反。向上拖且未到 Expanded → 吸附展开并消费。
+                        if available.y <= 0.0 {
+                            return crate::nested_scroll::ScrollVelocity::default();
+                        }
+                        let expanded_pos = self
+                            .st
+                            .anchored_draggable()
+                            .position_of(&SheetValue::Expanded);
+                        if !expanded_pos.is_nan() && self.st.offset() <= expanded_pos {
+                            return crate::nested_scroll::ScrollVelocity::default();
+                        }
+                        self.st.settle_with_velocity(-available.y);
+                        crate::nested_scroll::ScrollVelocity {
+                            x: 0.0,
+                            y: available.y,
+                        }
+                    }
+                }
+                let sheet_conn = SheetNested {
+                    st: sheet_state.clone(),
+                };
+                sheet_mod_with_nested = sheet_mod_with_nested.nested_scroll(sheet_conn);
+            }
+            // 面板任意位置可拖（对齐 Compose BottomSheetScaffold——整面板 Surface 可拖，
+            // 不只把手）。背景/文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
+            //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
+            let s_d = sheet_state.clone();
+            let s_e = sheet_state.clone();
+            let sheet_mod_with_panel_drag = sheet_mod_with_nested
+                .on_drag(move |_pos, (_dx, dy)| s_d.drag_delta(dy))
+                .on_drag_end(move || {
+                    s_e.settle_with_velocity(s_e.last_velocity());
+                });
+            crate::layout::components::Column::new()
+                .modifier(sheet_mod_with_panel_drag)
+                .build(ctx, move |ctx| {
+                    // The sheet's content colour, as a scope the whole panel inherits from.
+                    crate::theme::WiniaTheme::with_content_color(
+                        sheet_content_colour,
+                        ctx,
+                        |ctx| {
+                            // A caller-supplied handle replaces the built-in one, exactly as Compose's
+                            // composable `sheetDragHandle` slot does.
+                            if let Some(slot) = &sheet_drag_handle_content_slot {
+                                slot(ctx);
+                            } else if drag_handle {
+                                // The handle is CLICKABLE in Compose (`StandardBottomSheet`, the
+                                // `DragHandleWithTooltip { Box(Modifier.clickable { … }) }`): a click expands
+                                // a peeking sheet, collapses an expanded one (or hides it when the hidden
+                                // state is allowed), and shows a hidden one. `semantics` actions
+                                // (expand/collapse/dismiss) are not ported — winia's semantics API has no
+                                // custom-action channel yet, which the module doc records.
+                                let handle_state = sheet_state.clone();
+                                crate::layout::components::Row::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .fill_max_width()
+                                            // Compose's `DragHandleVerticalPadding = 22.dp`
+                                            // (`SheetDefaults.kt:543`) — winia used 12, which made the collapsed
+                                            // sheet 20 px shorter than Compose's.
+                                            .padding_vertical(SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING)
+                                            // Compose's drag handle reads `currentValue`, which is the state the
+                                            // sheet's POSITION is closest to during an animation
+                                            // (`AnchoredDraggableState.updateIfNeeded`), so a click mid-flight
+                                            // asks for the state it is already heading to and does nothing. With
+                                            // `current_value()` (which flips when the animation is requested)
+                                            // the click reversed the animation instead.
+                                            .clickable(move || {
+                                                match handle_state.value_for_offset() {
+                                                    SheetValue::Expanded => {
+                                                        if handle_state.skip_hidden_state() {
+                                                            handle_state.partial_expand();
+                                                        } else {
+                                                            handle_state.hide();
+                                                        }
+                                                    }
+                                                    SheetValue::PartiallyExpanded => {
+                                                        handle_state.expand()
+                                                    }
+                                                    _ => handle_state.show(),
+                                                }
+                                            }),
+                                    )
+                                    .arrangement(crate::layout::Arrangement::Center)
+                                    .build(ctx, |ctx| {
+                                        crate::layout::components::Stack::new()
+                                            .modifier(
+                                                Modifier::new().size(32.0, 4.0).background(
+                                                    // `SheetBottomTokens.DockedDragHandleColor` = `OnSurfaceVariant`
+                                                    // (winia painted it with `outline_variant`, a dimmer token).
+                                                    crate::theme::WiniaTheme::colors()
+                                                        .on_surface_variant,
+                                                    Shape::RoundedRect { corner_radius: 2.0 },
+                                                ),
+                                            )
+                                            .build(ctx, |_| {});
+                                    });
+                            }
+                            sheet_content(ctx);
+                        },
+                    );
+                });
+
+            // The snackbar: centred, just above the sheet while it is partially expanded, on the bottom
+            // edge otherwise — Compose's rule (`BottomSheetScaffold.kt:441-446`). Compose knows the
+            // snackbar's height because its layout measures every child before placing any; here the
+            // height is remembered from the previous frame, so the first frame of a snackbar's life
+            // places it by its bottom edge. The rule reads the state that drives the sheet, so it
+            // re-runs as the sheet moves.
+            if let Some(host) = &snackbar {
+                let snack_h: State<f32> = ctx.remember(|| 0.0);
+                // Compose's rule reads `currentValue` (`BottomSheetScaffold.kt:441-446`), which during an
+                // animation is the state the sheet's POSITION is closest to — so the snackbar stays on the
+                // panel's top edge until the panel has actually travelled past the midpoint between two
+                // anchors. `current_value()` flips at the request instead, which put the snackbar on the
+                // window's bottom edge while the panel was still where it started (measured: panel at
+                // 663.7 of 664 while the snackbar had already moved).
+                //
+                // The offset is resolved AT LAYOUT TIME from the height the slot has just measured, instead
+                // of from a value read in this build. Reading it here left the placement on the first
+                // frame's value (0, before the slot had ever been measured) with nothing to re-run this
+                // build afterwards — traced `h=96 y=528` here while the DRAWN card sat at the panel's top
+                // edge, confirmed by a pixel probe. The slot is measured and placed in the same pass, so the
+                // fresh height is available by placement time.
+                let snack_h_for_offset = snack_h.clone();
+                let st_for_offset = st_for_snackbar_snapshot.clone();
+                // The scaffold's own height comes from the policy, which writes it before measuring the
+                // children — so this closure reads the CURRENT pass's number (traced: `h=0 y=624` on the
+                // first frames, `h=96 y=528` once the slot measured 96, `h=96 y=408` as the sheet moved),
+                // and takes the window only until the first layout has run.
+                let h_for_offset = measured_layout_h.clone();
+                let y = move || {
+                    let h_self = h_for_offset.peek().unwrap_or(layout_h);
+                    match st_for_offset.value_for_offset() {
+                        SheetValue::PartiallyExpanded => {
+                            st_for_offset.offset() - snack_h_for_offset.get()
+                        }
+                        _ => h_self - snack_h_for_offset.get(),
+                    }
+                };
+                let snack_mod = Modifier::new().absolute_offset(0.0, y).on_size_changed({
+                    let h = snack_h.clone();
+                    move |_w, height| h.set(height)
+                });
+                crate::layout::components::Stack::new()
+                    .modifier(snack_mod)
+                    .build(ctx, |ctx| {
+                        host(ctx);
+                    });
+            }
+        });
     }
 }
 
@@ -687,7 +707,8 @@ impl crate::layout::node::MeasurePolicy for ScaffoldStackPolicy {
         // (normally `PartiallyExpanded`) BEFORE measuring — without this the first layout would place the panel
         // at y=0.
         if self.sheet_state.offset().is_nan() {
-            self.sheet_state.update_anchors_scaffold(layout_h, peek, self.sheet_h.peek());
+            self.sheet_state
+                .update_anchors_scaffold(layout_h, peek, self.sheet_h.peek());
         }
 
         let out = self.inner.measure(nodes, policies, children, constraints);
@@ -699,7 +720,8 @@ impl crate::layout::node::MeasurePolicy for ScaffoldStackPolicy {
         let sheet_h = self.sheet_h.peek();
         if sheet_h > 0.0 && self.anchors_input.peek() != Some((layout_h, peek, sheet_h)) {
             self.anchors_input.set(Some((layout_h, peek, sheet_h)));
-            self.sheet_state.update_anchors_scaffold(layout_h, peek, sheet_h);
+            self.sheet_state
+                .update_anchors_scaffold(layout_h, peek, sheet_h);
         }
 
         out
@@ -720,7 +742,6 @@ impl Default for BottomSheetScaffold {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests;

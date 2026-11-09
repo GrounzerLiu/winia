@@ -11,32 +11,36 @@ fn chrome_nested_inside_chrome_keeps_its_own_layer_entry() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                        if s.get() {
-                            under_bar_list(ctx, &scope, true);
-                        } else {
-                            under_bar_detail(ctx, &scope, true);
-                        }
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                if s.get() {
+                                    under_bar_list(ctx, &scope, true);
+                                } else {
+                                    under_bar_detail(ctx, &scope, true);
+                                }
+                            });
+                        // Outer chrome, with an INNER chrome marker inside it.
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(Color::GREEN, Shape::Rectangle)
+                                    .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                            )
+                            .build(ctx, |ctx| {
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .size(200.0, 30.0)
+                                            .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                                    )
+                                    .build(ctx, |_| {});
+                            });
                     });
-                    // Outer chrome, with an INNER chrome marker inside it.
-                    Column::new()
-                        .modifier(
-                            Modifier::new()
-                                .size(400.0, 60.0)
-                                .background(Color::GREEN, Shape::Rectangle)
-                                .render_in_shared_transition_scope_overlay(&scope, 0.0),
-                        )
-                        .build(ctx, |ctx| {
-                            Column::new()
-                                .modifier(
-                                    Modifier::new()
-                                        .size(200.0, 30.0)
-                                        .render_in_shared_transition_scope_overlay(&scope, 0.0),
-                                )
-                                .build(ctx, |_| {});
-                        });
-                });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -47,7 +51,10 @@ fn chrome_nested_inside_chrome_keeps_its_own_layer_entry() {
     show.set(false);
     frame(&mut composer, &show);
     assert!(
-        composer.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+        composer
+            .shared_flights
+            .values()
+            .any(|f| !is_terminal(f.flight.phase)),
         "a flight must be running for chrome to elevate"
     );
     let marked: Vec<usize> = composer
@@ -71,7 +78,12 @@ fn chrome_nested_inside_chrome_keeps_its_own_layer_entry() {
         );
     }
     assert!(
-        composer.layer_order.iter().filter(|i| marked.contains(i)).count() == 2,
+        composer
+            .layer_order
+            .iter()
+            .filter(|i| marked.contains(i))
+            .count()
+            == 2,
         "…and both are in the layer's draw order (layer_order={:?})",
         composer.layer_order
     );
@@ -131,13 +143,8 @@ fn scope_overlay_chrome_covers_both_flight_ends() {
     {
         let nodes = composer.arena_nodes();
         let root = composer.layout_root_idx().expect("root");
-        let path = hit_test_with_flights(
-            nodes,
-            root,
-            composer.transition_roots(),
-            probe_x,
-            probe_y,
-        );
+        let path =
+            hit_test_with_flights(nodes, root, composer.transition_roots(), probe_x, probe_y);
         assert!(
             path.contains(&bar),
             "tap in the overlap must reach the chrome, got {path:?}"
@@ -168,13 +175,8 @@ fn scope_overlay_chrome_covers_both_flight_ends() {
     {
         let nodes = composer.arena_nodes();
         let root = composer.layout_root_idx().expect("root");
-        let path = hit_test_with_flights(
-            nodes,
-            root,
-            composer.transition_roots(),
-            probe_x,
-            probe_y,
-        );
+        let path =
+            hit_test_with_flights(nodes, root, composer.transition_roots(), probe_x, probe_y);
         assert!(
             !path.contains(&bar),
             "unelevated chrome gets no special hit routing, got {path:?}"
@@ -281,28 +283,34 @@ fn scope_overlay_chrome_elevates_in_a_peer_composer() {
         let (x, y) = (sa.clone(), sb.clone());
         let (ka, kb) = (sca.clone(), scb.clone());
         a.compose(|ctx| {
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if x.get() {
-                    hero_leaf(ctx, 60.0, 60.0, Color::RED, &ka, true);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if x.get() {
+                        hero_leaf(ctx, 60.0, 60.0, Color::RED, &ka, true);
+                    }
+                });
         });
         b.compose(|ctx| {
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if y.get() {
-                    Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &kb, true);
-                        Column::new()
-                            .modifier(
-                                Modifier::new()
-                                    .size(400.0, 60.0)
-                                    .background(Color::GREEN, Shape::Rectangle)
-                                    .render_in_shared_transition_scope_overlay(&kb, 1.0),
-                            )
-                            .build(ctx, |_| {});
-                    });
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if y.get() {
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &kb, true);
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .size(400.0, 60.0)
+                                            .background(Color::GREEN, Shape::Rectangle)
+                                            .render_in_shared_transition_scope_overlay(&kb, 1.0),
+                                    )
+                                    .build(ctx, |_| {});
+                            });
+                    }
+                });
         });
         a.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -404,23 +412,25 @@ fn morph_never_elevates_even_with_the_flag_on() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    Column::new()
-                        .modifier(
-                            Modifier::new()
-                                .size(ww.get(), 60.0)
-                                .background(Color::BLUE, Shape::rounded(8.0))
-                                .shared_element(
-                                    scope.shared_content_state("hero"),
-                                    BoundsTransform::default(),
-                                    PlaceHolderSize::JumpCut,
-                                    PathMotion::Linear,
-                                    0.0,
-                                    true,
-                                ),
-                        )
-                        .build(ctx, |_| {});
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(ww.get(), 60.0)
+                                    .background(Color::BLUE, Shape::rounded(8.0))
+                                    .shared_element(
+                                        scope.shared_content_state("hero"),
+                                        BoundsTransform::default(),
+                                        PlaceHolderSize::JumpCut,
+                                        PathMotion::Linear,
+                                        0.0,
+                                        true,
+                                    ),
+                            )
+                            .build(ctx, |_| {});
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -434,7 +444,10 @@ fn morph_never_elevates_even_with_the_flag_on() {
     morph_frame(&mut composer);
     assert_eq!(composer.shared_flights.len(), 1, "morph flight opened");
     let idx = marked_in(&composer)[0];
-    let vis = composer.arena_nodes()[idx].transition.clone().expect("morph visual");
+    let vis = composer.arena_nodes()[idx]
+        .transition
+        .clone()
+        .expect("morph visual");
     assert_eq!(vis.role, TransitionRole::Morph, "same-screen resize");
     assert!(!vis.elevated, "a morph must stay in-tree");
     assert!(
@@ -455,28 +468,35 @@ fn layered_chrome_is_not_painted_twice() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    Column::new()
-                        .modifier(Modifier::new().fill_max_size())
-                        .build(ctx, |ctx| {
-                            if s.get() {
-                                under_bar_list(ctx, &scope, true);
-                            } else {
-                                under_bar_detail(ctx, &scope, true);
-                            }
-                        });
-                    Column::new()
-                        .modifier(
-                            Modifier::new()
-                                .size(400.0, 60.0)
-                                .background(
-                                    Color { r: 0, g: 255, b: 0, a: 128 },
-                                    Shape::Rectangle,
-                                )
-                                .render_in_shared_transition_scope_overlay(&scope, 1.0),
-                        )
-                        .build(ctx, |_| {});
-                });
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                if s.get() {
+                                    under_bar_list(ctx, &scope, true);
+                                } else {
+                                    under_bar_detail(ctx, &scope, true);
+                                }
+                            });
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(
+                                        Color {
+                                            r: 0,
+                                            g: 255,
+                                            b: 0,
+                                            a: 128,
+                                        },
+                                        Shape::Rectangle,
+                                    )
+                                    .render_in_shared_transition_scope_overlay(&scope, 1.0),
+                            )
+                            .build(ctx, |_| {});
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));

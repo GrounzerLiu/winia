@@ -53,7 +53,9 @@ pub(crate) fn node_json(node: &SemanticsNode, out: &mut String) {
         state.push(format!("\"enabled\":{enabled}"));
     }
     if let Some((current, min, max)) = node.state.progress_value() {
-        state.push(format!("\"progress\":{{\"value\":{current},\"min\":{min},\"max\":{max}}}"));
+        state.push(format!(
+            "\"progress\":{{\"value\":{current},\"min\":{min},\"max\":{max}}}"
+        ));
     }
     if let Some(message) = node.state.error_value() {
         // `json_string` already quotes and escapes; quoting it again would make the whole
@@ -112,5 +114,3 @@ pub(crate) fn json_string(value: &str) -> String {
         .replace('\u{c}', "\\f");
     format!("\"{escaped}\"")
 }
-
-

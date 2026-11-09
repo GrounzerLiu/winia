@@ -15,12 +15,12 @@
 use crate::animation::interpolator;
 use crate::animation::{InfiniteRepeatableSpec, SpringSpec, TweenSpec};
 use crate::composable;
+use crate::effect::LaunchedEffect;
+use crate::graphics::{Color, Shape};
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::effect::LaunchedEffect;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
 use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{MaterialShapes, Morph, MorphToPath, RoundedPolygon};
 use std::sync::{Arc, LazyLock};
@@ -132,7 +132,10 @@ impl LoadingIndicator {
     /// Color.Unspecified`) and it does **not** rotate — the rotation in the default shape sequence is baked
     /// into the shapes, not animated.
     pub fn determinate(progress: State<f32>) -> Self {
-        Self { progress: Some(progress), ..Self::new() }
+        Self {
+            progress: Some(progress),
+            ..Self::new()
+        }
     }
 
     /// Switch to the Container configuration (`ContainedLoadingIndicator`): a round container with the
@@ -205,10 +208,18 @@ impl LoadingIndicator {
     /// SecondaryContainer instead, and winia followed the artwork until now; from here it follows the
     /// tokens, so the values agree with what `LoadingIndicatorDefaults` actually resolves.
     fn resolve_colors(&self, theme: &ThemeColors) -> (Color, Color) {
-        let default_indicator = if self.is_contained { theme.on_primary_container } else { theme.primary };
+        let default_indicator = if self.is_contained {
+            theme.on_primary_container
+        } else {
+            theme.primary
+        };
         let indicator_color = self.indicator_color.unwrap_or(default_indicator);
         let container_color = self.container_color.unwrap_or_else(|| {
-            if self.is_contained { theme.primary_container } else { Color::TRANSPARENT }
+            if self.is_contained {
+                theme.primary_container
+            } else {
+                Color::TRANSPARENT
+            }
         });
         (indicator_color, container_color)
     }
@@ -290,8 +301,10 @@ impl LoadingIndicator {
 
         // The role is the same either way; the determinate variant reports no value, since winia's
         // semantics layer has no range to carry it.
-        let m = m.semantics(crate::semantics::SemanticsConfig::new()
-            .role(crate::semantics::SemanticsRole::ProgressBar));
+        let m = m.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar),
+        );
 
         let m = m.then(self.modifier);
         let key = ctx.next_key();
@@ -356,7 +369,9 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
             let rotation = -t * 180.0;
             let path = match &self.shapes {
                 // A caller's pair is not `'static`, so its single morph is built on the spot.
-                Some(shapes) => Morph::new(&shapes[0], &shapes[1]).to_path(t, 0, None, None, None, None),
+                Some(shapes) => {
+                    Morph::new(&shapes[0], &shapes[1]).to_path(t, 0, None, None, None, None)
+                }
                 None => DETERMINATE_MORPH.to_path(t, 0, None, None, None, None),
             };
             (path, rotation)
@@ -370,10 +385,13 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
                     let (a, b) = (&shapes[current_index % n], &shapes[(current_index + 1) % n]);
                     Morph::new(a, b).to_path(morph_progress, 0, None, None, None, None)
                 }
-                None => MORPH_SEQUENCE[current_index].to_path(morph_progress, 0, None, None, None, None),
+                None => {
+                    MORPH_SEQUENCE[current_index].to_path(morph_progress, 0, None, None, None, None)
+                }
             };
             let global_rotation = self.global_rotation.as_ref().map_or(0.0, |r| r.peek());
-            let rotation = morph_progress * 90.0 + self.morph_rotation_target.peek() + global_rotation;
+            let rotation =
+                morph_progress * 90.0 + self.morph_rotation_target.peek() + global_rotation;
             (path, rotation)
         };
         let path = progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
@@ -432,42 +450,59 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
             canvas.draw_round_rect(rect, corner_radius, corner_radius, &paint);
         }
         Shape::TopRoundedRect { radius } => {
-            let rr = skia_safe::RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(radius, radius),
-                skia_safe::Vector::new(radius, radius),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = skia_safe::RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(radius, radius),
+                    skia_safe::Vector::new(radius, radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
         Shape::RightRoundedRect { radius } => {
-            let rr = skia_safe::RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(radius, radius),
-                skia_safe::Vector::new(radius, radius),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = skia_safe::RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(radius, radius),
+                    skia_safe::Vector::new(radius, radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
-        Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => {
             // A contained indicator takes its container shape from the caller, so the per-corner
             // shape has to paint too — falling through to a rectangle would be a silent lie about
             // which shapes this component supports.
-            let rr = skia_safe::RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(top_left, top_left),
-                skia_safe::Vector::new(top_right, top_right),
-                skia_safe::Vector::new(bottom_right, bottom_right),
-                skia_safe::Vector::new(bottom_left, bottom_left),
-            ]);
+            let rr = skia_safe::RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(top_left, top_left),
+                    skia_safe::Vector::new(top_right, top_right),
+                    skia_safe::Vector::new(bottom_right, bottom_right),
+                    skia_safe::Vector::new(bottom_left, bottom_left),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
         Shape::LeftRoundedRect { radius } => {
-            let rr = skia_safe::RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(radius, radius),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(radius, radius),
-            ]);
+            let rr = skia_safe::RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(radius, radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(radius, radius),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
         Shape::Rectangle => {
@@ -540,9 +575,9 @@ fn skia_color(c: Color) -> skia_safe::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
-    use crate::layout::Constraints;
     use crate::graphics::Color;
+    use crate::layout::Constraints;
+    use crate::runtime::composer::Composer;
 
     #[test]
     fn default_is_uncontained() {
@@ -563,8 +598,14 @@ mod tests {
         let contained = LoadingIndicator::new().contained(true);
         assert!(contained.is_contained());
         let (ic, cc) = contained.resolve_colors(&theme);
-        assert_eq!(ic, theme.on_primary_container, "contained indicator is ContainedActiveColor");
-        assert_eq!(cc, theme.primary_container, "contained container is ContainedContainerColor");
+        assert_eq!(
+            ic, theme.on_primary_container,
+            "contained indicator is ContainedActiveColor"
+        );
+        assert_eq!(
+            cc, theme.primary_container,
+            "contained container is ContainedContainerColor"
+        );
     }
 
     #[test]
@@ -618,7 +659,9 @@ mod tests {
         use skia_safe::{Color as SkColor, surfaces};
         // indeterminate 会注册无限动画（永不完成）——持串行锁并前后清理，
         // 防止残留污染其他测试的全局注册表断言/排空循环
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         // LaunchedEffect 需要 tokio 运行时上下文；渲染测试不依赖任务推进，仅需 Handle 存在
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -658,7 +701,10 @@ mod tests {
     fn determinate_reports_its_variant_and_morphs_between_two_shapes() {
         let progress = State::new(0.0_f32);
         assert!(LoadingIndicator::determinate(progress.clone()).is_determinate());
-        assert!(!LoadingIndicator::new().is_determinate(), "new() stays indeterminate");
+        assert!(
+            !LoadingIndicator::new().is_determinate(),
+            "new() stays indeterminate"
+        );
 
         // The morph really answers to the progress: its two endpoints are the two different shapes.
         assert_eq!(DETERMINATE_POLYGONS.len(), 2);
@@ -677,7 +723,9 @@ mod tests {
     /// global rotation that never finish.
     #[test]
     fn a_determinate_indicator_does_not_spin() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let progress = State::new(0.4_f32);
         let mut composer = Composer::new();
@@ -789,7 +837,11 @@ mod tests {
             shapes: None,
         };
         assert_eq!(mk(true).node_key(), mk(true).node_key());
-        assert_ne!(mk(true).node_key(), mk(false).node_key(), "is_contained 应进 key");
+        assert_ne!(
+            mk(true).node_key(),
+            mk(false).node_key(),
+            "is_contained 应进 key"
+        );
         // 动画值变化 → 相等（不进 key）
         let moved = LoadingIndicatorNode {
             is_contained: true,
@@ -803,7 +855,11 @@ mod tests {
             determinate: None,
             shapes: None,
         };
-        assert_eq!(mk(true).node_key(), moved.node_key(), "morph/旋转动画值不应进 key");
+        assert_eq!(
+            mk(true).node_key(),
+            moved.node_key(),
+            "morph/旋转动画值不应进 key"
+        );
     }
 
     #[test]
@@ -831,40 +887,46 @@ mod tests {
             let pm = surface.peek_pixels().expect("pixmap");
             pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
         };
-        let node_mod = crate::modifier::Modifier::new()
-            .size(40.0, 40.0)
-            .draw_node(LoadingIndicatorNode {
-                is_contained: false,
-                container_shape: crate::graphics::Shape::Circle,
-                indicator_color: theme.primary,
-                container_color: Color::TRANSPARENT,
-                morph_progress: State::new(0.0),
-                morph_index: State::new(0usize),
-                morph_rotation_target: State::new(90.0),
-                global_rotation: Some(crate::runtime::state::Visual::new(0.0)),
-                determinate: None,
-                shapes: None,
-            });
-        let enum_mod = crate::modifier::Modifier::new()
-            .size(40.0, 40.0)
-            .draw(move |canvas, rect| {
-                let morph = &MORPH_SEQUENCE[0];
-                let path = morph.to_path(0.0, 0, None, None, None, None);
-                let path = progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
-                let mut paint = skia_safe::Paint::default();
-                paint.set_anti_alias(true);
-                paint.set_color(skia_color(theme.primary));
-                paint.set_style(skia_safe::paint::Style::Fill);
-                canvas.save();
-                canvas.translate((rect.left, rect.top));
-                let center = skia_safe::Point::new(rect.width() / 2.0, rect.height() / 2.0);
-                canvas.rotate(0.0 * 90.0 + 90.0 + 0.0, Some(center));
-                canvas.draw_path(&path, &paint);
-                canvas.restore();
-            });
+        let node_mod =
+            crate::modifier::Modifier::new()
+                .size(40.0, 40.0)
+                .draw_node(LoadingIndicatorNode {
+                    is_contained: false,
+                    container_shape: crate::graphics::Shape::Circle,
+                    indicator_color: theme.primary,
+                    container_color: Color::TRANSPARENT,
+                    morph_progress: State::new(0.0),
+                    morph_index: State::new(0usize),
+                    morph_rotation_target: State::new(90.0),
+                    global_rotation: Some(crate::runtime::state::Visual::new(0.0)),
+                    determinate: None,
+                    shapes: None,
+                });
+        let enum_mod =
+            crate::modifier::Modifier::new()
+                .size(40.0, 40.0)
+                .draw(move |canvas, rect| {
+                    let morph = &MORPH_SEQUENCE[0];
+                    let path = morph.to_path(0.0, 0, None, None, None, None);
+                    let path =
+                        progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
+                    let mut paint = skia_safe::Paint::default();
+                    paint.set_anti_alias(true);
+                    paint.set_color(skia_color(theme.primary));
+                    paint.set_style(skia_safe::paint::Style::Fill);
+                    canvas.save();
+                    canvas.translate((rect.left, rect.top));
+                    let center = skia_safe::Point::new(rect.width() / 2.0, rect.height() / 2.0);
+                    canvas.rotate(0.0 * 90.0 + 90.0 + 0.0, Some(center));
+                    canvas.draw_path(&path, &paint);
+                    canvas.restore();
+                });
         let px_node = render_leaf(node_mod);
         let px_enum = render_leaf(enum_mod);
         assert_eq!(px_node.len(), 100 * 100);
-        assert_eq!(px_node, px_enum, "loading node 路与旧 draw 路必须逐字节一致");
+        assert_eq!(
+            px_node, px_enum,
+            "loading node 路与旧 draw 路必须逐字节一致"
+        );
     }
 }

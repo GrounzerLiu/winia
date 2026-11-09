@@ -7,12 +7,10 @@
 
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
-use crate::layout::node::{
-    scroll_offset_for_node, LayoutNode,
-};
+use crate::graphics::Shape;
 use crate::graphics::{ContentScale, ImageAlignment};
+use crate::layout::node::{LayoutNode, scroll_offset_for_node};
 use crate::modifier::{Modifier, ModifierElement};
-use crate::graphics::{Shape};
 use crate::runtime::state::State;
 use crate::unit::Size;
 use std::collections::HashMap;
@@ -21,7 +19,6 @@ use std::collections::HashMap;
 ///
 /// `lerp` deliberately does NOT clamp `t`: overshoot (`t > 1`, `t < 0`) flies
 /// past the endpoint, which is how spring progress renders (Phase 2).
-
 mod flight;
 mod helpers;
 mod types;
@@ -30,7 +27,10 @@ pub(crate) use flight::*;
 pub(crate) use helpers::*;
 pub(crate) use types::*;
 
-pub use types::{BoundsTransform, FlightEdges, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds, SharedKind};
+pub use types::{
+    BoundsTransform, FlightEdges, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode,
+    SharedBounds, SharedKind,
+};
 
 #[cfg(test)]
 mod tests;

@@ -46,7 +46,10 @@ thread_local! {
     static DEPENDENCY_FRAME_STACK: std::cell::RefCell<Vec<DependencyFrame>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-pub(crate) fn push_dependency_frame(mode: DepMode, recorder_queue: Option<Weak<ComposerSubscription>>) -> DependencyFrameGuard {
+pub(crate) fn push_dependency_frame(
+    mode: DepMode,
+    recorder_queue: Option<Weak<ComposerSubscription>>,
+) -> DependencyFrameGuard {
     let subscription = recorder_queue.as_ref().and_then(Weak::upgrade);
     let baseline_signals = subscription
         .as_ref()
@@ -61,9 +64,8 @@ pub(crate) fn push_dependency_frame(mode: DepMode, recorder_queue: Option<Weak<C
             m.set(mode);
             previous
         }),
-        recorder_queue: RECORDER_QUEUE.with(|q| {
-            std::mem::replace(&mut *q.borrow_mut(), recorder_queue)
-        }),
+        recorder_queue: RECORDER_QUEUE
+            .with(|q| std::mem::replace(&mut *q.borrow_mut(), recorder_queue)),
     };
     DEPENDENCY_FRAME_STACK.with(|frames| frames.borrow_mut().push(previous));
     DependencyFrameGuard {
@@ -123,15 +125,17 @@ impl Drop for DependencyFrameGuard {
     }
 }
 
-
 /// Composer composition entry: subscribe reads to this Composer's queue.
-pub(crate) fn begin_compose_deps_with_queue(queue: Weak<ComposerSubscription>) -> DependencyFrameGuard {
+pub(crate) fn begin_compose_deps_with_queue(
+    queue: Weak<ComposerSubscription>,
+) -> DependencyFrameGuard {
     push_dependency_frame(DepMode::Compose, Some(queue))
 }
 
-
 /// Begin layout dependency recording for a live Composer subscription.
-pub(crate) fn begin_layout_deps_with_queue(queue: Weak<ComposerSubscription>) -> DependencyFrameGuard {
+pub(crate) fn begin_layout_deps_with_queue(
+    queue: Weak<ComposerSubscription>,
+) -> DependencyFrameGuard {
     push_dependency_frame(DepMode::Layout, Some(queue))
 }
 
@@ -171,7 +175,10 @@ pub(crate) struct DependencyReadCheckpoint {
 
 pub(crate) fn checkpoint_dependency_reads() -> DependencyReadCheckpoint {
     let subscription = RECORDER_QUEUE.with(|q| q.borrow().as_ref().and_then(Weak::upgrade));
-    let baseline_signals = subscription.as_ref().map(|queue| queue.signal_ids()).unwrap_or_default();
+    let baseline_signals = subscription
+        .as_ref()
+        .map(|queue| queue.signal_ids())
+        .unwrap_or_default();
     DependencyReadCheckpoint {
         length: DEP_BUFFER.with(|b| b.borrow().len()),
         subscription,
@@ -181,14 +188,18 @@ pub(crate) fn checkpoint_dependency_reads() -> DependencyReadCheckpoint {
 }
 
 impl DependencyReadCheckpoint {
-    pub(crate) fn commit(&mut self) { self.committed = true; }
+    pub(crate) fn commit(&mut self) {
+        self.committed = true;
+    }
 }
 
 impl Drop for DependencyReadCheckpoint {
     fn drop(&mut self) {
         if !self.committed {
             DEP_BUFFER.with(|b| b.borrow_mut().truncate(self.length));
-            if let Some(queue) = &self.subscription { queue.retain_signals(&self.baseline_signals); }
+            if let Some(queue) = &self.subscription {
+                queue.retain_signals(&self.baseline_signals);
+            }
         }
     }
 }
@@ -206,7 +217,9 @@ pub(crate) fn record_dep(
     // Do not hold a TLS RefCell borrow while tracking or subscribing. Those
     // operations may invoke code that reads State again.
     let recorder = RECORDER_QUEUE.with(|q| q.borrow().clone().and_then(|weak| weak.upgrade()));
-    let Some(recorder) = recorder else { return None };
+    let Some(recorder) = recorder else {
+        return None;
+    };
     let observed_revision = recorder.subscribe_signal(&signal);
     observed_revision.map(|revision| (recorder, revision))
 }
@@ -223,7 +236,9 @@ pub(crate) fn set_wake_fn(f: impl Fn() + Send + Sync + 'static) {
 
 /// 唤醒事件循环一次（动画注册后调用）。
 pub(crate) fn wake_loop() {
-    if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+    if let Some(ref f) = *WAKE_FN.lock().unwrap() {
+        f();
+    }
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
@@ -240,4 +255,3 @@ pub(crate) fn register_dependency(
     });
     registration
 }
-

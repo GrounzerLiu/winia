@@ -61,12 +61,16 @@ pub type LazyRow = LazyList<crate::layout::axis::HorizontalAxis>;
 
 impl LazyList<crate::layout::axis::VerticalAxis> {
     /// A vertical list (LazyColumn)
-    pub fn new() -> Self { Self::new_list() }
+    pub fn new() -> Self {
+        Self::new_list()
+    }
 }
 
 impl LazyList<crate::layout::axis::HorizontalAxis> {
     /// A horizontal list (LazyRow)
-    pub fn new() -> Self { Self::new_list() }
+    pub fn new() -> Self {
+        Self::new_list()
+    }
 }
 
 impl<A: LazyAxis> LazyList<A> {
@@ -155,7 +159,11 @@ impl<A: LazyAxis> LazyList<A> {
             (0.0..=1.0).contains(&threshold) && threshold.is_finite(),
             "snap_positional_threshold must be within 0.0..=1.0, got {threshold}"
         );
-        self.snap_positional_threshold = if threshold.is_finite() { threshold.clamp(0.0, 1.0) } else { 0.5 };
+        self.snap_positional_threshold = if threshold.is_finite() {
+            threshold.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
         self
     }
 
@@ -206,7 +214,11 @@ impl<A: LazyAxis> LazyList<A> {
 
     /// Where inside an item a snapping list comes to rest (`SnapPosition`).
     pub fn snap_offset(mut self, offset: f32) -> Self {
-        self.snap_offset = if offset.is_finite() { offset.max(0.0) } else { 0.0 };
+        self.snap_offset = if offset.is_finite() {
+            offset.max(0.0)
+        } else {
+            0.0
+        };
         self
     }
 
@@ -231,9 +243,14 @@ impl<A: LazyAxis> LazyList<A> {
     }
 
     /// A single item with an explicit key — Compose's `item(key = …) { }`.
-    pub fn item_keyed(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn item_keyed(
+        mut self,
+        key: u64,
+        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
-        self.intervals.add(1, Some(Arc::new(move |_| key)), c, false);
+        self.intervals
+            .add(1, Some(Arc::new(move |_| key)), c, false);
         self
     }
 
@@ -286,9 +303,7 @@ impl<A: LazyAxis> LazyList<A> {
         let lk = list.clone();
         let lc = list.clone();
         let n = list.len();
-        let kk: Arc<dyn Fn(usize) -> u64 + Send + Sync> = Arc::new(move |g: usize| {
-            k(&lk[g])
-        });
+        let kk: Arc<dyn Fn(usize) -> u64 + Send + Sync> = Arc::new(move |g: usize| k(&lk[g]));
         let cc: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(move |ctx, g| {
             c(ctx, g, &lc[g]);
         });
@@ -299,7 +314,11 @@ impl<A: LazyAxis> LazyList<A> {
     /// A sticky-header section — Compose's `stickyHeader(key, content)`. While scrolling it stays
     /// pinned at the main axis's start edge and the content slides underneath; the next sticky
     /// header pushes the previous one out. The key must be unique across the whole list.
-    pub fn sticky_header(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn sticky_header(
+        mut self,
+        key: u64,
+        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
         self.intervals.add(1, Some(Arc::new(move |_| key)), c, true);
         self
@@ -341,11 +360,20 @@ pub struct ItemHeightCache {
 }
 
 impl ItemHeightCache {
-    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new(), recent: Vec::new(), uniform: None } }
+    pub fn new() -> Self {
+        Self {
+            heights: Vec::new(),
+            keyed: std::collections::HashMap::new(),
+            recent: Vec::new(),
+            uniform: None,
+        }
+    }
 
     /// Declare that every item measures `size` along the main axis, so unmeasured indices can be
     /// priced exactly instead of estimated. `None` restores the estimating behaviour.
-    pub fn set_uniform(&mut self, size: Option<f32>) { self.uniform = size; }
+    pub fn set_uniform(&mut self, size: Option<f32>) {
+        self.uniform = size;
+    }
 }
 
 impl ItemHeightCache {
@@ -412,7 +440,9 @@ impl ItemHeightCache {
     }
 
     pub fn record(&mut self, index: usize, h: f32) {
-        if self.heights.len() <= index { self.heights.resize(index + 1, 0.0); }
+        if self.heights.len() <= index {
+            self.heights.resize(index + 1, 0.0);
+        }
         self.heights[index] = h;
         self.note_recent(h);
     }
@@ -483,7 +513,12 @@ pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32)
 /// `coverage_height` for the same reason as [`prefix_height`]: this is the inverse of it, and the two are
 /// only inverses if they price an unmeasured item the same way. The extrapolation past the recorded part
 /// uses that same value as its step, for the same reason.
-pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32, before: f32) -> (usize, f32) {
+pub(crate) fn anchor_from_offset(
+    cache: &ItemHeightCache,
+    offset: f32,
+    spacing: f32,
+    before: f32,
+) -> (usize, f32) {
     // Content coordinates include the `before` padding: item i's top is `before + prefix(i)`.
     let known = cache.heights.len();
     let mut acc = before;
@@ -496,7 +531,9 @@ pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: 
     }
     // Past the recorded range: divide by the estimate to count the remaining items.
     let step = cache.coverage_height(known) + spacing;
-    if step <= 0.0 { return (known.saturating_sub(1), 0.0); }
+    if step <= 0.0 {
+        return (known.saturating_sub(1), 0.0);
+    }
     let remaining = offset - acc;
     let extra = (remaining / step).floor() as usize;
     let idx = known + extra;
@@ -613,13 +650,18 @@ impl<A: LazyAxis> LazyList<A> {
         // A section without a key factory (`items_plain`) uses the index itself as the key, so replacing
         // the content of such a section is invisible — an inherent limitation, documented; sections
         // WITH keys (`items_from`, `item_keyed`) track identity exactly.
-        let keys: Vec<u64> = (0..total).map(|g| intervals.key_of(g).unwrap_or(g as u64)).collect();
+        let keys: Vec<u64> = (0..total)
+            .map(|g| intervals.key_of(g).unwrap_or(g as u64))
+            .collect();
         let key_set: std::collections::HashSet<u64> = keys.iter().copied().collect();
         // The data signature (FNV-1a over the key sequence) detects a data change: a different total,
         // or the same total reordered or replaced (the key sequence changed). On a change the height
         // cache migrates by item key.
         let mut sig = 0xcbf29ce484222325u64;
-        for &k in &keys { sig ^= k; sig = sig.wrapping_mul(0x100000001b3); }
+        for &k in &keys {
+            sig ^= k;
+            sig = sig.wrapping_mul(0x100000001b3);
+        }
         let data_changed = data_sig.get() != sig;
         // Which keys are new to the DATA (not merely to the composed window)? Scrolling composes keys
         // that have been in the data all along, and fading those in makes a scroll look like a strobe.
@@ -635,7 +677,9 @@ impl<A: LazyAxis> LazyList<A> {
             // leaving its keys pending would make them fade the first time a scroll composed them.
             // A flag, not "known is empty": a list that starts empty must still fade its first real
             // content in, and every empty -> filled transition would otherwise look like a first layout.
-            let first_layout = !state.has_layout.swap(true, std::sync::atomic::Ordering::Relaxed);
+            let first_layout = !state
+                .has_layout
+                .swap(true, std::sync::atomic::Ordering::Relaxed);
             if !first_layout {
                 for key in &key_set {
                     if !known.contains(key) {
@@ -698,8 +742,12 @@ impl<A: LazyAxis> LazyList<A> {
                     // back. Without it the anchor snaps to the top of the viewport, and mid-scroll that
                     // is a jump of up to a full row (measured: 20 dp into a row, the offset snapped from
                     // 192 to a row boundary). At the very top this branch does not run at all.
-                    let (_, item_offset) =
-                        anchor_from_offset(&cache_ref, state.offset.get(), self.spacing, self.content_padding.0);
+                    let (_, item_offset) = anchor_from_offset(
+                        &cache_ref,
+                        state.offset.get(),
+                        self.spacing,
+                        self.content_padding.0,
+                    );
                     // NOT clamped here: `fling_limit` still holds the PREVIOUS pass's limit, and at the
                     // bottom of the list the insert has just grown it by a row. Clamping to the stale
                     // value pinned the offset at the old end and shifted the whole content down by one
@@ -720,7 +768,8 @@ impl<A: LazyAxis> LazyList<A> {
                         *anchor = Some(last_key);
                     }
                     {
-                        let mut shift = state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut shift =
+                            state.anchor_shift.lock().unwrap_or_else(|e| e.into_inner());
                         *shift = new_offset - previous;
                     }
                 }
@@ -753,7 +802,8 @@ impl<A: LazyAxis> LazyList<A> {
                 if !(last_max_off > 0.0 && last_max_off < f32::MAX) {
                     (idx.min(total), off)
                 } else {
-                    let target = pad_before + prefix_height(&cache_ref, idx.min(total), self.spacing) + off;
+                    let target =
+                        pad_before + prefix_height(&cache_ref, idx.min(total), self.spacing) + off;
                     let clamped = target.clamp(0.0, last_max_off);
                     if clamped == target {
                         (idx.min(total), off)
@@ -785,8 +835,13 @@ impl<A: LazyAxis> LazyList<A> {
         // does not write infinity), so reading it here is safe. The 1.0 floor guards against 0/negative.
         let viewport_h = viewport.get().max(1.0);
         let (mut start, end) = visible_range(
-            &cache_ref, first_index, first_item_offset,
-            viewport_h, self.spacing, total, self.beyond_bounds,
+            &cache_ref,
+            first_index,
+            first_item_offset,
+            viewport_h,
+            self.spacing,
+            total,
+            self.beyond_bounds,
         );
 
         // Sticky-header walk-back (Compose keeps a pinned header in the window even when its natural
@@ -983,9 +1038,8 @@ impl<A: LazyAxis> LazyList<A> {
                         // The item's position in the collection — a reader says "3 of 200" from these
                         // two declarations (the count on the list node above, the index here).
                         let item_modifier = Modifier::new().semantics(
-                            crate::semantics::SemanticsConfig::new().collection_item_info(
-                                crate::semantics::CollectionItemInfo::new(g),
-                            ),
+                            crate::semantics::SemanticsConfig::new()
+                                .collection_item_info(crate::semantics::CollectionItemInfo::new(g)),
                         );
                         match ctx.start_restartable_group(ik, item_modifier, BoxLayout::new()) {
                             GroupStatus::Skip => {}
@@ -1004,4 +1058,3 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.end_restartable_group();
     }
 }
-

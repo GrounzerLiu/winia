@@ -152,7 +152,9 @@ impl Composer {
             if let Some(m) = find_shared_marker(&n.modifier) {
                 m.z_index
             } else {
-                find_scope_overlay_marker(&n.modifier).map(|(_, z)| z).unwrap_or(0.0)
+                find_scope_overlay_marker(&n.modifier)
+                    .map(|(_, z)| z)
+                    .unwrap_or(0.0)
             }
         };
         order.sort_by(|&a, &b| {
@@ -199,7 +201,10 @@ impl Composer {
             .filter(|(k, _)| !self.prev_shared_endpoints.contains_key(k))
             .map(|(k, s)| ((k.0, k.1.clone()), *s))
             .collect();
-        if live.is_empty() && self.prev_shared_endpoints.is_empty() && self.shared_flights.is_empty() {
+        if live.is_empty()
+            && self.prev_shared_endpoints.is_empty()
+            && self.shared_flights.is_empty()
+        {
             return; // fast path: no shared content anywhere
         }
         // Cancel flights whose key left the live tree with no counterpart
@@ -260,14 +265,11 @@ impl Composer {
                 // * The candidate's slots are this flight's own two ends REVERSED: that is a genuine
                 //   navigation back (measured: clicking Back while the push flight still runs produces
                 //   exactly `old=target new=source`), so it must go through retarget below.
-                let target_moved = self
-                    .shared_flights
-                    .get(&id)
-                    .is_some_and(|a| {
-                        a.flight.target_slot == Some(c.old_slot)
-                            && a.flight.source_slot != Some(c.new_slot)
-                            && a.source_idx.is_some()
-                    });
+                let target_moved = self.shared_flights.get(&id).is_some_and(|a| {
+                    a.flight.target_slot == Some(c.old_slot)
+                        && a.flight.source_slot != Some(c.new_slot)
+                        && a.source_idx.is_some()
+                });
                 if target_moved {
                     if let Some(a) = self.shared_flights.get_mut(&id) {
                         a.flight.target_slot = Some(c.new_slot);
@@ -277,13 +279,21 @@ impl Composer {
                         .get(&id)
                         .map(|a| a.flight.key.clone())
                         .unwrap_or_default();
-                    self.clear_transition_for_slot(c.old_slot, FlightKey { cid: self.composer_id, id });
+                    self.clear_transition_for_slot(
+                        c.old_slot,
+                        FlightKey {
+                            cid: self.composer_id,
+                            id,
+                        },
+                    );
                     if crate::debug::animation::enabled() {
-                        crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
-                            format!("flight:{key}"),
-                            "rebind",
-                            format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
-                        ));
+                        crate::debug::animation::record(
+                            crate::debug::animation::TraceRecord::event(
+                                format!("flight:{key}"),
+                                "rebind",
+                                format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
+                            ),
+                        );
                     }
                     continue;
                 }
@@ -348,7 +358,10 @@ impl Composer {
     /// absolute OWNER-canvas position, shelter from the drain. Returns arena
     /// index + exact start bounds (WINDOW coords) + start radii, or `None`
     /// when the node object was repurposed by the new tree (same-key reuse).
-    pub(crate) fn detach_source(&mut self, old_slot: u64) -> Option<(usize, SharedBounds, [f32; 4])> {
+    pub(crate) fn detach_source(
+        &mut self,
+        old_slot: u64,
+    ) -> Option<(usize, SharedBounds, [f32; 4])> {
         let src_idx = self.prev_node_by_key.remove(&old_slot)?;
         // Unlink from any still-referencing old parent (objects alive pre-drain;
         // reused ancestors already dropped the ref via children.clear()).
@@ -396,8 +409,13 @@ impl Composer {
                 }
             }
         }
-        let id_to_idx: HashMap<u64, usize> =
-            self.arena.nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let id_to_idx: HashMap<u64, usize> = self
+            .arena
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
         let mut b = abs_rect_upward(&self.arena.nodes, &id_to_idx, src_idx);
         let (ox, oy) = self.screen_origin;
         b.x += ox;
@@ -442,7 +460,11 @@ impl Composer {
     /// Detach the source node (freeze) and open an AwaitingBounds flight.
     /// `start_override`: retarget visual continuity (WINDOW coords); otherwise
     /// the exact upward-walk bounds (no lookahead needed).
-    pub(crate) fn begin_flight(&mut self, c: SwitchCandidate, start_override: Option<(SharedBounds, [f32; 4])>) {
+    pub(crate) fn begin_flight(
+        &mut self,
+        c: SwitchCandidate,
+        start_override: Option<(SharedBounds, [f32; 4])>,
+    ) {
         let (src_idx, walked, walked_r) = match self.detach_source(c.old_slot) {
             Some(v) => v,
             None => return,
@@ -457,7 +479,10 @@ impl Composer {
         });
         debug_assert_eq!(
             acts,
-            vec![FlightAction::CollectBounds { source_slot: c.old_slot, target_slot: c.new_slot }]
+            vec![FlightAction::CollectBounds {
+                source_slot: c.old_slot,
+                target_slot: c.new_slot
+            }]
         );
         // anim-trace lifecycle event: which key opened a flight, and between which slots.
         let scene_of = |slot: u64| {
@@ -561,7 +586,13 @@ impl Composer {
             self.free_retained_source(idx, slot);
         }
         if let Some(slot) = a.flight.target_slot {
-            self.clear_transition_for_slot(slot, FlightKey { cid: self.composer_id, id });
+            self.clear_transition_for_slot(
+                slot,
+                FlightKey {
+                    cid: self.composer_id,
+                    id,
+                },
+            );
         }
     }
 
@@ -572,9 +603,18 @@ impl Composer {
         // positional identities resurrected on navigate-back; key-based
         // removal murders the live successor. Stale slots self-clean via
         // truncate/Enter-prune.
-        if self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+        if self
+            .arena
+            .nodes
+            .get(idx)
+            .is_some_and(|n| n.slot_key == slot)
+        {
             let mut visited = crate::layout::node::NodeMarks::default();
-            self.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
+            self.arena.free_node_skip(
+                idx,
+                &crate::layout::node::NodeMarks::default(),
+                &mut visited,
+            );
         }
         self.transition_layer.retain(|&x| x != idx);
     }
@@ -734,7 +774,6 @@ impl Composer {
         self.paint_dirty = dirty;
     }
 
-
     /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
     /// copies of one key are painted, and where" is otherwise only answerable by looking at pixels, and
     /// a duplicate (a scene host re-composing a copy of a key that a flight already owns) shows up here
@@ -831,7 +870,10 @@ impl Composer {
         match phase {
             FlightPhase::AwaitingBounds => {
                 // Resolve target in the CURRENT tree (layout rebuilt the map).
-                let target_slot = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot);
+                let target_slot = self
+                    .shared_flights
+                    .get(&id)
+                    .and_then(|a| a.flight.target_slot);
                 let root = match self.arena.root {
                     Some(r) => r,
                     None => {
@@ -839,13 +881,14 @@ impl Composer {
                         return;
                     }
                 };
-                let tidx = match target_slot.and_then(|s| find_idx_by_slot(&self.arena.nodes, root, s)) {
-                    Some(i) => i,
-                    None => {
-                        self.cancel_flight(id, "awaiting_target_not_found");
-                        return;
-                    }
-                };
+                let tidx =
+                    match target_slot.and_then(|s| find_idx_by_slot(&self.arena.nodes, root, s)) {
+                        Some(i) => i,
+                        None => {
+                            self.cancel_flight(id, "awaiting_target_not_found");
+                            return;
+                        }
+                    };
                 let tid = self.arena.nodes[tidx].id;
                 let (tx, ty) = crate::app::node_abs_position(&self.arena.nodes, root, tid);
                 let (tw, th) = {
@@ -876,10 +919,12 @@ impl Composer {
                             // `id=` lets a report pair this announcement with the resolved end's records
                             // (the event's subject carries only the key, not the role or the flight).
                             "id={id} tidx={tidx} own_size={:?} measured={:?} content_box={:?} scene={:?} end=({tw:.0},{th:.0})",
-                            self.arena.nodes[tidx].modifier.elements().iter().find_map(|el| match el {
-                                ModifierElement::Size { .. } => Some(format!("{el:?}")),
-                                _ => None,
-                            }),
+                            self.arena.nodes[tidx].modifier.elements().iter().find_map(
+                                |el| match el {
+                                    ModifierElement::Size { .. } => Some(format!("{el:?}")),
+                                    _ => None,
+                                }
+                            ),
                             self.arena.nodes[tidx].measured_size,
                             self.arena.nodes[tidx].content_box(),
                             scene_of_node(&self.arena.nodes, tidx),
@@ -948,9 +993,7 @@ impl Composer {
                 }
                 let bounds_fx = match enter {
                     Some(enter) => {
-                        let exit = source_marker
-                            .and_then(|m| m.exit)
-                            .unwrap_or_default();
+                        let exit = source_marker.and_then(|m| m.exit).unwrap_or_default();
                         Some((enter, exit))
                     }
                     None => None,
@@ -972,7 +1015,10 @@ impl Composer {
                     ancestor_scroll_sum(&self.arena.nodes, &id_to_idx, tidx)
                 };
                 let (start, acts) = {
-                    let a = self.shared_flights.get_mut(&id).expect("polled flight exists");
+                    let a = self
+                        .shared_flights
+                        .get_mut(&id)
+                        .expect("polled flight exists");
                     a.spec = spec;
                     a.radius_to = radius_to;
                     a.end_scroll = end_scroll;
@@ -994,7 +1040,10 @@ impl Composer {
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
                     (start, acts)
                 };
-                debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+                debug_assert!(matches!(
+                    acts.as_slice(),
+                    [FlightAction::StartFlight { .. }]
+                ));
                 let _ = start;
                 // Drive the flight: the four EDGES for the geometry (Compose's `Rect.VectorConverter`
                 // shape — one spring per edge, one pixel of threshold each) and a scalar 0→1 clock for
@@ -1005,7 +1054,10 @@ impl Composer {
                         .get(&id)
                         .map(|a| (a.spec.clone(), a.flight.end.unwrap_or(a.start)))
                         .expect("the flight being started exists");
-                    let a = self.shared_flights.get_mut(&id).expect("polled flight exists");
+                    let a = self
+                        .shared_flights
+                        .get_mut(&id)
+                        .expect("polled flight exists");
                     let edges = State::new(crate::transition::FlightEdges::of(&start));
                     a.edges = edges.clone();
                     push_animatable(
@@ -1015,7 +1067,11 @@ impl Composer {
                     );
                     let clock = State::new(0.0f32);
                     a.progress = clock.clone();
-                    push_animatable(clock, 1.0, crate::transition::BoundsTransform::clock_spec(&spec));
+                    push_animatable(
+                        clock,
+                        1.0,
+                        crate::transition::BoundsTransform::clock_spec(&spec),
+                    );
                 }
                 self.write_flight_visuals(id);
             }
@@ -1025,7 +1081,10 @@ impl Composer {
                     a.flight.progress = a.progress_value();
                 }
                 self.write_flight_visuals(id);
-                let done = self.shared_flights.get(&id).is_some_and(flight_progress_done);
+                let done = self
+                    .shared_flights
+                    .get(&id)
+                    .is_some_and(flight_progress_done);
                 if done {
                     let acts = self
                         .shared_flights
@@ -1042,8 +1101,18 @@ impl Composer {
                     if let (Some(slot), Some(idx)) = (src_slot, src_idx) {
                         self.free_retained_source(idx, slot);
                     }
-                    if let Some(slot) = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot) {
-                        self.clear_transition_for_slot(slot, FlightKey { cid: self.composer_id, id });
+                    if let Some(slot) = self
+                        .shared_flights
+                        .get(&id)
+                        .and_then(|a| a.flight.target_slot)
+                    {
+                        self.clear_transition_for_slot(
+                            slot,
+                            FlightKey {
+                                cid: self.composer_id,
+                                id,
+                            },
+                        );
                     }
                     self.shared_flights.remove(&id);
                 }
@@ -1125,16 +1194,23 @@ impl Composer {
         // path paints it as it is; an arc flight leaves it `None` and bends the parameterised rect
         // below (the arc is a winia addition Compose has no counterpart for).
         let flown = if matches!(path, PathMotion::Linear) {
-            self.shared_flights.get(&id).map(|a| a.edges.peek().bounds()).map(|mut r| {
-                r.x -= ox;
-                r.y -= oy;
-                r
-            })
+            self.shared_flights
+                .get(&id)
+                .map(|a| a.edges.peek().bounds())
+                .map(|mut r| {
+                    r.x -= ox;
+                    r.y -= oy;
+                    r
+                })
         } else {
             None
         };
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
-            let matched = self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot);
+            let matched = self
+                .arena
+                .nodes
+                .get(idx)
+                .is_some_and(|n| n.slot_key == slot);
             if matched {
                 self.arena.nodes[idx].transition = Some(TransitionVisual {
                     start,
@@ -1174,9 +1250,7 @@ impl Composer {
                     // Tier 1 has the equivalent guard (its staleness check); Tier 0
                     // re-checks the marker instead.
                     let still_ours = find_shared_marker(&self.arena.nodes[tidx].modifier)
-                        .is_some_and(|m| {
-                            m.scope_id == flight_key.0 && m.key == flight_key.1
-                        });
+                        .is_some_and(|m| m.scope_id == flight_key.0 && m.key == flight_key.1);
                     if !still_ours {
                         return;
                     }
@@ -1204,7 +1278,10 @@ impl Composer {
                     );
                     measure_state.set(frame);
                     let key = self.arena.nodes[tidx].slot_key;
-                    let mine = FlightKey { cid: self.composer_id, id };
+                    let mine = FlightKey {
+                        cid: self.composer_id,
+                        id,
+                    };
                     // Never clobber (or clear) a DIFFERENT flight's override:
                     // ids are per-composer, so another flight can legitimately
                     // own this node's override while this one is being torn down.
@@ -1212,13 +1289,15 @@ impl Composer {
                         .flight_measure
                         .as_ref()
                         .is_some_and(|f| f.owner != mine);
-                    let had_override =
-                        !foreign && self.arena.nodes[tidx].flight_measure.is_some();
+                    let had_override = !foreign && self.arena.nodes[tidx].flight_measure.is_some();
                     if !foreign {
                         self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                             None
                         } else {
-                            Some(FlightMeasure { frame: measure_state, owner: mine })
+                            Some(FlightMeasure {
+                                frame: measure_state,
+                                owner: mine,
+                            })
                         };
                     }
                     // `layout()` resets `layout_dirty` on the whole tree at the
@@ -1321,7 +1400,11 @@ impl Composer {
                     TransitionRole::Morph => "Morph",
                 });
                 rec.flight = Some(id);
-                rec.phase = Some(if t.progress >= 1.0 { "settled" } else { "flying" });
+                rec.phase = Some(if t.progress >= 1.0 {
+                    "settled"
+                } else {
+                    "flying"
+                });
                 rec.progress = Some(t.progress);
                 rec.layout = Some(crate::debug::animation::TraceRect::new(
                     n.position.x,
@@ -1330,7 +1413,10 @@ impl Composer {
                     n.measured_size.height,
                 ));
                 rec.painted = Some(crate::debug::animation::TraceRect::new(
-                    lerped.x, lerped.y, lerped.width, lerped.height,
+                    lerped.x,
+                    lerped.y,
+                    lerped.width,
+                    lerped.height,
                 ));
                 rec.alpha = Some(t.alpha());
                 // A detached/elevated end is drawn from the transition layer, where the scene's own
@@ -1355,4 +1441,3 @@ impl Composer {
 pub(crate) fn off_origin(b: SharedBounds, o: (f32, f32)) -> SharedBounds {
     SharedBounds::new(b.x - o.0, b.y - o.1, b.width, b.height)
 }
-

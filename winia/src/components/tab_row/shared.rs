@@ -50,7 +50,11 @@ pub struct TabPosition {
 
 impl TabPosition {
     pub fn new(left: f32, width: f32, content_width: f32) -> Self {
-        Self { left, width, content_width, right: left + width }
+        Self {
+            left,
+            width,
+            content_width,
+            right: left + width,
+        }
     }
 }
-

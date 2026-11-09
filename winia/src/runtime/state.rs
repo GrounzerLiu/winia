@@ -13,8 +13,8 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 
@@ -37,7 +37,6 @@ impl StateId {
         self.0
     }
 }
-
 
 /// Per-Composer invalidation queue. State creation is intentionally ownerless;
 /// a Composer subscribes when its compose/layout code reads a State.
@@ -122,7 +121,9 @@ impl ComposerSubscription {
         let mut signals = self.signals.lock();
         let mut removed = Vec::new();
         signals.retain(|id, weak| {
-            let Some(signal) = weak.upgrade() else { return false };
+            let Some(signal) = weak.upgrade() else {
+                return false;
+            };
             if live_ids.contains(id) {
                 true
             } else {
@@ -171,7 +172,10 @@ impl ComposerSubscription {
         }
     }
 
-    pub(crate) fn drain_matching(&self, mut predicate: impl FnMut(StateId) -> bool) -> Vec<StateId> {
+    pub(crate) fn drain_matching(
+        &self,
+        mut predicate: impl FnMut(StateId) -> bool,
+    ) -> Vec<StateId> {
         let mut pending = self.pending.lock();
         let mut drained = Vec::new();
         pending.retain(|&state_id| {
@@ -250,7 +254,6 @@ impl StateSignal {
     pub(crate) fn id(&self) -> StateId {
         self.id
     }
-
 
     fn new(id: StateId) -> Arc<Self> {
         Arc::new(Self {
@@ -524,14 +527,11 @@ impl<T: 'static> RawState<T> {
         VISUAL_EPOCH.fetch_add(1, Ordering::Relaxed);
     }
 
-
-
     /// Write-back write: no dedup, no notify, no wake. For measure/layout
     /// write-back and cross-frame staging; the next frame reads the value.
     pub(crate) fn set_backchannel(&self, value: T) {
         *self.inner.value.write() = value;
     }
-
 }
 
 // ── Public handles ──
@@ -864,7 +864,9 @@ struct BatchCommit;
 
 impl Drop for BatchCommit {
     fn drop(&mut self) {
-        let deferred = DEFERRED_WRITES.with(|slot| slot.borrow_mut().take()).unwrap_or_default();
+        let deferred = DEFERRED_WRITES
+            .with(|slot| slot.borrow_mut().take())
+            .unwrap_or_default();
         if deferred.is_empty() {
             return;
         }
@@ -1012,7 +1014,6 @@ impl<T: 'static> State<T> {
         Self { raw }
     }
 
-
     pub fn as_backchannel(&self) -> Backchannel<T>
     where
         T: Clone,
@@ -1027,9 +1028,6 @@ impl<T: 'static> State<T> {
     pub(crate) fn into_visual(self) -> Visual<T> {
         Visual::from_raw(self.raw)
     }
-
-
-
 }
 
 impl<T: Clone + 'static> State<T> {
@@ -1082,7 +1080,9 @@ impl<T: Clone + PartialEq + 'static> State<T> {
     where
         T: Send + Sync,
     {
-        let observer = Arc::new(ChangesObserver { waker: Mutex::new(None) });
+        let observer = Arc::new(ChangesObserver {
+            waker: Mutex::new(None),
+        });
         let signal = &self.raw.inner.signal;
         signal.subscribe_observer(&(observer.clone() as Arc<dyn StateObserver>));
         StateChanges {
@@ -1091,17 +1091,15 @@ impl<T: Clone + PartialEq + 'static> State<T> {
             last: None,
         }
     }
-
 }
-
 
 mod changes;
 mod deps;
 mod derived;
 
-pub(crate) use deps::*;
 use changes::ChangesObserver;
 pub use changes::*;
+pub(crate) use deps::*;
 pub use derived::*;
 
 #[cfg(test)]

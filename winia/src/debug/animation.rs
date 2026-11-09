@@ -36,7 +36,6 @@ impl TraceRect {
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
-
 }
 
 /// What kind of thing a record describes.
@@ -62,8 +61,7 @@ pub enum TraceKind {
     Render,
 }
 
-impl TraceKind {
-}
+impl TraceKind {}
 
 /// One frame's worth of information about one animated subject.
 #[derive(Debug, Clone, PartialEq)]
@@ -129,7 +127,11 @@ impl TraceRecord {
     }
 
     /// A lifecycle event: `name` says what happened (e.g. `cancel`), `detail` why.
-    pub fn event(subject: impl Into<String>, name: &'static str, detail: impl Into<String>) -> Self {
+    pub fn event(
+        subject: impl Into<String>,
+        name: &'static str,
+        detail: impl Into<String>,
+    ) -> Self {
         let mut r = Self::flight(subject);
         r.kind = TraceKind::Event;
         r.phase = Some(name);
@@ -153,9 +155,7 @@ impl TraceRecord {
         r.kind = TraceKind::Render;
         r
     }
-
 }
-
 
 // Real implementation (feature on).
 
@@ -189,8 +189,9 @@ mod imp {
     /// thread while the debug server's WebSocket task runs on a tokio thread, and a thread-local ring
     /// answered `tr` with zero lines (measured). The lock is uncontended in practice — one push per
     /// record per frame.
-    static RING: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<(u64, u128, TraceRecord)>>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+    static RING: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::VecDeque<(u64, u128, TraceRecord)>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
 
     /// Records kept for the live channel (a few seconds of a busy transition).
     const RING_CAP: usize = 4000;
@@ -282,7 +283,9 @@ mod imp {
     /// The most recent `n` records as NDJSON lines, oldest first — what the debug server's `tr`
     /// command returns. Works whether or not a file sink is configured, and from any thread.
     pub fn recent_lines(n: usize) -> Vec<String> {
-        let Ok(ring) = RING.lock() else { return Vec::new() };
+        let Ok(ring) = RING.lock() else {
+            return Vec::new();
+        };
         ring.iter()
             .skip(ring.len().saturating_sub(n))
             .map(|(frame, t_ms, r)| r.to_json(*frame, *t_ms))

@@ -41,7 +41,11 @@ impl WindowSemantics {
                 )
             })
             .collect();
-        format!("{{\"main\":{},\"overlays\":[{}]}}", semantics_json(&self.main), overlays.join(","))
+        format!(
+            "{{\"main\":{},\"overlays\":[{}]}}",
+            semantics_json(&self.main),
+            overlays.join(",")
+        )
     }
 
     /// The window's top-level elements: the main tree's, then each overlay's — with the origin each
@@ -155,13 +159,16 @@ pub enum UiAction {
     ScrollToIndex { node: Option<u64>, index: usize },
 }
 
-pub(crate) static ACTIONS: std::sync::Mutex<Option<Vec<(u64, UiAction)>>> = std::sync::Mutex::new(None);
+pub(crate) static ACTIONS: std::sync::Mutex<Option<Vec<(u64, UiAction)>>> =
+    std::sync::Mutex::new(None);
 
 /// Queue an action for a window's next frame.
 pub fn request_action(window_id: u64, action: UiAction) {
     {
         let mut store = ACTIONS.lock().unwrap();
-        store.get_or_insert_with(Default::default).push((window_id, action));
+        store
+            .get_or_insert_with(Default::default)
+            .push((window_id, action));
     }
     // The queue is drained from the event loop's `about_to_wait`, and a provider is called on a
     // thread the application does not control — so nothing else would wake the loop and the action
@@ -198,8 +205,9 @@ pub fn take_actions(window_id: u64) -> Vec<UiAction> {
     taken
 }
 
-pub(crate) static PUBLISHED: std::sync::Mutex<Option<std::collections::HashMap<u64, std::sync::Arc<WindowSemantics>>>> =
-    std::sync::Mutex::new(None);
+pub(crate) static PUBLISHED: std::sync::Mutex<
+    Option<std::collections::HashMap<u64, std::sync::Arc<WindowSemantics>>>,
+> = std::sync::Mutex::new(None);
 
 /// Whether the frame loop should build snapshots at all. Both consumers are optional, and the walk is
 /// pure overhead without one — so it compiles away entirely in a plain build.
@@ -229,4 +237,3 @@ pub fn forget(window_id: u64) {
         }
     }
 }
-

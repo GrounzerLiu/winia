@@ -127,7 +127,9 @@ struct PasswordMapping {
 impl OffsetMapping for PasswordMapping {
     fn original_to_transformed(&self, offset: usize) -> usize {
         // Original byte -> characters before it -> display byte (each character takes `mask_len`).
-        let chars = self.orig_chars.partition_point(|&s| s < offset.min(self.orig_len));
+        let chars = self
+            .orig_chars
+            .partition_point(|&s| s < offset.min(self.orig_len));
         chars * self.mask_len
     }
 
@@ -182,7 +184,11 @@ mod tests {
         assert_eq!(t.text, "**");
         let m = &*t.offset_mapping;
         assert_eq!(m.original_to_transformed(0), 0);
-        assert_eq!(m.original_to_transformed(2), 1, "'你' 内部 byte → 1 个 char");
+        assert_eq!(
+            m.original_to_transformed(2),
+            1,
+            "'你' 内部 byte → 1 个 char"
+        );
         assert_eq!(m.original_to_transformed(3), 1);
         assert_eq!(m.original_to_transformed(6), 2);
         assert_eq!(m.transformed_to_original(1), 3);

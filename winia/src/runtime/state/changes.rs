@@ -68,7 +68,6 @@ impl<T: 'static> State<T> {
     pub(crate) fn signal_id(&self) -> StateId {
         self.raw.signal_id()
     }
-
 }
 
 impl<T> Clone for State<T> {
@@ -103,4 +102,3 @@ impl<T: PartialEq> PartialEq for State<T> {
 }
 
 impl<T> Eq for State<T> where T: Eq {}
-

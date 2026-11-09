@@ -3,7 +3,6 @@
 //! These are the shapes a hit test and a key dispatch hand around; they lived in `modifier.rs`,
 //! which put the input vocabulary inside the chain that reacts to it.
 
-
 #[derive(Debug, Clone)]
 pub struct KbEvent {
     pub key: winit::keyboard::Key,
@@ -53,7 +52,9 @@ impl PointerKind {
                 },
                 pressure: data.force.map(|f| f.normalized(None) as f32),
             },
-            _ => PointerKind::Mouse { button: PointerButton::Primary },
+            _ => PointerKind::Mouse {
+                button: PointerButton::Primary,
+            },
         }
     }
 }
@@ -70,9 +71,17 @@ pub enum PointerEventType {
 /// The pointer kind (Compose's `PointerType`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PointerKind {
-    Mouse { button: PointerButton },
-    Touch { finger_id: u64, force: Option<f32> },
-    Pen { kind: PenKind, pressure: Option<f32> },
+    Mouse {
+        button: PointerButton,
+    },
+    Touch {
+        finger_id: u64,
+        force: Option<f32>,
+    },
+    Pen {
+        kind: PenKind,
+        pressure: Option<f32>,
+    },
 }
 
 /// The stylus kind.

@@ -17,13 +17,13 @@
 //!   `SnackbarDuration` 控制（Short 4s / Long 10s / Indefinite 手动 dismiss）
 //! - 单条显示（Compose 有队列——winia 新 show 覆盖当前）
 
-use std::sync::Arc;
 use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
 use crate::theme::WiniaTheme;
+use std::sync::Arc;
 
 /// `SnackbarTokens.ContainerShape` = `ShapeTokens.CornerExtraSmall` = 4 dp.
 pub const SNACKBAR_CORNER_RADIUS: f32 = 4.0;
@@ -107,7 +107,11 @@ impl SnackbarData {
     }
 
     /// 设置 action 按钮（文本 + 点击回调）
-    pub fn action(mut self, label: impl Into<String>, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+    pub fn action(
+        mut self,
+        label: impl Into<String>,
+        on_click: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         self.action_label = Some(label.into());
         self.on_action = Some(Arc::new(on_click));
         self
@@ -146,7 +150,10 @@ pub struct SnackbarHostState {
 
 impl SnackbarHostState {
     pub fn new() -> Self {
-        Self { data: State::new(None), progress: State::new(0.0) }
+        Self {
+            data: State::new(None),
+            progress: State::new(0.0),
+        }
     }
 
     /// 当前 Snackbar 数据（组合期读——注册依赖，变化触发重组）
@@ -221,7 +228,9 @@ impl SnackbarHostState {
 }
 
 impl Default for SnackbarHostState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Snackbar 宿主——观察 hostState 渲染 Snackbar，进出场动画
@@ -315,7 +324,10 @@ pub struct Snackbar {
 
 impl Snackbar {
     pub fn new(data: SnackbarData) -> Self {
-        Self { data, on_dismiss: None }
+        Self {
+            data,
+            on_dismiss: None,
+        }
     }
 
     /// 注入 dismiss 回调（SnackbarHost 内部用——dismiss 按钮触发隐藏）
@@ -335,21 +347,30 @@ impl Snackbar {
         let on_dismiss = self.on_dismiss;
 
         crate::layout::components::Row::new()
-            .modifier(Modifier::new()
-                .fill_max_width()
-                .padding_horizontal(16.0)
-                .padding_vertical(10.0)
-                // `SnackbarTokens.ContainerShape` is `ShapeKeyTokens.CornerExtraSmall`, which
-                // `ShapeTokens.CornerExtraSmall` resolves to `RoundedCornerShape(4.0.dp)` — winia drew 8 dp.
-                .background(bg, Shape::RoundedRect { corner_radius: SNACKBAR_CORNER_RADIUS })
-                // `Snackbar.kt:117` gives its Surface `shadowElevation = SnackbarTokens.ContainerElevation`,
-                // i.e. `ElevationTokens.Level3` = 6 dp; winia drew no shadow at all.
-                .shadow(
-                    SNACKBAR_SHADOW_ELEVATION,
-                    Shape::RoundedRect { corner_radius: SNACKBAR_CORNER_RADIUS },
-                    false,
-                    Color::from_argb(40, 0, 0, 0),
-                ))
+            .modifier(
+                Modifier::new()
+                    .fill_max_width()
+                    .padding_horizontal(16.0)
+                    .padding_vertical(10.0)
+                    // `SnackbarTokens.ContainerShape` is `ShapeKeyTokens.CornerExtraSmall`, which
+                    // `ShapeTokens.CornerExtraSmall` resolves to `RoundedCornerShape(4.0.dp)` — winia drew 8 dp.
+                    .background(
+                        bg,
+                        Shape::RoundedRect {
+                            corner_radius: SNACKBAR_CORNER_RADIUS,
+                        },
+                    )
+                    // `Snackbar.kt:117` gives its Surface `shadowElevation = SnackbarTokens.ContainerElevation`,
+                    // i.e. `ElevationTokens.Level3` = 6 dp; winia drew no shadow at all.
+                    .shadow(
+                        SNACKBAR_SHADOW_ELEVATION,
+                        Shape::RoundedRect {
+                            corner_radius: SNACKBAR_CORNER_RADIUS,
+                        },
+                        false,
+                        Color::from_argb(40, 0, 0, 0),
+                    ),
+            )
             .spacing(8.0)
             .build(ctx, |ctx| {
                 // message（weight 弹性占位——action/dismiss 靠右）
@@ -368,10 +389,12 @@ impl Snackbar {
                 crate::components::Text::new(data.message.as_str())
                     .font_size(14.0)
                     .color(fg)
-                    .modifier(Modifier::new()
-                        .layout_weight(1.0)
-                        .semantics(crate::semantics::SemanticsConfig::new()
-                            .live_region(crate::semantics::LiveRegionMode::Polite)))
+                    .modifier(
+                        Modifier::new().layout_weight(1.0).semantics(
+                            crate::semantics::SemanticsConfig::new()
+                                .live_region(crate::semantics::LiveRegionMode::Polite),
+                        ),
+                    )
                     .build(ctx);
                 // action 按钮（M3：inversePrimary 色文本）
                 if let Some(action_label) = &data.action_label {
@@ -397,7 +420,10 @@ impl Snackbar {
                         crate::components::Button::text()
                             .on_click(move || (cb)())
                             .build(ctx, |ctx| {
-                                crate::components::Text::new("✕").font_size(14.0).color(fg).build(ctx);
+                                crate::components::Text::new("✕")
+                                    .font_size(14.0)
+                                    .color(fg)
+                                    .build(ctx);
                             });
                     }
                 }
@@ -423,7 +449,10 @@ mod tests {
         // 覆盖：新 show 替换当前
         host.show(SnackbarData::new("msg2").duration(SnackbarDuration::Long));
         assert_eq!(host.current_snackbar_data().unwrap().message, "msg2");
-        assert_eq!(host.current_snackbar_data().unwrap().duration, SnackbarDuration::Long);
+        assert_eq!(
+            host.current_snackbar_data().unwrap().duration,
+            SnackbarDuration::Long
+        );
 
         host.dismiss();
         assert!(!host.is_showing());
@@ -466,7 +495,9 @@ mod tests {
     #[test]
     fn snackbar_host_renders_and_hides() {
         use crate::runtime::composer::Composer;
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         let mut composer = Composer::new();
         let mut build = |composer: &mut Composer| {
@@ -476,11 +507,17 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
         let texts = |composer: &mut Composer| -> Vec<String> {
-            let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+            let Some(root) = composer.layout_root_idx() else {
+                return Vec::new();
+            };
             let nodes = composer.arena_nodes();
             let mut out = Vec::new();
             // 复用 nav 的 collect 思路——直接遍历节点 modifier
-            fn collect(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<String>) {
+            fn collect(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                out: &mut Vec<String>,
+            ) {
                 let node = &nodes[idx];
                 for el in node.modifier.elements() {
                     if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
@@ -503,7 +540,10 @@ mod tests {
         host.show(SnackbarData::new("hello").action("undo", || {}));
         build(&mut composer);
         let t = texts(&mut composer);
-        assert!(t.iter().any(|x| x.contains("hello")), "应渲染 message: {t:?}");
+        assert!(
+            t.iter().any(|x| x.contains("hello")),
+            "应渲染 message: {t:?}"
+        );
         assert!(t.iter().any(|x| x.contains("undo")), "应渲染 action: {t:?}");
 
         // dismiss: the host plays the exit, then disappears. Removal waits for EVERY channel of the
@@ -518,7 +558,10 @@ mod tests {
         }
         build(&mut composer);
         let t = texts(&mut composer);
-        assert!(!t.iter().any(|x| x.contains("hello")), "after the exit finished it disappears: {t:?}");
+        assert!(
+            !t.iter().any(|x| x.contains("hello")),
+            "after the exit finished it disappears: {t:?}"
+        );
     }
 
     /// 自动消失：show 启动 duration 动画 → update_animations 推进 →
@@ -526,7 +569,9 @@ mod tests {
     #[test]
     fn host_state_auto_dismiss_after_duration() {
         use std::time::Duration;
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
 
         // 短时长（100ms）——动画完成后自动 dismiss
@@ -544,7 +589,9 @@ mod tests {
     #[test]
     fn host_state_indefinite_does_not_auto_dismiss() {
         use std::time::Duration;
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         host.show(SnackbarData::new("sticky").duration(SnackbarDuration::Indefinite));
         assert!(host.is_showing());
@@ -559,17 +606,25 @@ mod tests {
     #[test]
     fn host_state_override_rearms_timer() {
         use std::time::Duration;
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         // 3 条连续 show（模拟 demo 覆盖按钮）
         for i in 0..3 {
-            host.show(SnackbarData::new(format!("消息 #{i}")).duration(SnackbarDuration::Custom(200)));
+            host.show(
+                SnackbarData::new(format!("消息 #{i}")).duration(SnackbarDuration::Custom(200)),
+            );
         }
         assert_eq!(host.current_snackbar_data().unwrap().message, "消息 #2");
         // 推进超过 200ms——最后一条应 dismiss
         std::thread::sleep(Duration::from_millis(400));
         crate::animation::update_animations();
-        assert!(!host.is_showing(), "覆盖后最后一条 200ms 后应自动消失（实际: {:?}）", host.current_snackbar_data());
+        assert!(
+            !host.is_showing(),
+            "覆盖后最后一条 200ms 后应自动消失（实际: {:?}）",
+            host.current_snackbar_data()
+        );
     }
 
     /// ⚠ 退出动画期间内容保留（display 方案的核心——第 3 轮修复）。
@@ -581,9 +636,11 @@ mod tests {
     /// `snackbar_host_renders_and_hides` 没测到的缺口）。
     #[test]
     fn snackbar_host_keeps_content_during_exit_animation() {
-        use std::time::Duration;
         use crate::runtime::composer::Composer;
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use std::time::Duration;
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         let mut composer = Composer::new();
         let mut build = |composer: &mut Composer| {
@@ -593,16 +650,24 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
         let has_msg = |composer: &mut Composer| -> bool {
-            let Some(root) = composer.layout_root_idx() else { return false };
+            let Some(root) = composer.layout_root_idx() else {
+                return false;
+            };
             let nodes = composer.arena_nodes();
-            fn collect(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<String>) {
+            fn collect(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                out: &mut Vec<String>,
+            ) {
                 let node = &nodes[idx];
                 for el in node.modifier.elements() {
                     if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
                         out.push(content.clone());
                     }
                 }
-                for &c in &node.children { collect(nodes, c, out); }
+                for &c in &node.children {
+                    collect(nodes, c, out);
+                }
             }
             let mut out = Vec::new();
             collect(nodes, root, &mut out);
@@ -630,7 +695,10 @@ mod tests {
         // dismiss：退出动画中——display 保留旧条，内容应仍在
         host.dismiss();
         advance(&mut composer, 50); // 退出动画刚起步（150ms exit）
-        assert!(has_msg(&mut composer), "dismiss 后退出动画初期内容应保留（display 方案）");
+        assert!(
+            has_msg(&mut composer),
+            "dismiss 后退出动画初期内容应保留（display 方案）"
+        );
 
         // 推进 exit 动画完成（>150ms）→ removed → 内容移除
         advance(&mut composer, 200);

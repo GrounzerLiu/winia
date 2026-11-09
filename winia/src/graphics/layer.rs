@@ -7,9 +7,19 @@ use super::{Color, ColorFilter, Shape};
 
 // Skia's native shadow utility consumes the alpha directly. These values match
 // the low-opacity ambient/spot defaults used by Skia's shadow examples.
-pub(crate) const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x20 };
+pub(crate) const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 0x20,
+};
 
-pub(crate) const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x50 };
+pub(crate) const DEFAULT_SPOT_SHADOW_COLOR: Color = Color {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 0x50,
+};
 
 /// Graphics-layer transform parameters.
 ///
@@ -92,11 +102,16 @@ impl RenderEffect {
 impl Default for GraphicsLayerParams {
     fn default() -> Self {
         Self {
-            scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
-            translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            alpha: 1.0,
+            translation_x: 0.0,
+            translation_y: 0.0,
+            rotation_z: 0.0,
             transform_origin: TransformOrigin::CENTER,
             clip: false,
-            rotation_x: 0.0, rotation_y: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
             camera_distance: 8.0,
             shadow_elevation: 0.0,
             shadow_shape: None,
@@ -136,7 +151,14 @@ pub struct ShadowParams {
 impl ShadowParams {
     /// Convenience constructor (radius/offset/color/alpha; spread = 0).
     pub fn new(radius: f32, offset_x: f32, offset_y: f32, color: Color, alpha: f32) -> Self {
-        Self { radius, spread: 0.0, offset_x, offset_y, color, alpha }
+        Self {
+            radius,
+            spread: 0.0,
+            offset_x,
+            offset_y,
+            color,
+            alpha,
+        }
     }
 }
 

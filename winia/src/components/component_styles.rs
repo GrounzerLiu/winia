@@ -107,7 +107,9 @@ impl ComponentStyles {
 /// per-frame cost for nothing.
 fn empty_styles() -> Arc<ComponentStyles> {
     static EMPTY: std::sync::OnceLock<Arc<ComponentStyles>> = std::sync::OnceLock::new();
-    EMPTY.get_or_init(|| Arc::new(ComponentStyles::default())).clone()
+    EMPTY
+        .get_or_init(|| Arc::new(ComponentStyles::default()))
+        .clone()
 }
 
 static LOCAL_STYLES: std::sync::LazyLock<CompositionLocal<Arc<ComponentStyles>>> =
@@ -232,13 +234,20 @@ mod tests {
 
     #[test]
     fn an_inner_provider_replaces_the_set_for_its_block() {
-        with_component_styles(ComponentStyles::new().with(CounterStyling::new(|c| c.0 = 1)), || {
-            assert_eq!(current_component_styles().len(), 1);
-            with_component_styles(ComponentStyles::new(), || {
-                assert!(current_component_styles().is_empty(), "replace, not merge");
-            });
-            assert_eq!(current_component_styles().len(), 1, "and the outer one is back");
-        });
+        with_component_styles(
+            ComponentStyles::new().with(CounterStyling::new(|c| c.0 = 1)),
+            || {
+                assert_eq!(current_component_styles().len(), 1);
+                with_component_styles(ComponentStyles::new(), || {
+                    assert!(current_component_styles().is_empty(), "replace, not merge");
+                });
+                assert_eq!(
+                    current_component_styles().len(),
+                    1,
+                    "and the outer one is back"
+                );
+            },
+        );
     }
 
     /// `merge` keeps classes the argument does not mention, and lets it win for the ones it does.
@@ -254,7 +263,11 @@ mod tests {
             .with(BStyling::new(|b| b.0 = 1));
         let page = ComponentStyles::new().with(AStyling::new(|a| a.0 = 2));
         let merged = base.merge(page);
-        assert_eq!(merged.len(), 2, "the class the page did not mention survives");
+        assert_eq!(
+            merged.len(),
+            2,
+            "the class the page did not mention survives"
+        );
 
         let mut a = A(0);
         let mut b = B(0);

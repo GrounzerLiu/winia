@@ -1,4 +1,4 @@
-use crate::{SkiwinResult, SkiaWindowTrait};
+use crate::{SkiaWindowTrait, SkiwinResult};
 use skia_safe::Surface;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -20,7 +20,10 @@ pub struct GlSkiaWindow {
 impl GlSkiaWindow {
     /// Every step can fail on a machine whose GL driver is missing, too old, or software-only, and
     /// the reason is propagated so `SkiaWindow::new` can still fall through to the CPU backend.
-    pub fn new(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> SkiwinResult<Self> {
+    pub fn new(
+        event_loop: &dyn ActiveEventLoop,
+        window: Arc<Box<dyn Window>>,
+    ) -> SkiwinResult<Self> {
         let mut render_ctx = GlRenderContext::default();
         let renderer = render_ctx.renderer_for_window(event_loop, window.clone())?;
         Ok(Self {
@@ -42,7 +45,10 @@ impl SkiaWindowTrait for GlSkiaWindow {
         if self.renderer.is_some() {
             return;
         }
-        match self.render_ctx.renderer_for_window(event_loop, self.window.clone()) {
+        match self
+            .render_ctx
+            .renderer_for_window(event_loop, self.window.clone())
+        {
             Ok(renderer) => self.renderer = Some(renderer),
             Err(error) => log::error!("[skiwin] could not recreate the GL surface: {error}"),
         }

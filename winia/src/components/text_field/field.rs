@@ -40,7 +40,8 @@ pub struct TextField {
     pub(crate) supporting_text: Option<String>,
     /// 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation；
     /// None = 恒等）
-    pub(crate) visual_transformation: Option<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>,
+    pub(crate) visual_transformation:
+        Option<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>,
     /// 前置图标（M3 leadingIcon——组合内容闭包：12dp 边距垂直居中，
     /// 与文本 16dp 间距）
     pub(crate) leading_icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -127,7 +128,10 @@ impl TextField {
     /// 占位文字（值空时显示——组合内容闭包；仅显示条件满足时构建）。
     /// 默认文字样式由 TextField 提供（LOCAL_TEXT_STYLE：on_surface_variant
     /// 色 + 淡入 alpha）——闭包内 Text 无需显式样式
-    pub fn placeholder(mut self, placeholder: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn placeholder(
+        mut self,
+        placeholder: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         self.placeholder = Some(Box::new(placeholder));
         self
     }
@@ -155,7 +159,10 @@ impl TextField {
 
     /// 注入交互源（hoist——TextField 的 focus 状态发射到此源；
     /// 不传则内部 remember 一个）
-    pub fn interaction_source(mut self, source: crate::input::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(
+        mut self,
+        source: crate::input::interaction::MutableInteractionSource,
+    ) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -212,7 +219,10 @@ impl TextField {
     /// 视觉变换（对标 Compose `visualTransformation`）——密码掩码
     /// `PasswordTransformation`、格式化输入（自定义 OffsetMapping）。
     /// 显示文本 ≠ 编辑文本；光标/选区/定位自动经 OffsetMapping 转换
-    pub fn visual_transformation(mut self, t: impl Into<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>) -> Self {
+    pub fn visual_transformation(
+        mut self,
+        t: impl Into<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>,
+    ) -> Self {
         self.visual_transformation = Some(t.into());
         self
     }
@@ -220,13 +230,19 @@ impl TextField {
     /// 前置图标（M3 leadingIcon——组合内容闭包，如
     /// `|ctx| { Icon::new(...).build(ctx); }`；12dp 边距垂直居中，
     /// 与文本 16dp 间距）
-    pub fn leading_icon(mut self, icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn leading_icon(
+        mut self,
+        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         self.leading_icon = Some(Box::new(icon));
         self
     }
 
     /// 后置图标（M3 trailingIcon——右 12dp 垂直居中）
-    pub fn trailing_icon(mut self, icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn trailing_icon(
+        mut self,
+        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         self.trailing_icon = Some(Box::new(icon));
         self
     }
@@ -267,7 +283,10 @@ impl TextField {
         if let Some(font_size) = self.font_size {
             input_style.font_size = Some(font_size);
         }
-        let font_size = input_style.font_size.unwrap_or(16.0.into()).to_logical_px(crate::runtime::density::current_density());
+        let font_size = input_style
+            .font_size
+            .unwrap_or(16.0.into())
+            .to_logical_px(crate::runtime::density::current_density());
         let input_line_height = text_style_line_height(&input_style, font_size);
         // 外观状态（M3 容器）——focused 从交互源组合期读取
         let visual = self.variant;
@@ -281,12 +300,17 @@ impl TextField {
         // 交互源提前解析（聚焦状态读取 + focusable 共用——避免 build 开头
         // 读到 None 而 focused 恒 false：外部注入或内部 remember）
         let interaction = if self.enabled {
-            Some(self.interaction_source.clone()
-                .unwrap_or_else(|| ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get()))
+            Some(self.interaction_source.clone().unwrap_or_else(|| {
+                ctx.remember(|| crate::input::interaction::MutableInteractionSource::new())
+                    .get()
+            }))
         } else {
             None
         };
-        let focused = interaction.as_ref().map(|s| s.is_focused()).unwrap_or(false);
+        let focused = interaction
+            .as_ref()
+            .map(|s| s.is_focused())
+            .unwrap_or(false);
         // 悬浮 label：聚焦或文本非空（对齐 M3：Focused / UnfocusedNotEmpty）
         let label_float = self.label.is_some() && (focused || !content.is_empty());
         // 状态优先级 disabled > error > focused > unfocused
@@ -304,17 +328,18 @@ impl TextField {
         // - 未聚焦 + 空 + 有 label：placeholder 隐藏（展开 label 占据输入位）
         // - 空 + 无 label：placeholder 显示
         // - 非空：隐藏
-        let show_placeholder = content.is_empty()
-            && self.placeholder.is_some()
-            && (focused || self.label.is_none());
+        let show_placeholder =
+            content.is_empty() && self.placeholder.is_some() && (focused || self.label.is_none());
         // 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation）：
         // 显示文本 = transform(原始文本)，偏移映射跨界转换（光标/选区绘制用
         // original→transformed，点击/拖动定位用 transformed→original）。
         // ⚠ placeholder 不经过变换（显示原样）
-        let transformation = self.visual_transformation.clone()
-            .unwrap_or_else(|| std::sync::Arc::new(crate::text::transformation::IdentityTransformation::new()));
+        let transformation = self.visual_transformation.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::text::transformation::IdentityTransformation::new())
+        });
         let transformed = transformation.filter(&content);
-        let offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping> = transformed.offset_mapping;
+        let offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping> =
+            transformed.offset_mapping;
         // 显示文本恒为变换结果（placeholder 为闭包子节点——text-field-v2
         // 容器化：由 TextFieldLayout 定位在输入位）
         let display_content = transformed.text.clone();
@@ -324,12 +349,10 @@ impl TextField {
         // 渲染缺口共用
         let label_progress = ctx.animate_float_as_state(
             if label_float { 1.0 } else { 0.0 },
-            crate::animation::AnimationSpec::Tween(
-                crate::animation::TweenSpec::new(
-                    std::time::Duration::from_millis(150),
-                    crate::animation::interpolator::EaseInOutCubic::new(),
-                )
-            ),
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(150),
+                crate::animation::interpolator::EaseInOutCubic::new(),
+            )),
         );
 
         // 光标闪烁状态。⚠ `cursor_visible.get()` 必须在 start_leaf **之前**
@@ -342,7 +365,9 @@ impl TextField {
         // 最后交互时刻（点击/按键）——光标立即显示并重置闪烁周期
         // （对齐 Compose `snapToVisibleAndAnimate`：文本/选区变化时光标
         // 闪到可见并重启周期，打字时不消失）
-        let last_blink = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(std::time::Instant::now()))).get();
+        let last_blink = ctx
+            .remember(|| std::sync::Arc::new(parking_lot::Mutex::new(std::time::Instant::now())))
+            .get();
         let blink_started = ctx.remember(|| false);
         // 组合生命周期协程作用域（§3.11 修复）：blink 任务纳入 effect 生命周期——
         // TextField 移除时 ScopeState::drop 自动 abort，不再裸 tokio::spawn 泄漏。
@@ -364,7 +389,10 @@ impl TextField {
                     // 100ms 轮询（500ms 相位粒度——交互重置精度 ±100ms）
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     // 非聚焦：不翻转（光标不可见且不触发重组）
-                    let focused_now = interaction2.as_ref().map(|s| s.is_focused()).unwrap_or(false);
+                    let focused_now = interaction2
+                        .as_ref()
+                        .map(|s| s.is_focused())
+                        .unwrap_or(false);
                     if !focused_now {
                         continue;
                     }
@@ -395,7 +423,9 @@ impl TextField {
         // （app.rs handle_pointer_move 的 compute_selection 依赖节点
         // registrar；TextField 此前不注册 → 拖动被跳过）。选区经
         // set_on_change 同步回 value（拖动结束 fire_on_change）
-        let registrar = ctx.remember(|| crate::text::selection::SelectionRegistrar::new()).get();
+        let registrar = ctx
+            .remember(|| crate::text::selection::SelectionRegistrar::new())
+            .get();
         {
             let v = value.clone();
             let mapping = offset_mapping.clone();
@@ -414,7 +444,9 @@ impl TextField {
         // 节点注释）。此处容器 key 注册会导致拖动定位/渲染高亮查不到段
         // （节点 slot_key ≠ 容器 key）。
         // UndoManager（组合点 remember——跨帧持久，键位处理共享）
-        let undo = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(UndoManager::new()))).get();
+        let undo = ctx
+            .remember(|| std::sync::Arc::new(parking_lot::Mutex::new(UndoManager::new())))
+            .get();
         let kb_handler = {
             let v = value.clone();
             let cb = on_change.clone();
@@ -438,7 +470,9 @@ impl TextField {
             let read_only = self.read_only;
             let single_line = self.single_line;
             move |e: &crate::input::KbEvent| -> bool {
-                if e.event_type != crate::input::KbEventType::KeyDown { return false; }
+                if e.event_type != crate::input::KbEventType::KeyDown {
+                    return false;
+                }
                 // 任何按键处理前：光标立即可见 + 闪烁计时器重置
                 // （用户交互时光标不消失——对齐 Compose snapToVisibleAndAnimate）
                 blink_reset();
@@ -451,28 +485,37 @@ impl TextField {
                 let alt = e.is_alt_pressed;
                 // 导航键（只读时仍允许——对标 Compose readOnly 可选中；
                 // Tab 必须放行——否则键盘焦点无法移出）
-                let is_nav = matches!(key,
+                let is_nav = matches!(
+                    key,
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
-                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
+                        | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab)
                 );
                 // 剪贴板/全选（editsText=false 命令——read_only 也允许）
                 // Ctrl+A 全选
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a")) {
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a"))
+                {
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
+                    undo.lock()
+                        .push(&val.text, &val.selection, val.composing_range.clone());
                     val.selection = 0..val.text.len();
                     commit!(val);
                     return true;
                 }
                 // Ctrl+C 复制（read_only 可复制——Compose COPY editsText=false）
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c")) {
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("c"))
+                {
                     let val = v.get();
-                    let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
+                    let (s, e) = (
+                        val.selection.start.min(val.selection.end),
+                        val.selection.start.max(val.selection.end),
+                    );
                     if s != e {
                         crate::clipboard::request_text(&val.text[s..e]);
                     }
@@ -488,22 +531,35 @@ impl TextField {
                 // ⚠ 放在 read_only 检查之后（只读不得编辑——结束组合会删文本）；
                 // ⚠ Ctrl+A/C（复制/全选，editsText=false）不结束组合
                 {
-                    let copy_like = ctrl && matches!(key, winit::keyboard::Key::Character(c)
+                    let copy_like = ctrl
+                        && matches!(key, winit::keyboard::Key::Character(c)
                         if c.eq_ignore_ascii_case("a") || c.eq_ignore_ascii_case("c"));
                     if !copy_like {
                         let mut val = v.get();
                         if val.composing_range.is_some() {
                             end_composition(&mut val);
-                            undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
+                            undo.lock().push(
+                                &val.text,
+                                &val.selection,
+                                val.composing_range.clone(),
+                            );
                             commit!(val.clone());
-                            if let Ok(cb) = cb.lock() { cb(val); }
+                            if let Ok(cb) = cb.lock() {
+                                cb(val);
+                            }
                         }
                     }
                 }
                 // Ctrl+Z 撤销 / Ctrl+Shift+Z、Ctrl+Y 重做
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("z")) {
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("z"))
+                {
                     let mut val = v.get();
-                    let cur = (val.text.clone(), val.selection.clone(), val.composing_range.clone());
+                    let cur = (
+                        val.text.clone(),
+                        val.selection.clone(),
+                        val.composing_range.clone(),
+                    );
                     let restored = if shift || e.is_meta_pressed {
                         undo.lock().redo(cur)
                     } else {
@@ -514,61 +570,95 @@ impl TextField {
                         val.selection = sel;
                         val.composing_range = composing;
                         commit!(val.clone());
-                        if let Ok(cb) = cb.lock() { cb(val); }
+                        if let Ok(cb) = cb.lock() {
+                            cb(val);
+                        }
                     }
                     return true;
                 }
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("y")) {
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("y"))
+                {
                     let mut val = v.get();
-                    let cur = (val.text.clone(), val.selection.clone(), val.composing_range.clone());
+                    let cur = (
+                        val.text.clone(),
+                        val.selection.clone(),
+                        val.composing_range.clone(),
+                    );
                     if let Some((text, sel, composing)) = undo.lock().redo(cur) {
                         val.text = text;
                         val.selection = sel;
                         val.composing_range = composing;
                         commit!(val.clone());
-                        if let Ok(cb) = cb.lock() { cb(val); }
+                        if let Ok(cb) = cb.lock() {
+                            cb(val);
+                        }
                     }
                     return true;
                 }
                 // Ctrl+X 剪切
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("x")) {
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("x"))
+                {
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
-                    let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
+                    undo.lock()
+                        .push(&val.text, &val.selection, val.composing_range.clone());
+                    let (s, e) = (
+                        val.selection.start.min(val.selection.end),
+                        val.selection.start.max(val.selection.end),
+                    );
                     if s != e {
                         crate::clipboard::request_text(&val.text[s..e]);
                         val.text.replace_range(s..e, "");
                         val.selection = s..s;
                         commit!(val.clone());
-                        if let Ok(cb) = cb.lock() { cb(val); }
+                        if let Ok(cb) = cb.lock() {
+                            cb(val);
+                        }
                     }
                     return true;
                 }
                 // Ctrl+V 粘贴（单行：换行符替换为空格——Compose 单行语义）
-                if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("v")) {
-                    let Some(clip) = clipboard_get_text() else { return true; };
-                    let clip = if single_line { clip.replace(['\n', '\r'], " ") } else { clip };
+                if ctrl
+                    && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("v"))
+                {
+                    let Some(clip) = clipboard_get_text() else {
+                        return true;
+                    };
+                    let clip = if single_line {
+                        clip.replace(['\n', '\r'], " ")
+                    } else {
+                        clip
+                    };
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
-                    let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
+                    undo.lock()
+                        .push(&val.text, &val.selection, val.composing_range.clone());
+                    let (s, e) = (
+                        val.selection.start.min(val.selection.end),
+                        val.selection.start.max(val.selection.end),
+                    );
                     val.text.replace_range(s..e, &clip);
                     let caret = s + clip.len();
                     val.selection = caret..caret;
                     commit!(val.clone());
-                    if let Ok(cb) = cb.lock() { cb(val); }
+                    if let Ok(cb) = cb.lock() {
+                        cb(val);
+                    }
                     return true;
                 }
                 let mut val = v.get();
                 // 每次键处理前快照（对齐 Compose forceNextSnapshot：
                 // 编辑与移动都会记录——同文本合并 selection）
-                undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
+                undo.lock()
+                    .push(&val.text, &val.selection, val.composing_range.clone());
                 // 词级移动（Ctrl+←/→；Shift 扩展选区）
                 match key {
                     winit::keyboard::Key::Named(named) if ctrl => match named {
                         winit::keyboard::NamedKey::ArrowLeft => {
                             let target = word_prev(&val.text, val.selection.start);
                             if shift {
-                                val.selection = val.selection.start.min(target)..val.selection.end.max(target);
+                                val.selection =
+                                    val.selection.start.min(target)..val.selection.end.max(target);
                             } else {
                                 val.selection = target..target;
                             }
@@ -578,7 +668,8 @@ impl TextField {
                         winit::keyboard::NamedKey::ArrowRight => {
                             let target = word_next(&val.text, val.selection.start);
                             if shift {
-                                val.selection = val.selection.start.min(target)..val.selection.end.max(target);
+                                val.selection =
+                                    val.selection.start.min(target)..val.selection.end.max(target);
                             } else {
                                 val.selection = target..target;
                             }
@@ -587,7 +678,10 @@ impl TextField {
                         }
                         winit::keyboard::NamedKey::Backspace => {
                             if val.selection.start != val.selection.end {
-                                let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
+                                let (s, e) = (
+                                    val.selection.start.min(val.selection.end),
+                                    val.selection.start.max(val.selection.end),
+                                );
                                 val.text.replace_range(s..e, "");
                                 val.selection = s..s;
                             } else {
@@ -598,12 +692,17 @@ impl TextField {
                                 }
                             }
                             commit!(val.clone());
-                            if let Ok(cb) = cb.lock() { cb(val); }
+                            if let Ok(cb) = cb.lock() {
+                                cb(val);
+                            }
                             return true;
                         }
                         winit::keyboard::NamedKey::Delete => {
                             if val.selection.start != val.selection.end {
-                                let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
+                                let (s, e) = (
+                                    val.selection.start.min(val.selection.end),
+                                    val.selection.start.max(val.selection.end),
+                                );
                                 val.text.replace_range(s..e, "");
                                 val.selection = s..s;
                             } else {
@@ -614,7 +713,9 @@ impl TextField {
                                 }
                             }
                             commit!(val.clone());
-                            if let Ok(cb) = cb.lock() { cb(val); }
+                            if let Ok(cb) = cb.lock() {
+                                cb(val);
+                            }
                             return true;
                         }
                         winit::keyboard::NamedKey::Home => {
@@ -642,9 +743,13 @@ impl TextField {
                                 val.text.replace_range(s..e, "");
                                 val.selection = s..s;
                                 commit!(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
+                                if let Ok(cb) = cb.lock() {
+                                    cb(val);
+                                }
                             } else if val.selection.start > 0 {
-                                let prev = val.text.as_str()
+                                let prev = val
+                                    .text
+                                    .as_str()
                                     .grapheme_indices(true)
                                     .map(|(i, _)| i)
                                     .rev()
@@ -654,7 +759,9 @@ impl TextField {
                                 val.text.replace_range(range.clone(), "");
                                 val.selection = prev..prev;
                                 commit!(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
+                                if let Ok(cb) = cb.lock() {
+                                    cb(val);
+                                }
                             }
                             return true;
                         }
@@ -665,9 +772,13 @@ impl TextField {
                                 val.text.replace_range(s..e, "");
                                 val.selection = s..s;
                                 commit!(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
+                                if let Ok(cb) = cb.lock() {
+                                    cb(val);
+                                }
                             } else if val.selection.start < val.text.len() {
-                                let next = val.text.as_str()
+                                let next = val
+                                    .text
+                                    .as_str()
                                     .grapheme_indices(true)
                                     .map(|(i, _)| i)
                                     .find(|&pos| pos > val.selection.start)
@@ -676,7 +787,9 @@ impl TextField {
                                 val.text.replace_range(range.clone(), "");
                                 val.selection = val.selection.start..val.selection.start;
                                 commit!(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
+                                if let Ok(cb) = cb.lock() {
+                                    cb(val);
+                                }
                             }
                             return true;
                         }
@@ -690,14 +803,21 @@ impl TextField {
                                 }
                                 return true;
                             }
-                            let change = TextChange::Inserted { index: val.selection.start, text: "\n".into() };
+                            let change = TextChange::Inserted {
+                                index: val.selection.start,
+                                text: "\n".into(),
+                            };
                             change.apply_to(&mut val);
                             commit!(val.clone());
-                            if let Ok(cb) = cb.lock() { cb(val); }
+                            if let Ok(cb) = cb.lock() {
+                                cb(val);
+                            }
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowLeft => {
-                            let prev = val.text.as_str()
+                            let prev = val
+                                .text
+                                .as_str()
                                 .grapheme_indices(true)
                                 .map(|(i, _)| i)
                                 .rev()
@@ -713,7 +833,9 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
-                            let next = val.text.as_str()
+                            let next = val
+                                .text
+                                .as_str()
                                 .grapheme_indices(true)
                                 .map(|(i, _)| i)
                                 .find(|&pos| pos > val.selection.start);
@@ -733,7 +855,8 @@ impl TextField {
                             // 行首（对齐 Compose LINE_START——无修饰 Home）
                             let target = line_start(&val.text, val.selection.start);
                             if shift {
-                                val.selection = val.selection.start.min(target)..val.selection.end.max(target);
+                                val.selection =
+                                    val.selection.start.min(target)..val.selection.end.max(target);
                             } else {
                                 val.selection = target..target;
                             }
@@ -744,7 +867,8 @@ impl TextField {
                             // 行尾（对齐 Compose LINE_END）
                             let target = line_end(&val.text, val.selection.start);
                             if shift {
-                                val.selection = val.selection.start.min(target)..val.selection.end.max(target);
+                                val.selection =
+                                    val.selection.start.min(target)..val.selection.end.max(target);
                             } else {
                                 val.selection = target..target;
                             }
@@ -754,7 +878,9 @@ impl TextField {
                         winit::keyboard::NamedKey::ArrowUp => {
                             // 单行：放行给框架的方向键焦点导航（对标 Compose
                             // 单行输入框 Up/Down 不移动光标，焦点可移出）
-                            if single_line { return false; }
+                            if single_line {
+                                return false;
+                            }
                             // 无布局信息时的近似：移到上一行行首（\n 分隔）
                             let target = caret_prev_line(&val.text, val.selection.start);
                             if shift {
@@ -766,7 +892,9 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowDown => {
-                            if single_line { return false; }
+                            if single_line {
+                                return false;
+                            }
                             // 近似：移到下一行行首；已是最后一行则保持原位
                             let target = caret_next_line(&val.text, val.selection.start);
                             if shift {
@@ -785,12 +913,21 @@ impl TextField {
                     },
                     winit::keyboard::Key::Character(c) => {
                         // Ctrl/Alt 组合键不插入字符（未映射命令放行——Compose 语义）
-                        if ctrl || alt { return false; }
-                        if c.is_empty() { return false; }
-                        let change = TextChange::Inserted { index: val.selection.start, text: c.to_string() };
+                        if ctrl || alt {
+                            return false;
+                        }
+                        if c.is_empty() {
+                            return false;
+                        }
+                        let change = TextChange::Inserted {
+                            index: val.selection.start,
+                            text: c.to_string(),
+                        };
                         change.apply_to(&mut val);
                         commit!(val.clone());
-                        if let Ok(cb) = cb.lock() { cb(val); }
+                        if let Ok(cb) = cb.lock() {
+                            cb(val);
+                        }
                         return true;
                     }
                     _ => {}
@@ -820,31 +957,46 @@ impl TextField {
         // M3 padding（TextFieldLayout 用 pad_top/bottom 计算图标容器居中锚点）
         let (mut pad_top, mut pad_bottom) = (8.0, 8.0);
         let container_modifier = if let Some(variant) = visual {
-            let pad_h = if has_leading_icon || has_trailing_icon { 12.0 } else { 16.0 };
+            let pad_h = if has_leading_icon || has_trailing_icon {
+                12.0
+            } else {
+                16.0
+            };
             (pad_top, pad_bottom) = match variant {
                 TextFieldVariant::Filled if self.label.is_some() => (24.0, 8.0),
                 TextFieldVariant::Filled => (16.0, 8.0),
                 _ => (16.0, 16.0),
             };
-            let shape = crate::graphics::Shape::RoundedRect {
-                corner_radius: 4.0,
-            };
+            let shape = crate::graphics::Shape::RoundedRect { corner_radius: 4.0 };
             // 支持文本：容器底部外侧 12sp（M3 supporting 色）
-            let supporting_visual = self.supporting_text.as_ref().map(|s| crate::modifier::SupportingVisual {
-                content: s.clone(),
-                font_size: typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density()),
-                font_weight: typography.body_small.font_weight.unwrap_or_default(),
-                font_style: typography.body_small.font_style.unwrap_or_default(),
-                letter_spacing: typography
-                    .body_small
-                    .letter_spacing
-                    .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
-                    .unwrap_or(0.0),
-                line_height: typography.body_small.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
-                color: if disabled { colors.disabled_supporting }
-                    else if self.is_error { colors.error_supporting }
-                    else { colors.supporting },
-            });
+            let supporting_visual =
+                self.supporting_text
+                    .as_ref()
+                    .map(|s| crate::modifier::SupportingVisual {
+                        content: s.clone(),
+                        font_size: typography
+                            .body_small
+                            .font_size
+                            .unwrap_or(12.0.into())
+                            .to_logical_px(crate::runtime::density::current_density()),
+                        font_weight: typography.body_small.font_weight.unwrap_or_default(),
+                        font_style: typography.body_small.font_style.unwrap_or_default(),
+                        letter_spacing: typography
+                            .body_small
+                            .letter_spacing
+                            .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
+                            .unwrap_or(0.0),
+                        line_height: typography.body_small.line_height.map(|height| {
+                            height.to_logical_px(crate::runtime::density::current_density())
+                        }),
+                        color: if disabled {
+                            colors.disabled_supporting
+                        } else if self.is_error {
+                            colors.error_supporting
+                        } else {
+                            colors.supporting
+                        },
+                    });
             // The indicator colour follows M3's `FastEffects` spring — see `text_field_colour_spec`,
             // which also records where winia animates a different object than Compose does.
             let indicator_anim = ctx.animate_color_as_state(
@@ -853,12 +1005,10 @@ impl TextField {
             );
             let focus_progress = ctx.animate_float_as_state(
                 if focused { 1.0 } else { 0.0 },
-                crate::animation::AnimationSpec::Tween(
-                    crate::animation::TweenSpec::new(
-                        std::time::Duration::from_millis(150),
-                        crate::animation::interpolator::EaseInOutCubic::new(),
-                    )
-                ),
+                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(150),
+                    crate::animation::interpolator::EaseInOutCubic::new(),
+                )),
             );
             // The M3 minimum (280x56) is the FIELD's box, so it sits OUTSIDE the padding: padding is
             // a chain step (`SizeStep::Padding`), and a minimum inside it would be deflated by the
@@ -875,7 +1025,11 @@ impl TextField {
                     colors.clone(),
                     self.enabled,
                     self.read_only,
-                    if self.is_error { colors.error_cursor } else { colors.cursor },
+                    if self.is_error {
+                        colors.error_cursor
+                    } else {
+                        colors.cursor
+                    },
                     indicator_anim,
                     focus_progress,
                     Some(offset_mapping.clone()),
@@ -893,9 +1047,18 @@ impl TextField {
         // 容器最小高度（supporting + min_lines + 56）——min_height 兜底
         // 占位；测量用 paragraph 实际高度（含折行）
         let supporting_h = self.supporting_text.as_ref().map_or(0.0, |_| {
-            4.0 + typography.body_small.line_height
+            4.0 + typography
+                .body_small
+                .line_height
                 .map(|height| height.to_logical_px(crate::runtime::density::current_density()))
-                .unwrap_or_else(|| typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density()) * 1.4)
+                .unwrap_or_else(|| {
+                    typography
+                        .body_small
+                        .font_size
+                        .unwrap_or(12.0.into())
+                        .to_logical_px(crate::runtime::density::current_density())
+                        * 1.4
+                })
         });
         let container_modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
             let line_h = input_line_height;
@@ -915,7 +1078,9 @@ impl TextField {
         // ⚠ 焦点/键盘在**容器**（焦点语义：点击容器任意处聚焦——padding/
         // 图标区也命中，对标 Compose 全容器可交互）；输入子节点 on_press
         // 定位光标（点击文本区域）
-        let fr = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+        let fr = ctx
+            .remember(|| crate::modifier::FocusRequester::new())
+            .get();
         let input_modifier = Modifier::new()
             .text_field_slot(TextFieldSlotRole::Input)
             .text_content_full(
@@ -932,13 +1097,16 @@ impl TextField {
                     .letter_spacing
                     .map(|u| u.to_logical_px(crate::runtime::density::current_density()))
                     .unwrap_or(0.0),
-                input_style.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
+                input_style
+                    .line_height
+                    .map(|height| height.to_logical_px(crate::runtime::density::current_density())),
                 crate::modifier::TextExtras::default(),
             );
         let input_modifier = if interaction.is_some() {
             let fr_click = fr.clone();
-            input_modifier
-                .on_press(move |_| { fr_click.request_focus(); })
+            input_modifier.on_press(move |_| {
+                fr_click.request_focus();
+            })
         } else {
             input_modifier
         };
@@ -949,7 +1117,9 @@ impl TextField {
             container_modifier
                 .focusable_with_source(&interaction)
                 .focus_requester(&fr)
-                .on_press(move |_| { fr_click.request_focus(); })
+                .on_press(move |_| {
+                    fr_click.request_focus();
+                })
                 .on_key_event(kb_handler)
         } else {
             container_modifier
@@ -959,7 +1129,14 @@ impl TextField {
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h, input_line_height),
+            TextFieldLayout::new(
+                label_progress.clone(),
+                visual,
+                pad_top,
+                pad_bottom,
+                supporting_h,
+                input_line_height,
+            ),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
         // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
@@ -981,21 +1158,30 @@ impl TextField {
                     );
                     match $role {
                         TextFieldSlotRole::Prefix | TextFieldSlotRole::Suffix => {
-                            let affix_color = if !self.enabled { colors.disabled_affix } else { colors.affix };
+                            let affix_color = if !self.enabled {
+                                colors.disabled_affix
+                            } else {
+                                colors.affix
+                            };
                             let mut style = typography.body_large.clone();
                             style.color = Some(affix_color);
                             ProvideTextStyle(style, ctx, $content);
                         }
                         TextFieldSlotRole::Leading | TextFieldSlotRole::Trailing => {
                             let icon_color = if !self.enabled {
-                                if $role == TextFieldSlotRole::Leading { colors.leading_icon_disabled }
-                                else { colors.trailing_icon_disabled }
+                                if $role == TextFieldSlotRole::Leading {
+                                    colors.leading_icon_disabled
+                                } else {
+                                    colors.trailing_icon_disabled
+                                }
                             } else if $role == TextFieldSlotRole::Trailing && self.is_error {
                                 colors.trailing_icon_error
                             } else {
                                 colors.leading_icon_focused
                             };
-                            crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
+                            crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| {
+                                $content(c)
+                            });
                         }
                         _ => $content(ctx),
                     }
@@ -1020,9 +1206,13 @@ impl TextField {
                 //   组重组 → 闭包重跑 → current() 读到新字号（字号动画）
                 // - 闭包内 Text 显式 .font_size()/.color() 可覆盖
                 let p = label_progress.get();
-                let label_color = if !self.enabled { colors.label_disabled }
-                    else if self.is_error { colors.label_error }
-                    else { colors.label_unfocused };
+                let label_color = if !self.enabled {
+                    colors.label_disabled
+                } else if self.is_error {
+                    colors.label_error
+                } else {
+                    colors.label_unfocused
+                };
                 let label_style = interpolate_text_style(
                     &typography.body_large,
                     &typography.body_small,
@@ -1037,223 +1227,239 @@ impl TextField {
         // need it too — e.g. SearchBar input). Previously gated on has_visual (v2
         // containerization oversight); the block is self-contained (own key + alpha).
         if let Some(ph) = self.placeholder {
-                // M3 placeholderAlpha：淡入**淡出**双向（150ms）——alpha 目标
-                // 随显示状态（显示 1 / 隐藏 0）；构建条件 = 显示中或淡出中
-                // （alpha > 0）——淡出动画期间仍构建（透明度渐低），alpha
-                // 归零后移除。
-                // ⚠ remember + push + 组全部包在显式 ctx.key 内——remember
-                // 的 key base 固定为 role 哈希（不随帧内序号流漂移——实测
-                // 无 label 字段（恒显示）alpha State 每帧新建 → 动画每帧
-                // 从 0 重启永不完成 → 持续重组）
-                ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
-                    let alpha = ctx.remember(|| 0.0f32);
-                    crate::animation::push_animatable(
-                        alpha.clone(),
-                        if show_placeholder { 1.0 } else { 0.0 },
-                        crate::animation::AnimationSpec::Tween(
-                            crate::animation::TweenSpec::new(
-                                std::time::Duration::from_millis(150),
-                                crate::animation::interpolator::EaseOutCubic::new(),
-                            )
-                        ),
+            // M3 placeholderAlpha：淡入**淡出**双向（150ms）——alpha 目标
+            // 随显示状态（显示 1 / 隐藏 0）；构建条件 = 显示中或淡出中
+            // （alpha > 0）——淡出动画期间仍构建（透明度渐低），alpha
+            // 归零后移除。
+            // ⚠ remember + push + 组全部包在显式 ctx.key 内——remember
+            // 的 key base 固定为 role 哈希（不随帧内序号流漂移——实测
+            // 无 label 字段（恒显示）alpha State 每帧新建 → 动画每帧
+            // 从 0 重启永不完成 → 持续重组）
+            ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
+                let alpha = ctx.remember(|| 0.0f32);
+                crate::animation::push_animatable(
+                    alpha.clone(),
+                    if show_placeholder { 1.0 } else { 0.0 },
+                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(150),
+                        crate::animation::interpolator::EaseOutCubic::new(),
+                    )),
+                );
+                // 构建条件：alpha.get() 注册依赖——淡出动画推进 → 重组 →
+                // 条件重评估（alpha=0 时停止构建移除节点）
+                let alpha_now = alpha.get();
+                if show_placeholder || alpha_now > 0.001 {
+                    let sk = ctx.next_key();
+                    ctx.start_restartable_group(
+                        sk,
+                        Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
+                        crate::layout::BoxLayout::new(),
                     );
-                    // 构建条件：alpha.get() 注册依赖——淡出动画推进 → 重组 →
-                    // 条件重评估（alpha=0 时停止构建移除节点）
-                    let alpha_now = alpha.get();
-                    if show_placeholder || alpha_now > 0.001 {
-                        let sk = ctx.next_key();
-                        ctx.start_restartable_group(
-                            sk,
-                            Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
-                            crate::layout::BoxLayout::new(),
-                        );
-                        // M3 默认 placeholder 样式：16sp + on_surface_variant
-                        // （disabled 38%）+ 淡入/淡出 alpha
-                        let a = alpha.get();
-                        let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
-                        let mut style = typography.body_large.clone();
-                        style.color = Some(crate::graphics::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
-                        ProvideTextStyle(style, ctx, ph);
-                        ctx.end_restartable_group();
-                    }
-                });
-            }
+                    // M3 默认 placeholder 样式：16sp + on_surface_variant
+                    // （disabled 38%）+ 淡入/淡出 alpha
+                    let a = alpha.get();
+                    let pc = if !self.enabled {
+                        colors.disabled_placeholder
+                    } else {
+                        colors.placeholder
+                    };
+                    let mut style = typography.body_large.clone();
+                    style.color = Some(crate::graphics::Color::from_argb(
+                        (255.0 * a) as u8,
+                        pc.r,
+                        pc.g,
+                        pc.b,
+                    ));
+                    ProvideTextStyle(style, ctx, ph);
+                    ctx.end_restartable_group();
+                }
+            });
+        }
         if let Some(prefix) = self.prefix {
             slot_wrap!(TextFieldSlotRole::Prefix, prefix);
         }
         // 输入子节点（原 leaf 逻辑）——显式 ctx.key 稳定（show_placeholder
         // 切换不平移 key 流——输入节点/光标状态不因结构变化重建）
         ctx.key(TextFieldSlotRole::Input, |ctx| {
-        let input_key = ctx.next_key();
-        ctx.start_leaf(input_key, input_modifier);
-        ctx.set_current_node_selection_color(
-            crate::text::selection::LOCAL_TEXT_SELECTION_COLORS.current().background,
-        );
+            let input_key = ctx.next_key();
+            ctx.start_leaf(input_key, input_modifier);
+            ctx.set_current_node_selection_color(
+                crate::text::selection::LOCAL_TEXT_SELECTION_COLORS
+                    .current()
+                    .background,
+            );
 
-        // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
-        // 同步更新文本/长度）。
-        // ⚠ 必须用**输入 leaf 的 slot_key**（input_key）而非容器 key：渲染
-        // 高亮（selected_range(node.slot_key)）与拖动定位
-        // （segment_info(node.slot_key)）都按 leaf 的 slot_key 查询——
-        // 注册在容器 key 上则查不到 → 选区永不显示/拖动无法开始
-        registrar.register(input_key, &transformed.text);
+            // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
+            // 同步更新文本/长度）。
+            // ⚠ 必须用**输入 leaf 的 slot_key**（input_key）而非容器 key：渲染
+            // 高亮（selected_range(node.slot_key)）与拖动定位
+            // （segment_info(node.slot_key)）都按 leaf 的 slot_key 查询——
+            // 注册在容器 key 上则查不到 → 选区永不显示/拖动无法开始
+            registrar.register(input_key, &transformed.text);
 
-
-        // 设置光标位置和回调（desc 通道——组合期捕获，物化时应用到节点）
-        ctx.set_current_node_cursor_and_callback(
-            current.selection.start,
-            cursor_visible_now,
-            Box::new({
-                let v = value.clone();
-                let blink_reset = blink_reset.clone();
-                move |idx| {
-                    blink_reset(); // 点击定位：光标立即可见 + 计时重置
-                    v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
-                }
-            }),
-        );
-        // 显示聚焦标记：焦点在容器（交互移容器后本节点 focused=false）——
-        // 渲染端用此标记画光标/选区（组合期聚焦状态经 interaction 源可得）
-        ctx.set_current_node_display_focused(focused);
-        // 注册到节点（app.rs 拖动选区定位依赖 node.registrar）
-        ctx.set_current_node_registrar(registrar.clone());
-        // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
-        ctx.set_current_node_focus_color(crate::theme::WiniaTheme::colors().primary);
-        // IME 组合下划线颜色：主题 primary（组合期捕获——Phase 4.2：render 阶段
-        // 不能读 CompositionLocal，否则自定义主题下下划线用默认色）
-        ctx.set_current_node_composing_color(crate::theme::WiniaTheme::colors().primary);
-        // IME 预输入回调（旧版风格——直接修改 text 内容）
-        {
-            let v = value.clone();
-            let registrar = registrar.clone();
-            let mapping = offset_mapping.clone();
-            let undo = undo.clone();
-            ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {
-                let mut val = v.get();
-                // 首次 Preedit（进入新组合，此前无 composing）：删用户选区
-                // （替换语义——选中文本输入拼音时立即移除，Compose 行为）；
-                // 组合更新（已有 composing）不删（组合文本替换自身）
-                let first_preedit = val.composing_range.is_none();
-                // §5.2：首次 Preedit 进入新组合——**修改前**快照（含当前 composing
-                // =None 状态），使 Ctrl+Z 能回退到组合输入前。组合更新不 push
-                // （同文本合并可吸收光标变化——避免组合期间每帧产生 undo 条目）。
-                if first_preedit {
-                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
-                }
-                // 删除旧的 composing range（组合更新——收拢 selection，防越界）
-                end_composition(&mut val);
-                if first_preedit && val.selection.start != val.selection.end {
-                    let (s, e) = (
-                        val.selection.start.min(val.selection.end),
-                        val.selection.start.max(val.selection.end),
-                    );
-                    let len = val.text.len();
-                    let (s, e) = (s.min(len), e.min(len));
-                    if s < e {
-                        val.text.replace_range(s..e, "");
-                        val.selection = s..s;
-                    } else {
-                        val.selection = s.min(len)..s.min(len);
+            // 设置光标位置和回调（desc 通道——组合期捕获，物化时应用到节点）
+            ctx.set_current_node_cursor_and_callback(
+                current.selection.start,
+                cursor_visible_now,
+                Box::new({
+                    let v = value.clone();
+                    let blink_reset = blink_reset.clone();
+                    move |idx| {
+                        blink_reset(); // 点击定位：光标立即可见 + 计时重置
+                        v.update(|val| {
+                            val.selection.start = idx;
+                            val.selection.end = idx;
+                        });
                     }
-                }
-                // 插入新的预输入文本
-                if !text.is_empty() {
-                    // P2（review）：pos 来自 selection——undo 恢复/registrar 拉回可能
-                    // 落在非字符边界，insert_str 前对齐（防 panic）
-                    let pos = val.text.floor_char_boundary(val.selection.start.min(val.text.len()));
-                    val.text.insert_str(pos, text);
-                    let new_len = text.len();
-                    val.composing_range = Some(pos..(pos + new_len));
-                    // 组合内光标：**恒单点**（start == end）——IME 的 cursor
-                    // 可能是组合内选中范围（拼音候选态），若采用则 selection
-                    // 非零宽 → 渲染隐藏光标、且删除/替换语义混乱。Compose 中
-                    // 组合文本的选中态由 composing underline 表达
-                    let caret = if let Some((start, end)) = cursor {
-                        // §5.3：IME cursor 是**字节索引**（winit 契约），可能落在
-                        // 多字节字符（CJK/emoji）中间——对齐 char 边界防止 selection
-                        // 落在非字符边界（后续 replace/drain/光标渲染错乱）
-                        val.text.floor_char_boundary((pos + start.max(end)).min(val.text.len()))
-                    } else {
-                        pos + new_len
-                    };
-                    val.selection = caret..caret;
-                } else {
-                    val.composing_range = None;
-                }
-                // 同步 reg（防 build 的 reg_leads 用旧选区拉回——Preedit
-                // 删选区/组合后 reg 残留旧选区会导致组合期间误删；
-                // value（编辑偏移）→ reg（显示偏移））
-                registrar.set_selection(
-                    mapping.original_to_transformed(val.selection.start),
-                    mapping.original_to_transformed(val.selection.end),
-                );
-                v.set(val);
-            }));
-        }
-        // IME committed edits (Commit and DeleteSurrounding). Preedit is handled above; this
-        // callback applies the edit to committed text and keeps the selection/registrar in sync.
-        {
-            let v = value.clone();
-            let registrar = registrar.clone();
-            let mapping = offset_mapping.clone();
-            let undo = undo.clone();
-            ctx.set_current_node_ime_edit_callback(Box::new(move |edit| {
-                let mut val = v.get();
-                undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
-                if val.composing_range.is_some() {
+                }),
+            );
+            // 显示聚焦标记：焦点在容器（交互移容器后本节点 focused=false）——
+            // 渲染端用此标记画光标/选区（组合期聚焦状态经 interaction 源可得）
+            ctx.set_current_node_display_focused(focused);
+            // 注册到节点（app.rs 拖动选区定位依赖 node.registrar）
+            ctx.set_current_node_registrar(registrar.clone());
+            // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
+            ctx.set_current_node_focus_color(crate::theme::WiniaTheme::colors().primary);
+            // IME 组合下划线颜色：主题 primary（组合期捕获——Phase 4.2：render 阶段
+            // 不能读 CompositionLocal，否则自定义主题下下划线用默认色）
+            ctx.set_current_node_composing_color(crate::theme::WiniaTheme::colors().primary);
+            // IME 预输入回调（旧版风格——直接修改 text 内容）
+            {
+                let v = value.clone();
+                let registrar = registrar.clone();
+                let mapping = offset_mapping.clone();
+                let undo = undo.clone();
+                ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {
+                    let mut val = v.get();
+                    // 首次 Preedit（进入新组合，此前无 composing）：删用户选区
+                    // （替换语义——选中文本输入拼音时立即移除，Compose 行为）；
+                    // 组合更新（已有 composing）不删（组合文本替换自身）
+                    let first_preedit = val.composing_range.is_none();
+                    // §5.2：首次 Preedit 进入新组合——**修改前**快照（含当前 composing
+                    // =None 状态），使 Ctrl+Z 能回退到组合输入前。组合更新不 push
+                    // （同文本合并可吸收光标变化——避免组合期间每帧产生 undo 条目）。
+                    if first_preedit {
+                        undo.lock()
+                            .push(&val.text, &val.selection, val.composing_range.clone());
+                    }
+                    // 删除旧的 composing range（组合更新——收拢 selection，防越界）
                     end_composition(&mut val);
-                }
-                val.apply_ime_edit(&edit);
-                registrar.set_selection(
-                    mapping.original_to_transformed(val.selection.start),
-                    mapping.original_to_transformed(val.selection.end),
-                );
-                v.set(val);
-            }));
-        }
-        // 同步 composing_range 到节点（渲染画下划线用）
-        ctx.sync_composing_range(current.composing_range.clone());
-        // 选区双向同步：
-        // - 拖动中 reg 领先（app.rs compute_selection 直写 reg，value 未更新）——
-        //   重组（闪烁翻转/其他）时若 reg ≠ value 则把 reg 拉回 value，
-        //   否则 build 用旧 value 覆盖 reg → 拖动选区随光标闪烁被重置
-        // - 其余情况（点击/键盘/外部）value → reg（渲染 registrar 高亮）
-        let reg_sel = registrar.selected_range(input_key);
-        let val_nonzero = current.selection.start != current.selection.end;
-        let (vs, ve) = (
-            current.selection.start.min(current.selection.end),
-            current.selection.start.max(current.selection.end),
-        );
-        // reg 空间 = 显示偏移——与 value（编辑偏移）比较/转换须经映射
-        let (vts, vte) = (
-            offset_mapping.original_to_transformed(vs),
-            offset_mapping.original_to_transformed(ve),
-        );
-        // reg 有真实选区（非零宽）时领先——包括 value 仍是单点（拖动中
-        // 点击定位后 value 未更新）：此时必须拉回 value，否则 `_` 分支
-        // 会用单点覆盖拖动选区（选区随闪烁翻转消失）
-        let reg_leads = match &reg_sel {
-            Some(r) if r.start < r.end => match val_nonzero {
-                true => (r.start, r.end) != (vts, vte),
-                false => true,
-            },
-            _ => false,
-        };
-        if reg_leads {
-            if let Some(r) = reg_sel {
-                let (s, e) = (r.start, r.end);
-                value.update(|val| {
-                    let len = val.text.len();
-                    let s = offset_mapping.transformed_to_original(s).min(len);
-                    let e = offset_mapping.transformed_to_original(e).min(len);
-                    val.selection = s..e;
-                });
+                    if first_preedit && val.selection.start != val.selection.end {
+                        let (s, e) = (
+                            val.selection.start.min(val.selection.end),
+                            val.selection.start.max(val.selection.end),
+                        );
+                        let len = val.text.len();
+                        let (s, e) = (s.min(len), e.min(len));
+                        if s < e {
+                            val.text.replace_range(s..e, "");
+                            val.selection = s..s;
+                        } else {
+                            val.selection = s.min(len)..s.min(len);
+                        }
+                    }
+                    // 插入新的预输入文本
+                    if !text.is_empty() {
+                        // P2（review）：pos 来自 selection——undo 恢复/registrar 拉回可能
+                        // 落在非字符边界，insert_str 前对齐（防 panic）
+                        let pos = val
+                            .text
+                            .floor_char_boundary(val.selection.start.min(val.text.len()));
+                        val.text.insert_str(pos, text);
+                        let new_len = text.len();
+                        val.composing_range = Some(pos..(pos + new_len));
+                        // 组合内光标：**恒单点**（start == end）——IME 的 cursor
+                        // 可能是组合内选中范围（拼音候选态），若采用则 selection
+                        // 非零宽 → 渲染隐藏光标、且删除/替换语义混乱。Compose 中
+                        // 组合文本的选中态由 composing underline 表达
+                        let caret = if let Some((start, end)) = cursor {
+                            // §5.3：IME cursor 是**字节索引**（winit 契约），可能落在
+                            // 多字节字符（CJK/emoji）中间——对齐 char 边界防止 selection
+                            // 落在非字符边界（后续 replace/drain/光标渲染错乱）
+                            val.text
+                                .floor_char_boundary((pos + start.max(end)).min(val.text.len()))
+                        } else {
+                            pos + new_len
+                        };
+                        val.selection = caret..caret;
+                    } else {
+                        val.composing_range = None;
+                    }
+                    // 同步 reg（防 build 的 reg_leads 用旧选区拉回——Preedit
+                    // 删选区/组合后 reg 残留旧选区会导致组合期间误删；
+                    // value（编辑偏移）→ reg（显示偏移））
+                    registrar.set_selection(
+                        mapping.original_to_transformed(val.selection.start),
+                        mapping.original_to_transformed(val.selection.end),
+                    );
+                    v.set(val);
+                }));
             }
-        } else {
-            registrar.set_selection(vts, vte);
-        }
-        // 输入节点结束
-        ctx.end_node();
+            // IME committed edits (Commit and DeleteSurrounding). Preedit is handled above; this
+            // callback applies the edit to committed text and keeps the selection/registrar in sync.
+            {
+                let v = value.clone();
+                let registrar = registrar.clone();
+                let mapping = offset_mapping.clone();
+                let undo = undo.clone();
+                ctx.set_current_node_ime_edit_callback(Box::new(move |edit| {
+                    let mut val = v.get();
+                    undo.lock()
+                        .push(&val.text, &val.selection, val.composing_range.clone());
+                    if val.composing_range.is_some() {
+                        end_composition(&mut val);
+                    }
+                    val.apply_ime_edit(&edit);
+                    registrar.set_selection(
+                        mapping.original_to_transformed(val.selection.start),
+                        mapping.original_to_transformed(val.selection.end),
+                    );
+                    v.set(val);
+                }));
+            }
+            // 同步 composing_range 到节点（渲染画下划线用）
+            ctx.sync_composing_range(current.composing_range.clone());
+            // 选区双向同步：
+            // - 拖动中 reg 领先（app.rs compute_selection 直写 reg，value 未更新）——
+            //   重组（闪烁翻转/其他）时若 reg ≠ value 则把 reg 拉回 value，
+            //   否则 build 用旧 value 覆盖 reg → 拖动选区随光标闪烁被重置
+            // - 其余情况（点击/键盘/外部）value → reg（渲染 registrar 高亮）
+            let reg_sel = registrar.selected_range(input_key);
+            let val_nonzero = current.selection.start != current.selection.end;
+            let (vs, ve) = (
+                current.selection.start.min(current.selection.end),
+                current.selection.start.max(current.selection.end),
+            );
+            // reg 空间 = 显示偏移——与 value（编辑偏移）比较/转换须经映射
+            let (vts, vte) = (
+                offset_mapping.original_to_transformed(vs),
+                offset_mapping.original_to_transformed(ve),
+            );
+            // reg 有真实选区（非零宽）时领先——包括 value 仍是单点（拖动中
+            // 点击定位后 value 未更新）：此时必须拉回 value，否则 `_` 分支
+            // 会用单点覆盖拖动选区（选区随闪烁翻转消失）
+            let reg_leads = match &reg_sel {
+                Some(r) if r.start < r.end => match val_nonzero {
+                    true => (r.start, r.end) != (vts, vte),
+                    false => true,
+                },
+                _ => false,
+            };
+            if reg_leads {
+                if let Some(r) = reg_sel {
+                    let (s, e) = (r.start, r.end);
+                    value.update(|val| {
+                        let len = val.text.len();
+                        let s = offset_mapping.transformed_to_original(s).min(len);
+                        let e = offset_mapping.transformed_to_original(e).min(len);
+                        val.selection = s..e;
+                    });
+                }
+            } else {
+                registrar.set_selection(vts, vte);
+            }
+            // 输入节点结束
+            ctx.end_node();
         });
         // 后缀 / 后置图标（右对齐）
         if let Some(suffix) = self.suffix {
@@ -1296,5 +1502,3 @@ impl Default for TextField {
         Self::new(State::new(TextFieldValue::new("")))
     }
 }
-
-

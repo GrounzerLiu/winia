@@ -427,7 +427,10 @@ impl<K: Clone + Eq + Hash + 'static, V: Clone + 'static> StateMap<K, V> {
 
     /// Every entry, cloned.
     pub fn to_vec(&self) -> Vec<(K, V)> {
-        self.snapshot().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.snapshot()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     // ── writes ──
@@ -496,8 +499,8 @@ impl<K: Clone + Eq + Hash + 'static, V: Clone + 'static> StateMap<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::{ComposeCtx, Composer};
     use crate::layout::Constraints;
+    use crate::runtime::composer::{ComposeCtx, Composer};
 
     /// Compose a scene, run the layout pass, and count how many times the reader ran — plus what it
     /// read on the last run.
@@ -511,9 +514,9 @@ mod tests {
         runs: &std::rc::Rc<std::cell::Cell<usize>>,
         seen: &std::rc::Rc<std::cell::RefCell<Vec<i32>>>,
     ) {
-        use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
         use crate::modifier::Modifier;
+        use crate::runtime::composer::GroupStatus;
 
         let list = list.clone();
         let runs = runs.clone();
@@ -558,12 +561,20 @@ mod tests {
 
         // CONTROL: nothing changed, so the reader must Skip — otherwise "it re-ran" below means nothing.
         run(&mut composer, &list, &runs, &seen);
-        assert_eq!(runs.get(), 1, "CONTROL: an unchanged frame must Skip the reader");
+        assert_eq!(
+            runs.get(),
+            1,
+            "CONTROL: an unchanged frame must Skip the reader"
+        );
 
         list.push(5);
         run(&mut composer, &list, &runs, &seen);
         assert_eq!(runs.get(), 2, "a push must re-run the reader");
-        assert_eq!(seen.borrow().last(), Some(&5), "and the reader must see the new element");
+        assert_eq!(
+            seen.borrow().last(),
+            Some(&5),
+            "and the reader must see the new element"
+        );
     }
 
     #[test]
@@ -624,7 +635,11 @@ mod tests {
         list.remove(0);
         run(&mut composer, &list, &runs, &seen);
         assert_eq!(runs.get(), 3, "both mutations notified");
-        assert_eq!(seen.borrow().last(), Some(&0), "and the list is empty again");
+        assert_eq!(
+            seen.borrow().last(),
+            Some(&0),
+            "and the list is empty again"
+        );
     }
 
     #[test]
@@ -642,7 +657,11 @@ mod tests {
         list.remove(0);
         list.pop();
         run(&mut composer, &list, &runs, &seen);
-        assert_eq!(runs.get(), 1, "a removal that found nothing is not a change");
+        assert_eq!(
+            runs.get(),
+            1,
+            "a removal that found nothing is not a change"
+        );
     }
 
     #[test]
@@ -651,12 +670,18 @@ mod tests {
         let list = StateList::from_vec(vec![1, 2, 3]);
         let a = list.snapshot();
         let b = list.snapshot();
-        assert!(Arc::ptr_eq(&a.arc(), &b.arc()), "two reads share the same allocation");
+        assert!(
+            Arc::ptr_eq(&a.arc(), &b.arc()),
+            "two reads share the same allocation"
+        );
         assert_eq!(a.as_slice(), &[1, 2, 3]);
 
         list.push(4);
         let c = list.snapshot();
-        assert!(!Arc::ptr_eq(&a.arc(), &c.arc()), "a mutation publishes a new snapshot");
+        assert!(
+            !Arc::ptr_eq(&a.arc(), &c.arc()),
+            "a mutation publishes a new snapshot"
+        );
         assert_eq!(a.as_slice(), &[1, 2, 3], "the old snapshot is untouched");
     }
 
@@ -673,18 +698,38 @@ mod tests {
         let map: StateMap<String, i32> = StateMap::new();
         assert!(map.is_empty());
 
-        assert_eq!(map.insert("a".to_string(), 1), None, "a fresh insert has no previous value");
-        assert_eq!(map.insert("a".to_string(), 2), Some(1), "and a replace reports the old one");
+        assert_eq!(
+            map.insert("a".to_string(), 1),
+            None,
+            "a fresh insert has no previous value"
+        );
+        assert_eq!(
+            map.insert("a".to_string(), 2),
+            Some(1),
+            "and a replace reports the old one"
+        );
         assert_eq!(map.get(&"a".to_string()), Some(2));
 
         // `insert_if_absent` reports whether IT inserted; a present key leaves the value alone.
-        assert!(!map.insert_if_absent("a".to_string(), 9), "the key is present");
-        assert_eq!(map.get(&"a".to_string()), Some(2), "and the value is untouched");
-        assert!(map.insert_if_absent("b".to_string(), 3), "a new key inserts");
+        assert!(
+            !map.insert_if_absent("a".to_string(), 9),
+            "the key is present"
+        );
+        assert_eq!(
+            map.get(&"a".to_string()),
+            Some(2),
+            "and the value is untouched"
+        );
+        assert!(
+            map.insert_if_absent("b".to_string(), 3),
+            "a new key inserts"
+        );
 
         map.update(&"a".to_string(), |value| *value += 1);
         assert_eq!(map.get(&"a".to_string()), Some(3));
-        map.update(&"missing".to_string(), |_| unreachable!("an absent key is not edited"));
+        map.update(&"missing".to_string(), |_| {
+            unreachable!("an absent key is not edited")
+        });
 
         assert_eq!(map.len(), 2);
         assert_eq!(map.remove(&"a".to_string()), Some(3));
@@ -694,9 +739,9 @@ mod tests {
 
     #[test]
     fn a_map_mutation_reaches_a_reader() {
-        use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
         use crate::modifier::Modifier;
+        use crate::runtime::composer::GroupStatus;
 
         let map: StateMap<i32, i32> = StateMap::new();
         let map_in = map.clone();

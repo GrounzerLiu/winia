@@ -3,7 +3,7 @@
 //! winit's `set_clipboard` (measured against the OS clipboard separately — see
 //! `docs/selection-review.md` M-1).
 
-use super::{dispatch_key_to_focus, PerWindow};
+use super::{PerWindow, dispatch_key_to_focus};
 use crate::components::text_field::TextFieldValue;
 use crate::input::{KbEvent, KbEventType};
 use crate::layout::Constraints;
@@ -26,7 +26,10 @@ fn ctrl_c() -> KbEvent {
 fn focused_field(text: &str) -> (PerWindow, State<TextFieldValue>) {
     // A TextField's effects need an active tokio runtime, exactly as every other TextField test
     // notes; `run_app` provides one in the real app. Per test, so each keeps its own.
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let _guard = rt.enter();
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 200.0, ThemeColors::default_light());
     let value = State::new(TextFieldValue::new(text));
@@ -49,7 +52,10 @@ fn focused_field(text: &str) -> (PerWindow, State<TextFieldValue>) {
         crate::layout::node::collect_focusable_ids(nodes, root, &mut focusable);
         focusable.first().copied().expect("the field is focusable")
     };
-    assert!(pw.focus_by_node_id(first_focusable), "the field takes focus");
+    assert!(
+        pw.focus_by_node_id(first_focusable),
+        "the field takes focus"
+    );
     (pw, value)
 }
 
@@ -62,7 +68,11 @@ fn a_copy_in_a_text_field_asks_the_clipboard_for_the_selected_text() {
     dispatch_key_to_focus(&mut pw, &ctrl_c());
 
     let queued = crate::clipboard::take_pending();
-    assert_eq!(queued, vec!["hello".to_string()], "Ctrl+C queues exactly the selected text");
+    assert_eq!(
+        queued,
+        vec!["hello".to_string()],
+        "Ctrl+C queues exactly the selected text"
+    );
 }
 
 /// A copy with a collapsed caret queues nothing: an empty write would wipe what the user had.
@@ -73,7 +83,10 @@ fn a_copy_with_no_selection_queues_nothing() {
     value.update(|val| val.selection = 3..3);
     dispatch_key_to_focus(&mut pw, &ctrl_c());
 
-    assert!(crate::clipboard::take_pending().is_empty(), "a caret is not a selection");
+    assert!(
+        crate::clipboard::take_pending().is_empty(),
+        "a caret is not a selection"
+    );
 }
 
 /// Ctrl+X copies and clears: the clipboard gets the text and the field loses it.
@@ -95,11 +108,15 @@ fn a_cut_queues_the_text_and_removes_it() {
 #[test]
 fn a_container_copies_its_selection_on_ctrl_c() {
     crate::clipboard::take_pending();
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let _guard = rt.enter();
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
-    let reg_slot: std::sync::Arc<std::sync::Mutex<Option<crate::text::selection::SelectionRegistrar>>> =
-        Default::default();
+    let reg_slot: std::sync::Arc<
+        std::sync::Mutex<Option<crate::text::selection::SelectionRegistrar>>,
+    > = Default::default();
     let reg_in = reg_slot.clone();
     pw.content = Box::new(move |ctx| {
         let r = reg_in.clone();
@@ -107,7 +124,8 @@ fn a_container_copies_its_selection_on_ctrl_c() {
             crate::components::SelectionContainer::new()
                 .modifier(crate::modifier::Modifier::new().size(300.0, 160.0))
                 .build(ctx, move |ctx| {
-                    *r.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                    *r.lock().unwrap() =
+                        Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                     crate::layout::components::Column::new().build(ctx, |ctx| {
                         crate::components::Text::new("selectable words")
                             .modifier(crate::modifier::Modifier::new().width(300.0))
@@ -137,27 +155,40 @@ fn a_container_copies_its_selection_on_ctrl_c() {
     };
     assert!(pw.focus_by_node_id(focusable));
 
-    let reg = reg_slot.lock().unwrap().clone().expect("the container registered");
+    let reg = reg_slot
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the container registered");
     reg.set_selection(0, 8);
     dispatch_key_to_focus(&mut pw, &ctrl_c());
 
-    assert_eq!(crate::clipboard::take_pending(), vec!["selectab".to_string()], "the container copied its own selection");
+    assert_eq!(
+        crate::clipboard::take_pending(),
+        vec!["selectab".to_string()],
+        "the container copied its own selection"
+    );
 }
 
 /// With nothing selected the key is left alone, so another handler (or the platform) can take it.
 #[test]
 fn a_container_leaves_ctrl_c_alone_with_no_selection() {
     crate::clipboard::take_pending();
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let _guard = rt.enter();
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
     pw.content = Box::new(move |ctx| {
         crate::components::SelectionContainer::new()
             .modifier(crate::modifier::Modifier::new().size(300.0, 160.0))
             .build(ctx, |ctx| {
-                crate::components::Button::new().on_click(|| {}).build(ctx, |ctx| {
-                    crate::components::Text::new("focus me").build(ctx);
-                });
+                crate::components::Button::new()
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("focus me").build(ctx);
+                    });
             });
     });
     let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
@@ -172,6 +203,9 @@ fn a_container_leaves_ctrl_c_alone_with_no_selection() {
         ids.first().copied().expect("the button is focusable")
     };
     assert!(pw.focus_by_node_id(focusable));
-    assert!(!dispatch_key_to_focus(&mut pw, &ctrl_c()), "nothing consumed the key");
+    assert!(
+        !dispatch_key_to_focus(&mut pw, &ctrl_c()),
+        "nothing consumed the key"
+    );
     assert!(crate::clipboard::take_pending().is_empty());
 }

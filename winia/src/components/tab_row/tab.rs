@@ -58,7 +58,10 @@ impl Tab {
     }
 
     /// 注入外部交互源（缺省内部创建），用于外部观察 pressed/hover/focus 状态。
-    pub fn interaction_source(mut self, source: crate::input::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(
+        mut self,
+        source: crate::input::interaction::MutableInteractionSource,
+    ) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -72,7 +75,10 @@ impl Tab {
         self
     }
     /// 自定义 content（替代 text/icon 槽）
-    pub fn content(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    pub fn content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         self.content = Some(Box::new(content));
         self
     }
@@ -102,7 +108,10 @@ impl Tab {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let selected = self.selected;
         let enabled = self.enabled;
@@ -110,9 +119,9 @@ impl Tab {
         // 颜色：默认取 contentColor（LocalContentColor.current）
         let content_color = WiniaTheme::content_color();
         let sel_color = self.selected_content_color.unwrap_or(content_color);
-        let unsel_color = self.unselected_content_color.unwrap_or_else(|| {
-            TabRowDefaults::unselected_content_color(&theme)
-        });
+        let unsel_color = self
+            .unselected_content_color
+            .unwrap_or_else(|| TabRowDefaults::unselected_content_color(&theme));
 
         // The content colour, animated per Compose's `TabTransition` — see `tab_colour_spec` for the
         // reference and why the direction decides the spec. The remembered `was_selected` is what says
@@ -121,7 +130,8 @@ impl Tab {
         let arriving = selected && !was_selected.peek();
         was_selected.set(selected);
         let color_spec = crate::animation::AnimationSpec::Spring(tab_colour_spec(arriving));
-        let color_anim = ctx.animate_color_as_state(if selected { sel_color } else { unsel_color }, color_spec);
+        let color_anim =
+            ctx.animate_color_as_state(if selected { sel_color } else { unsel_color }, color_spec);
 
         let has_text = self.text.is_some();
         let has_icon = self.icon.is_some();
@@ -132,7 +142,9 @@ impl Tab {
         // 与 Compose interactionSource 参数语义一致），缺省内部创建
         let interaction = match self.interaction_source.clone() {
             Some(src) => src,
-            None => ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get(),
+            None => ctx
+                .remember(|| crate::input::interaction::MutableInteractionSource::new())
+                .get(),
         };
         let callback = self.on_click.clone();
 
@@ -152,14 +164,22 @@ impl Tab {
             crate::semantics::SemanticsConfig::new()
                 .role(crate::semantics::SemanticsRole::Tab)
                 .merge_descendants(true)
-                .state(crate::semantics::SemanticsState::new().selected(self.selected).enabled(enabled)),
+                .state(
+                    crate::semantics::SemanticsState::new()
+                        .selected(self.selected)
+                        .enabled(enabled),
+                ),
         );
         let item_modifier = item_modifier.then(self.modifier);
 
         // 自定义 content 版：直接包装点击+ripple（颜色动画由用户 content 自理）
         if has_content {
             let content = self.content.unwrap();
-            match ctx.start_restartable_group(key, item_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+            match ctx.start_restartable_group(
+                key,
+                item_modifier,
+                crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     content(ctx);
@@ -177,24 +197,32 @@ impl Tab {
         // 动态颜色 tint（渲染期 peek 零重组；layout_deps 由 TabLayoutPolicy.measure
         // 读 color_anim.get() 注册——动画帧重测 Tab 节点 → 重绘 → 新色生效）
         let tint_for_icon = color_anim.clone();
-        let icon_tint_modifier = Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
-            color_filter: Some(crate::graphics::ColorFilter::Tint {
-                color: tint_for_icon.peek(),
-                blend_mode: crate::graphics::BlendMode::SrcIn,
-            }),
-            ..crate::graphics::GraphicsLayerParams::default()
-        });
+        let icon_tint_modifier =
+            Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
+                color_filter: Some(crate::graphics::ColorFilter::Tint {
+                    color: tint_for_icon.peek(),
+                    blend_mode: crate::graphics::BlendMode::SrcIn,
+                }),
+                ..crate::graphics::GraphicsLayerParams::default()
+            });
         let tint_for_text = color_anim.clone();
-        let text_tint_modifier = Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
-            color_filter: Some(crate::graphics::ColorFilter::Tint {
-                color: tint_for_text.peek(),
-                blend_mode: crate::graphics::BlendMode::SrcIn,
-            }),
-            ..crate::graphics::GraphicsLayerParams::default()
-        });
+        let text_tint_modifier =
+            Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
+                color_filter: Some(crate::graphics::ColorFilter::Tint {
+                    color: tint_for_text.peek(),
+                    blend_mode: crate::graphics::BlendMode::SrcIn,
+                }),
+                ..crate::graphics::GraphicsLayerParams::default()
+            });
 
         // 默认 text/icon 版：TabLayoutPolicy
-        let policy = TabLayoutPolicy { has_text, has_icon, leading, direction, color_anim: color_anim.clone() };
+        let policy = TabLayoutPolicy {
+            has_text,
+            has_icon,
+            leading,
+            direction,
+            color_anim: color_anim.clone(),
+        };
 
         match ctx.start_restartable_group(key, item_modifier, policy) {
             GroupStatus::Skip => {}
@@ -202,7 +230,11 @@ impl Tab {
                 // 1) icon (if present)——Tint 染色后无需 with_content_color 再注入
                 if let Some(icon) = self.icon {
                     let icon_key = ctx.next_key();
-                    match ctx.start_restartable_group(icon_key, icon_tint_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+                    match ctx.start_restartable_group(
+                        icon_key,
+                        icon_tint_modifier,
+                        crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             icon(ctx);
@@ -220,7 +252,11 @@ impl Tab {
                     if !leading {
                         text_modifier = text_modifier.padding_horizontal(HORIZONTAL_TEXT_PADDING);
                     }
-                    match ctx.start_restartable_group(text_key, text_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+                    match ctx.start_restartable_group(
+                        text_key,
+                        text_modifier,
+                        crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             crate::components::text::ProvideTextStyle(style, ctx, text);
@@ -299,10 +335,17 @@ impl MeasurePolicy for TabLayoutPolicy {
         };
         let spec_height = if leading {
             SMALL_TAB_HEIGHT
-        } else if has_icon && has_text { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
+        } else if has_icon && has_text {
+            LARGE_TAB_HEIGHT
+        } else {
+            SMALL_TAB_HEIGHT
+        };
         let content_height: f32 = if leading {
             // leading 垂直取 max（水平排列不叠加高度）
-            content_sizes.iter().map(|s| s.height).fold(0.0f32, f32::max)
+            content_sizes
+                .iter()
+                .map(|s| s.height)
+                .fold(0.0f32, f32::max)
         } else {
             content_sizes.iter().map(|s| s.height).sum()
         };
@@ -362,7 +405,10 @@ impl MeasurePolicy for TabLayoutPolicy {
             });
             placements.push(Placement {
                 size: text_size,
-                position: Offset::new((tab_width - text_size.width) / 2.0, start_y + icon_size.height),
+                position: Offset::new(
+                    (tab_width - text_size.width) / 2.0,
+                    start_y + icon_size.height,
+                ),
             });
         } else if has_icon || has_text {
             // 单元素：水平 + 垂直居中
@@ -375,7 +421,10 @@ impl MeasurePolicy for TabLayoutPolicy {
             }
         } else {
             for &size in content_sizes.iter() {
-                placements.push(Placement { size, position: Offset::new(0.0, 0.0) });
+                placements.push(Placement {
+                    size,
+                    position: Offset::new(0.0, 0.0),
+                });
             }
         }
 
@@ -397,4 +446,3 @@ impl MeasurePolicy for TabLayoutPolicy {
         }
     }
 }
-

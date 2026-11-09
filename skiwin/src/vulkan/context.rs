@@ -105,15 +105,16 @@ impl VulkanRenderContext {
                 .build(),
                 None,
             )
-            .ok_or_else(|| {
-                SkiwinError::Vulkan("Skia could not create a Vulkan context".into())
-            })?;
+            .ok_or_else(|| SkiwinError::Vulkan("Skia could not create a Vulkan context".into()))?;
 
             Ok(Arc::new(Mutex::new(direct_context)))
         }
     }
 
-    fn shared_queue(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> SkiwinResult<Arc<Queue>> {
+    fn shared_queue(
+        event_loop: &dyn ActiveEventLoop,
+        window: Arc<Box<dyn Window>>,
+    ) -> SkiwinResult<Arc<Queue>> {
         let library = VulkanLibrary::new()
             .map_err(|e| SkiwinError::Vulkan(format!("no Vulkan loader or ICD: {e}")))?;
 
@@ -152,9 +153,7 @@ impl VulkanRenderContext {
             },
         )
         .map_err(|e| {
-            SkiwinError::Vulkan(format!(
-                "no instance supports {required_extensions:?}: {e}"
-            ))
+            SkiwinError::Vulkan(format!("no instance supports {required_extensions:?}: {e}"))
         })?;
 
         let device_extensions = DeviceExtensions {
@@ -188,7 +187,6 @@ impl VulkanRenderContext {
                 _ => 5,
             })
             .ok_or(SkiwinError::NoDevice)?;
-
 
         let (_, mut queues) = Device::new(
             physical_device,
@@ -230,4 +228,3 @@ impl Drop for VulkanRenderContext {
         self.skia_ctx = None;
     }
 }
-

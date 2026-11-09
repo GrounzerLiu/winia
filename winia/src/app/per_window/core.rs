@@ -8,7 +8,8 @@ pub(crate) struct PerWindow {
     /// composition reads the same controller through its composer.
     pub(crate) insets: crate::window::insets::WindowInsetsController,
     pub(crate) skia_window: Option<SkiaWindow>,
-    pub(crate) width: f32, pub(crate) height: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
     pub(crate) scale_factor: f64,
     pub(crate) focused_id: Option<u64>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
@@ -17,8 +18,10 @@ pub(crate) struct PerWindow {
     ///   dependents (suite scaffolds reading `window_size()`) dirty for recompose.
     /// - `window_size_backchannel`: per-frame sync without notify (replaces the
     ///   old silent write on the shared State — same value, Backchannel write).
-    pub(crate) window_size_state: std::cell::RefCell<Option<crate::runtime::state::State<(f32, f32)>>>,
-    pub(crate) window_size_backchannel: std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
+    pub(crate) window_size_state:
+        std::cell::RefCell<Option<crate::runtime::state::State<(f32, f32)>>>,
+    pub(crate) window_size_backchannel:
+        std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     /// Stable key this window saves its saveable state under (see `PendingWindow::saveable_key`).
@@ -38,7 +41,8 @@ pub(crate) struct PerWindow {
     pub(crate) cursor_icon: crate::input::PointerIcon,
     /// The current press interaction (the clickable's bound source plus the pressed node's slot;
     /// released on Up or when the pointer leaves the slop).
-    pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
+    pub(crate) pressed_interaction:
+        Option<(u64, crate::input::interaction::MutableInteractionSource)>,
     /// Slot of the node Focus was emitted for (the old node gets an Unfocus when focus changes).
     pub(crate) focused_interaction_slot: Option<u64>,
     /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
@@ -57,7 +61,6 @@ pub(crate) struct PerWindow {
     pub(crate) overlay: OverlayHost,
 }
 
-
 impl PerWindow {
     /// Refresh this window's system insets from Android.
     ///
@@ -74,20 +77,53 @@ impl PerWindow {
         }
     }
 
-    pub(crate) fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
+    pub(crate) fn new(
+        content: Box<dyn Fn(&mut ComposeCtx)>,
+        width: f32,
+        height: f32,
+        theme: crate::theme::ThemeColors,
+    ) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
         let theme = WindowThemeState::from_theme(theme);
         let insets = crate::window::insets::WindowInsetsController::new();
         let mut composer = Composer::new();
         composer.set_window_insets(insets.clone());
-        PerWindow { composer, insets, skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), cursor_icon: crate::input::PointerIcon::DEFAULT, pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow {
+            composer,
+            insets,
+            skia_window: None,
+            width,
+            height,
+            scale_factor: 1.0,
+            focused_id: None,
+            content,
+            window_size_state: std::cell::RefCell::new(None),
+            window_size_backchannel: std::cell::RefCell::new(None),
+            on_close: None,
+            created_id: None,
+            saveable_key: None,
+            theme,
+            focused_slot_key: None,
+            input: GestureState::default(),
+            wheel: WheelPager::default(),
+            overlay: OverlayHost::default(),
+            clock: FrameClock::default(),
+            modifiers: Default::default(),
+            hovered_slots: std::collections::HashSet::new(),
+            cursor_icon: crate::input::PointerIcon::DEFAULT,
+            pressed_interaction: None,
+            focused_interaction_slot: None,
+        }
     }
-    pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
+    pub(crate) fn created_id(&self) -> Option<u64> {
+        self.created_id
+    }
 
     /// Focus sync: when `focused_slot_key` changes, emit Unfocus for the old focused node and
     /// Focus for the new one (called after layout, once recomposition has refreshed the flags).
-    pub(crate) fn sync_focus_interaction(&mut self) {        let new_slot = self.focused_slot_key;
+    pub(crate) fn sync_focus_interaction(&mut self) {
+        let new_slot = self.focused_slot_key;
         if new_slot == self.focused_interaction_slot {
             return;
         }
@@ -149,7 +185,9 @@ impl PerWindow {
             if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == old_id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
-                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot) {
+                    if let Some(nid) =
+                        crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot)
+                    {
                         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
                             if let Some(src) = nodes[idx].modifier.focusable_interaction() {
                                 src.emit_unfocus();
@@ -163,7 +201,8 @@ impl PerWindow {
             if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
-                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+                    {
                         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
                             if let Some(src) = nodes[idx].modifier.focusable_interaction() {
                                 src.emit_focus();
@@ -190,7 +229,11 @@ impl PerWindow {
     /// the IME off while moving focus inside a dialog's text field.
     pub(crate) fn apply_ime_for_focus_in(&self, overlay: Option<usize>, fid: Option<u64>) {
         let root = match overlay {
-            Some(i) => self.overlay.layers.get(i).and_then(|ov| ov.composer.layout_root_idx()),
+            Some(i) => self
+                .overlay
+                .layers
+                .get(i)
+                .and_then(|ov| ov.composer.layout_root_idx()),
             None => self.composer.layout_root_idx(),
         };
         let wants_ime = match (root, fid) {
@@ -221,12 +264,22 @@ impl PerWindow {
             return;
         }
         self.clock.last_refresh_check = now;
-        let Some(ref sw) = self.skia_window else { return; };
-        let Some(interval) = current_frame_interval(sw) else { return; };
+        let Some(ref sw) = self.skia_window else {
+            return;
+        };
+        let Some(interval) = current_frame_interval(sw) else {
+            return;
+        };
         if interval != self.clock.frame_interval {
-            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.clock.frame_interval, interval);
+            debug_log!(
+                "[refresh] frame_interval {:?} -> {:?}",
+                self.clock.frame_interval,
+                interval
+            );
             self.clock.frame_interval = interval;
-            if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+            if let Some(ref sw) = self.skia_window {
+                sw.request_redraw();
+            }
         }
     }
 
@@ -240,20 +293,27 @@ impl PerWindow {
         match t.overlay_id {
             None => {
                 let nodes = self.composer.arena_nodes();
-                let Some(r) = self.composer.layout_root_idx() else { return; };
+                let Some(r) = self.composer.layout_root_idx() else {
+                    return;
+                };
                 fire_gesture_action(nodes, r, t.slot_key, action);
             }
             Some(id) => {
-                let Some(i) = self.overlay.layers.iter().position(|o| o.id == id) else { return; };
+                let Some(i) = self.overlay.layers.iter().position(|o| o.id == id) else {
+                    return;
+                };
                 let ov = &self.overlay.layers[i];
                 let nodes = ov.composer.arena_nodes();
-                let Some(r) = ov.composer.layout_root_idx() else { return; };
+                let Some(r) = ov.composer.layout_root_idx() else {
+                    return;
+                };
                 fire_gesture_action(nodes, r, t.slot_key, action);
             }
         }
-        if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+        if let Some(ref sw) = self.skia_window {
+            sw.request_redraw();
+        }
     }
-
 
     /// Escape: close the topmost overlay, or — with no overlay open — drop the page's focus.
     ///
@@ -333,11 +393,20 @@ impl PerWindow {
     /// setting only `focused_id`/the slot to None leaves the tree with a focus ring and a
     /// semantics "focused" node that the window does not know about.
     pub(crate) fn restore_focus_by_slot_key(&mut self) {
-        let Some(slot_key) = self.focused_slot_key else { return };
-        let Some(r) = self.composer.layout_root_idx() else { return };
+        let Some(slot_key) = self.focused_slot_key else {
+            return;
+        };
+        let Some(r) = self.composer.layout_root_idx() else {
+            return;
+        };
         let nodes = self.composer.arena_nodes_mut();
-        let restored = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot_key)
-            .map(|new_id| (new_id, crate::layout::node::focus_node_by_id(nodes, r, new_id)));
+        let restored =
+            crate::layout::node::find_node_id_by_slot_key(nodes, r, slot_key).map(|new_id| {
+                (
+                    new_id,
+                    crate::layout::node::focus_node_by_id(nodes, r, new_id),
+                )
+            });
         match restored {
             Some((new_id, true)) => {
                 self.focused_id = Some(new_id);
@@ -358,11 +427,20 @@ impl PerWindow {
                 match ov.composer.layout_root_idx() {
                     Some(r) => {
                         let nodes = ov.composer.arena_nodes_mut();
-                        if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
+                        if shift {
+                            focus_prev(nodes, r);
+                        } else {
+                            focus_next(nodes, r);
+                        }
                         let fid = crate::layout::node::get_focus_id(nodes, r);
                         let (slot, want) = fid
                             .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
-                            .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
+                            .map(|idx| {
+                                (
+                                    nodes[idx].slot_key,
+                                    node_or_descendant_wants_ime(nodes, idx),
+                                )
+                            })
                             .unwrap_or((0, false));
                         (fid, fid.map(|_| slot), want)
                     }
@@ -375,13 +453,24 @@ impl PerWindow {
                 set_ime_enabled(&sw, want_ime);
             }
         } else {
-            let (new_id, new_slot) = self.composer.layout_root_idx().map(|r| {
-                let nodes = self.composer.arena_nodes_mut();
-                if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
-                let id = crate::layout::node::get_focus_id(nodes, r);
-                let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
-                (id, slot)
-            }).unwrap_or((None, None));
+            let (new_id, new_slot) = self
+                .composer
+                .layout_root_idx()
+                .map(|r| {
+                    let nodes = self.composer.arena_nodes_mut();
+                    if shift {
+                        focus_prev(nodes, r);
+                    } else {
+                        focus_next(nodes, r);
+                    }
+                    let id = crate::layout::node::get_focus_id(nodes, r);
+                    let slot = id.and_then(|fid| {
+                        crate::layout::node::find_node_by_id(nodes, r, fid)
+                            .map(|idx| nodes[idx].slot_key)
+                    });
+                    (id, slot)
+                })
+                .unwrap_or((None, None));
             self.focused_id = new_id;
             self.focused_slot_key = new_slot;
             self.apply_ime_for_focus(new_id);
@@ -395,17 +484,21 @@ impl PerWindow {
     /// The keyboard-owning overlay is checked first (its arena owns focus while it is up), then the
     /// page - the same precedence `keyboard_scope` uses for keys.
     pub(crate) fn reveal_focused(&mut self) {
-                if let Some(i) = keyboard_scope(self) {
+        if let Some(i) = keyboard_scope(self) {
             let ov = &mut self.overlay.layers[i];
-            let (Some(root), Some(fid)) = (ov.composer.layout_root_idx(), ov.focused_id) else { return };
+            let (Some(root), Some(fid)) = (ov.composer.layout_root_idx(), ov.focused_id) else {
+                return;
+            };
             let nodes = ov.composer.arena_nodes_mut();
             if let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, fid) {
                 crate::layout::relocation::reveal_node(nodes, root, idx);
             }
             return;
         }
-        let (Some(root), Some(fid)) = (self.composer.layout_root_idx(), self.focused_id) else { return };
-            }
+        let (Some(root), Some(fid)) = (self.composer.layout_root_idx(), self.focused_id) else {
+            return;
+        };
+    }
 
     /// Focus one node id from UIA / any non-keyboard entry point: same bookkeeping as Tab (the
     /// single-focus invariant, `focused_id`/`focused_slot_key` and IME), and the target's arena is
@@ -499,10 +592,15 @@ impl PerWindow {
     pub(crate) fn focus_move_directional(&mut self, dir: FocusDir) -> bool {
         let overlay = keyboard_scope(self);
         let (current, root) = match overlay {
-            Some(i) => (self.overlay.layers[i].focused_id, self.overlay.layers[i].composer.layout_root_idx()),
+            Some(i) => (
+                self.overlay.layers[i].focused_id,
+                self.overlay.layers[i].composer.layout_root_idx(),
+            ),
             None => (self.focused_id, self.composer.layout_root_idx()),
         };
-        let (Some(fid), Some(r)) = (current, root) else { return false };
+        let (Some(fid), Some(r)) = (current, root) else {
+            return false;
+        };
 
         let target = {
             let nodes = match overlay {
@@ -515,7 +613,9 @@ impl PerWindow {
             };
             let mut best: Option<(f32, u64)> = None;
             for &(id, cx, cy) in &candidates {
-                if id == fid { continue; }
+                if id == fid {
+                    continue;
+                }
                 let (dx, dy) = (cx - cur_cx, cy - cur_cy);
                 let in_dir = match dir {
                     FocusDir::Right => dx > 0.0,
@@ -523,7 +623,9 @@ impl PerWindow {
                     FocusDir::Down => dy > 0.0,
                     FocusDir::Up => dy < 0.0,
                 };
-                if !in_dir { continue; }
+                if !in_dir {
+                    continue;
+                }
                 let (main, cross) = match dir {
                     FocusDir::Right | FocusDir::Left => (dx.abs(), dy.abs()),
                     FocusDir::Down | FocusDir::Up => (dy.abs(), dx.abs()),
@@ -615,7 +717,9 @@ impl PerWindow {
     /// moment the pointer stops, which is exactly the case that has to keep going, so this runs from
     /// the frame path and asks for the next frame itself.
     pub(crate) fn selection_autoscroll_tick(&mut self) {
-        let Some(auto) = self.input.selection_autoscroll else { return };
+        let Some(auto) = self.input.selection_autoscroll else {
+            return;
+        };
         if self.input.down.is_none() {
             self.input.selection_autoscroll = None;
             return;
@@ -648,8 +752,11 @@ impl PerWindow {
                 return;
             }
         };
-        let Some(root) = self.composer.layout_root_idx() else { return };
-        let density = crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
+        let Some(root) = self.composer.layout_root_idx() else {
+            return;
+        };
+        let density =
+            crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
         let consumed = crate::app::dispatch_nested_scroll_delta(
             self.composer.arena_nodes_mut(),
             root,
@@ -671,19 +778,31 @@ impl PerWindow {
         }
     }
 
-    pub(crate) fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+    pub(crate) fn recompose_layout_render(
+        &mut self,
+        window_id: WindowId,
+        after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface),
+    ) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // The frame clock is dispatched per window: `ComposeCtx::frame_clock()` uses it to bind
         // waiters to this window's frames.
         self.composer.set_window_id(window_id.into_raw() as u64);
         // Vsync study: render frame counter (renders per second — should be ~60 under Fifo).
         self.clock.frame_counter += 1;
-        debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        debug_log!(
+            "[fps] render#{} compose#{} pending={}",
+            self.clock.frame_counter,
+            self.composer.compose_count(),
+            self.composer.pending_state_count()
+        );
         // The user's "text size" setting (`Sp` scaling). winit only forwards `WM_SETTINGCHANGE` when
         // the THEME changed, so a text-size change never reaches the event loop: re-read it here,
         // throttled, and re-compose when it moved — `Sp` is resolved during composition.
         if crate::runtime::density::refresh_system_font_scale() {
-            debug_log!("[density] system text scale is now {}", crate::runtime::density::system_font_scale());
+            debug_log!(
+                "[density] system text scale is now {}",
+                crate::runtime::density::system_font_scale()
+            );
             self.composer.request_recomposition(0);
         }
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
@@ -703,154 +822,172 @@ impl PerWindow {
         // Provide this window's Density (from `scale_factor`) for the whole compose + layout + draw
         // path, so `Dimension::Px` / `TextUnit::Px` use the window's sf during layout/rendering
         // rather than `standard(1.0)`.
-        let density = crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
+        let density =
+            crate::runtime::density::density_with_system_font_scale(self.scale_factor as f32);
         crate::runtime::density::with_density(density, || {
-        // Update the current Composer's adaptive context; the thread-local singleton is no longer
-        // overwritten.
-        self.composer.set_adaptive_window_size(self.width, self.height);
-        // Compose in a loop until no new pending state is left — this handles a concurrent task
-        // finishing during composition (the second notification's state is queued only after the
-        // first compose).
-        // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
-        // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
-        // same call as the compose. Doing it from the render handler instead consumed the change on a
-        // frame whose compose had already happened, and the tree kept the old colors.
-        self.refresh_theme();
-        // Start the frame with no stale request: a request raised on a frame whose convergence hit its
-        // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
-        // compose the frame did not need.
-        let _ = crate::runtime::composer::take_compose_after_layout();
-        // Compose in a loop until no new pending state is left.
-        let mut any_composed = self.recompose_until_stable();
-        self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
-        // A layout pass can find that this frame's composition cannot fill the space it was measured in:
-        // `LazyColumn` composes its window in `build` from the viewport the PREVIOUS measure wrote, so on
-        // the frame the viewport grows the window is short and the new bottom is empty until the next
-        // frame. Only a compose can add the items, so the policy that noticed asks for one — measured on
-        // a viewport growing 400 -> 2500: the resize frame's bottom was empty, and covered once this loop
-        // consumes the request (`docs/lazy-column.md`).
-        //
-        // The trigger is the REQUEST, not "composition is pending": a measure also writes back derived
-        // values (the anchor), which are pending on nearly every scrolling frame, and converging on those
-        // doubled the frame's compose+layout while scrolling (measured: 2 passes on 4 of 5 scroll
-        // frames). The cap keeps a policy that asks on every pass from spinning the frame.
-        let mut frame_passes: u8 = 1;
-        for _ in 0..8 {
-            if !crate::runtime::composer::take_compose_after_layout() {
-                break;
-            }
-            any_composed |= self.recompose_until_stable();
-            self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
-            frame_passes += 1;
-        }
-        // Publish how many compose+layout rounds THIS frame took: the difference between one frame that
-        // caught up with its own measurement (2) and the frame-by-frame lag it replaced (two frames of 1
-        // each) is invisible in the tree, and it is exactly the property the convergence exists for.
-        crate::debug::update_frame_passes(window_id.into_raw() as u64, frame_passes);
-        // Shared-element flights (Phase 2): fill ends, start flights, rewrite
-        // per-frame visual snapshots, reap completed flights. Render reads
-        // plain f32 snapshots — never subscribes (zero-recomposition rule).
-        self.composer.poll_shared_flights();
-        // Focus interaction sync (emit Focus/Unfocus — the focus flags were refreshed by
-        // recomposition).
-        self.sync_focus_interaction();
-
-        // Top-level popups: sync (keep State by matching id) + compose + layout + position.
-        // ⚠ The `recomposed` flag matters: on a frame where recompose was skipped (no pending
-        // State change) the retain must not run — an empty `take_overlays` would delete overlays
-        // that are still open (`dialog_open` unchanged), so the overlay disappears while the state
-        // stays set and the next toggle click misfires ("needs two clicks to open").
-        sync_overlays(self, any_composed);
-        layout_overlays(self);
-        // A modal overlay owns the keyboard from the frame it appears on and until it closes. The
-        // arenas have to exist first, which is why this runs after `layout_overlays`.
-        claim_keyboard_for_overlay(self);
-        // Overlay focus interaction sync (needs overlay layout for slot resolve).
-        self.sync_overlay_focus_interaction();
-        self.dispatch_focus_changed();
-        // Cross-composer Tier1 flights (Phase 4): match stashed sources with
-        // overlay counterparts, drive active Tier1, free unmatched stashes.
-        // Main composer first by convention (Tier1 flights live in its map).
-        {
-            let mut all: Vec<&mut crate::runtime::composer::Composer> = Vec::with_capacity(1 + self.overlay.layers.len());
-            all.push(&mut self.composer);
-            for ov in self.overlay.layers.iter_mut() {
-                all.push(&mut ov.composer);
-            }
-            crate::runtime::composer::Composer::poll_cross_flights(&mut all);
-        }
-        // A flight that attached its layout override for the FIRST time this frame left the
-        // entering end's parent stale WITHIN the frame: the override can only be attached by
-        // the polls above — resolving a flight needs the target's measured rect — so the
-        // layout that ran before them reported the target's NATURAL size to the parent, and
-        // the rows below a starting hero dipped and snapped back on the next frame (seen in
-        // `shared_transition_image_demo`). One extra pass per composer, taken once, makes the
-        // frame coherent; this is winia's stand-in for Compose's lookahead pass, and it costs
-        // a second measurement only on flight-start frames (everything else folds).
-        if self.composer.take_layout_override_fresh() {
-            self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
-        }
-        for ov in self.overlay.layers.iter_mut() {
-            if ov.composer.take_layout_override_fresh() {
-                ov.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
-            }
-        }
-
-        let bg = self.theme.applied.colors.background;
-
-        if let Some(root_idx) = self.composer.layout_root_idx() {
-            let nodes = self.composer.arena_nodes();
-            if let Some(ref mut sw) = self.skia_window {
-                let sf = self.scale_factor as f32;
-                let debug_window_id = window_id.into_raw() as u64;
-                if crate::debug::screenshot_requested(debug_window_id) {
-                    request_capture();
+            // Update the current Composer's adaptive context; the thread-local singleton is no longer
+            // overwritten.
+            self.composer
+                .set_adaptive_window_size(self.width, self.height);
+            // Compose in a loop until no new pending state is left — this handles a concurrent task
+            // finishing during composition (the second notification's state is queued only after the
+            // first compose).
+            // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
+            // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
+            // same call as the compose. Doing it from the render handler instead consumed the change on a
+            // frame whose compose had already happened, and the tree kept the old colors.
+            self.refresh_theme();
+            // Start the frame with no stale request: a request raised on a frame whose convergence hit its
+            // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
+            // compose the frame did not need.
+            let _ = crate::runtime::composer::take_compose_after_layout();
+            // Compose in a loop until no new pending state is left.
+            let mut any_composed = self.recompose_until_stable();
+            self.composer
+                .layout(Constraints::new(0.0, self.width, 0.0, self.height));
+            // A layout pass can find that this frame's composition cannot fill the space it was measured in:
+            // `LazyColumn` composes its window in `build` from the viewport the PREVIOUS measure wrote, so on
+            // the frame the viewport grows the window is short and the new bottom is empty until the next
+            // frame. Only a compose can add the items, so the policy that noticed asks for one — measured on
+            // a viewport growing 400 -> 2500: the resize frame's bottom was empty, and covered once this loop
+            // consumes the request (`docs/lazy-column.md`).
+            //
+            // The trigger is the REQUEST, not "composition is pending": a measure also writes back derived
+            // values (the anchor), which are pending on nearly every scrolling frame, and converging on those
+            // doubled the frame's compose+layout while scrolling (measured: 2 passes on 4 of 5 scroll
+            // frames). The cap keeps a policy that asks on every pass from spinning the frame.
+            let mut frame_passes: u8 = 1;
+            for _ in 0..8 {
+                if !crate::runtime::composer::take_compose_after_layout() {
+                    break;
                 }
-                sw.draw(|surface| {
-                    // Draw order: main tree → overlays → main transition layer.
-                    // Overlays always sit above the tree (an open dialog must
-                    // not be covered by the base screen, in either mode), and
-                    // while a cross-composer flight runs the main layer lands
-                    // above both so the ghost flies over modal scrims
-                    // (Compose zIndexInOverlay).
-                    // NOTE: `render_overlays` expects the DEVICE context — it
-                    // applies `scale` itself — so it must not run inside the
-                    // tree's `canvas.scale(sf)`, or a HiDPI window would draw
-                    // every overlay at sf² and at an sf²-offset origin.
-                    let cross_active = self.composer.has_cross_flights();
-                    let canvas = surface.canvas();
-                    canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
-                    canvas.save();
-                    canvas.scale((sf, sf));
-                    render::render_with_menu(nodes, root_idx, canvas, self.input.selection_menu.as_ref(), (self.width, self.height));
-                    if !cross_active {
-                        // Shared-element transition layer: detached sources AND
-                        // elevated (render_in_overlay) endpoints, drawn rootless
-                        // at their absolute positions, so they escape every
-                        // ancestor clip / layer transform the tree walk is
-                        // still under.
-                        self.composer.render_layer(canvas);
+                any_composed |= self.recompose_until_stable();
+                self.composer
+                    .layout(Constraints::new(0.0, self.width, 0.0, self.height));
+                frame_passes += 1;
+            }
+            // Publish how many compose+layout rounds THIS frame took: the difference between one frame that
+            // caught up with its own measurement (2) and the frame-by-frame lag it replaced (two frames of 1
+            // each) is invisible in the tree, and it is exactly the property the convergence exists for.
+            crate::debug::update_frame_passes(window_id.into_raw() as u64, frame_passes);
+            // Shared-element flights (Phase 2): fill ends, start flights, rewrite
+            // per-frame visual snapshots, reap completed flights. Render reads
+            // plain f32 snapshots — never subscribes (zero-recomposition rule).
+            self.composer.poll_shared_flights();
+            // Focus interaction sync (emit Focus/Unfocus — the focus flags were refreshed by
+            // recomposition).
+            self.sync_focus_interaction();
+
+            // Top-level popups: sync (keep State by matching id) + compose + layout + position.
+            // ⚠ The `recomposed` flag matters: on a frame where recompose was skipped (no pending
+            // State change) the retain must not run — an empty `take_overlays` would delete overlays
+            // that are still open (`dialog_open` unchanged), so the overlay disappears while the state
+            // stays set and the next toggle click misfires ("needs two clicks to open").
+            sync_overlays(self, any_composed);
+            layout_overlays(self);
+            // A modal overlay owns the keyboard from the frame it appears on and until it closes. The
+            // arenas have to exist first, which is why this runs after `layout_overlays`.
+            claim_keyboard_for_overlay(self);
+            // Overlay focus interaction sync (needs overlay layout for slot resolve).
+            self.sync_overlay_focus_interaction();
+            self.dispatch_focus_changed();
+            // Cross-composer Tier1 flights (Phase 4): match stashed sources with
+            // overlay counterparts, drive active Tier1, free unmatched stashes.
+            // Main composer first by convention (Tier1 flights live in its map).
+            {
+                let mut all: Vec<&mut crate::runtime::composer::Composer> =
+                    Vec::with_capacity(1 + self.overlay.layers.len());
+                all.push(&mut self.composer);
+                for ov in self.overlay.layers.iter_mut() {
+                    all.push(&mut ov.composer);
+                }
+                crate::runtime::composer::Composer::poll_cross_flights(&mut all);
+            }
+            // A flight that attached its layout override for the FIRST time this frame left the
+            // entering end's parent stale WITHIN the frame: the override can only be attached by
+            // the polls above — resolving a flight needs the target's measured rect — so the
+            // layout that ran before them reported the target's NATURAL size to the parent, and
+            // the rows below a starting hero dipped and snapped back on the next frame (seen in
+            // `shared_transition_image_demo`). One extra pass per composer, taken once, makes the
+            // frame coherent; this is winia's stand-in for Compose's lookahead pass, and it costs
+            // a second measurement only on flight-start frames (everything else folds).
+            if self.composer.take_layout_override_fresh() {
+                self.composer
+                    .layout(Constraints::new(0.0, self.width, 0.0, self.height));
+            }
+            for ov in self.overlay.layers.iter_mut() {
+                if ov.composer.take_layout_override_fresh() {
+                    ov.composer
+                        .layout(Constraints::new(0.0, self.width, 0.0, self.height));
+                }
+            }
+
+            let bg = self.theme.applied.colors.background;
+
+            if let Some(root_idx) = self.composer.layout_root_idx() {
+                let nodes = self.composer.arena_nodes();
+                if let Some(ref mut sw) = self.skia_window {
+                    let sf = self.scale_factor as f32;
+                    let debug_window_id = window_id.into_raw() as u64;
+                    if crate::debug::screenshot_requested(debug_window_id) {
+                        request_capture();
                     }
-                    canvas.restore();
-                    render_overlays(&self.overlay.layers, canvas, sf, (self.width, self.height));
-                    if cross_active {
+                    sw.draw(|surface| {
+                        // Draw order: main tree → overlays → main transition layer.
+                        // Overlays always sit above the tree (an open dialog must
+                        // not be covered by the base screen, in either mode), and
+                        // while a cross-composer flight runs the main layer lands
+                        // above both so the ghost flies over modal scrims
+                        // (Compose zIndexInOverlay).
+                        // NOTE: `render_overlays` expects the DEVICE context — it
+                        // applies `scale` itself — so it must not run inside the
+                        // tree's `canvas.scale(sf)`, or a HiDPI window would draw
+                        // every overlay at sf² and at an sf²-offset origin.
+                        let cross_active = self.composer.has_cross_flights();
+                        let canvas = surface.canvas();
+                        canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                         canvas.save();
                         canvas.scale((sf, sf));
-                        self.composer.render_layer(canvas);
+                        render::render_with_menu(
+                            nodes,
+                            root_idx,
+                            canvas,
+                            self.input.selection_menu.as_ref(),
+                            (self.width, self.height),
+                        );
+                        if !cross_active {
+                            // Shared-element transition layer: detached sources AND
+                            // elevated (render_in_overlay) endpoints, drawn rootless
+                            // at their absolute positions, so they escape every
+                            // ancestor clip / layer transform the tree walk is
+                            // still under.
+                            self.composer.render_layer(canvas);
+                        }
                         canvas.restore();
+                        render_overlays(
+                            &self.overlay.layers,
+                            canvas,
+                            sf,
+                            (self.width, self.height),
+                        );
+                        if cross_active {
+                            canvas.save();
+                            canvas.scale((sf, sf));
+                            self.composer.render_layer(canvas);
+                            canvas.restore();
+                        }
+                        after_draw(nodes, root_idx, surface);
+                    });
+                    // The screenshot read-back happens after the flush (inside skiwin's draw), which
+                    // guarantees a genuinely presented frame.
+                    if crate::debug::screenshot_requested(debug_window_id) {
+                        if let Some((w2, h2, pixels)) = take_capture() {
+                            crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);
+                        }
+                        crate::debug::screenshot_done(debug_window_id);
                     }
-                    after_draw(nodes, root_idx, surface);
-                });
-                // The screenshot read-back happens after the flush (inside skiwin's draw), which
-                // guarantees a genuinely presented frame.
-                if crate::debug::screenshot_requested(debug_window_id) {
-                    if let Some((w2, h2, pixels)) = take_capture() {
-                        crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);
-                    }
-                    crate::debug::screenshot_done(debug_window_id);
                 }
             }
-        }
         });
 
         // The context menu animates in and out: keep frames coming while it does, and drop it once
@@ -863,11 +1000,13 @@ impl PerWindow {
             if finished {
                 self.input.selection_menu = None;
             } else if animating {
-                if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+                if let Some(ref sw) = self.skia_window {
+                    sw.request_redraw();
+                }
             }
-        }    }
+        }
+    }
 }
-
 
 impl PerWindow {
     pub(crate) fn refresh_theme(&mut self) -> bool {
@@ -886,4 +1025,3 @@ impl PerWindow {
         true
     }
 }
-

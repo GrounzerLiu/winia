@@ -65,7 +65,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
     }
 
     pub fn from_animating(state: crate::runtime::state::Animating<T>) -> Self {
-        Self { state, anim_state: None, on_finish: None, on_boundary: None, clamp: None }
+        Self {
+            state,
+            anim_state: None,
+            on_finish: None,
+            on_boundary: None,
+            clamp: None,
+        }
     }
 
     /// Fling boundary clamp (Decay only): a value the clamp changes is written at the bound and the
@@ -108,7 +114,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 velocity
             }
             None => RetargetVelocity::scalar(
-                self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0),
+                self.anim_state
+                    .as_ref()
+                    .map(|s| s.last_velocity)
+                    .unwrap_or(0.0),
             ),
         }
     }
@@ -125,7 +134,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
 
     /// Internal start entry taking an explicit initial velocity: `push_animatable` inherits it from the
     /// animation it replaces on a retarget, and `animate_to` from its own `anim_state`.
-    pub(super) fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: RetargetVelocity) {
+    pub(super) fn start_with_velocity(
+        &mut self,
+        to: T,
+        spec: AnimationSpec,
+        start_velocity: RetargetVelocity,
+    ) {
         // Review fix: only Spring/Decay have physical velocity semantics — Tween/Keyframes/
         // Repeatable/Snap restart from rest when interrupted. Otherwise a "Spring -> Tween ->
         // Spring" chain would inherit the stale velocity from the Tween phase on its second
@@ -246,7 +260,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         let decay_lanes = if v_len == from_len && v_len > 1 {
             Some(
                 (0..v_len)
-                    .map(|i| DecayLane { from: components[i], velocity: velocities[i] })
+                    .map(|i| DecayLane {
+                        from: components[i],
+                        velocity: velocities[i],
+                    })
                     .collect(),
             )
         } else {
@@ -274,7 +291,9 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
 
     /// Advance the animation by one frame; returns whether it is still running.
     pub fn update(&mut self) -> bool {
-        let Some(ref mut state) = self.anim_state else { return false; };
+        let Some(ref mut state) = self.anim_state else {
+            return false;
+        };
         let now = now();
         // Extreme-parameter guard: a Spring/Decay that has not settled after 5s is forced to finish.
         // A Spring has a done threshold, but asymptotic convergence may never reach it (stiffness=0); with
@@ -386,8 +405,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                         let mut last_velocity = 0.0f32;
                         for (i, lane) in lanes.iter_mut().enumerate() {
                             lane.displacement = compute_spring_displacement(
-                                spec.stiffness, spec.damping_ratio, spec.mass,
-                                lane.displacement, &mut lane.velocity, dt, spec.threshold,
+                                spec.stiffness,
+                                spec.damping_ratio,
+                                spec.mass,
+                                lane.displacement,
+                                &mut lane.velocity,
+                                dt,
+                                spec.threshold,
                             );
                             if spring_at_rest(lane.displacement, lane.velocity, spec.threshold) {
                                 // As on the scalar path: on done write the exact target, not the
@@ -414,8 +438,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 } else {
                     let to_f32 = AnimatableValue::to_f32(&state.to);
                     let displacement = compute_spring_displacement(
-                        spec.stiffness, spec.damping_ratio, spec.mass,
-                        state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
+                        spec.stiffness,
+                        spec.damping_ratio,
+                        spec.mass,
+                        state.current_displacement,
+                        &mut state.last_velocity,
+                        dt,
+                        spec.threshold,
                     );
                     state.current_displacement = displacement;
                     // Use the physical value directly, with no lerp/clamp (truncating the overshoot
@@ -442,23 +471,23 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 if elapsed < spec.delay {
                     (state.from.clone(), false)
                 } else {
-                let elapsed = elapsed - spec.delay;
-                // duration=0 -> complete immediately (a zero duration is a jump); >0 follows the
-                // normal timeline.
-                let t = if spec.duration.is_zero() {
-                    1.0
-                } else {
-                    (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
-                };
-                let eased = spec.interpolator.interpolate(t);
-                if t >= 1.0 {
-                    // Time is up: write the exact target. An overshooting interpolator (Elastic/Back) can
-                    // push `eased` past 1.0 early, and judging by `eased` would end the animation at the
-                    // overshoot value (parking outside the range).
-                    (state.to.clone(), true)
-                } else {
-                    (state.from.lerp(&state.to, eased), false)
-                }
+                    let elapsed = elapsed - spec.delay;
+                    // duration=0 -> complete immediately (a zero duration is a jump); >0 follows the
+                    // normal timeline.
+                    let t = if spec.duration.is_zero() {
+                        1.0
+                    } else {
+                        (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
+                    };
+                    let eased = spec.interpolator.interpolate(t);
+                    if t >= 1.0 {
+                        // Time is up: write the exact target. An overshooting interpolator (Elastic/Back) can
+                        // push `eased` past 1.0 early, and judging by `eased` would end the animation at the
+                        // overshoot value (parking outside the range).
+                        (state.to.clone(), true)
+                    } else {
+                        (state.from.lerp(&state.to, eased), false)
+                    }
                 }
             }
             AnimationSpec::Keyframes(spec) => {
@@ -514,7 +543,11 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     let end_val = match spec.mode {
                         RepeatMode::Restart => state.to.clone(),
                         RepeatMode::Reverse => {
-                            if spec.iterations % 2 == 0 { state.from.clone() } else { state.to.clone() }
+                            if spec.iterations % 2 == 0 {
+                                state.from.clone()
+                            } else {
+                                state.to.clone()
+                            }
                         }
                     };
                     (end_val, true)
@@ -525,7 +558,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     let cycle_idx = (played.as_secs_f64() / d).floor() as u32;
                     let factor = match spec.mode {
                         RepeatMode::Restart => t,
-                        RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
+                        RepeatMode::Reverse => {
+                            if cycle_idx % 2 == 0 {
+                                t
+                            } else {
+                                1.0 - t
+                            }
+                        }
                     };
                     // Evaluate the base curve (a reversed factor plays a Keyframes curve backwards).
                     (base.value_at(&state.from, &state.to, factor), false)
@@ -572,19 +611,19 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     state.last_velocity = last_velocity; // for an interruption (velocity continuity, P2-9)
                     (T::from_components(&components[..len]), all_done)
                 } else {
-                let v0 = state.initial_velocity;
-                let decay = (-friction * t).exp();
-                let vel_now = v0 * decay;
-                state.last_velocity = vel_now; // for an interruption (velocity continuity, P2-9)
-                // Analytic limit (parks exactly once the velocity falls below the threshold).
-                let raw = if vel_now.abs() < spec.threshold {
-                    state.from.to_f32() + v0 / friction
-                } else {
-                    state.from.to_f32() + v0 / friction * (1.0 - decay)
-                };
-                let done = vel_now.abs() < spec.threshold;
-                // The boundary clamp is applied once, at the write point below, for every spec.
-                (AnimatableValue::from_f32(raw), done)
+                    let v0 = state.initial_velocity;
+                    let decay = (-friction * t).exp();
+                    let vel_now = v0 * decay;
+                    state.last_velocity = vel_now; // for an interruption (velocity continuity, P2-9)
+                    // Analytic limit (parks exactly once the velocity falls below the threshold).
+                    let raw = if vel_now.abs() < spec.threshold {
+                        state.from.to_f32() + v0 / friction
+                    } else {
+                        state.from.to_f32() + v0 / friction * (1.0 - decay)
+                    };
+                    let done = vel_now.abs() < spec.threshold;
+                    // The boundary clamp is applied once, at the write point below, for every spec.
+                    (AnimatableValue::from_f32(raw), done)
                 }
             }
         };
@@ -634,18 +673,28 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         }
         !done
     }
-
 }
 
 /// Keyframe interpolation: locate the segment for progress `t` in `frames` and interpolate inside it
 /// with that segment's interpolator.
-pub(super) fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)], t: f32) -> f32 {
-    if frames.is_empty() { return 0.0; }
-    if t <= 0.0 { return frames[0].1; }
+pub(super) fn interpolate_keyframes(
+    frames: &[(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)],
+    t: f32,
+) -> f32 {
+    if frames.is_empty() {
+        return 0.0;
+    }
+    if t <= 0.0 {
+        return frames[0].1;
+    }
     let last = frames.last().unwrap();
-    if t >= last.0 { return last.1; }
+    if t >= last.0 {
+        return last.1;
+    }
     // Below the first frame's progress take its value (the first frame's progress may be > 0).
-    if t < frames[0].0 { return frames[0].1; }
+    if t < frames[0].0 {
+        return frames[0].1;
+    }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];
         let (p1, v1, interp) = frames[i + 1].clone();
@@ -711,7 +760,11 @@ pub(super) fn estimate_duration_seconds(
     if initial_position == 0.0 && initial_velocity == 0.0 {
         return 0.0;
     }
-    let v0 = if initial_position < 0.0 { -initial_velocity } else { initial_velocity };
+    let v0 = if initial_position < 0.0 {
+        -initial_velocity
+    } else {
+        initial_velocity
+    };
     let p0 = initial_position.abs();
     if damping_ratio > 1.0 {
         estimate_over_damped(first_root_real, second_root_real, p0, v0, delta)
@@ -830,7 +883,12 @@ pub(super) fn newton_step(x: f64, f: impl Fn(f64) -> f64, f_prime: impl Fn(f64) 
 /// odd ones (`if (iteration % 2 != 0) durationNanos - iterationTime`) and evaluates the base there. Mirroring
 /// the time rather than the value is what makes the return leg the same curve running backwards; interpolating
 /// the return leg linearly — what winia did — is a different motion for any eased base.
-pub(super) fn loop_factor(base: Option<&DurationSpec>, mode: RepeatMode, cycle: u32, phase: f32) -> f32 {
+pub(super) fn loop_factor(
+    base: Option<&DurationSpec>,
+    mode: RepeatMode,
+    cycle: u32,
+    phase: f32,
+) -> f32 {
     let forward = match mode {
         RepeatMode::Restart => phase,
         RepeatMode::Reverse => {

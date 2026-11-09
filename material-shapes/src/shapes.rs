@@ -1,7 +1,7 @@
 use crate::corner_rounding::CornerRounding;
 use crate::point::Point;
 use crate::rounded_polygon::RoundedPolygon;
-use crate::utils::{interpolate, radial_to_cartesian, require, FLOAT_PI, TWO_PI};
+use crate::utils::{FLOAT_PI, TWO_PI, interpolate, radial_to_cartesian, require};
 
 pub struct CircleBuilder {
     num_vertices: Option<usize>,

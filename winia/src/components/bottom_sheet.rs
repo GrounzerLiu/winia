@@ -31,16 +31,16 @@
 //! - `sheetMaxWidth` 已对齐（默认 `640.dp`，`Dp::from(f32::INFINITY)` 表铺满，居中）
 //! - 拖拽 velocity 用内部估算（winia 拖拽事件无原生 velocity）
 
-use std::sync::Arc;
+use crate::components::sheet_state::{SheetState, SheetValue};
 use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::layout::node::ContentAlignment;
+use crate::modifier::Modifier;
+use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition, next_overlay_id};
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
-use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
-use crate::components::sheet_state::{SheetState, SheetValue};
-use crate::layout::node::ContentAlignment;
 use crate::unit::Dp;
+use std::sync::Arc;
 
 /// 默认 sheet 顶部圆角（M3 `BottomSheetDefaults.ExpandedShape` 28dp）
 pub const SHEET_TOP_CORNER_RADIUS: f32 = 28.0;
@@ -226,8 +226,12 @@ impl ModalBottomSheet {
                 });
                 f
             }),
-            enter_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
-            exit_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
+            enter_anim: Some(OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(200),
+            )),
+            exit_anim: Some(OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(200),
+            )),
             content: Box::new(move |ctx| {
                 let theme = crate::theme::WiniaTheme::colors();
                 // 对齐 Compose BottomSheetDefaults.ContainerColor = surfaceContainerLow
@@ -267,7 +271,8 @@ impl ModalBottomSheet {
                 // when the sheet crosses an anchor — the offset alone would never recompose anything here
                 // (the sheet expands by ANIMATING the offset), which is how the corners used to arrive
                 // square only after some unrelated compose re-ran this closure.
-                let clipped_full = sheet_h.get() >= full_h - 1.0 && st.current_value() == SheetValue::Expanded;
+                let clipped_full =
+                    sheet_h.get() >= full_h - 1.0 && st.current_value() == SheetValue::Expanded;
                 let cur_shape = Shape::TopRoundedRect {
                     radius: if clipped_full { 0.0 } else { radius },
                 };
@@ -300,7 +305,11 @@ impl ModalBottomSheet {
                 } else {
                     false
                 };
-                if shown.get() && settled_hidden && (slid_out || !sheet_state.is_animation_running()) && !fired.get() {
+                if shown.get()
+                    && settled_hidden
+                    && (slid_out || !sheet_state.is_animation_running())
+                    && !fired.get()
+                {
                     fired.set(true);
                     if let Some(cb) = &dismiss_cb {
                         (cb)();
@@ -329,11 +338,9 @@ impl ModalBottomSheet {
                         if dismiss_cb.is_some() {
                             let st_hide = st.clone();
                             crate::layout::components::Stack::new()
-                                .modifier(Modifier::new()
-                                    .fill_max_size()
-                                    .clickable(move || {
-                                        st_hide.hide();
-                                    }))
+                                .modifier(Modifier::new().fill_max_size().clickable(move || {
+                                    st_hide.hide();
+                                }))
                                 .build(ctx, |_| {});
                         }
                         // 面板（布局在顶部，offset 推下——用布局 offset 而非
@@ -349,12 +356,7 @@ impl ModalBottomSheet {
                             // `ContentAlignment::TOP_CENTER` above, which is direction-independent, whereas the
                             // inset this used to add was applied on top of a mirrored `Start`.
                             .absolute_offset(0.0, st.offset_state())
-                            .shadow(
-                                1.0,
-                                cur_shape,
-                                false,
-                                Color::from_argb(40, 0, 0, 0),
-                            )
+                            .shadow(1.0, cur_shape, false, Color::from_argb(40, 0, 0, 0))
                             // The panel's own surface is PAINTED by a draw node rather than composed into the
                             // modifier chain, because the radius cannot be composed here at all: this
                             // closure's reads of the sheet's state register NOTHING (they happen outside any
@@ -397,7 +399,8 @@ impl ModalBottomSheet {
                                 fn consume(
                                     st: &crate::components::sheet_state::SheetState,
                                     delta_y: f32,
-                                ) -> crate::nested_scroll::ScrollDelta {
+                                ) -> crate::nested_scroll::ScrollDelta
+                                {
                                     if delta_y == 0.0 {
                                         return crate::nested_scroll::ScrollDelta::ZERO;
                                     }
@@ -412,7 +415,8 @@ impl ModalBottomSheet {
                                     &self,
                                     available: crate::nested_scroll::ScrollDelta,
                                     source: crate::nested_scroll::NestedScrollSource,
-                                ) -> crate::nested_scroll::ScrollDelta {
+                                ) -> crate::nested_scroll::ScrollDelta
+                                {
                                     // 对齐 Compose M3：向上拖(available.y<0)先展开 sheet
                                     // （expands-first），列表只在 sheet 已到 Expanded 后滚动。
                                     // Compose's connection answers USER INPUT (`SheetDefaults.kt:454-470`),
@@ -430,7 +434,8 @@ impl ModalBottomSheet {
                                     _consumed: crate::nested_scroll::ScrollDelta,
                                     available: crate::nested_scroll::ScrollDelta,
                                     source: crate::nested_scroll::NestedScrollSource,
-                                ) -> crate::nested_scroll::ScrollDelta {
+                                ) -> crate::nested_scroll::ScrollDelta
+                                {
                                     // 向下拖/列表到顶后的剩余增量（折叠/关闭方向）。
                                     // 用 consumed 度量——avoid over-consumption
                                     if !source.is_user_input() {
@@ -442,7 +447,8 @@ impl ModalBottomSheet {
                                     &self,
                                     _consumed: crate::nested_scroll::ScrollVelocity,
                                     available: crate::nested_scroll::ScrollVelocity,
-                                ) -> crate::nested_scroll::ScrollVelocity {
+                                ) -> crate::nested_scroll::ScrollVelocity
+                                {
                                     // 向下滑松手：dispatch 传 available.y = -vy（手指向下→负）。
                                     // sheet 折叠（收向 Hidden）需正 velocity（offset 增大），故取反。
                                     // ⚠ 直接用 available.y 会得到负 velocity → 朝 Expanded → 回弹。
@@ -452,7 +458,8 @@ impl ModalBottomSheet {
                                 fn on_pre_fling(
                                     &self,
                                     available: crate::nested_scroll::ScrollVelocity,
-                                ) -> crate::nested_scroll::ScrollVelocity {
+                                ) -> crate::nested_scroll::ScrollVelocity
+                                {
                                     // 方向约定：dispatch 传 available.y = -vy（手指向上→正）。
                                     // sheet 展开需 velocity<0（offset 减小），故取反。
                                     // 向上拖(available.y>0)且 sheet 未到 Expanded → 吸附展开；
@@ -460,16 +467,24 @@ impl ModalBottomSheet {
                                     if available.y <= 0.0 {
                                         return crate::nested_scroll::ScrollVelocity::default();
                                     }
-                                    let expanded_pos = self.st.anchored_draggable().position_of(&SheetValue::Expanded);
+                                    let expanded_pos = self
+                                        .st
+                                        .anchored_draggable()
+                                        .position_of(&SheetValue::Expanded);
                                     if !expanded_pos.is_nan() && self.st.offset() <= expanded_pos {
                                         return crate::nested_scroll::ScrollVelocity::default();
                                     }
                                     // 吸附展开并消费速度（阻止列表抢——Compose M3 语义）
                                     self.st.settle_with_velocity(-available.y);
-                                    crate::nested_scroll::ScrollVelocity { x: 0.0, y: available.y }
+                                    crate::nested_scroll::ScrollVelocity {
+                                        x: 0.0,
+                                        y: available.y,
+                                    }
                                 }
                             }
-                            let sheet_conn = SheetNested { st: drag_st.clone() };
+                            let sheet_conn = SheetNested {
+                                st: drag_st.clone(),
+                            };
                             panel_mod_with_nested = panel_mod_with_nested.nested_scroll(sheet_conn);
                         }
                         let panel_mod_with_gesture = panel_mod_with_nested;
@@ -493,7 +508,9 @@ impl ModalBottomSheet {
                                         .modifier(
                                             Modifier::new()
                                                 .fill_max_width()
-                                                .padding_vertical(BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING)
+                                                .padding_vertical(
+                                                    BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING,
+                                                )
                                                 .on_drag(move |_pos, (_dx, dy)| d.drag_delta(dy))
                                                 .on_drag_end(move || {
                                                     e.settle_with_velocity(e.last_velocity());
@@ -502,13 +519,15 @@ impl ModalBottomSheet {
                                         .arrangement(crate::layout::Arrangement::Center)
                                         .build(ctx, |ctx| {
                                             crate::layout::components::Stack::new()
-                                                .modifier(Modifier::new().size(32.0, 4.0).background(
-                                                    // `SheetBottomTokens.DockedDragHandleColor =
-                                                    // OnSurfaceVariant` (winia painted it with the dimmer
-                                                    // `outline_variant`, and only the scaffold had been fixed).
-                                                    theme.on_surface_variant,
-                                                    Shape::RoundedRect { corner_radius: 2.0 },
-                                                ))
+                                                .modifier(
+                                                    Modifier::new().size(32.0, 4.0).background(
+                                                        // `SheetBottomTokens.DockedDragHandleColor =
+                                                        // OnSurfaceVariant` (winia painted it with the dimmer
+                                                        // `outline_variant`, and only the scaffold had been fixed).
+                                                        theme.on_surface_variant,
+                                                        Shape::RoundedRect { corner_radius: 2.0 },
+                                                    ),
+                                                )
                                                 .build(ctx, |_| {});
                                         });
                                 }
@@ -522,7 +541,9 @@ impl ModalBottomSheet {
 }
 
 impl Default for ModalBottomSheet {
-    fn default() -> Self { Self::new(false) }
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 /// The sheet panel's own surface, painted on every frame.
@@ -564,20 +585,31 @@ impl SheetPanelNode {
         } else {
             SheetValue::Hidden
         };
-        let p = self.state.anchored_draggable().peek_progress(&from, &SheetValue::Expanded);
-        if p.is_nan() { self.radius } else { self.radius * (1.0 - p.clamp(0.0, 1.0)) }
+        let p = self
+            .state
+            .anchored_draggable()
+            .peek_progress(&from, &SheetValue::Expanded);
+        if p.is_nan() {
+            self.radius
+        } else {
+            self.radius * (1.0 - p.clamp(0.0, 1.0))
+        }
     }
 }
 
 impl std::fmt::Debug for SheetPanelNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SheetPanelNode").field("radius", &self.radius).finish()
+        f.debug_struct("SheetPanelNode")
+            .field("radius", &self.radius)
+            .finish()
     }
 }
 
 impl crate::modifier::DrawNode for SheetPanelNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
-        let r = self.current_radius(rect.height()).clamp(0.0, rect.height() / 2.0);
+        let r = self
+            .current_radius(rect.height())
+            .clamp(0.0, rect.height() / 2.0);
         let rrect = skia_safe::RRect::new_rect_radii(
             rect,
             &[
@@ -606,10 +638,12 @@ impl crate::modifier::DrawNode for SheetPanelNode {
             | ((self.color.r as u32) << 16)
             | ((self.color.g as u32) << 8)
             | (self.color.b as u32);
-        format!("SheetPanelNode|{argb:08x}|{}|{}", self.radius, self.window_height)
+        format!(
+            "SheetPanelNode|{argb:08x}|{}|{}",
+            self.radius, self.window_height
+        )
     }
 }
-
 
 #[cfg(test)]
 mod tests {

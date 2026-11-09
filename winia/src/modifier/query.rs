@@ -1,5 +1,5 @@
-use super::*;
 use super::param_eq::merge_graphics_params;
+use super::*;
 
 impl Modifier {
     /// 累积的四边 padding（start, top, end, bottom 各自独立）——
@@ -27,7 +27,13 @@ impl Modifier {
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let (mut s, mut t, mut e, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for el in &self.elements {
-            if let ModifierElement::PaddingSides { start, top, end, bottom } = el {
+            if let ModifierElement::PaddingSides {
+                start,
+                top,
+                end,
+                bottom,
+            } = el
+            {
                 s += resolve(start);
                 t += resolve(top);
                 e += resolve(end);
@@ -43,18 +49,24 @@ impl Modifier {
     pub(crate) fn inset_at(
         &self,
         index: usize,
-    ) -> Option<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
+    ) -> Option<(
+        crate::window::insets::InsetsKind,
+        crate::window::insets::WindowInsetsController,
+    )> {
         let element = self.elements.get(index)?;
         debug_assert!(
             matches!(
                 element,
-                ModifierElement::WindowInsetsPadding { .. } | ModifierElement::ConsumeWindowInsets { .. }
+                ModifierElement::WindowInsetsPadding { .. }
+                    | ModifierElement::ConsumeWindowInsets { .. }
             ),
             "inset step index {index} does not point at an inset element — `size_steps` and `elements` disagree"
         );
         match element {
             ModifierElement::WindowInsetsPadding { kind, controller }
-            | ModifierElement::ConsumeWindowInsets { kind, controller } => Some((*kind, controller.clone())),
+            | ModifierElement::ConsumeWindowInsets { kind, controller } => {
+                Some((*kind, controller.clone()))
+            }
             _ => None,
         }
     }
@@ -99,7 +111,11 @@ impl Modifier {
     /// 固定尺寸（从 Size modifier 提取）
     pub fn fixed_size(&self) -> Option<(Dimension, Dimension)> {
         for el in &self.elements {
-            if let ModifierElement::Size { width: SizeValue::Length(w), height: SizeValue::Length(h) } = el {
+            if let ModifierElement::Size {
+                width: SizeValue::Length(w),
+                height: SizeValue::Length(h),
+            } = el
+            {
                 return Some((w.clone(), h.clone()));
             }
         }
@@ -109,8 +125,8 @@ impl Modifier {
     /// 解析 Size 元素的尺寸（静态/动态单轴独立解析）——返回 (width, height) 解析值，
     /// None 表示该轴不约束（Auto/Fill）。
     pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{Dp};
         use crate::runtime::density::current_density;
+        use crate::unit::Dp;
         // 合并所有 Size 元素（链序：后 push 的外层胜出——非 None 覆盖）。
         // ⚠ 不能只返回第一个：`width(300).height(dyn)` 是两个 Size 元素，
         // 只取第一个会丢 height（min_lines 动态高度失效的根因）
@@ -119,8 +135,11 @@ impl Modifier {
             if let ModifierElement::Size { width, height } = el {
                 let resolve = |sv: &SizeValue| -> Option<f32> {
                     match sv {
-                        SizeValue::Length(Dimension::Fixed(v)) | SizeValue::Length(Dimension::Dp(Dp(v))) => Some(*v),
-                        SizeValue::Length(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                        SizeValue::Length(Dimension::Fixed(v))
+                        | SizeValue::Length(Dimension::Dp(Dp(v))) => Some(*v),
+                        SizeValue::Length(Dimension::Px(p)) => {
+                            Some(p.to_logical(current_density()))
+                        }
                         SizeValue::Auto => None,
                         SizeValue::Length(Dimension::Dynamic(f)) => Some(f()),
                         // An intrinsic request carries no number: it is resolved by the measure
@@ -175,23 +194,35 @@ impl Modifier {
                     let iw = matches!(width, SizeValue::Intrinsic(_));
                     let ih = matches!(height, SizeValue::Intrinsic(_));
                     if iw || ih {
-                        out.push(SizeStep::Intrinsic { width: iw, height: ih });
+                        out.push(SizeStep::Intrinsic {
+                            width: iw,
+                            height: ih,
+                        });
                     }
                     let (w, h) = (width.to_logical_px(), height.to_logical_px());
                     if w.is_some() || h.is_some() {
-                        out.push(SizeStep::Size { width: w, height: h });
+                        out.push(SizeStep::Size {
+                            width: w,
+                            height: h,
+                        });
                     }
                 }
                 ModifierElement::RequiredSize { width, height } => {
                     let iw = matches!(width.as_ref(), Some(SizeValue::Intrinsic(_)));
                     let ih = matches!(height.as_ref(), Some(SizeValue::Intrinsic(_)));
                     if iw || ih {
-                        out.push(SizeStep::Intrinsic { width: iw, height: ih });
+                        out.push(SizeStep::Intrinsic {
+                            width: iw,
+                            height: ih,
+                        });
                     }
                     let w = width.as_ref().and_then(|v| v.to_logical_px());
                     let h = height.as_ref().and_then(|v| v.to_logical_px());
                     if w.is_some() || h.is_some() {
-                        out.push(SizeStep::RequiredSize { width: w, height: h });
+                        out.push(SizeStep::RequiredSize {
+                            width: w,
+                            height: h,
+                        });
                     }
                 }
                 ModifierElement::FillMaxWidth { fraction } => out.push(SizeStep::Fill {
@@ -208,8 +239,12 @@ impl Modifier {
                 }),
                 ModifierElement::MinWidth { value } => out.push(SizeStep::MinWidth(resolve(value))),
                 ModifierElement::MaxWidth { value } => out.push(SizeStep::MaxWidth(resolve(value))),
-                ModifierElement::MinHeight { value } => out.push(SizeStep::MinHeight(resolve(value))),
-                ModifierElement::MaxHeight { value } => out.push(SizeStep::MaxHeight(resolve(value))),
+                ModifierElement::MinHeight { value } => {
+                    out.push(SizeStep::MinHeight(resolve(value)))
+                }
+                ModifierElement::MaxHeight { value } => {
+                    out.push(SizeStep::MaxHeight(resolve(value)))
+                }
                 ModifierElement::SizeIn {
                     min_width,
                     min_height,
@@ -223,29 +258,41 @@ impl Modifier {
                     max_height: opt(max_height),
                     enforce_incoming: *enforce_incoming,
                 }),
-                ModifierElement::DefaultMinSize { min_width, min_height } => {
-                    out.push(SizeStep::DefaultMin {
-                        min_width: opt(min_width),
-                        min_height: opt(min_height),
-                    })
-                }
+                ModifierElement::DefaultMinSize {
+                    min_width,
+                    min_height,
+                } => out.push(SizeStep::DefaultMin {
+                    min_width: opt(min_width),
+                    min_height: opt(min_height),
+                }),
                 // Insets are chain steps too: an inset has a position, and a size written inside
                 // it must see the deflated range (the reviewer's "one place the two kinds of padding
                 // differ"). The walk resolves the value; this only carries the element index.
-                ModifierElement::WindowInsetsPadding { .. } => out.push(SizeStep::InsetPadding(index)),
+                ModifierElement::WindowInsetsPadding { .. } => {
+                    out.push(SizeStep::InsetPadding(index))
+                }
                 ModifierElement::WindowInsetsSize { .. } => out.push(SizeStep::InsetSize(index)),
-                ModifierElement::ConsumeWindowInsets { .. } => out.push(SizeStep::ConsumeInsets(index)),
-                ModifierElement::PaddingSides { start, top, end, bottom } => {
-                    out.push(SizeStep::Padding {
-                        start: resolve(start),
-                        top: resolve(top),
-                        end: resolve(end),
-                        bottom: resolve(bottom),
-                    })
+                ModifierElement::ConsumeWindowInsets { .. } => {
+                    out.push(SizeStep::ConsumeInsets(index))
                 }
-                ModifierElement::AspectRatio { ratio, match_height_first } => {
-                    out.push(SizeStep::AspectRatio { ratio: *ratio, match_height_first: *match_height_first })
-                }
+                ModifierElement::PaddingSides {
+                    start,
+                    top,
+                    end,
+                    bottom,
+                } => out.push(SizeStep::Padding {
+                    start: resolve(start),
+                    top: resolve(top),
+                    end: resolve(end),
+                    bottom: resolve(bottom),
+                }),
+                ModifierElement::AspectRatio {
+                    ratio,
+                    match_height_first,
+                } => out.push(SizeStep::AspectRatio {
+                    ratio: *ratio,
+                    match_height_first: *match_height_first,
+                }),
                 ModifierElement::WrapContent {
                     width,
                     height,
@@ -281,18 +328,23 @@ impl Modifier {
 
     /// 是否填满最大宽度
     pub fn is_fill_max_width(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el,
-            ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. }
-        ))
+        self.elements.iter().any(|el| {
+            matches!(
+                el,
+                ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. }
+            )
+        })
     }
 
     /// 是否填满最大高度
     pub fn is_fill_max_height(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el,
-            ModifierElement::FillMaxHeight { .. } | ModifierElement::FillMaxSize { .. }
-        ))
+        self.elements.iter().any(|el| {
+            matches!(
+                el,
+                ModifierElement::FillMaxHeight { .. } | ModifierElement::FillMaxSize { .. }
+            )
+        })
     }
-
 
     /// 垂直滚动状态（如果有 VerticalScroll modifier）
     /// The orientation declared by `clipScrollableContainer`, if the chain carries it.
@@ -306,7 +358,9 @@ impl Modifier {
     /// The overscroll effect attached to this chain, if any.
     /// Whether an effect is already attached (the builders use it to avoid a second one).
     pub fn has_overscroll(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::Overscroll { .. }))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::Overscroll { .. }))
     }
 
     pub fn overscroll_effect(&self) -> Option<&crate::overscroll::OverscrollEffect> {
@@ -335,9 +389,7 @@ impl Modifier {
     }
 
     /// The item placement/fade contract attached with `Modifier::animate_item`.
-    pub(crate) fn animate_item_spec(
-        &self,
-    ) -> Option<crate::animation::item::ItemAnimationSpec> {
+    pub(crate) fn animate_item_spec(&self) -> Option<crate::animation::item::ItemAnimationSpec> {
         self.elements.iter().find_map(|el| match el {
             ModifierElement::AnimateItem(spec) => Some(spec.clone()),
             _ => None,
@@ -403,7 +455,9 @@ impl Modifier {
     }
 
     /// The nested-scroll connection on this node.
-    pub fn nested_scroll_connection(&self) -> Option<Arc<dyn crate::nested_scroll::NestedScrollConnection>> {
+    pub fn nested_scroll_connection(
+        &self,
+    ) -> Option<Arc<dyn crate::nested_scroll::NestedScrollConnection>> {
         self.elements.iter().find_map(|el| match el {
             ModifierElement::NestedScroll { connection } => Some(connection.clone()),
             _ => None,
@@ -449,7 +503,10 @@ impl Modifier {
     /// `AspectRatioNode` does.
     pub fn aspect_ratio_constraint(&self) -> Option<(f32, bool)> {
         self.elements.iter().find_map(|el| match el {
-            ModifierElement::AspectRatio { ratio, match_height_first } => Some((*ratio, *match_height_first)),
+            ModifierElement::AspectRatio {
+                ratio,
+                match_height_first,
+            } => Some((*ratio, *match_height_first)),
             _ => None,
         })
     }
@@ -574,11 +631,17 @@ impl Modifier {
 
     /// Applied after the content is measured: it is the content's own alignment line that says how
     /// much padding the node needs.
-    pub fn get_padding_from(&self) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
+    pub fn get_padding_from(
+        &self,
+    ) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
         self.elements
             .iter()
             .filter_map(|el| match el {
-                ModifierElement::PaddingFrom { line, before, after } => Some((*line, *before, *after)),
+                ModifierElement::PaddingFrom {
+                    line,
+                    before,
+                    after,
+                } => Some((*line, *before, *after)),
                 _ => None,
             })
             .collect()
@@ -711,7 +774,11 @@ impl Modifier {
     /// Clickable 绑定的交互源（无则 None）
     pub fn clickable_interaction(&self) -> Option<&MutableInteractionSource> {
         self.elements.iter().find_map(|el| {
-            if let ModifierElement::Clickable { interaction: Some(s), .. } = el {
+            if let ModifierElement::Clickable {
+                interaction: Some(s),
+                ..
+            } = el
+            {
                 Some(s)
             } else {
                 None
@@ -722,7 +789,10 @@ impl Modifier {
     /// Focusable 绑定的交互源（无则 None）
     pub fn focusable_interaction(&self) -> Option<&MutableInteractionSource> {
         self.elements.iter().find_map(|el| {
-            if let ModifierElement::Focusable { interaction: Some(s) } = el {
+            if let ModifierElement::Focusable {
+                interaction: Some(s),
+            } = el
+            {
                 Some(s)
             } else {
                 None
@@ -755,54 +825,66 @@ impl Modifier {
 
     /// 是否声明了悬停交互（hover 路由判定）
     pub fn has_hoverable(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::Hoverable { .. }))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::Hoverable { .. }))
     }
 
     /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用。
     /// 只认 TapOn/DragOn 枚举（PointerNode 不参与——见 PointerNode 文档的
     /// P0-1 教训：装饰性 PointerNode 纳入路由会静默偷走外层 tap）。
     pub fn has_gesture(&self) -> bool {
-        self.elements.iter().any(|el| matches!(
-            el,
-            ModifierElement::TapOnTap { .. }
-                | ModifierElement::TapOnDoubleTap { .. }
-                | ModifierElement::TapOnLongPress { .. }
-                | ModifierElement::TapOnPress { .. }
-                | ModifierElement::DragOnStart { .. }
-                | ModifierElement::DragOnMove { .. }
-                | ModifierElement::DragOnEnd { .. }
-                | ModifierElement::DragOnCancel { .. }
-        ))
+        self.elements.iter().any(|el| {
+            matches!(
+                el,
+                ModifierElement::TapOnTap { .. }
+                    | ModifierElement::TapOnDoubleTap { .. }
+                    | ModifierElement::TapOnLongPress { .. }
+                    | ModifierElement::TapOnPress { .. }
+                    | ModifierElement::DragOnStart { .. }
+                    | ModifierElement::DragOnMove { .. }
+                    | ModifierElement::DragOnEnd { .. }
+                    | ModifierElement::DragOnCancel { .. }
+            )
+        })
     }
 
     /// 是否声明了拖拽回调（决定 slop 后走 drag 还是取消 tap）
     pub fn has_drag_gesture(&self) -> bool {
-        self.elements.iter().any(|el| matches!(
-            el,
-            ModifierElement::DragOnStart { .. }
-                | ModifierElement::DragOnMove { .. }
-                | ModifierElement::DragOnEnd { .. }
-                | ModifierElement::DragOnCancel { .. }
-        ))
+        self.elements.iter().any(|el| {
+            matches!(
+                el,
+                ModifierElement::DragOnStart { .. }
+                    | ModifierElement::DragOnMove { .. }
+                    | ModifierElement::DragOnEnd { .. }
+                    | ModifierElement::DragOnCancel { .. }
+            )
+        })
     }
 
     /// Whether this node's drag outranks a surrounding scroll container on every axis (a scrollbar
     /// thumb, whose drag is vertical inside a vertical list).
     pub fn drag_preempts_scroll(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::DragPreemptsScroll))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::DragPreemptsScroll))
     }
 
     /// 是否声明了双击回调——决定 onTap 是否延迟到双击窗口结束
     /// （Compose detectTapGestures：onDoubleTap 存在时 onTap 延迟触发，
     /// 窗口内第二次按下同节点 → 取消；超时 → 补发）
     pub fn has_double_tap(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::TapOnDoubleTap { .. }))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::TapOnDoubleTap { .. }))
     }
 
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         let mut merged = None;
         for el in self.elements.iter() {
-            let ModifierElement::GraphicsLayer { params } = el else { continue };
+            let ModifierElement::GraphicsLayer { params } = el else {
+                continue;
+            };
             let next = params.eval();
             if let Some(current) = &mut merged {
                 merge_graphics_params(current, next);
@@ -816,7 +898,11 @@ impl Modifier {
     /// 背景模糊半径（渲染期在节点内容绘制前即时处理）
     pub fn backdrop_blur_radius(&self) -> Option<f32> {
         self.elements.iter().find_map(|el| {
-            if let ModifierElement::BackdropBlur { radius } = el { Some(radius.eval()) } else { None }
+            if let ModifierElement::BackdropBlur { radius } = el {
+                Some(radius.eval())
+            } else {
+                None
+            }
         })
     }
 
@@ -875,11 +961,14 @@ impl Modifier {
     pub(crate) fn register_state_deps(&self) {
         for el in &self.elements {
             match el {
-                ModifierElement::VerticalScroll { state, .. } => { let _ = state.offset.get(); }
-                ModifierElement::HorizontalScroll { state, .. } => { let _ = state.offset.get(); }
+                ModifierElement::VerticalScroll { state, .. } => {
+                    let _ = state.offset.get();
+                }
+                ModifierElement::HorizontalScroll { state, .. } => {
+                    let _ = state.offset.get();
+                }
                 _ => {}
             }
         }
     }
 }
-

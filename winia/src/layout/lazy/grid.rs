@@ -21,9 +21,9 @@
 //! - No `stickyHeader` (Compose's lazy grids do not have one either).
 
 use super::{LazyAxis, LazyList, LazyListState};
-use crate::layout::container::build_container;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::layout::Constraints;
+use crate::layout::container::build_container;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::unit::{Offset, Size};
@@ -87,7 +87,11 @@ fn shape_key(first: u64, items: usize, cells: usize, spacing: f32) -> u64 {
 
 /// Splits `count` items into lines, honouring each item's span — Compose's `LazyGridIntervalContent`
 /// chunking: an item that does not fit the room left in the current line starts the next one.
-fn chunk_lines(count: usize, cells: usize, span: &(dyn Fn(usize) -> u32 + Send + Sync)) -> Vec<Line> {
+fn chunk_lines(
+    count: usize,
+    cells: usize,
+    span: &(dyn Fn(usize) -> u32 + Send + Sync),
+) -> Vec<Line> {
     let cells = cells.max(1);
     let mut lines: Vec<Line> = Vec::new();
     let mut current: Vec<(usize, u32)> = Vec::new();
@@ -95,7 +99,9 @@ fn chunk_lines(count: usize, cells: usize, span: &(dyn Fn(usize) -> u32 + Send +
     for index in 0..count {
         let want = (span(index).max(1) as usize).min(cells);
         if !current.is_empty() && used + want > cells {
-            lines.push(Line { items: std::mem::take(&mut current) });
+            lines.push(Line {
+                items: std::mem::take(&mut current),
+            });
             used = 0;
         }
         current.push((index, want as u32));
@@ -284,7 +290,11 @@ impl<A: LazyAxis> LazyGrid<A> {
         let line_keys: Vec<u64> = lines
             .iter()
             .map(|line| {
-                let first = line.items.first().map(|(index, _)| (content.key)(*index)).unwrap_or(0);
+                let first = line
+                    .items
+                    .first()
+                    .map(|(index, _)| (content.key)(*index))
+                    .unwrap_or(0);
                 // The line's identity carries its SHAPE as well as its first item's key: appending an
                 // item INSIDE the last line (or changing the cell count or the cross spacing) changes
                 // nothing else the lazy list compares, so the stale line was skipped and the new items
@@ -386,8 +396,16 @@ impl MeasurePolicy for LineLayout {
             } else {
                 Offset::new(0.0, start_cross)
             };
-            let cell_cross = if self.vertical { size.width } else { size.height };
-            let cell_main = if self.vertical { size.height } else { size.width };
+            let cell_cross = if self.vertical {
+                size.width
+            } else {
+                size.height
+            };
+            let cell_main = if self.vertical {
+                size.height
+            } else {
+                size.width
+            };
             cross_used = cross_used.max(start_cross + cell_cross);
             main_used = main_used.max(cell_main);
             placements.push(Placement { size, position });
@@ -470,7 +488,10 @@ mod tests {
     #[test]
     fn fixed_cells_chunk_the_items_into_lines() {
         let lines = chunk_lines(7, 3, &spans(&[]));
-        let shape: Vec<Vec<usize>> = lines.iter().map(|l| l.items.iter().map(|(i, _)| *i).collect()).collect();
+        let shape: Vec<Vec<usize>> = lines
+            .iter()
+            .map(|l| l.items.iter().map(|(i, _)| *i).collect())
+            .collect();
         assert_eq!(shape, vec![vec![0, 1, 2], vec![3, 4, 5], vec![6]]);
     }
 
@@ -479,16 +500,31 @@ mod tests {
         // cells = 3; items 0 and 1 take one cell each, item 2 needs two and does not fit the one that
         // is left, so it opens the next line and item 3 joins it.
         let lines = chunk_lines(4, 3, &spans(&[1, 1, 2, 1]));
-        let shape: Vec<Vec<usize>> = lines.iter().map(|l| l.items.iter().map(|(i, _)| *i).collect()).collect();
+        let shape: Vec<Vec<usize>> = lines
+            .iter()
+            .map(|l| l.items.iter().map(|(i, _)| *i).collect())
+            .collect();
         assert_eq!(shape, vec![vec![0, 1], vec![2, 3]]);
     }
 
     #[test]
     fn an_adaptive_grid_floors_the_count_that_fits() {
         assert_eq!(GridCells::Adaptive(100.0).count(320.0, 0.0), 3);
-        assert_eq!(GridCells::Adaptive(100.0).count(320.0, 10.0), 3, "320 + 10 over 110");
-        assert_eq!(GridCells::Adaptive(100.0).count(0.0, 0.0), 1, "nothing measured yet");
-        assert_eq!(GridCells::Fixed(4).count(0.0, 0.0), 4, "a fixed count ignores the extent");
+        assert_eq!(
+            GridCells::Adaptive(100.0).count(320.0, 10.0),
+            3,
+            "320 + 10 over 110"
+        );
+        assert_eq!(
+            GridCells::Adaptive(100.0).count(0.0, 0.0),
+            1,
+            "nothing measured yet"
+        );
+        assert_eq!(
+            GridCells::Fixed(4).count(0.0, 0.0),
+            4,
+            "a fixed count ignores the extent"
+        );
     }
 
     /// End to end: six items in a three-cell vertical grid compose as two line Rows, the cells share
@@ -532,7 +568,8 @@ mod tests {
         assert_eq!(lines.len(), 2, "six items in three-cell lines");
         assert_eq!(composer.arena_nodes()[lines[0]].position.y, 0.0);
         assert_eq!(
-            composer.arena_nodes()[lines[1]].position.y, 44.0,
+            composer.arena_nodes()[lines[1]].position.y,
+            44.0,
             "the second line starts one 40 dp line plus the 4 dp spacing down"
         );
         // The line's root holds the Row; the Row holds the three equally weighted cells.
@@ -559,7 +596,9 @@ mod tests {
     /// A line is a wrapper node in the lazy list; its single child is the line, whose children are the
     /// cells. These two helpers read that shape off the arena.
     fn line_shapes(composer: &Composer) -> Vec<usize> {
-        let Some(root) = composer.layout_root() else { return Vec::new() };
+        let Some(root) = composer.layout_root() else {
+            return Vec::new();
+        };
         root.children
             .clone()
             .into_iter()
@@ -574,7 +613,9 @@ mod tests {
     }
 
     fn cell_widths(composer: &Composer) -> Vec<Vec<f32>> {
-        let Some(root) = composer.layout_root() else { return Vec::new() };
+        let Some(root) = composer.layout_root() else {
+            return Vec::new();
+        };
         root.children
             .clone()
             .into_iter()
@@ -591,7 +632,11 @@ mod tests {
             .collect()
     }
 
-    fn grid_frame(composer: &mut Composer, constraints: Constraints, build: impl Fn(&mut ComposeCtx)) {
+    fn grid_frame(
+        composer: &mut Composer,
+        constraints: Constraints,
+        build: impl Fn(&mut ComposeCtx),
+    ) {
         composer.compose(crate::compose!(|ctx| {
             build(ctx);
         }));
@@ -600,7 +645,11 @@ mod tests {
 
     fn cell(ctx: &mut ComposeCtx, index: usize) {
         crate::layout::Stack::new()
-            .modifier(Modifier::new().size(10.0, 40.0).test_tag(format!("g{index}")))
+            .modifier(
+                Modifier::new()
+                    .size(10.0, 40.0)
+                    .test_tag(format!("g{index}")),
+            )
             .build(ctx, |_| {});
     }
 
@@ -613,19 +662,31 @@ mod tests {
         let mut composer = Composer::new();
         for _ in 0..2 {
             let s = state.clone();
-            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Fixed(3))
-                    .state(s.clone())
-                    .cross_spacing(2.0)
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items(4, cell)
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 300.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Fixed(3))
+                        .state(s.clone())
+                        .cross_spacing(2.0)
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items(4, cell)
+                        .build(ctx);
+                },
+            );
         }
         let widths = cell_widths(&composer);
-        assert_eq!(widths.len(), 2, "four items in three-cell lines: {widths:?}");
-        assert_eq!(widths[1].len(), 1, "the second line holds one cell: {widths:?}");
+        assert_eq!(
+            widths.len(),
+            2,
+            "four items in three-cell lines: {widths:?}"
+        );
+        assert_eq!(
+            widths[1].len(),
+            1,
+            "the second line holds one cell: {widths:?}"
+        );
         assert!(
             (widths[1][0] - (300.0 - 2.0 * 2.0) / 3.0).abs() < 0.5,
             "the partial line keeps the slot width instead of the whole line: {widths:?}"
@@ -640,20 +701,24 @@ mod tests {
         let mut composer = Composer::new();
         for _ in 0..2 {
             let s = state.clone();
-            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Fixed(3))
-                    .state(s.clone())
-                    .cross_spacing(12.0)
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items_with(
-                        2,
-                        |index| index as u64,
-                        |index| if index == 1 { 2 } else { 1 },
-                        cell,
-                    )
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 300.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Fixed(3))
+                        .state(s.clone())
+                        .cross_spacing(12.0)
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items_with(
+                            2,
+                            |index| index as u64,
+                            |index| if index == 1 { 2 } else { 1 },
+                            cell,
+                        )
+                        .build(ctx);
+                },
+            );
         }
         let widths = cell_widths(&composer);
         let unit = (300.0 - 2.0 * 12.0) / 3.0;
@@ -672,14 +737,18 @@ mod tests {
         let mut composer = Composer::new();
         for cells in [2usize, 2, 3, 3] {
             let s = state.clone();
-            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Fixed(cells))
-                    .state(s.clone())
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items(7, cell)
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 300.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Fixed(cells))
+                        .state(s.clone())
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items(7, cell)
+                        .build(ctx);
+                },
+            );
         }
         assert_eq!(line_shapes(&composer), vec![3, 3, 1]);
     }
@@ -693,14 +762,18 @@ mod tests {
         let mut composer = Composer::new();
         for count in [7usize, 7, 9, 9] {
             let s = state.clone();
-            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Fixed(3))
-                    .state(s.clone())
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items(count, cell)
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 300.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Fixed(3))
+                        .state(s.clone())
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items(count, cell)
+                        .build(ctx);
+                },
+            );
         }
         assert_eq!(line_shapes(&composer), vec![3, 3, 3]);
     }
@@ -712,15 +785,19 @@ mod tests {
         let mut composer = Composer::new();
         for spacing in [0.0f32, 0.0, 12.0, 12.0] {
             let s = state.clone();
-            grid_frame(&mut composer, Constraints::new(0.0, 300.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Fixed(3))
-                    .state(s.clone())
-                    .cross_spacing(spacing)
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items(6, cell)
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 300.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Fixed(3))
+                        .state(s.clone())
+                        .cross_spacing(spacing)
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items(6, cell)
+                        .build(ctx);
+                },
+            );
         }
         let widths = cell_widths(&composer);
         assert!(
@@ -738,14 +815,18 @@ mod tests {
             let mut composer = Composer::new();
             for _ in 0..2 {
                 let s = state.clone();
-                grid_frame(&mut composer, Constraints::new(0.0, cross, 0.0, 300.0), |ctx| {
-                    LazyVerticalGrid::new()
-                        .cells(GridCells::Adaptive(100.0))
-                        .state(s.clone())
-                        .modifier(Modifier::new().height(300.0))
-                        .items(6, cell)
-                        .build(ctx);
-                });
+                grid_frame(
+                    &mut composer,
+                    Constraints::new(0.0, cross, 0.0, 300.0),
+                    |ctx| {
+                        LazyVerticalGrid::new()
+                            .cells(GridCells::Adaptive(100.0))
+                            .state(s.clone())
+                            .modifier(Modifier::new().height(300.0))
+                            .items(6, cell)
+                            .build(ctx);
+                    },
+                );
             }
             let shapes = line_shapes(&composer);
             assert!(
@@ -763,13 +844,17 @@ mod tests {
     fn an_adaptive_grid_without_a_state_still_chunks_after_the_first_measure() {
         let mut composer = Composer::new();
         for _ in 0..3 {
-            grid_frame(&mut composer, Constraints::new(0.0, 320.0, 0.0, 300.0), |ctx| {
-                LazyVerticalGrid::new()
-                    .cells(GridCells::Adaptive(100.0))
-                    .modifier(Modifier::new().fill_max_width().height(300.0))
-                    .items(6, cell)
-                    .build(ctx);
-            });
+            grid_frame(
+                &mut composer,
+                Constraints::new(0.0, 320.0, 0.0, 300.0),
+                |ctx| {
+                    LazyVerticalGrid::new()
+                        .cells(GridCells::Adaptive(100.0))
+                        .modifier(Modifier::new().fill_max_width().height(300.0))
+                        .items(6, cell)
+                        .build(ctx);
+                },
+            );
         }
         let shapes = line_shapes(&composer);
         assert!(

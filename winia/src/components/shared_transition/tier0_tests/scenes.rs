@@ -30,7 +30,11 @@ fn a_panicking_scene_does_not_stay_on_the_scene_stack() {
         is_prev: false,
     };
     let seen = with_nav_scene(next_scene, || current_nav_scene().map(|s| s.id));
-    assert_eq!(seen, Some(0x5CE80), "a marker composed now belongs to the new scene");
+    assert_eq!(
+        seen,
+        Some(0x5CE80),
+        "a marker composed now belongs to the new scene"
+    );
     assert!(
         nav_scene_visibility(0x5CE80).is_some(),
         "a normally completed publish keeps its entry (a layer that Skips still resolves it)"
@@ -53,7 +57,13 @@ fn scope_is_transition_active_tracks_flight() {
     // Same global entry the coordinator syncs (keyed by scope_id).
     // Created on first read (false) — the next poll flips it, which is
     // exactly the subscription semantics users observe in composition.
-    let scope_id = composer.shared_flights.values().next().expect("flight").flight.scope_id;
+    let scope_id = composer
+        .shared_flights
+        .values()
+        .next()
+        .expect("flight")
+        .flight
+        .scope_id;
     let active = SharedTransitionScope::new(scope_id).is_transition_active();
     advance(&mut composer, &show);
     assert!(active.get(), "flag true while the flight is non-terminal");
@@ -104,7 +114,11 @@ fn scene_registry_drops_scenes_that_left_the_tree() {
     with_nav_scene(info2(33), || {});
     assert_eq!(nav_scene_registry_len(), 2, "one live, one stale");
     prune_nav_scenes(&HashSet::from([22]));
-    assert_eq!(nav_scene_registry_len(), 1, "the stale one goes even when the counts match");
+    assert_eq!(
+        nav_scene_registry_len(),
+        1,
+        "the stale one goes even when the counts match"
+    );
     clear_nav_scenes();
 }
 
@@ -143,13 +157,15 @@ fn a_peer_composer_does_not_prune_another_composers_live_scene() {
         b.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        mixed_list_screen(ctx, &scope, &ww);
-                    } else {
-                        mixed_detail_screen(ctx, &scope, &ww);
-                    }
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        if s.get() {
+                            mixed_list_screen(ctx, &scope, &ww);
+                        } else {
+                            mixed_detail_screen(ctx, &scope, &ww);
+                        }
+                    });
             });
         });
         b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -159,7 +175,9 @@ fn a_peer_composer_does_not_prune_another_composers_live_scene() {
     show_b.set(false);
     b_frame(&mut b, &show_b);
     assert!(
-        b.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+        b.shared_flights
+            .values()
+            .any(|f| !is_terminal(f.flight.phase)),
         "the peer really has a flight running"
     );
 
@@ -213,17 +231,21 @@ fn scope_activity_is_a_union_over_the_frames_composers() {
             move |ctx| {
                 SharedTransitionLayout::new().build(ctx, |ctx| {
                     let scope = current_shared_scope().expect("scope");
-                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                        if s.get() {
-                            mixed_list_screen(ctx, &scope, &ww);
-                        } else {
-                            mixed_detail_screen(ctx, &scope, &ww);
-                        }
-                    });
+                    Column::new()
+                        .modifier(Modifier::new().fill_max_size())
+                        .build(ctx, |ctx| {
+                            if s.get() {
+                                mixed_list_screen(ctx, &scope, &ww);
+                            } else {
+                                mixed_detail_screen(ctx, &scope, &ww);
+                            }
+                        });
                 });
             },
             |ctx| {
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |_| {});
             },
         );
     };
@@ -247,7 +269,9 @@ fn scope_activity_is_a_union_over_the_frames_composers() {
     show.set(false);
     a_frame(&mut a, &mut b, &show, &w);
     assert!(
-        a.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+        a.shared_flights
+            .values()
+            .any(|f| !is_terminal(f.flight.phase)),
         "the switch opened a flight in the main composer"
     );
     assert!(
@@ -271,7 +295,10 @@ fn nav_scene_host_pairs_one_flight_and_suppresses_the_other_copy() {
 
     // Frame 0: one scene, so the key has exactly one live end and there is nothing to pair.
     nav_frame(&mut composer, &main, &peer);
-    assert!(composer.shared_flights.is_empty(), "no flight before the push");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "no flight before the push"
+    );
     assert_eq!(
         marked_indices(&composer).len(),
         1,

@@ -137,7 +137,10 @@ impl SemanticsState {
     /// and the reason a progress bar without it is just an unnamed shape. The range is explicit
     /// because a caller's units are their own (bytes, steps, seconds).
     pub fn progress(mut self, current: f32, min: f32, max: f32) -> Self {
-        debug_assert!(max > min, "a progress range needs max > min, got {min}..{max}");
+        debug_assert!(
+            max > min,
+            "a progress range needs max > min, got {min}..{max}"
+        );
         debug_assert!(
             (min..=max).contains(&current),
             "the progress value {current} is outside {min}..{max}"
@@ -251,7 +254,9 @@ pub struct ScrollToIndexAction {
 
 impl ScrollToIndexAction {
     pub fn new(action: impl Fn(usize) + Send + Sync + 'static) -> Self {
-        Self { action: std::sync::Arc::new(action) }
+        Self {
+            action: std::sync::Arc::new(action),
+        }
     }
 
     /// Bring `index` into view — what a platform bridge calls when a client asks for it.
@@ -285,7 +290,9 @@ pub struct IndexForKeyAction {
 
 impl IndexForKeyAction {
     pub fn new(action: impl Fn(u64) -> Option<usize> + Send + Sync + 'static) -> Self {
-        Self { action: std::sync::Arc::new(action) }
+        Self {
+            action: std::sync::Arc::new(action),
+        }
     }
 
     /// The index of `key`, or `None` when the data no longer holds it.
@@ -326,7 +333,10 @@ impl CollectionItemInfo {
 
     /// Item `index` spanning `span` positions (clamped to at least one).
     pub fn spanning(index: usize, span: usize) -> Self {
-        Self { index, span: span.max(1) }
+        Self {
+            index,
+            span: span.max(1),
+        }
     }
 }
 
@@ -365,7 +375,9 @@ impl SemanticsAction {
 
 impl std::fmt::Debug for SemanticsAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SemanticsAction").field("label", &self.label).finish_non_exhaustive()
+        f.debug_struct("SemanticsAction")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
     }
 }
 
@@ -484,7 +496,8 @@ impl SemanticsConfig {
     ) -> Self {
         let label = label.into();
         if !self.custom_actions.iter().any(|a| a.label == label) {
-            self.custom_actions.push(SemanticsAction::new(label, action));
+            self.custom_actions
+                .push(SemanticsAction::new(label, action));
         }
         self
     }
@@ -518,7 +531,10 @@ impl SemanticsConfig {
 
     /// Declare Compose's `ScrollToIndex`: the collection can bring an item into view. The closure
     /// receives the index the platform asks for; a lazy list wires it to `scroll_to_item`.
-    pub fn scroll_to_index_action(mut self, action: impl Fn(usize) + Send + Sync + 'static) -> Self {
+    pub fn scroll_to_index_action(
+        mut self,
+        action: impl Fn(usize) + Send + Sync + 'static,
+    ) -> Self {
         self.scroll_to_index = Some(ScrollToIndexAction::new(action));
         self
     }
@@ -682,4 +698,3 @@ impl SemanticsNode {
         }
     }
 }
-

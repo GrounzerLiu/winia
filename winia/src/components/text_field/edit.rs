@@ -84,4 +84,3 @@ pub(crate) fn clipboard_get_text() -> Option<String> {
 pub(crate) fn clipboard_get_text() -> Option<String> {
     None
 }
-

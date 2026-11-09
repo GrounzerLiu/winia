@@ -4,7 +4,6 @@
 //! They lived in `modifier.rs`, which made the crate's most-used type (`Color` appears in over
 //! 1,700 places) a member of the modifier chain rather than of the drawing layer it describes.
 
-
 /// A colour (placeholder; to be replaced by skia's `Color` or the material theme).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -15,12 +14,42 @@ pub struct Color {
 }
 
 impl Color {
-    pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
-    pub const BLACK: Color = Color { r: 0, g: 0, b: 0, a: 255 };
-    pub const WHITE: Color = Color { r: 255, g: 255, b: 255, a: 255 };
-    pub const RED: Color = Color { r: 255, g: 0, b: 0, a: 255 };
-    pub const GREEN: Color = Color { r: 0, g: 255, b: 0, a: 255 };
-    pub const BLUE: Color = Color { r: 0, g: 0, b: 255, a: 255 };
+    pub const TRANSPARENT: Color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    pub const BLACK: Color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+    pub const WHITE: Color = Color {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+    pub const RED: Color = Color {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+    pub const GREEN: Color = Color {
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+    };
+    pub const BLUE: Color = Color {
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+    };
 
     pub fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b, a }
@@ -35,7 +64,11 @@ impl Color {
     /// a 50 % displacement — the same lightness to the eye). The matrices are the standard ones
     /// Compose's `ColorSpaces.Oklab` uses: sRGB -> linear light -> LMS -> cube root -> Lab.
     pub fn to_oklab(self) -> [f32; 4] {
-        let (r, g, b) = (srgb_to_linear(self.r), srgb_to_linear(self.g), srgb_to_linear(self.b));
+        let (r, g, b) = (
+            srgb_to_linear(self.r),
+            srgb_to_linear(self.g),
+            srgb_to_linear(self.b),
+        );
         let l = 0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b;
         let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
         let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
@@ -76,13 +109,21 @@ impl Color {
 /// sRGB byte -> linear light, the transfer function the Oklab matrices expect.
 fn srgb_to_linear(byte: u8) -> f32 {
     let c = byte as f32 / 255.0;
-    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// Linear light -> sRGB byte, clamped the way a display expects.
 fn to_srgb_byte(c: f32) -> u8 {
     let c = c.clamp(0.0, 1.0);
-    let v = if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    let v = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
     (v * 255.0).round() as u8
 }
 
@@ -106,10 +147,35 @@ impl Color {
 /// mapped to `skia_safe::BlendMode` at render time).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
-    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
-    SrcATop, DstATop, Xor, Plus, Modulate, Screen, Overlay, Darken, Lighten,
-    ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Multiply,
-    Hue, Saturation, Color, Luminosity,
+    Clear,
+    Src,
+    Dst,
+    SrcOver,
+    DstOver,
+    SrcIn,
+    DstIn,
+    SrcOut,
+    DstOut,
+    SrcATop,
+    DstATop,
+    Xor,
+    Plus,
+    Modulate,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Multiply,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 
 /// Colour filter (mirrors Compose's `ColorFilter` — attached to the paint while rendering an Image/Icon).
@@ -137,7 +203,9 @@ pub enum FilterQuality {
 }
 
 impl Default for FilterQuality {
-    fn default() -> Self { Self::Low }
+    fn default() -> Self {
+        Self::Low
+    }
 }
 
 /// This crate's `Color` as skia's — the one place the two meet, so that a module holding a colour
@@ -160,10 +228,16 @@ mod tests {
         assert!(black[1].abs() < 1e-6 && black[2].abs() < 1e-6 && black[3].abs() < 1e-6);
         let red = Color::RED.to_oklab();
         assert!(
-            (red[1] - 0.6280).abs() < 1e-3 && (red[2] - 0.2249).abs() < 1e-3 && (red[3] - 0.1258).abs() < 1e-3,
+            (red[1] - 0.6280).abs() < 1e-3
+                && (red[2] - 0.2249).abs() < 1e-3
+                && (red[3] - 0.1258).abs() < 1e-3,
             "sRGB red in Oklab: {red:?}"
         );
-        assert_eq!(Color::from_argb(128, 1, 2, 3).to_oklab()[0], 128.0 / 255.0, "alpha is its own component");
+        assert_eq!(
+            Color::from_argb(128, 1, 2, 3).to_oklab()[0],
+            128.0 / 255.0,
+            "alpha is its own component"
+        );
     }
 
     #[test]
@@ -176,7 +250,12 @@ mod tests {
             Color::from_argb(17, 200, 30, 90),
         ] {
             let back = Color::from_oklab(color.to_oklab());
-            assert_eq!(back, color, "round trip of {color:?} (through {:?})", color.to_oklab());
+            assert_eq!(
+                back,
+                color,
+                "round trip of {color:?} (through {:?})",
+                color.to_oklab()
+            );
         }
     }
 
@@ -185,7 +264,11 @@ mod tests {
     #[test]
     fn the_midpoint_is_the_perceptual_one() {
         let mid = Color::from_oklab([1.0, 0.5, 0.0, 0.0]);
-        assert_eq!((mid.r, mid.g, mid.b), (99, 99, 99), "Oklab L = 0.5 is #636363 in sRGB");
+        assert_eq!(
+            (mid.r, mid.g, mid.b),
+            (99, 99, 99),
+            "Oklab L = 0.5 is #636363 in sRGB"
+        );
         let encoded_mid = Color::from_argb(255, 128, 128, 128);
         assert_ne!(mid, encoded_mid, "and that is NOT the byte-wise midpoint");
     }
@@ -212,8 +295,14 @@ mod tests {
             ],
             "the demo's engine strip"
         );
-        let bytes: Vec<u8> = (0..5).map(|i| (255.0 * (i as f32 / 4.0)).round() as u8).collect();
-        assert_eq!(bytes, vec![0x00, 0x40, 0x80, 0xBF, 0xFF], "the demo's byte strip");
+        let bytes: Vec<u8> = (0..5)
+            .map(|i| (255.0 * (i as f32 / 4.0)).round() as u8)
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![0x00, 0x40, 0x80, 0xBF, 0xFF],
+            "the demo's byte strip"
+        );
         assert!(
             engine[1].0 < bytes[1] && engine[3].0 < bytes[3],
             "the perceptual ramp stays darker than the byte blend of the same progress"
@@ -223,7 +312,10 @@ mod tests {
     #[test]
     fn from_oklab_clamps_like_compose_does() {
         assert_eq!(Color::from_oklab([2.0, 2.0, 0.0, 0.0]), Color::WHITE);
-        assert_eq!(Color::from_oklab([-1.0, -1.0, 0.0, 0.0]), Color::TRANSPARENT);
+        assert_eq!(
+            Color::from_oklab([-1.0, -1.0, 0.0, 0.0]),
+            Color::TRANSPARENT
+        );
         let wild = Color::from_oklab([0.5, 0.5, 9.0, -9.0]);
         assert_eq!(wild.a, 128, "alpha clamps, it does not wrap");
     }

@@ -1,10 +1,8 @@
 use super::*;
 
-
 // ═══════════════════════════════════════════════════════════
 // Flight engine: pure state machine
 // ═══════════════════════════════════════════════════════════
-
 
 // ═══════════════════════════════════════════════════════════
 // Modifier builders (frozen API)
@@ -64,7 +62,10 @@ impl Modifier {
         scope: &SharedTransitionScope,
         z_index: f32,
     ) -> Self {
-        self.push(ModifierElement::SharedScopeOverlay { scope_id: scope.scope_id, z_index })
+        self.push(ModifierElement::SharedScopeOverlay {
+            scope_id: scope.scope_id,
+            z_index,
+        })
     }
 
     /// Tag this subtree as the content composed for scene `id` (scene hosts call it on the wrapper
@@ -132,7 +133,11 @@ impl Modifier {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
             key: state.key,
-            kind: SharedKind::Bounds { resize, placeholder, overlay_clip },
+            kind: SharedKind::Bounds {
+                resize,
+                placeholder,
+                overlay_clip,
+            },
             transform,
             path,
             z_index,
@@ -177,8 +182,14 @@ mod tests {
         let a = SharedBounds::new(0.0, 0.0, 10.0, 20.0);
         let b = SharedBounds::new(30.0, 40.0, 50.0, 60.0);
         // Trait entry clamps (engine contract); inherent `lerp` does not.
-        assert_eq!(AnimatableValue::lerp(&a, &b, 0.5), SharedBounds::new(15.0, 20.0, 30.0, 40.0));
-        assert!(!<SharedBounds as AnimatableValue>::supports_spring(), "the rect type is not the animated value — flights animate FlightEdges");
+        assert_eq!(
+            AnimatableValue::lerp(&a, &b, 0.5),
+            SharedBounds::new(15.0, 20.0, 30.0, 40.0)
+        );
+        assert!(
+            !<SharedBounds as AnimatableValue>::supports_spring(),
+            "the rect type is not the animated value — flights animate FlightEdges"
+        );
         assert!(<SharedBounds as AnimatableValue>::same_target(&a, &a));
     }
 
@@ -189,7 +200,10 @@ mod tests {
         let t = BoundsTransform::tween(TweenSpec::default());
         assert!(matches!(t.spec, AnimationSpec::Tween(_)));
         // The DEFAULT is Compose's spring, not a tween — see `BoundsTransform::default`.
-        assert!(matches!(BoundsTransform::default().spec, AnimationSpec::Spring(_)));
+        assert!(matches!(
+            BoundsTransform::default().spec,
+            AnimationSpec::Spring(_)
+        ));
     }
 
     /// The `ContentScale`/`ImageAlignment` math, pinned against Compose's documented
@@ -215,7 +229,10 @@ mod tests {
             "FillBounds is the non-uniform stretch winia used to hard-code"
         );
         assert_eq!(ContentScale::Fit.scale_factors(content, bounds), (1.0, 1.0));
-        assert_eq!(ContentScale::Crop.scale_factors(content, bounds), (2.0, 2.0));
+        assert_eq!(
+            ContentScale::Crop.scale_factors(content, bounds),
+            (2.0, 2.0)
+        );
         assert_eq!(
             ContentScale::Inside.scale_factors((500.0, 500.0), bounds),
             (0.3, 0.3),
@@ -236,7 +253,9 @@ mod tests {
             "degenerate bounds must not produce NaN/inf"
         );
         // A uniform FillWidth scale leaves the leftover axis to the alignment.
-        let off = |a: ImageAlignment| ContentScale::align_offset(a, (300.0, 150.0), (300.0, 250.0), false);
+        let off = |a: ImageAlignment| {
+            ContentScale::align_offset(a, (300.0, 150.0), (300.0, 250.0), false)
+        };
         assert_eq!(off(ImageAlignment::Center), (0.0, 50.0));
         assert_eq!(off(ImageAlignment::BottomCenter), (0.0, 100.0));
         assert_eq!(off(ImageAlignment::TopStart), (0.0, 0.0));
@@ -272,18 +291,22 @@ mod tests {
     #[test]
     pub(crate) fn shared_clip_and_layout_contract_resolution() {
         // Marker round-trip: shared_element carries the placeholder.
-        let m = Modifier::new()
-            .shared_element(
-                SharedContentState { scope_id: 1, key: "k".to_string() },
-                BoundsTransform::default(),
-                PlaceHolderSize::AnimatedSize,
-                PathMotion::Linear,
-                0.0,
-                true,
-            );
+        let m = Modifier::new().shared_element(
+            SharedContentState {
+                scope_id: 1,
+                key: "k".to_string(),
+            },
+            BoundsTransform::default(),
+            PlaceHolderSize::AnimatedSize,
+            PathMotion::Linear,
+            0.0,
+            true,
+        );
         assert_eq!(
             find_shared_marker(&m).map(|x| x.kind),
-            Some(SharedKind::Element { placeholder: PlaceHolderSize::AnimatedSize }),
+            Some(SharedKind::Element {
+                placeholder: PlaceHolderSize::AnimatedSize
+            }),
             "element marker preserves the placeholder"
         );
         // Clip extraction: ALWAYS false now — the render clips every transitioning
@@ -395,10 +418,16 @@ mod tests {
         };
         let (bx, by) = dev_of(PathMotion::ArcBelow);
         let bmag = (bx * bx + by * by).sqrt();
-        assert!(bmag > 20.0, "below-arc bends substantially, got ({bx}, {by})");
+        assert!(
+            bmag > 20.0,
+            "below-arc bends substantially, got ({bx}, {by})"
+        );
         let (ax, ay) = dev_of(PathMotion::ArcAbove);
         let amag = (ax * ax + ay * ay).sqrt();
-        assert!(amag > 20.0, "above-arc bends substantially, got ({ax}, {ay})");
+        assert!(
+            amag > 20.0,
+            "above-arc bends substantially, got ({ax}, {ay})"
+        );
         assert!(
             bx * ax + by * ay < 0.0,
             "arcs bulge to opposite sides: below ({bx}, {by}) vs above ({ax}, {ay})"
@@ -442,34 +471,44 @@ mod tests {
             };
             v.lerped()
         };
-        assert_eq!(flat(0.0, 0.0, 200.0, 0.0), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
-        assert_eq!(flat(0.0, 0.0, 0.0, 200.0), SharedBounds::new(0.0, 100.0, 100.0, 100.0));
-        assert_eq!(flat(50.0, 50.0, 50.0, 50.0), SharedBounds::new(50.0, 50.0, 100.0, 100.0));
+        assert_eq!(
+            flat(0.0, 0.0, 200.0, 0.0),
+            SharedBounds::new(100.0, 0.0, 100.0, 100.0)
+        );
+        assert_eq!(
+            flat(0.0, 0.0, 0.0, 200.0),
+            SharedBounds::new(0.0, 100.0, 100.0, 100.0)
+        );
+        assert_eq!(
+            flat(50.0, 50.0, 50.0, 50.0),
+            SharedBounds::new(50.0, 50.0, 100.0, 100.0)
+        );
     }
 
     #[test]
     pub(crate) fn bounds_alpha_matrix_claims_fade_channels() {
-        let mk = |role, fx: Option<(VisibilityTransition, VisibilityTransition)>| TransitionVisual {
-            start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
-            end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
-            progress: 0.25,
-            flown: None,
-            role,
-            scene_alpha: None,
-            radius_from: [0.0; 4],
-            radius_to: [0.0; 4],
-            clip: false,
-            link_slot: None,
-            scroll: (0.0, 0.0),
-            flight: 0,
-            path: PathMotion::Linear,
-            bounds_fx: fx,
-            elevated: false,
-            remeasure: false,
-            scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
-            radius_from_auto: false,
-            radius_to_auto: false,
-        };
+        let mk =
+            |role, fx: Option<(VisibilityTransition, VisibilityTransition)>| TransitionVisual {
+                start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
+                end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
+                progress: 0.25,
+                flown: None,
+                role,
+                scene_alpha: None,
+                radius_from: [0.0; 4],
+                radius_to: [0.0; 4],
+                clip: false,
+                link_slot: None,
+                scroll: (0.0, 0.0),
+                flight: 0,
+                path: PathMotion::Linear,
+                bounds_fx: fx,
+                elevated: false,
+                remeasure: false,
+                scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
+                radius_from_auto: false,
+                radius_to_auto: false,
+            };
         let fade_in = VisibilityTransition::fade_in(TweenSpec::default());
         let fade_out = VisibilityTransition::fade_out(TweenSpec::default());
         let empty = VisibilityTransition::empty();
@@ -480,11 +519,19 @@ mod tests {
         // flight's crossfade. Compose splits it the same way (the scene transition fades, the shared
         // bounds animation moves), and fading an element twice would dim it twice as fast. Checked
         // with a fade pair attached too, so the scene value wins over the channels.
-        for role in [TransitionRole::Source, TransitionRole::Target, TransitionRole::Morph] {
+        for role in [
+            TransitionRole::Source,
+            TransitionRole::Target,
+            TransitionRole::Morph,
+        ] {
             for (vis, want) in [(0.0, 0.0), (0.4, 0.4), (1.0, 1.0)] {
                 let mut v = mk(role.clone(), Some((fade_in.clone(), fade_out.clone())));
                 v.scene_alpha = Some(vis);
-                assert_eq!(v.alpha(), want, "scene visibility must own opacity for {role:?}");
+                assert_eq!(
+                    v.alpha(),
+                    want,
+                    "scene visibility must own opacity for {role:?}"
+                );
                 let mut v = mk(role.clone(), None);
                 v.scene_alpha = Some(vis);
                 assert_eq!(v.alpha(), want, "…and with no enter/exit either");
@@ -493,36 +540,64 @@ mod tests {
         // Bounds + fade enter/exit: identical numbers (fade defaults claim
         // the crossfade they already produce).
         assert_eq!(
-            mk(TransitionRole::Target, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            mk(
+                TransitionRole::Target,
+                Some((fade_in.clone(), fade_out.clone()))
+            )
+            .alpha(),
             0.25
         );
         assert_eq!(
-            mk(TransitionRole::Source, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            mk(
+                TransitionRole::Source,
+                Some((fade_in.clone(), fade_out.clone()))
+            )
+            .alpha(),
             0.75
         );
         // Bounds + fade-less customs ride opaque (Compose rule).
         assert_eq!(
-            mk(TransitionRole::Target, Some((empty.clone(), fade_out.clone()))).alpha(),
+            mk(
+                TransitionRole::Target,
+                Some((empty.clone(), fade_out.clone()))
+            )
+            .alpha(),
             1.0
         );
         assert_eq!(
-            mk(TransitionRole::Source, Some((fade_in.clone(), empty.clone()))).alpha(),
+            mk(
+                TransitionRole::Source,
+                Some((fade_in.clone(), empty.clone()))
+            )
+            .alpha(),
             1.0
         );
         // Morphs never touch opacity, pair or not.
         assert_eq!(mk(TransitionRole::Morph, None).alpha(), 1.0);
         assert_eq!(
-            mk(TransitionRole::Morph, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            mk(
+                TransitionRole::Morph,
+                Some((fade_in.clone(), fade_out.clone()))
+            )
+            .alpha(),
             1.0
         );
     }
 
     #[test]
     pub(crate) fn detect_switch_finds_pair_under_different_slots() {
-        let prev: HashMap<(u64, String), u64> =
-            [((7, "hero".to_string()), 100), ((7, "static".to_string()), 101)].into_iter().collect();
-        let live: HashMap<(u64, String), u64> =
-            [((7, "hero".to_string()), 200), ((7, "static".to_string()), 101)].into_iter().collect();
+        let prev: HashMap<(u64, String), u64> = [
+            ((7, "hero".to_string()), 100),
+            ((7, "static".to_string()), 101),
+        ]
+        .into_iter()
+        .collect();
+        let live: HashMap<(u64, String), u64> = [
+            ((7, "hero".to_string()), 200),
+            ((7, "static".to_string()), 101),
+        ]
+        .into_iter()
+        .collect();
         let found = detect_switch(&prev, &live);
         assert_eq!(found.len(), 1, "only the re-slotted key is a switch");
         assert_eq!(found[0].scope_id, 7);
@@ -535,21 +610,47 @@ mod tests {
         let prev: HashMap<(u64, String), u64> = [((1, "a".to_string()), 10)].into_iter().collect();
         // Brand-new key (no old endpoint) and vanished key (no new endpoint).
         let live: HashMap<(u64, String), u64> = [((1, "b".to_string()), 20)].into_iter().collect();
-        assert!(detect_switch(&prev, &live).is_empty(), "appear-without-disappear is not a switch");
-        assert!(detect_switch(&prev, &prev).is_empty(), "identical frames never switch");
+        assert!(
+            detect_switch(&prev, &live).is_empty(),
+            "appear-without-disappear is not a switch"
+        );
+        assert!(
+            detect_switch(&prev, &prev).is_empty(),
+            "identical frames never switch"
+        );
     }
 
     #[test]
     pub(crate) fn flight_full_lifecycle() {
         let mut f = Flight::new(1, 7, "hero".to_string());
-        let acts = f.on_event(FlightEvent::CounterpartAppeared { source_slot: 100, target_slot: 200 });
+        let acts = f.on_event(FlightEvent::CounterpartAppeared {
+            source_slot: 100,
+            target_slot: 200,
+        });
         assert_eq!(f.phase, FlightPhase::AwaitingBounds);
-        assert_eq!(acts, vec![FlightAction::CollectBounds { source_slot: 100, target_slot: 200 }]);
+        assert_eq!(
+            acts,
+            vec![FlightAction::CollectBounds {
+                source_slot: 100,
+                target_slot: 200
+            }]
+        );
 
-        let (s, e) = (SharedBounds::new(0.0, 0.0, 50.0, 50.0), SharedBounds::new(200.0, 0.0, 150.0, 150.0));
+        let (s, e) = (
+            SharedBounds::new(0.0, 0.0, 50.0, 50.0),
+            SharedBounds::new(200.0, 0.0, 150.0, 150.0),
+        );
         let acts = f.on_event(FlightEvent::BoundsReady { start: s, end: e });
         assert_eq!(f.phase, FlightPhase::Flying);
-        assert_eq!(acts, vec![FlightAction::StartFlight { source_slot: 100, target_slot: 200, start: s, end: e }]);
+        assert_eq!(
+            acts,
+            vec![FlightAction::StartFlight {
+                source_slot: 100,
+                target_slot: 200,
+                start: s,
+                end: e
+            }]
+        );
 
         let acts = f.on_event(FlightEvent::ProgressDone);
         assert_eq!(f.phase, FlightPhase::Finishing);
@@ -563,21 +664,34 @@ mod tests {
         );
 
         let acts = f.on_event(FlightEvent::Retarget);
-        assert_eq!((f.phase, acts), (FlightPhase::Idle, vec![FlightAction::Noop]));
+        assert_eq!(
+            (f.phase, acts),
+            (FlightPhase::Idle, vec![FlightAction::Noop])
+        );
     }
 
     #[test]
     pub(crate) fn flight_retarget_bumps_generation() {
         let mut f = Flight::new(2, 7, "hero".to_string());
-        f.on_event(FlightEvent::CounterpartAppeared { source_slot: 1, target_slot: 2 });
+        f.on_event(FlightEvent::CounterpartAppeared {
+            source_slot: 1,
+            target_slot: 2,
+        });
         f.on_event(FlightEvent::BoundsReady {
             start: SharedBounds::new(0.0, 0.0, 10.0, 10.0),
             end: SharedBounds::new(50.0, 0.0, 10.0, 10.0),
         });
         let prev_gen = f.generation;
         let acts = f.on_event(FlightEvent::Retarget);
-        assert_eq!(f.generation, prev_gen + 1, "actuators ignore stale generations");
-        assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]), "restart from current visual");
+        assert_eq!(
+            f.generation,
+            prev_gen + 1,
+            "actuators ignore stale generations"
+        );
+        assert!(
+            matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]),
+            "restart from current visual"
+        );
         assert_eq!(f.phase, FlightPhase::Flying, "still flying after redirect");
     }
 
@@ -585,7 +699,10 @@ mod tests {
     pub(crate) fn flight_cancel_on_dispose_and_close() {
         for ev in [FlightEvent::ScopeDisposed, FlightEvent::WindowClosed] {
             let mut f = Flight::new(3, 7, "k".to_string());
-            f.on_event(FlightEvent::CounterpartAppeared { source_slot: 1, target_slot: 2 });
+            f.on_event(FlightEvent::CounterpartAppeared {
+                source_slot: 1,
+                target_slot: 2,
+            });
             let acts = f.on_event(ev);
             assert_eq!(f.phase, FlightPhase::Cancelled);
             assert_eq!(acts, vec![FlightAction::CancelFlight]);
@@ -598,11 +715,17 @@ mod tests {
     #[test]
     pub(crate) fn flight_stray_events_are_noop() {
         let mut f = Flight::new(4, 7, "k".to_string());
-        assert_eq!(f.on_event(FlightEvent::ProgressDone), vec![FlightAction::Noop]);
-        assert_eq!(f.on_event(FlightEvent::BoundsReady {
-            start: SharedBounds::new(0.0, 0.0, 1.0, 1.0),
-            end: SharedBounds::new(0.0, 0.0, 1.0, 1.0),
-        }), vec![FlightAction::Noop]);
+        assert_eq!(
+            f.on_event(FlightEvent::ProgressDone),
+            vec![FlightAction::Noop]
+        );
+        assert_eq!(
+            f.on_event(FlightEvent::BoundsReady {
+                start: SharedBounds::new(0.0, 0.0, 1.0, 1.0),
+                end: SharedBounds::new(0.0, 0.0, 1.0, 1.0),
+            }),
+            vec![FlightAction::Noop]
+        );
         assert_eq!(f.phase, FlightPhase::Idle);
     }
 
@@ -615,7 +738,9 @@ mod tests {
             b.shared_content_state("hero"),
             "same key in different scopes must never match"
         );
-        assert_eq!(a.shared_content_state("hero"), a.shared_content_state("hero"));
+        assert_eq!(
+            a.shared_content_state("hero"),
+            a.shared_content_state("hero")
+        );
     }
 }
-

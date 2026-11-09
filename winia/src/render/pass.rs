@@ -1,8 +1,8 @@
-use super::*;
 use super::backdrop::*;
 use super::helpers::*;
 use super::paint::*;
 use super::text_field::*;
+use super::*;
 
 // ── The render walk, with BackdropBlur handled inline ──
 
@@ -64,7 +64,8 @@ fn capture_item(
     let picture = recorder.finish_recording_as_picture(None);
     CAPTURING_ITEM.with(|c| c.set(false));
     if let Some(picture) = picture {
-        paint.exit_store
+        paint
+            .exit_store
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pictures
@@ -102,7 +103,9 @@ fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAn
         .collect();
     order.sort_by_key(|(_, order)| *order);
     for (key, _) in order {
-        let Some(exit) = store.exits.get(&key) else { continue; };
+        let Some(exit) = store.exits.get(&key) else {
+            continue;
+        };
         let alpha = exit.alpha.peek().clamp(0.0, 1.0);
         if alpha > 0.001 {
             canvas.save();
@@ -112,9 +115,7 @@ fn draw_host_exits(canvas: &Canvas, host: &crate::layout::item_animation::ItemAn
             canvas.draw_picture(&exit.picture, None, Some(&paint));
             canvas.restore();
         }
-        if alpha <= 0.001
-            && !crate::animation::has_animation_for_state(exit.alpha.state_id())
-        {
+        if alpha <= 0.001 && !crate::animation::has_animation_for_state(exit.alpha.state_id()) {
             finished.push(key);
         }
     }
@@ -138,7 +139,11 @@ impl<'a> ItemCanvasGuard<'a> {
         bounds: Rect,
     ) -> Self {
         let Some(paint) = paint else {
-            return Self { canvas, active: false, layer: false };
+            return Self {
+                canvas,
+                active: false,
+                layer: false,
+            };
         };
         canvas.save();
         let offset = paint.offset.peek();
@@ -150,7 +155,11 @@ impl<'a> ItemCanvasGuard<'a> {
             // not add the offset again or Skia's parameter-space bounds move the layer twice.
             canvas.save_layer_alpha_f(Some(bounds), alpha);
         }
-        Self { canvas, active: true, layer }
+        Self {
+            canvas,
+            active: true,
+            layer,
+        }
     }
 }
 
@@ -170,7 +179,8 @@ pub(super) fn render_pass1(
     root_idx: usize,
     idx: usize,
     canvas: &Canvas,
-    parent_x: f32, parent_y: f32,
+    parent_x: f32,
+    parent_y: f32,
     layer_root: bool,
     // This subtree is painted on a ROOTLESS canvas (a layer entry above it):
     // the ancestor translate is not on the canvas, so a transitioning node
@@ -201,7 +211,9 @@ pub(super) fn render_pass1(
     let content_box = node.content_box();
     let w = content_box.width;
     let h = content_box.height;
-    if w <= 0.0 || h <= 0.0 { return; }
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
 
     // Item animation (Compose's `animateItem`): the item is painted where it WAS, and the offset
     // travels to 0 as the layout settles; the alpha layer covers the whole item for enter/exit fade.
@@ -214,11 +226,8 @@ pub(super) fn render_pass1(
     if let Some(paint) = &item_paint {
         capture_item(nodes, root_idx, idx, x, y, paint);
     }
-    let _item_canvas = ItemCanvasGuard::new(
-        canvas,
-        item_paint.as_ref(),
-        Rect::new(x, y, x + w, y + h),
-    );
+    let _item_canvas =
+        ItemCanvasGuard::new(canvas, item_paint.as_ref(), Rect::new(x, y, x + w, y + h));
 
     let rect = Rect::new(x, y, x + w, y + h);
 
@@ -275,170 +284,180 @@ pub(super) fn render_pass1(
         // The scale the flight transform applies; `RoundedCorner` needs it to turn its
         // device-space radius into the pre-divided one the canvas expects.
         Option<(f32, f32)>,
-    ) =
-        if let Some(t) = node.transition.as_ref() {            // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
-            // the endpoint — the Compose spring look. Every consumer
-            // (lerp, radii, clip, hit) shares this single t; only opacity
-            // stays clamped (alpha()) and degenerate rects stay invisible.
-            // Paint follows the SAME arc-aware lerped() as hit (a raw
-            // start.lerp here would silently straighten arc flights).
-            let l = t.lerped();
-            let alpha = t.alpha();
-            if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
-                return;
-            }
-            // Render-time trace (node level): the flight's painted rect, radii, clip and alpha are all
-            // produced HERE and stored nowhere — the layout tree only knows the end's own layout box, and the
-            // flight records describe the flight's decision rather than the geometry this call was handed.
-            // Recorded before the early-return above would have skipped it, i.e. only what is really painted.
-            if crate::debug::animation::enabled() {
-                let mut r = crate::debug::animation::TraceRecord::render(node.slot_key);
-                r.role = Some(match t.role {
-                    TransitionRole::Source => "Source",
-                    TransitionRole::Target => "Target",
-                    TransitionRole::Morph => "Morph",
-                });
-                r.flight = Some(t.flight);
-                r.progress = Some(t.progress);
-                r.painted = Some(crate::debug::animation::TraceRect { x: l.x, y: l.y, w: l.width, h: l.height });
-                r.alpha = Some(alpha);
-                r.radii = Some(t.radii());
-                r.clip = Some(t.clip);
-                r.detail = Some(format!("node={:#x}", node.id));
-                crate::debug::animation::record(r);
-            }
-            canvas.save();
-            // Expand wipes in from the edge — force the lerped-bounds clip
-            // even when the marker asked for none (else content overflows).
-            // Morphs never run channels (same content, no appear/disappear).
-            let fx_clip = match (&t.role, t.bounds_fx.as_ref()) {
-                (TransitionRole::Morph, _) | (_, None) => false,
-                (TransitionRole::Target, Some((enter, _))) => enter.expand || enter.expand_h,
-                (TransitionRole::Source, Some((_, exit))) => exit.expand || exit.expand_h,
+    ) = if let Some(t) = node.transition.as_ref() {
+        // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
+        // the endpoint — the Compose spring look. Every consumer
+        // (lerp, radii, clip, hit) shares this single t; only opacity
+        // stays clamped (alpha()) and degenerate rects stay invisible.
+        // Paint follows the SAME arc-aware lerped() as hit (a raw
+        // start.lerp here would silently straighten arc flights).
+        let l = t.lerped();
+        let alpha = t.alpha();
+        if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
+            return;
+        }
+        // Render-time trace (node level): the flight's painted rect, radii, clip and alpha are all
+        // produced HERE and stored nowhere — the layout tree only knows the end's own layout box, and the
+        // flight records describe the flight's decision rather than the geometry this call was handed.
+        // Recorded before the early-return above would have skipped it, i.e. only what is really painted.
+        if crate::debug::animation::enabled() {
+            let mut r = crate::debug::animation::TraceRecord::render(node.slot_key);
+            r.role = Some(match t.role {
+                TransitionRole::Source => "Source",
+                TransitionRole::Target => "Target",
+                TransitionRole::Morph => "Morph",
+            });
+            r.flight = Some(t.flight);
+            r.progress = Some(t.progress);
+            r.painted = Some(crate::debug::animation::TraceRect {
+                x: l.x,
+                y: l.y,
+                w: l.width,
+                h: l.height,
+            });
+            r.alpha = Some(alpha);
+            r.radii = Some(t.radii());
+            r.clip = Some(t.clip);
+            r.detail = Some(format!("node={:#x}", node.id));
+            crate::debug::animation::record(r);
+        }
+        canvas.save();
+        // Expand wipes in from the edge — force the lerped-bounds clip
+        // even when the marker asked for none (else content overflows).
+        // Morphs never run channels (same content, no appear/disappear).
+        let fx_clip = match (&t.role, t.bounds_fx.as_ref()) {
+            (TransitionRole::Morph, _) | (_, None) => false,
+            (TransitionRole::Target, Some((enter, _))) => enter.expand || enter.expand_h,
+            (TransitionRole::Source, Some((_, exit))) => exit.expand || exit.expand_h,
+        };
+        if t.clip || fx_clip {
+            canvas.clip_rrect(t.canvas_rrect(), None, Some(true));
+        }
+        // Ancestor scroll add-back (BLOCKER #1): the canvas carries
+        // translate(-S) from scrolled ancestors while `l` is
+        // scroll-corrected — painting at `l + S` lands exactly on the
+        // lerped rect (the frame hit test and ghost routing use).
+        // Pivot stays the pure layout origin: content is drawn at layout
+        // coords, so final(p) = l + S - S + s*(p - node_origin).
+        // A LAYER ROOT renders on a canvas with no ancestor translate and
+        // at a scroll-corrected origin, so it must not add the sum back —
+        // the same bit that routed this node to the layer (skip in the
+        // walk, paint here) decides the add-back too, so the two can never
+        // disagree.
+        // The canvas decides, not the node: a layer entry is painted with no
+        // ancestor translate, so neither it nor anything below it may add
+        // the frozen scroll sum back (that would double-count).
+        let scroll = if rootless { (0.0, 0.0) } else { t.scroll };
+        canvas.translate((l.x + scroll.0, l.y + scroll.1));
+        // sharedBounds enter/exit channels, evaluated at appearance
+        // amount q (target appears with p, source disappears with 1-p).
+        // Slide offsets, scale k and expand (≈ scale-about-edge; layout
+        // followers already sit at end state under JumpCut, so expand
+        // reads as scale+clip). Element flights and morphs skip.
+        // ORDER: channels live in DEVICE space (right after the flight
+        // translate, before the flight scale) — appending them after
+        // scale would multiply offsets by the axis scales (which differ
+        // per end: the ghost grows while the target shrinks).
+        if let Some((enter, exit)) = t.bounds_fx.as_ref() {
+            let (cfg, q) = match t.role {
+                TransitionRole::Target => (enter, t.progress),
+                TransitionRole::Source => (exit, 1.0 - t.progress),
+                TransitionRole::Morph => (enter, 1.0),
             };
-            if t.clip || fx_clip {
-                canvas.clip_rrect(t.canvas_rrect(), None, Some(true));
-            }
-            // Ancestor scroll add-back (BLOCKER #1): the canvas carries
-            // translate(-S) from scrolled ancestors while `l` is
-            // scroll-corrected — painting at `l + S` lands exactly on the
-            // lerped rect (the frame hit test and ghost routing use).
-            // Pivot stays the pure layout origin: content is drawn at layout
-            // coords, so final(p) = l + S - S + s*(p - node_origin).
-            // A LAYER ROOT renders on a canvas with no ancestor translate and
-            // at a scroll-corrected origin, so it must not add the sum back —
-            // the same bit that routed this node to the layer (skip in the
-            // walk, paint here) decides the add-back too, so the two can never
-            // disagree.
-            // The canvas decides, not the node: a layer entry is painted with no
-            // ancestor translate, so neither it nor anything below it may add
-            // the frozen scroll sum back (that would double-count).
-            let scroll = if rootless { (0.0, 0.0) } else { t.scroll };
-            canvas.translate((l.x + scroll.0, l.y + scroll.1));
-            // sharedBounds enter/exit channels, evaluated at appearance
-            // amount q (target appears with p, source disappears with 1-p).
-            // Slide offsets, scale k and expand (≈ scale-about-edge; layout
-            // followers already sit at end state under JumpCut, so expand
-            // reads as scale+clip). Element flights and morphs skip.
-            // ORDER: channels live in DEVICE space (right after the flight
-            // translate, before the flight scale) — appending them after
-            // scale would multiply offsets by the axis scales (which differ
-            // per end: the ghost grows while the target shrinks).
-            if let Some((enter, exit)) = t.bounds_fx.as_ref() {
-                let (cfg, q) = match t.role {
-                    TransitionRole::Target => (enter, t.progress),
-                    TransitionRole::Source => (exit, 1.0 - t.progress),
-                    TransitionRole::Morph => (enter, 1.0),
-                };
-                if !matches!(t.role, TransitionRole::Morph) {
-                    if let Some((dir, off)) = cfg.slide {
-                        let full = match dir {
-                            SlideDirection::Left | SlideDirection::Right => l.width,
-                            SlideDirection::Up | SlideDirection::Down => l.height,
-                        };
-                        let dist = match off {
-                            SlideOffset::Fixed(px) => px,
-                            SlideOffset::Fraction(f) => f * full,
-                        };
-                        let o = (1.0 - q) * dist;
-                        let (ox, oy) = match dir {
-                            SlideDirection::Left => (-o, 0.0),
-                            SlideDirection::Right => (o, 0.0),
-                            SlideDirection::Up => (0.0, -o),
-                            SlideDirection::Down => (0.0, o),
-                        };
-                        canvas.translate((ox, oy));
-                    }
-                    // Scale pivot is RELATIVE to the lerped origin (this block
-                    // sits before the flight scale — absolute device pivots
-                    // would be scaled along; same trap as the slide above).
-                    // NOTE: expand takes over the scale pivot (single merged
-                    // k) — combining scale+expand on one endpoint is
-                    // discouraged (Compose layers them; v1 merges).
-                    let mut kx = 1.0f32;
-                    let mut ky = 1.0f32;
-                    let mut px = l.width * cfg.transform_origin.0;
-                    let mut py = l.height * cfg.transform_origin.1;
-                    if cfg.scale {
-                        let k = cfg.scale_from + (1.0 - cfg.scale_from) * q;
-                        kx *= k;
-                        ky *= k;
-                    }
-                    if cfg.expand {
-                        ky *= q;
-                        px = l.width * 0.5;
-                        py = match cfg.expand_from {
-                            ExpandFrom::Top => 0.0,
-                            ExpandFrom::Bottom => l.height,
-                        };
-                    }
-                    if cfg.expand_h {
-                        kx *= q;
-                        px = match cfg.expand_from_h {
-                            ExpandFromH::Start => 0.0,
-                            ExpandFromH::End => l.width,
-                        };
-                        py = l.height * 0.5;
-                    }
-                    if (kx - 1.0).abs() > 1e-6 || (ky - 1.0).abs() > 1e-6 {
-                        canvas.translate((px, py));
-                        canvas.scale((kx, ky));
-                        canvas.translate((-px, -py));
-                    }
+            if !matches!(t.role, TransitionRole::Morph) {
+                if let Some((dir, off)) = cfg.slide {
+                    let full = match dir {
+                        SlideDirection::Left | SlideDirection::Right => l.width,
+                        SlideDirection::Up | SlideDirection::Down => l.height,
+                    };
+                    let dist = match off {
+                        SlideOffset::Fixed(px) => px,
+                        SlideOffset::Fraction(f) => f * full,
+                    };
+                    let o = (1.0 - q) * dist;
+                    let (ox, oy) = match dir {
+                        SlideDirection::Left => (-o, 0.0),
+                        SlideDirection::Right => (o, 0.0),
+                        SlideDirection::Up => (0.0, -o),
+                        SlideDirection::Down => (0.0, o),
+                    };
+                    canvas.translate((ox, oy));
+                }
+                // Scale pivot is RELATIVE to the lerped origin (this block
+                // sits before the flight scale — absolute device pivots
+                // would be scaled along; same trap as the slide above).
+                // NOTE: expand takes over the scale pivot (single merged
+                // k) — combining scale+expand on one endpoint is
+                // discouraged (Compose layers them; v1 merges).
+                let mut kx = 1.0f32;
+                let mut ky = 1.0f32;
+                let mut px = l.width * cfg.transform_origin.0;
+                let mut py = l.height * cfg.transform_origin.1;
+                if cfg.scale {
+                    let k = cfg.scale_from + (1.0 - cfg.scale_from) * q;
+                    kx *= k;
+                    ky *= k;
+                }
+                if cfg.expand {
+                    ky *= q;
+                    px = l.width * 0.5;
+                    py = match cfg.expand_from {
+                        ExpandFrom::Top => 0.0,
+                        ExpandFrom::Bottom => l.height,
+                    };
+                }
+                if cfg.expand_h {
+                    kx *= q;
+                    px = match cfg.expand_from_h {
+                        ExpandFromH::Start => 0.0,
+                        ExpandFromH::End => l.width,
+                    };
+                    py = l.height * 0.5;
+                }
+                if (kx - 1.0).abs() > 1e-6 || (ky - 1.0).abs() > 1e-6 {
+                    canvas.translate((px, py));
+                    canvas.scale((kx, ky));
+                    canvas.translate((-px, -py));
                 }
             }
-            // Scale the content box into the lerped rect. `paint_scale` owns the
-            // rule (and is unit-tested): a RE-MEASURED end must not scale at all
-            // — its content was already laid out at the animated size, and the
-            // box trails `lerped()` by one poll (writers run after layout), so
-            // scaling by `l/box` would stretch the freshly re-flowed content by
-            // the frame delta (measured 1.22-1.29x in the real app loop).
-            // Everything else scales its content box into the lerped rect.
-            let (sx, sy) = t.paint_scale(w, h);
-            canvas.scale((sx, sy));
-            // Scale about the lerped origin (not the canvas origin): content
-            // drawn at layout coords must land on the lerped rect, i.e.
-            // final(p) = l + s*(p - node_origin). Same pivot convention as
-            // apply_gl_transform and remap_hit. The offset places the content by
-            // Compose `Alignment` when the fit does not fill both axes (it is already
-            // in node coords, i.e. divided by the scale, because it is applied inside
-            // `canvas.scale`).
-            let (off_x, off_y) = t.paint_offset(w, h);
-            canvas.translate((-x + off_x, -y + off_y));
-            let mut layered = false;
-            if alpha < 0.999 {
-                let mut paint = skia_safe::Paint::default();
-                paint.set_alpha_f(alpha);
-                canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
-                layered = true;
-            }
-            (true, layered, Some(t.radii_pairs(
+        }
+        // Scale the content box into the lerped rect. `paint_scale` owns the
+        // rule (and is unit-tested): a RE-MEASURED end must not scale at all
+        // — its content was already laid out at the animated size, and the
+        // box trails `lerped()` by one poll (writers run after layout), so
+        // scaling by `l/box` would stretch the freshly re-flowed content by
+        // the frame delta (measured 1.22-1.29x in the real app loop).
+        // Everything else scales its content box into the lerped rect.
+        let (sx, sy) = t.paint_scale(w, h);
+        canvas.scale((sx, sy));
+        // Scale about the lerped origin (not the canvas origin): content
+        // drawn at layout coords must land on the lerped rect, i.e.
+        // final(p) = l + s*(p - node_origin). Same pivot convention as
+        // apply_gl_transform and remap_hit. The offset places the content by
+        // Compose `Alignment` when the fit does not fill both axes (it is already
+        // in node coords, i.e. divided by the scale, because it is applied inside
+        // `canvas.scale`).
+        let (off_x, off_y) = t.paint_offset(w, h);
+        canvas.translate((-x + off_x, -y + off_y));
+        let mut layered = false;
+        if alpha < 0.999 {
+            let mut paint = skia_safe::Paint::default();
+            paint.set_alpha_f(alpha);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
+            layered = true;
+        }
+        (
+            true,
+            layered,
+            Some(t.radii_pairs(
                 if t.remeasure { l.width } else { w },
                 if t.remeasure { l.height } else { h },
-            )), Some((sx, sy)))
-        } else {
-            (false, false, None, None)
-        };
+            )),
+            Some((sx, sy)),
+        )
+    } else {
+        (false, false, None, None)
+    };
     // Layout-space morph rect for the Clip-element arm (lands exactly on the
     // lerped bounds under the flight transform, by linearity) — shaped by Compose's
     // `overlayClip` read from THIS node's marker (per-end, like Compose): the flight's own
@@ -448,9 +467,7 @@ pub(super) fn render_pass1(
         (Some(r), Some((sx, sy))) => {
             match crate::transition::overlay_clip_of(&node.modifier) {
                 crate::transition::OverlayClip::None => None,
-                crate::transition::OverlayClip::Rectangle => {
-                    Some(skia_safe::RRect::new_rect(rect))
-                }
+                crate::transition::OverlayClip::Rectangle => Some(skia_safe::RRect::new_rect(rect)),
                 crate::transition::OverlayClip::RoundedCorner(radius) => {
                     // The radius is device-space, so pre-divide by the paint scale — the
                     // same convention `radii_pairs` uses (the clip is drawn inside
@@ -459,12 +476,10 @@ pub(super) fn render_pass1(
                     let ry = radius / sy.abs().max(1e-6);
                     Some(skia_safe::RRect::new_rect_xy(rect, rx, ry))
                 }
-                crate::transition::OverlayClip::Bounds => {
-                    Some(skia_safe::RRect::new_rect_radii(
-                        rect,
-                        &crate::transition::rrect_vectors(r),
-                    ))
-                }
+                crate::transition::OverlayClip::Bounds => Some(skia_safe::RRect::new_rect_radii(
+                    rect,
+                    &crate::transition::rrect_vectors(r),
+                )),
             }
         }
         _ => None,
@@ -496,8 +511,11 @@ pub(super) fn render_pass1(
     // (a fade) was therefore invisible to every other channel.
     if crate::debug::animation::enabled() {
         if let Some(gl) = gl_params.as_ref() {
-            if gl.alpha < 1.0 || gl.scale_x != 1.0 || gl.scale_y != 1.0
-                || gl.translation_x != 0.0 || gl.translation_y != 0.0
+            if gl.alpha < 1.0
+                || gl.scale_x != 1.0
+                || gl.scale_y != 1.0
+                || gl.translation_x != 0.0
+                || gl.translation_y != 0.0
                 || gl.rotation_z != 0.0
             {
                 let mut r = crate::debug::animation::TraceRecord::render(node.slot_key);
@@ -506,7 +524,12 @@ pub(super) fn render_pass1(
                 r.layout = Some(crate::debug::animation::TraceRect { x, y, w, h });
                 r.detail = Some(format!(
                     "scale=({:.4},{:.4}) translate=({:.2},{:.2}) rot_z={:.2} clip={}",
-                    gl.scale_x, gl.scale_y, gl.translation_x, gl.translation_y, gl.rotation_z, gl.clip
+                    gl.scale_x,
+                    gl.scale_y,
+                    gl.translation_x,
+                    gl.translation_y,
+                    gl.rotation_z,
+                    gl.clip
                 ));
                 crate::debug::animation::record(r);
             }
@@ -554,7 +577,10 @@ pub(super) fn render_pass1(
                 paint_rect.width(),
                 paint_rect.height(),
             );
-            let shape = gl.shadow_shape.clone().unwrap_or(crate::graphics::Shape::Rectangle);
+            let shape = gl
+                .shadow_shape
+                .clone()
+                .unwrap_or(crate::graphics::Shape::Rectangle);
             draw_elevation_shadow(
                 canvas,
                 rect,
@@ -583,13 +609,27 @@ pub(super) fn render_pass1(
             paint_rect.height(),
         );
         true
-    } else { false };
+    } else {
+        false
+    };
     let mut blur_radius: Option<f32> = None;
     let mut clip_shape: Option<crate::graphics::Shape> = None;
     // A shadow (elevation, shape, colour) paints on the same layer as a background in chain order.
     // With clip=true it joins `clip_shape`, which clips the CONTENT — never the shadow, matching
     // Compose. The shadow layer is drawn straight from the pre-scan; see the note below.
-    let mut text: Option<(&str, f32, &crate::graphics::Color, usize, crate::text::TextAlign, crate::text::TextOverflow, crate::text::FontWeight, crate::text::FontSlant, bool, f32, Option<f32>)> = None;
+    let mut text: Option<(
+        &str,
+        f32,
+        &crate::graphics::Color,
+        usize,
+        crate::text::TextAlign,
+        crate::text::TextOverflow,
+        crate::text::FontWeight,
+        crate::text::FontSlant,
+        bool,
+        f32,
+        Option<f32>,
+    )> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -604,9 +644,7 @@ pub(super) fn render_pass1(
         // the line needs is only known after the content is measured, so the node carries the result
         // instead of the modifier being asked again. A container moves its children and leaves this
         // `None`, falling through to the padding arithmetic below.
-        Some((inset_x, inset_y, w_inner, h_inner)) => {
-            (x + inset_x, y + inset_y, w_inner, h_inner)
-        }
+        Some((inset_x, inset_y, w_inner, h_inner)) => (x + inset_x, y + inset_y, w_inner, h_inner),
         None => (
             x + if pad_rtl { pad_e } else { pad_s },
             y + pad_t,
@@ -664,7 +702,18 @@ pub(super) fn render_pass1(
             }
             // The text-field container (M3 Filled/Outlined: background, indicator, outline, label,
             // supporting text).
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, read_only: _, cursor_color: _, indicator_color, focus_progress, offset_mapping: _, supporting } => {
+            ModifierElement::TextFieldVisual {
+                variant,
+                shape,
+                colors,
+                enabled: _,
+                read_only: _,
+                cursor_color: _,
+                indicator_color,
+                focus_progress,
+                offset_mapping: _,
+                supporting,
+            } => {
                 // The container rect: supporting text is carved out of it (supporting text draws
                 // 4 dp below the container, so the node's height is container + 4 + 16).
                 let supporting_h = supporting.as_ref().map_or(0.0, |sv| sv.height());
@@ -681,21 +730,38 @@ pub(super) fn render_pass1(
                             matches!(el, ModifierElement::TextFieldSlot { role }
                                 if *role == crate::text::field::TextFieldSlotRole::Label)
                         });
-                        if !is_label { return None; }
+                        if !is_label {
+                            return None;
+                        }
                         // A child's position is relative to the CONTAINER, which is this node, so the
                         // gap is built from this node's absolute x/y. Using the parent's coordinates
                         // puts the gap in the wrong place.
                         let (lx, ly) = (x + cn.position.x, y + cn.position.y);
-                        if ly >= container_rect.top { return None; } // 展开态：无缺口
+                        if ly >= container_rect.top {
+                            return None;
+                        } // 展开态：无缺口
                         Some(Rect::new(
-                            lx - 4.0, ly,
-                            lx + cn.measured_size.width + 4.0, ly + cn.measured_size.height,
+                            lx - 4.0,
+                            ly,
+                            lx + cn.measured_size.width + 4.0,
+                            ly + cn.measured_size.height,
                         ))
                     })
-                } else { None };
+                } else {
+                    None
+                };
                 let focus_p = focus_progress.peek();
                 let shape = shape.eval();
-                draw_text_field_container(canvas, container_rect, variant, &shape, colors, &indicator_color.peek(), focus_p, cutout);
+                draw_text_field_container(
+                    canvas,
+                    container_rect,
+                    variant,
+                    &shape,
+                    colors,
+                    &indicator_color.peek(),
+                    focus_p,
+                    cutout,
+                );
                 // Supporting text, 4 dp below the container.
                 if let Some(sv) = supporting {
                     draw_text_field_aux_text(
@@ -718,15 +784,37 @@ pub(super) fn render_pass1(
             }
             // An icon draws inside the content box, inset by the leaf's padding.
             ModifierElement::DrawIcon { spec } => {
-                draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
+                draw_icon(
+                    canvas,
+                    Rect::new(
+                        content_x,
+                        content_y,
+                        content_x + content_w,
+                        content_y + content_h,
+                    ),
+                    node.layout_direction,
+                    spec,
+                );
             }
             // A picture (`Image`): ContentScale, alignment, alpha, colour filter and filter quality.
-            ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality } => {
+            ModifierElement::ImageContent {
+                source,
+                content_scale,
+                alignment,
+                alpha,
+                color_filter,
+                filter_quality,
+            } => {
                 let alpha = alpha.eval();
                 let color_filter = color_filter.as_ref().map(|filter| filter.eval());
                 draw_image_content(
                     canvas,
-                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    Rect::new(
+                        content_x,
+                        content_y,
+                        content_x + content_w,
+                        content_y + content_h,
+                    ),
                     source,
                     *content_scale,
                     *alignment,
@@ -746,7 +834,19 @@ pub(super) fn render_pass1(
                     &mut last_background,
                     tf_radii,
                 ) {
-                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
+                    text = Some((
+                        tp.content,
+                        tp.font_size,
+                        tp.color,
+                        tp.max_lines,
+                        tp.align,
+                        tp.overflow,
+                        tp.font_weight,
+                        tp.font_style,
+                        tp.soft_wrap,
+                        tp.letter_spacing,
+                        tp.line_height,
+                    ));
                 }
             }
         }
@@ -768,7 +868,12 @@ pub(super) fn render_pass1(
     // A content blur is a saveLayer.
     if let Some(r) = blur_radius {
         let mut paint = Paint::default();
-        paint.set_image_filter(image_filters::blur((r, r), skia_safe::TileMode::Clamp, None, None));
+        paint.set_image_filter(image_filters::blur(
+            (r, r),
+            skia_safe::TileMode::Clamp,
+            None,
+            None,
+        ));
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
     }
@@ -791,9 +896,15 @@ pub(super) fn render_pass1(
         // inner node is the 40 dp box; here the target IS the node, so `rect` clipped the 48 dp box
         // and a squeezed item — whose container the row steers inside it — was clipped loosely.
         match shape {
-            crate::graphics::Shape::Rectangle => { canvas.clip_rect(paint_rect, None, Some(false)); }
+            crate::graphics::Shape::Rectangle => {
+                canvas.clip_rect(paint_rect, None, Some(false));
+            }
             crate::graphics::Shape::RoundedRect { corner_radius } => {
-                canvas.clip_rrect(RRect::new_rect_xy(paint_rect, *corner_radius, *corner_radius), None, Some(false));
+                canvas.clip_rrect(
+                    RRect::new_rect_xy(paint_rect, *corner_radius, *corner_radius),
+                    None,
+                    Some(false),
+                );
             }
             crate::graphics::Shape::PillToRounded { corner_radius, t } => {
                 let percent = paint_rect.width().min(paint_rect.height()) / 2.0;
@@ -801,12 +912,15 @@ pub(super) fn render_pass1(
                 canvas.clip_rrect(RRect::new_rect_xy(paint_rect, r, r), None, Some(false));
             }
             crate::graphics::Shape::TopRoundedRect { radius } => {
-                let rr = RRect::new_rect_radii(paint_rect, &[
-                    skia_safe::Vector::new(*radius, *radius),
-                    skia_safe::Vector::new(*radius, *radius),
-                    skia_safe::Vector::new(0.0, 0.0),
-                    skia_safe::Vector::new(0.0, 0.0),
-                ]);
+                let rr = RRect::new_rect_radii(
+                    paint_rect,
+                    &[
+                        skia_safe::Vector::new(*radius, *radius),
+                        skia_safe::Vector::new(*radius, *radius),
+                        skia_safe::Vector::new(0.0, 0.0),
+                        skia_safe::Vector::new(0.0, 0.0),
+                    ],
+                );
                 canvas.clip_rrect(rr, None, Some(false));
             }
             crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -815,9 +929,20 @@ pub(super) fn render_pass1(
             crate::graphics::Shape::LeftRoundedRect { radius } => {
                 canvas.clip_rrect(rrect_left_rounded(paint_rect, *radius), None, Some(false));
             }
-            crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            crate::graphics::Shape::Corners {
+                top_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            } => {
                 canvas.clip_rrect(
-                    rrect_corners(paint_rect, *top_left, *top_right, *bottom_right, *bottom_left),
+                    rrect_corners(
+                        paint_rect,
+                        *top_left,
+                        *top_right,
+                        *bottom_right,
+                        *bottom_left,
+                    ),
                     None,
                     Some(false),
                 );
@@ -836,7 +961,20 @@ pub(super) fn render_pass1(
         clipped = true;
     }
 
-    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap, letter_spacing, line_height)) = text {
+    if let Some((
+        content,
+        font_size,
+        color,
+        max_lines,
+        align,
+        overflow,
+        font_weight,
+        font_style,
+        soft_wrap,
+        letter_spacing,
+        line_height,
+    )) = text
+    {
         // Compose's `textGeometricTransform` widens the DRAWN run, not the laid-out one: everything
         // below divides or multiplies by `scale_x` so the two spaces stay in step.
         let transform = crate::layout::node::text_transform(node);
@@ -877,7 +1015,12 @@ pub(super) fn render_pass1(
             if text_clipped {
                 canvas.save();
                 canvas.clip_rect(
-                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    Rect::new(
+                        content_x,
+                        content_y,
+                        content_x + content_w,
+                        content_y + content_h,
+                    ),
                     None,
                     Some(false),
                 );
@@ -920,16 +1063,36 @@ pub(super) fn render_pass1(
             // trimmed at measure time, so the origin moves by the same amount.
             let rich_paint_dy = crate::layout::node::line_geometry(node, para).paint_dy;
             // The selection highlight.
-            if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
-                debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
+            if let Some(range) = node
+                .registrar
+                .borrow()
+                .as_ref()
+                .cloned()
+                .and_then(|reg| reg.selected_range(node.slot_key))
+            {
+                debug_log!(
+                    "[selection] render node={} range={}..{}",
+                    node.id,
+                    range.start,
+                    range.end
+                );
                 let rects: Vec<_> = if range.start < range.end {
-                // The range is in CONTENT offsets; a truncated paragraph draws in display offsets.
-                para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                    // The range is in CONTENT offsets; a truncated paragraph draws in display offsets.
+                    para.get_rects_for_range(
+                        para.display_offset(range.start)..para.display_offset(range.end),
+                        skia_safe::textlayout::RectHeightStyle::Max,
+                        skia_safe::textlayout::RectWidthStyle::Max,
+                    )
+                } else {
+                    Vec::new()
+                };
                 let mut paint = skia_safe::Paint::default();
                 // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
                 // (a render pass has no CompositionLocal left to read).
                 let sel_bg = node.selection_color.get();
-                paint.set_color(skia_safe::Color::from_argb(sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b));
+                paint.set_color(skia_safe::Color::from_argb(
+                    sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b,
+                ));
                 for tb in &rects {
                     // The highlight follows the same horizontal mapping as the glyphs.
                     let (left, right) = match transform {
@@ -939,7 +1102,15 @@ pub(super) fn render_pass1(
                         ),
                         None => (x_off + tb.rect.left, x_off + tb.rect.right),
                     };
-                    canvas.draw_rect(skia_safe::Rect::new(left, text_y + tb.rect.top, right, text_y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(
+                        skia_safe::Rect::new(
+                            left,
+                            text_y + tb.rect.top,
+                            right,
+                            text_y + tb.rect.bottom,
+                        ),
+                        &paint,
+                    );
                 }
             }
             match transform {
@@ -958,18 +1129,24 @@ pub(super) fn render_pass1(
             // The caret, on a focused text-field node, in the M3 caret colour (primary, or error).
             // It is NOT drawn while a non-zero-width selection exists: Compose draws a caret only on
             // a collapsed selection.
-            let has_selection = node.registrar.borrow().as_ref()
+            let has_selection = node
+                .registrar
+                .borrow()
+                .as_ref()
                 .and_then(|reg| reg.selected_range(node.slot_key))
                 .map(|r| r.start < r.end)
                 .unwrap_or(false);
-            // Focus comes from the compose-time marker first (the container owns focus 
+            // Focus comes from the compose-time marker first (the container owns focus
             // and the input child reads `display_focused`), falling back to the node's own flag.
             let focused = node.display_focused.get() || node.focused;
             // material3 draws its caret as `showCursor = enabled && !readOnly && …`;
             // `text_field_show_cursor` reads those two off the container's visual element along the parent
             // chain (the same walk the cursor colour below uses) and defaults to true for a bare field,
             // which has neither.
-            if focused && !has_selection && crate::text::field::text_field_show_cursor(nodes, root_idx, idx) {
+            if focused
+                && !has_selection
+                && crate::text::field::text_field_show_cursor(nodes, root_idx, idx)
+            {
                 if node.cursor_visible.get() {
                     // `cursor_color` lives on the container's TextFieldVisual, resolved at compose
                     // time; the input leaf carries nothing, so looking there falls back to the text
@@ -978,7 +1155,9 @@ pub(super) fn render_pass1(
                     let cursor = crate::text::field::text_field_visual_color(nodes, root_idx, idx)
                         .unwrap_or(*color);
                     let mut cp = skia_safe::Paint::default();
-                    cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
+                    cp.set_color(skia_safe::Color::from_argb(
+                        255, cursor.r, cursor.g, cursor.b,
+                    ));
                     cp.set_stroke_width(1.5);
                     // Empty text has no glyph to locate, so the caret sits at the content's origin.
                     // M3's caret height is approximated by the line height; the empty special case
@@ -999,8 +1178,10 @@ pub(super) fn render_pass1(
                         // The caret index is an editing offset, so it crosses through the
                         // OffsetMapping to a display offset (masked or formatted input shows
                         // different text than it edits). The TextFieldVisual sits on the container.
-                        let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
-                        let idx = offset_mapping.as_ref()
+                        let offset_mapping =
+                            crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
+                        let idx = offset_mapping
+                            .as_ref()
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
                             .unwrap_or_else(|| node.cursor_index.get());
                         if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
@@ -1010,19 +1191,41 @@ pub(super) fn render_pass1(
                                 None => cx,
                             };
                             debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
-                            canvas.draw_line(skia_safe::Point::new(x_off + cx, text_y + cy), skia_safe::Point::new(x_off + cx, text_y + cy + ch), &cp);
-                        } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
+                            canvas.draw_line(
+                                skia_safe::Point::new(x_off + cx, text_y + cy),
+                                skia_safe::Point::new(x_off + cx, text_y + cy + ch),
+                                &cp,
+                            );
+                        } else {
+                            debug_log!(
+                                "[render] get_cursor_position returned None for idx={}",
+                                node.cursor_index.get()
+                            );
+                        }
                     }
-                } else { debug_log!("[render] cursor_visible is false"); }
+                } else {
+                    debug_log!("[render] cursor_visible is false");
+                }
             }
             // The IME composition underline: editing offset to display offset.
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
-                    let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
-                    let (cs, ce) = offset_mapping.as_ref().map(|m| {
-                        (m.original_to_transformed(comp_range.start), m.original_to_transformed(comp_range.end))
-                    }).unwrap_or((comp_range.start, comp_range.end));
-                    let rects = para.get_rects_for_range(cs..ce, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+                    let offset_mapping =
+                        crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
+                    let (cs, ce) = offset_mapping
+                        .as_ref()
+                        .map(|m| {
+                            (
+                                m.original_to_transformed(comp_range.start),
+                                m.original_to_transformed(comp_range.end),
+                            )
+                        })
+                        .unwrap_or((comp_range.start, comp_range.end));
+                    let rects = para.get_rects_for_range(
+                        cs..ce,
+                        skia_safe::textlayout::RectHeightStyle::Max,
+                        skia_safe::textlayout::RectWidthStyle::Max,
+                    );
                     let mut und_paint = skia_safe::Paint::default();
                     // The primary captured at compose time. Reading `WiniaTheme::colors()` here would
                     // answer the DEFAULT theme, because the CompositionLocal is gone by render time.
@@ -1033,10 +1236,16 @@ pub(super) fn render_pass1(
                         let r = tb.rect;
                         // The underline follows the glyphs' horizontal mapping.
                         let (left, right) = match transform {
-                            Some(t) => (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0)),
+                            Some(t) => {
+                                (x_off + t.map_x(r.left, 0.0), x_off + t.map_x(r.right, 0.0))
+                            }
                             None => (x_off + r.left, x_off + r.right),
                         };
-                        canvas.draw_line(skia_safe::Point::new(left, text_y + r.bottom), skia_safe::Point::new(right, text_y + r.bottom), &und_paint);
+                        canvas.draw_line(
+                            skia_safe::Point::new(left, text_y + r.bottom),
+                            skia_safe::Point::new(right, text_y + r.bottom),
+                            &und_paint,
+                        );
                     }
                 }
             }
@@ -1044,7 +1253,29 @@ pub(super) fn render_pass1(
                 canvas.restore();
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, content_h, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key, node.selection_color.get(), transform, crate::layout::node::line_height_style_of(node));
+            draw_text_with_selection(
+                canvas,
+                content,
+                font_size,
+                color,
+                font_weight,
+                font_style,
+                content_x,
+                content_y,
+                content_w,
+                content_h,
+                max_lines,
+                align,
+                overflow,
+                soft_wrap,
+                letter_spacing,
+                line_height,
+                node.registrar.borrow().as_ref().cloned(),
+                node.slot_key,
+                node.selection_color.get(),
+                transform,
+                crate::layout::node::line_height_style_of(node),
+            );
         }
     }
 
@@ -1060,12 +1291,19 @@ pub(super) fn render_pass1(
                 .elements()
                 .iter()
                 .find_map(|el| match el {
-                    ModifierElement::RichTextContent { align, overflow, soft_wrap, .. } => {
-                        Some((*align, *overflow, *soft_wrap))
-                    }
+                    ModifierElement::RichTextContent {
+                        align,
+                        overflow,
+                        soft_wrap,
+                        ..
+                    } => Some((*align, *overflow, *soft_wrap)),
                     _ => None,
                 })
-                .unwrap_or((crate::text::TextAlign::Left, crate::text::TextOverflow::Clip, true));
+                .unwrap_or((
+                    crate::text::TextAlign::Left,
+                    crate::text::TextOverflow::Clip,
+                    true,
+                ));
             if rich_soft_wrap {
                 para.layout(content_w);
             }
@@ -1091,16 +1329,39 @@ pub(super) fn render_pass1(
                 crate::text::TextAlign::Right => content_x + slack,
             };
             // The selection highlight.
-            if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
+            if let Some(range) = node
+                .registrar
+                .borrow()
+                .as_ref()
+                .cloned()
+                .and_then(|reg| reg.selected_range(node.slot_key))
+            {
                 let rects: Vec<_> = if range.start < range.end {
-                para.get_rects_for_range(para.display_offset(range.start)..para.display_offset(range.end), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                    para.get_rects_for_range(
+                        para.display_offset(range.start)..para.display_offset(range.end),
+                        skia_safe::textlayout::RectHeightStyle::Max,
+                        skia_safe::textlayout::RectWidthStyle::Max,
+                    )
+                } else {
+                    Vec::new()
+                };
                 let mut paint = skia_safe::Paint::default();
                 // The highlight colour was captured at compose time from `LOCAL_TEXT_SELECTION_COLORS`
                 // (a render pass has no CompositionLocal left to read).
                 let sel_bg = node.selection_color.get();
-                paint.set_color(skia_safe::Color::from_argb(sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b));
+                paint.set_color(skia_safe::Color::from_argb(
+                    sel_bg.a, sel_bg.r, sel_bg.g, sel_bg.b,
+                ));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(rich_x + tb.rect.left, content_y + rich_paint_dy + tb.rect.top, rich_x + tb.rect.right, content_y + rich_paint_dy + tb.rect.bottom), &paint);
+                    canvas.draw_rect(
+                        skia_safe::Rect::new(
+                            rich_x + tb.rect.left,
+                            content_y + rich_paint_dy + tb.rect.top,
+                            rich_x + tb.rect.right,
+                            content_y + rich_paint_dy + tb.rect.bottom,
+                        ),
+                        &paint,
+                    );
                 }
             }
             // Same clip rule as the plain leaf (T-8): an overflowing rich layout is cut to its
@@ -1112,7 +1373,12 @@ pub(super) fn render_pass1(
             if rich_clips {
                 canvas.save();
                 canvas.clip_rect(
-                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    Rect::new(
+                        content_x,
+                        content_y,
+                        content_x + content_w,
+                        content_y + content_h,
+                    ),
                     None,
                     Some(false),
                 );
@@ -1129,12 +1395,20 @@ pub(super) fn render_pass1(
     // It keeps drawing while the blur's fade-out still has alpha above 0, which is what makes the
     // fade smooth. An M3 text-field container has no focus ring; it signals focus through the
     // indicator or outline colour instead.
-    let has_tf_container = node.modifier.elements().iter()
+    let has_tf_container = node
+        .modifier
+        .elements()
+        .iter()
         .any(|el| matches!(el, ModifierElement::TextFieldVisual { .. }));
     // NoFocusRing: the component draws its own ring (a Slider rings the thumb, not the component).
-    let no_focus_ring = node.modifier.elements().iter()
+    let no_focus_ring = node
+        .modifier
+        .elements()
+        .iter()
         .any(|el| matches!(el, ModifierElement::NoFocusRing));
-    let focus_alpha = node.modifier.focusable_interaction()
+    let focus_alpha = node
+        .modifier
+        .focusable_interaction()
         .map(|src| src.focus_indicator_alpha_value())
         .unwrap_or(if node.focused { 1.0 } else { 0.0 });
     // Deferred: the ring sits OUTSIDE the node's own clip (see draw_focus), so it has to be painted
@@ -1146,16 +1420,29 @@ pub(super) fn render_pass1(
         // The ring follows the component's shape: the nearest Background/Border/Clip shape, falling
         // back to a rectangle. Its colour was captured from the theme at compose time
         // (`node.focus_color`).
-        let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
-            ModifierElement::Background { shape, .. }
-            | ModifierElement::BackgroundBrush { shape, .. }
-            | ModifierElement::Border { shape, .. }
-            | ModifierElement::Clip { shape } => Some(shape),
-            _ => None,
-        }).map(|shape| shape.eval()).unwrap_or(crate::graphics::Shape::Rectangle);
+        let focus_shape = node
+            .modifier
+            .elements()
+            .iter()
+            .rev()
+            .find_map(|el| match el {
+                ModifierElement::Background { shape, .. }
+                | ModifierElement::BackgroundBrush { shape, .. }
+                | ModifierElement::Border { shape, .. }
+                | ModifierElement::Clip { shape } => Some(shape),
+                _ => None,
+            })
+            .map(|shape| shape.eval())
+            .unwrap_or(crate::graphics::Shape::Rectangle);
         // `paint_rect`, not `rect`: the ring hugs the container. Drawing the container's rounded shape on
         // the (possibly grown) node box put a squircle outside the control on the two smallest sizes.
-        pending_focus_ring = Some((paint_rect, focus_shape, tf_radii, node.focus_color.get(), focus_alpha));
+        pending_focus_ring = Some((
+            paint_rect,
+            focus_shape,
+            tf_radii,
+            node.focus_color.get(),
+            focus_alpha,
+        ));
     }
 
     // Scroll clip + translate
@@ -1172,10 +1459,14 @@ pub(super) fn render_pass1(
             match el {
                 ModifierElement::Size { width, height } => {
                     if let crate::layout::SizeValue::Length(dw) = width {
-                        if dw.is_fixed() { cw = dw.to_logical_px(); }
+                        if dw.is_fixed() {
+                            cw = dw.to_logical_px();
+                        }
                     }
                     if let crate::layout::SizeValue::Length(dh) = height {
-                        if dh.is_fixed() { ch = dh.to_logical_px(); }
+                        if dh.is_fixed() {
+                            ch = dh.to_logical_px();
+                        }
                     }
                 }
                 ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. } => {
@@ -1199,7 +1490,11 @@ pub(super) fn render_pass1(
         // real one, so it keeps using it.
         let plain = node.modifier.lazy_scroll_content_height().is_none();
         if node.scroll_viewport_height > 0.0 {
-            ch = if plain { h } else { node.scroll_viewport_height };
+            ch = if plain {
+                h
+            } else {
+                node.scroll_viewport_height
+            };
         }
         if node.scroll_viewport_width > 0.0 {
             cw = if plain { w } else { node.scroll_viewport_width };
@@ -1264,9 +1559,18 @@ pub(super) fn render_pass1(
     // Inner shadow: painted ABOVE the content (Compose's appearance draws it after the shape fill
     // and its children) and clipped to the shape.
     for el in node.modifier.elements() {
-        if let ModifierElement::InnerShadow { shape, color, blur, offset_x, offset_y } = el {
+        if let ModifierElement::InnerShadow {
+            shape,
+            color,
+            blur,
+            offset_x,
+            offset_y,
+        } = el
+        {
             let shape = shape.eval();
-            draw_inner_shadow(canvas, paint_rect, &shape, color, *blur, *offset_x, *offset_y);
+            draw_inner_shadow(
+                canvas, paint_rect, &shape, color, *blur, *offset_x, *offset_y,
+            );
         }
     }
 
@@ -1309,7 +1613,15 @@ pub(super) fn render_pass1(
             canvas.clip_rect(clip_rect, None, Some(false));
             canvas.translate((dx, dy));
         }
-        draw_focus(canvas, ring_rect, &ring_shape, ring_radii, ring_color, ring_alpha, 2.0);
+        draw_focus(
+            canvas,
+            ring_rect,
+            &ring_shape,
+            ring_radii,
+            ring_color,
+            ring_alpha,
+            2.0,
+        );
         if replayed {
             canvas.restore();
         }
@@ -1355,7 +1667,16 @@ pub(super) fn draw_ripple(
     node_y: f32,
 ) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape, state_layer_diameter } = el else { continue };
+        let ModifierElement::Ripple {
+            source,
+            color,
+            bounded,
+            shape,
+            state_layer_diameter,
+        } = el
+        else {
+            continue;
+        };
         // The colour and the halo diameter are carriers: evaluated once for this paint, then shared by
         // the background layer and every spreading foreground layer.
         let color = color.eval();
@@ -1379,12 +1700,16 @@ pub(super) fn draw_ripple(
         let mut clipped = false;
         if *bounded {
             let clip_shape = shape.clone().map(|shape| shape.eval()).or_else(|| {
-                node.modifier.elements().iter().rev().find_map(|el| match el {
-                    ModifierElement::Background { shape, .. }
-                    | ModifierElement::BackgroundBrush { shape, .. }
-                    | ModifierElement::Border { shape, .. } => Some(shape.eval()),
-                    _ => None,
-                })
+                node.modifier
+                    .elements()
+                    .iter()
+                    .rev()
+                    .find_map(|el| match el {
+                        ModifierElement::Background { shape, .. }
+                        | ModifierElement::BackgroundBrush { shape, .. }
+                        | ModifierElement::Border { shape, .. } => Some(shape.eval()),
+                        _ => None,
+                    })
             });
             canvas.save();
             clipped = true;
@@ -1397,21 +1722,20 @@ pub(super) fn draw_ripple(
                     );
                 }
                 Some(crate::graphics::Shape::TopRoundedRect { radius }) => {
-                    let rr = skia_safe::RRect::new_rect_radii(rect, &[
-                        skia_safe::Vector::new(radius, radius),
-                        skia_safe::Vector::new(radius, radius),
-                        skia_safe::Vector::new(0.0, 0.0),
-                        skia_safe::Vector::new(0.0, 0.0),
-                    ]);
+                    let rr = skia_safe::RRect::new_rect_radii(
+                        rect,
+                        &[
+                            skia_safe::Vector::new(radius, radius),
+                            skia_safe::Vector::new(radius, radius),
+                            skia_safe::Vector::new(0.0, 0.0),
+                            skia_safe::Vector::new(0.0, 0.0),
+                        ],
+                    );
                     canvas.clip_rrect(rr, None, Some(false));
                 }
                 Some(crate::graphics::Shape::Pill) => {
                     let r = rect.width().min(rect.height()) / 2.0;
-                    canvas.clip_rrect(
-                        skia_safe::RRect::new_rect_xy(rect, r, r),
-                        None,
-                        Some(false),
-                    );
+                    canvas.clip_rrect(skia_safe::RRect::new_rect_xy(rect, r, r), None, Some(false));
                 }
                 Some(crate::graphics::Shape::Circle) => {
                     // Circle == Pill (see the fill path): percent-50 corners, so a
@@ -1433,7 +1757,12 @@ pub(super) fn draw_ripple(
                 Some(crate::graphics::Shape::LeftRoundedRect { radius }) => {
                     canvas.clip_rrect(rrect_left_rounded(rect, radius), None, Some(false));
                 }
-                Some(crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
+                Some(crate::graphics::Shape::Corners {
+                    top_left,
+                    top_right,
+                    bottom_right,
+                    bottom_left,
+                }) => {
                     canvas.clip_rrect(
                         rrect_corners(rect, top_left, top_right, bottom_right, bottom_left),
                         None,
@@ -1529,4 +1858,3 @@ pub(super) fn draw_ripple(
         }
     }
 }
-

@@ -41,37 +41,89 @@ impl Modifier {
 fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
     use ModifierElement::*;
     match (a, b) {
-        (Size { width: aw, height: ah }, Size { width: bw, height: bh }) => {
-            size_value_eq(aw, bw) && size_value_eq(ah, bh)
-        }
+        (
+            Size {
+                width: aw,
+                height: ah,
+            },
+            Size {
+                width: bw,
+                height: bh,
+            },
+        ) => size_value_eq(aw, bw) && size_value_eq(ah, bh),
         (MinWidth { value: av }, MinWidth { value: bv }) => dimension_eq(av, bv),
         (MinHeight { value: av }, MinHeight { value: bv }) => dimension_eq(av, bv),
         (MaxWidth { value: av }, MaxWidth { value: bv }) => dimension_eq(av, bv),
         (MaxHeight { value: av }, MaxHeight { value: bv }) => dimension_eq(av, bv),
         (
-            WindowInsetsPadding { kind: ak, controller: ac },
-            WindowInsetsPadding { kind: bk, controller: bc },
+            WindowInsetsPadding {
+                kind: ak,
+                controller: ac,
+            },
+            WindowInsetsPadding {
+                kind: bk,
+                controller: bc,
+            },
         ) => ak == bk && ac.same(bc),
         (
-            ConsumeWindowInsets { kind: ak, controller: ac },
-            ConsumeWindowInsets { kind: bk, controller: bc },
+            ConsumeWindowInsets {
+                kind: ak,
+                controller: ac,
+            },
+            ConsumeWindowInsets {
+                kind: bk,
+                controller: bc,
+            },
         ) => ak == bk && ac.same(bc),
         (
-            WindowInsetsSize { kind: ak, controller: ac, side: as_ },
-            WindowInsetsSize { kind: bk, controller: bc, side: bs },
+            WindowInsetsSize {
+                kind: ak,
+                controller: ac,
+                side: as_,
+            },
+            WindowInsetsSize {
+                kind: bk,
+                controller: bc,
+                side: bs,
+            },
         ) => ak == bk && ac.same(bc) && as_ == bs,
         (
-            PaddingSides { start: as_, top: at, end: ae, bottom: ab },
-            PaddingSides { start: bs, top: bt, end: be, bottom: bb },
+            PaddingSides {
+                start: as_,
+                top: at,
+                end: ae,
+                bottom: ab,
+            },
+            PaddingSides {
+                start: bs,
+                top: bt,
+                end: be,
+                bottom: bb,
+            },
         ) => {
-            dimension_eq(as_, bs) && dimension_eq(at, bt) && dimension_eq(ae, be) && dimension_eq(ab, bb)
+            dimension_eq(as_, bs)
+                && dimension_eq(at, bt)
+                && dimension_eq(ae, be)
+                && dimension_eq(ab, bb)
         }
         (FillMaxWidth { fraction: af }, FillMaxWidth { fraction: bf }) => af == bf,
         (FillMaxHeight { fraction: af }, FillMaxHeight { fraction: bf }) => af == bf,
         (FillMaxSize { fraction: af }, FillMaxSize { fraction: bf }) => af == bf,
         (
-            SizeIn { min_width: amw, min_height: amh, max_width: axw, max_height: axh, enforce_incoming: ae },
-            SizeIn { min_width: bmw, min_height: bmh, max_width: bxw, max_height: bxh, enforce_incoming: be },
+            SizeIn {
+                min_width: amw,
+                min_height: amh,
+                max_width: axw,
+                max_height: axh,
+                enforce_incoming: ae,
+            },
+            SizeIn {
+                min_width: bmw,
+                min_height: bmh,
+                max_width: bxw,
+                max_height: bxh,
+                enforce_incoming: be,
+            },
         ) => {
             opt_dimension_eq(amw, bmw)
                 && opt_dimension_eq(amh, bmh)
@@ -79,15 +131,36 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                 && opt_dimension_eq(axh, bxh)
                 && ae == be
         }
-        (DefaultMinSize { min_width: amw, min_height: amh }, DefaultMinSize { min_width: bmw, min_height: bmh }) => {
-            opt_dimension_eq(amw, bmw) && opt_dimension_eq(amh, bmh)
-        }
         (
-            WrapContent { width: aw, height: ah, align: aa, unbounded: au },
-            WrapContent { width: bw, height: bh, align: ba, unbounded: bu },
+            DefaultMinSize {
+                min_width: amw,
+                min_height: amh,
+            },
+            DefaultMinSize {
+                min_width: bmw,
+                min_height: bmh,
+            },
+        ) => opt_dimension_eq(amw, bmw) && opt_dimension_eq(amh, bmh),
+        (
+            WrapContent {
+                width: aw,
+                height: ah,
+                align: aa,
+                unbounded: au,
+            },
+            WrapContent {
+                width: bw,
+                height: bh,
+                align: ba,
+                unbounded: bu,
+            },
         ) => aw == bw && ah == bh && aa == ba && au == bu,
-        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
-        (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
+        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => {
+            dimension_eq(ax, bx) && dimension_eq(ay, by)
+        }
+        (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => {
+            dimension_eq(ax, bx) && dimension_eq(ay, by)
+        }
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (ContentAlignSelf { alignment: aa }, ContentAlignSelf { alignment: ba }) => aa == ba,
         (MatchParentSize, MatchParentSize) => true,
@@ -95,25 +168,63 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FlexItem(a), FlexItem(b)) => a == b,
         (GridItemArea { area_id: a }, GridItemArea { area_id: b }) => a == b,
         (
-            GridItem { column_span: ac, row_span: ar, alignment: aa },
-            GridItem { column_span: bc, row_span: br, alignment: ba },
+            GridItem {
+                column_span: ac,
+                row_span: ar,
+                alignment: aa,
+            },
+            GridItem {
+                column_span: bc,
+                row_span: br,
+                alignment: ba,
+            },
         ) => ac == bc && ar == br && aa == ba,
         (AlignBy { line: a }, AlignBy { line: b }) => a == b,
         (FillMaxRowHeight { fraction: a }, FillMaxRowHeight { fraction: b }) => a == b,
         (FillMaxColumnWidth { fraction: a }, FillMaxColumnWidth { fraction: b }) => a == b,
-        (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
-        (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
-            ar == br && am == bm
-        }
-        (RequiredSize { width: aw, height: ah }, RequiredSize { width: bw, height: bh }) => {
-            opt_size_value_eq(aw, bw) && opt_size_value_eq(ah, bh)
-        }
+        (
+            LayoutWeight {
+                weight: aw,
+                fill: af,
+            },
+            LayoutWeight {
+                weight: bw,
+                fill: bf,
+            },
+        ) => aw == bw && af == bf,
+        (
+            AspectRatio {
+                ratio: ar,
+                match_height_first: am,
+            },
+            AspectRatio {
+                ratio: br,
+                match_height_first: bm,
+            },
+        ) => ar == br && am == bm,
+        (
+            RequiredSize {
+                width: aw,
+                height: ah,
+            },
+            RequiredSize {
+                width: bw,
+                height: bh,
+            },
+        ) => opt_size_value_eq(aw, bw) && opt_size_value_eq(ah, bh),
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         // Same rule as the colour background: a dynamic brush is a parameter, a changed STATIC brush
         // re-enters (otherwise the node keeps painting the old gradient), and the shape is part of it.
-        (BackgroundBrush { brush: abrush, shape: ashape }, BackgroundBrush { brush: bbrush, shape: bshape }) => {
-            abrush.same_parameter(bbrush) && ashape.same_parameter(bshape)
-        }
+        (
+            BackgroundBrush {
+                brush: abrush,
+                shape: ashape,
+            },
+            BackgroundBrush {
+                brush: bbrush,
+                shape: bshape,
+            },
+        ) => abrush.same_parameter(bbrush) && ashape.same_parameter(bshape),
         // Semantics carries visible state (a tab's selection): a change must re-enter the node.
         (Semantics(a), Semantics(b)) => a == b,
         (ClearAndSetSemantics(a), ClearAndSetSemantics(b)) => a == b,
@@ -129,33 +240,112 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // (bounds/transform/render_in_overlay) either rides flight progress or
         // is sampled at resolve — none of them forces Enter.
         (
-            SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
-            SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },
+            SharedTransition {
+                scope_id: a_id,
+                key: a_key,
+                kind: a_kind,
+                ..
+            },
+            SharedTransition {
+                scope_id: b_id,
+                key: b_key,
+                kind: b_kind,
+                ..
+            },
         ) => a_id == b_id && a_key == b_key && a_kind == b_kind,
         // Overlay marker: scope or z changing must rebuild the node, because the
         // coordinator reads the value from this modifier in the arena.
         (
-            SharedScopeOverlay { scope_id: a_id, z_index: a_z },
-            SharedScopeOverlay { scope_id: b_id, z_index: b_z },
+            SharedScopeOverlay {
+                scope_id: a_id,
+                z_index: a_z,
+            },
+            SharedScopeOverlay {
+                scope_id: b_id,
+                z_index: b_z,
+            },
         ) => a_id == b_id && a_z == b_z,
-        (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
-            ap.same_parameter(bp) && as_.same_parameter(bs) && ac == bc
-        }
+        (
+            Shadow {
+                params: ap,
+                shape: as_,
+                clip: ac,
+            },
+            Shadow {
+                params: bp,
+                shape: bs,
+                clip: bc,
+            },
+        ) => ap.same_parameter(bp) && as_.same_parameter(bs) && ac == bc,
         // A dynamic colour is a parameter (it is read at paint time); a static one that CHANGES has to
         // re-enter, or the node keeps painting the old colour.
-        (Background { color: ac, shape: as_ }, Background { color: bc, shape: bs }) => {
-            ac.same_parameter(bc) && as_.same_parameter(bs)
-        }
+        (
+            Background {
+                color: ac,
+                shape: as_,
+            },
+            Background {
+                color: bc,
+                shape: bs,
+            },
+        ) => ac.same_parameter(bc) && as_.same_parameter(bs),
         // The colour is a carrier too: a changed STATIC colour re-enters, a dynamic one is a
         // parameter read at paint.
-        (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
-            dimension_eq(aw, bw) && ac.same_parameter(bc) && as_.same_parameter(bs)
-        }
+        (
+            Border {
+                width: aw,
+                color: ac,
+                shape: as_,
+            },
+            Border {
+                width: bw,
+                color: bc,
+                shape: bs,
+            },
+        ) => dimension_eq(aw, bw) && ac.same_parameter(bc) && as_.same_parameter(bs),
         (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
         (Blur { radius: ar }, Blur { radius: br }) => ar.same_parameter(br),
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar.same_parameter(br),
-        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh, min_lines: amin, underline: au, line_through: alt, font_family: afam, on_text_layout: aotl, auto_size: aauto },
-         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh, min_lines: bmin, underline: bu, line_through: blt, font_family: bfam, on_text_layout: botl, auto_size: bauto }) => {
+        (
+            TextContent {
+                content: ac,
+                font_size: af,
+                color: acol,
+                font_weight: afw,
+                font_style: afs,
+                max_lines: am,
+                align: aa,
+                overflow: ao,
+                soft_wrap: asw,
+                letter_spacing: als,
+                line_height: alh,
+                min_lines: amin,
+                underline: au,
+                line_through: alt,
+                font_family: afam,
+                on_text_layout: aotl,
+                auto_size: aauto,
+            },
+            TextContent {
+                content: bc,
+                font_size: bf,
+                color: bcol,
+                font_weight: bfw,
+                font_style: bfs,
+                max_lines: bm,
+                align: ba,
+                overflow: bo,
+                soft_wrap: bsw,
+                letter_spacing: bls,
+                line_height: blh,
+                min_lines: bmin,
+                underline: bu,
+                line_through: blt,
+                font_family: bfam,
+                on_text_layout: botl,
+                auto_size: bauto,
+            },
+        ) => {
             ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw && als == bls && alh == blh
                 && amin == bmin && au == bu && alt == blt && afam == bfam
                 // Compose's `autoSize`: a changed fit window must re-search.
@@ -169,23 +359,61 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                 }
         }
         // The richer layout sink: identity, like the plain one. A rebuild produces a new closure.
-        (TextLayoutCallback { callback: a }, TextLayoutCallback { callback: b }) => std::sync::Arc::ptr_eq(a, b),
+        (TextLayoutCallback { callback: a }, TextLayoutCallback { callback: b }) => {
+            std::sync::Arc::ptr_eq(a, b)
+        }
         // Paint-only text extras: a shadow or a feature string changes the shaped paragraph, so a
         // difference has to re-enter the leaf.
-        (TextPaint { shadow: ash, font_feature_settings: afs, draw_style: ads, brush: abr, transform: atr, line_height_style: alh },
-         TextPaint { shadow: bsh, font_feature_settings: bfs, draw_style: bds, brush: bbr, transform: btr, line_height_style: blh }) => {
-            ash == bsh && afs == bfs && ads == bds && abr == bbr && atr == btr && alh == blh
-        }
+        (
+            TextPaint {
+                shadow: ash,
+                font_feature_settings: afs,
+                draw_style: ads,
+                brush: abr,
+                transform: atr,
+                line_height_style: alh,
+            },
+            TextPaint {
+                shadow: bsh,
+                font_feature_settings: bfs,
+                draw_style: bds,
+                brush: bbr,
+                transform: btr,
+                line_height_style: blh,
+            },
+        ) => ash == bsh && afs == bfs && ads == bds && abr == bbr && atr == btr && alh == blh,
         // Rich text: compare the content and the drawable count; the style ranges are rebuilt on
         // every build, so they are not compared here (the resolved spans are, further down).
-        (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar,
-                            align: aal, max_lines: aml, overflow: aov, soft_wrap: asw,
-                            line_height: alh, min_lines: amin, spans: aspans,
-                            line_height_style: alhs, .. },
-         RichTextContent { content: bc, drawables: bd, drawable_ranges: br,
-                            align: bal, max_lines: bml, overflow: bov, soft_wrap: bsw,
-                            line_height: blh, min_lines: bmin, spans: bspans,
-                            line_height_style: blhs, .. }) => {
+        (
+            RichTextContent {
+                content: ac,
+                drawables: ad,
+                drawable_ranges: ar,
+                align: aal,
+                max_lines: aml,
+                overflow: aov,
+                soft_wrap: asw,
+                line_height: alh,
+                min_lines: amin,
+                spans: aspans,
+                line_height_style: alhs,
+                ..
+            },
+            RichTextContent {
+                content: bc,
+                drawables: bd,
+                drawable_ranges: br,
+                align: bal,
+                max_lines: bml,
+                overflow: bov,
+                soft_wrap: bsw,
+                line_height: blh,
+                min_lines: bmin,
+                spans: bspans,
+                line_height_style: blhs,
+                ..
+            },
+        ) => {
             // Every paragraph parameter takes part: a changed `max_lines` or `overflow` has to
             // re-measure just like a changed `content` does. Before this, only content, the
             // drawable count and the ranges were compared.
@@ -194,13 +422,28 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             // produces an equal payload otherwise, and the leaf then never re-measures — measured
             // before: toggling bold left both the payload's weight and the cached paragraph's
             // fonts and width unchanged.
-            ac == bc && ad.len() == bd.len() && ar == br && aspans == bspans
-                && aal == bal && aml == bml && aov == bov && asw == bsw && alh == blh
-                && amin == bmin && alhs == blhs
+            ac == bc
+                && ad.len() == bd.len()
+                && ar == br
+                && aspans == bspans
+                && aal == bal
+                && aml == bml
+                && aov == bov
+                && asw == bsw
+                && alh == blh
+                && amin == bmin
+                && alhs == blhs
         }
         // A click: the interaction source's identity takes part, because a new source has to be
         // captured by re-entering the content. The callback itself is treated as equal.
-        (Clickable { interaction: ai, .. }, Clickable { interaction: bi, .. }) => ai == bi,
+        (
+            Clickable {
+                interaction: ai, ..
+            },
+            Clickable {
+                interaction: bi, ..
+            },
+        ) => ai == bi,
         (TapOnTap { .. }, TapOnTap { .. }) => true,
         (TapOnDoubleTap { .. }, TapOnDoubleTap { .. }) => true,
         (TapOnLongPress { .. }, TapOnLongPress { .. }) => true,
@@ -212,12 +455,30 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
         (
-            PointerHoverIcon { icon: ai, override_descendants: ao },
-            PointerHoverIcon { icon: bi, override_descendants: bo },
+            PointerHoverIcon {
+                icon: ai,
+                override_descendants: ao,
+            },
+            PointerHoverIcon {
+                icon: bi,
+                override_descendants: bo,
+            },
         ) => ai == bi && ao == bo,
         (
-            Ripple { source: as_, color: ac, bounded: abc, shape: ash, state_layer_diameter: asl },
-            Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, state_layer_diameter: bsl },
+            Ripple {
+                source: as_,
+                color: ac,
+                bounded: abc,
+                shape: ash,
+                state_layer_diameter: asl,
+            },
+            Ripple {
+                source: bs,
+                color: bc,
+                bounded: bbc,
+                shape: bsh,
+                state_layer_diameter: bsl,
+            },
         ) => {
             as_ == bs
                 && ac.same_parameter(bc)
@@ -226,8 +487,24 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
                 && crate::graphics::option_same_parameter(asl, bsl)
         }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
-        (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
-         ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {
+        (
+            ImageContent {
+                source: a,
+                content_scale: as_,
+                alignment: aa,
+                alpha: aal,
+                color_filter: acf,
+                filter_quality: afq,
+            },
+            ImageContent {
+                source: b,
+                content_scale: bs,
+                alignment: ba,
+                alpha: bal,
+                color_filter: bcf,
+                filter_quality: bfq,
+            },
+        ) => {
             a == b
                 && as_ == bs
                 && aa == ba
@@ -238,25 +515,60 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
-        (VerticalScroll { state: as_, reverse: ar }, VerticalScroll { state: bs, reverse: br }) =>
-            as_.offset.state_id() == bs.offset.state_id() && ar == br,
-        (LazyScroll { content_height: ac, reverse: ar }, LazyScroll { content_height: bc, reverse: br }) => {
-            ac.state_id() == bc.state_id() && ar == br
-        }
-        (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
+        (
+            VerticalScroll {
+                state: as_,
+                reverse: ar,
+            },
+            VerticalScroll {
+                state: bs,
+                reverse: br,
+            },
+        ) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
+        (
+            LazyScroll {
+                content_height: ac,
+                reverse: ar,
+            },
+            LazyScroll {
+                content_height: bc,
+                reverse: br,
+            },
+        ) => ac.state_id() == bc.state_id() && ar == br,
+        (
+            HorizontalScroll {
+                state: as_,
+                reverse: ar,
+            },
+            HorizontalScroll {
+                state: bs,
+                reverse: br,
+            },
+        ) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
         // Compared by VALUE, not by Debug: a caller may rebuild the spec (fresh Arc<dyn Interpolator>)
         // every frame, and the comparison runs once per item per frame.
         (AnimateItem(as_), AnimateItem(bs)) => as_.same_parameter(bs),
         (ItemAnimationHost(_), ItemAnimationHost(_)) => true,
         (
-            InnerShadow { shape: as_, color: ac, blur: ab, offset_x: ax, offset_y: ay },
-            InnerShadow { shape: bs, color: bc, blur: bb, offset_x: bx, offset_y: by },
+            InnerShadow {
+                shape: as_,
+                color: ac,
+                blur: ab,
+                offset_x: ax,
+                offset_y: ay,
+            },
+            InnerShadow {
+                shape: bs,
+                color: bc,
+                blur: bb,
+                offset_x: bx,
+                offset_y: by,
+            },
         ) => as_.same_parameter(bs) && ac == bc && ab == bb && ax == bx && ay == by,
-        (
-            ClipScrollableContainer { vertical: a },
-            ClipScrollableContainer { vertical: b },
-        ) => a == b,
+        (ClipScrollableContainer { vertical: a }, ClipScrollableContainer { vertical: b }) => {
+            a == b
+        }
         (Overscroll { effect: a }, Overscroll { effect: b }) => a.same(b),
         // Observation callbacks are rebuilt every composition; identity is the parameter (same rule
         // as Clickable's callback). Without these arms a chain carrying one could never Skip.
@@ -264,10 +576,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (OnGloballyPositioned { .. }, OnGloballyPositioned { .. }) => true,
         (OnPlaced { .. }, OnPlaced { .. }) => true,
         (LayoutId { id: a }, LayoutId { id: b }) => a == b,
-        (
-            BringIntoViewRequester { requester: a },
-            BringIntoViewRequester { requester: b },
-        ) => a.same(b),
+        (BringIntoViewRequester { requester: a }, BringIntoViewRequester { requester: b }) => {
+            a.same(b)
+        }
         // Scene tag: an equal id means the tag did not change. Without this arm the match falls through
         // to `_ => false`, so any modifier chain carrying a `SceneTag` could NEVER Skip — measured
         // consequence: the nav's transition-layer wrapper (which carries one) re-composed and re-measured
@@ -356,5 +667,3 @@ pub(crate) fn node_key_of(n: &ModifierNode) -> String {
         ModifierNode::Layout(l) => format!("layout:{}", l.node_key()),
     }
 }
-
-

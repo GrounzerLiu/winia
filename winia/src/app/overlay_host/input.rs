@@ -11,7 +11,9 @@ pub(crate) fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usiz
         let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
         if let Some(r) = ov.composer.layout_root_idx() {
             let nodes = ov.composer.arena_nodes();
-            if !hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1).is_empty() {
+            if !hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1)
+                .is_empty()
+            {
                 return Some((i, local));
             }
         }
@@ -39,17 +41,31 @@ pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
         })();
         #[cfg(debug_assertions)]
         if drag_trace_enabled() {
-            eprintln!("[overlay-drag-up] slot={:?} target={:?} v=({},{})", ds.slot, target, vx, vy);
+            eprintln!(
+                "[overlay-drag-up] slot={:?} target={:?} v=({},{})",
+                ds.slot, target, vx, vy
+            );
         }
-        let Some(idx) = target else { handled = true; return handled; };
-        let Some(ov) = pw.overlay.layers.last_mut() else { handled = true; return handled; };
-        let Some(r) = ov.composer.layout_root_idx() else { handled = true; return handled; };
+        let Some(idx) = target else {
+            handled = true;
+            return handled;
+        };
+        let Some(ov) = pw.overlay.layers.last_mut() else {
+            handled = true;
+            return handled;
+        };
+        let Some(r) = ov.composer.layout_root_idx() else {
+            handled = true;
+            return handled;
+        };
         // Finger velocity → scroll velocity (content velocity = -finger velocity), through the nested scroll pre/post fling chain.
         let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
         let _ = dispatch_nested_scroll_fling(ov.composer.arena_nodes_mut(), r, idx, velocity);
         handled = true;
     }
-    let Some((idx, slot, _down)) = pw.overlay.drag.take() else { return handled; };
+    let Some((idx, slot, _down)) = pw.overlay.drag.take() else {
+        return handled;
+    };
     let started = pw.overlay.drag_started;
     pw.overlay.drag_started = false;
     pw.overlay.drag_last = None;
@@ -59,21 +75,31 @@ pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
     if let Some(ov) = pw.overlay.layers.get(idx) {
         let nodes = ov.composer.arena_nodes();
         if let Some(r) = ov.composer.layout_root_idx() {
-            fire_gesture_action(nodes, r, slot,
-                crate::input::gesture::GestureAction::DragEnd);
+            fire_gesture_action(
+                nodes,
+                r,
+                slot,
+                crate::input::gesture::GestureAction::DragEnd,
+            );
         }
     }
     true
 }
 pub(crate) fn exec_overlay_click(pw: &mut PerWindow) -> bool {
-    let Some((idx, local, _nid)) = pw.overlay.click.take() else { return false; };
-    let Some(ov) = pw.overlay.layers.get(idx) else { return false; };
+    let Some((idx, local, _nid)) = pw.overlay.click.take() else {
+        return false;
+    };
+    let Some(ov) = pw.overlay.layers.get(idx) else {
+        return false;
+    };
     // Closing (an outside dismiss after down, etc.) → do not fire the click (avoid misfiring on an
     // already-closed overlay — a very narrow edge case, but the semantics are right).
     if ov.closing {
         return false;
     }
-    let Some(r) = ov.composer.layout_root_idx() else { return false; };
+    let Some(r) = ov.composer.layout_root_idx() else {
+        return false;
+    };
     let nodes = ov.composer.arena_nodes();
     let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
     // Find the clickable along the path (innermost first).
@@ -81,7 +107,11 @@ pub(crate) fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     r
 }
 /// Pointer down: test the overlays first (topmost) — a hit records the click target; outside → dismiss.
-pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::input::PointerKind) -> bool {
+pub(crate) fn overlay_down(
+    pw: &mut PerWindow,
+    scene_pos: (f32, f32),
+    kind: crate::input::PointerKind,
+) -> bool {
     if pw.overlay.layers.is_empty() {
         return false;
     }
@@ -104,7 +134,13 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+                let path = hit_test_with_flights(
+                    nodes,
+                    r,
+                    ov.composer.transition_roots(),
+                    local.0,
+                    local.1,
+                );
                 let scroll_idx = path_scroll_idx(nodes, &path);
                 let drag_idx = path_drag_idx(nodes, &path);
                 let inner_comp_drag = inner_component_drag(drag_idx, scroll_idx);
@@ -150,7 +186,13 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
             // scrim layer) would never reach overlay_click → the click is lost.
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+                let path = hit_test_with_flights(
+                    nodes,
+                    r,
+                    ov.composer.transition_roots(),
+                    local.0,
+                    local.1,
+                );
                 if let Some(&idx) = path.iter().rev().find(|&&i| {
                     nodes[i].modifier.clickable_interaction().is_some()
                         || nodes[i].modifier.node_click_interaction().is_some()
@@ -162,7 +204,9 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                         .or_else(|| nodes[idx].modifier.node_click_interaction())
                     {
                         // Ripple centre = node-local coordinates (no scroll/transform inside the overlay — convert directly).
-                        let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
+                        let local_press = crate::layout::node::scene_to_node_local(
+                            nodes, &path, idx, local.0, local.1,
+                        );
                         src.emit_press_at(local_press);
                         ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
                     }
@@ -191,9 +235,20 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 match ov.composer.layout_root_idx() {
                     None => None,
                     Some(r) => {
-                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+                        let path = hit_test_with_flights(
+                            nodes,
+                            r,
+                            ov.composer.transition_roots(),
+                            local.0,
+                            local.1,
+                        );
                         press_gesture_target(nodes, &path).map(|(nid, slot, has_drag)| {
-                            fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(local));
+                            fire_gesture_action(
+                                nodes,
+                                r,
+                                slot,
+                                crate::input::gesture::GestureAction::Press(local),
+                            );
                             (nid, slot, has_drag, ov.id)
                         })
                     }
@@ -208,7 +263,12 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                     // `fire_in_gesture_arena` into this same arena, so nothing is lost, and the node
                     // gains its `on_tap` / `on_double_tap` / `on_long_press` (the tap family of a
                     // popup drag target used to be unreachable, `Slider` included).
-                    if pw.overlay.drag.map(|(idx, key, _)| idx == i && key == slot).unwrap_or(false) {
+                    if pw
+                        .overlay
+                        .drag
+                        .map(|(idx, key, _)| idx == i && key == slot)
+                        .unwrap_or(false)
+                    {
                         pw.overlay.drag = None;
                         pw.overlay.drag_started = false;
                         pw.overlay.drag_last = None;
@@ -219,10 +279,15 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 // Same bookkeeping as the main tree for both kinds of target: a deferred tap on this
                 // node is due, or this press is its double-tap candidate.
                 process_pending_taps_on_down(pw, nid);
-                let ctx = pw.input.tap_ctx.take()
+                let ctx = pw
+                    .input
+                    .tap_ctx
+                    .take()
                     .filter(|(n, _, _)| *n == nid)
                     .map(|(_, t, p)| (t, p));
-                pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(nid, local, has_drag, ctx));
+                pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(
+                    nid, local, has_drag, ctx,
+                ));
                 pw.input.node = Some(nid);
                 pw.input.slot = Some(slot);
                 pw.input.arena = Some(ov_id);
@@ -276,33 +341,44 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
             } {
                 None => (Vec::new(), None),
                 Some((nodes, r, troots)) => {
-                let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
-                let caret = (|| {
-                    let &innermost = path.last()?;
-                    let anchor_node = find_anchor_text_node(nodes, &path, innermost)?;
-                    let borrow = nodes[anchor_node].cached_paragraph.try_borrow().ok()?;
-                    let para = borrow.as_ref()?;
-                    let (ax, ay) = node_abs_position(nodes, r, nodes[anchor_node].id);
-                    let (pad_s, pad_t, pad_e, _) = nodes[anchor_node].modifier.get_padding_sides();
-                    let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-                    let tl = crate::text::TextLayout::new(para);
-                    // Map the pointer into the paragraph's own space first (see the pointer module:
-                    // a geometric transform widens the drawn run but not the laid-out one).
-                    let mut point = (local.0 - ax - pad_x, local.1 - ay - pad_t);
-                    if let Some(t) = crate::layout::node::text_transform(&nodes[anchor_node]) {
-                        point.0 = t.unmap_x(point.0, point.1);
-                    }
-                    // A line-height style moves the glyphs inside their box; undo that too.
-                    point.1 -= crate::layout::node::line_geometry(&nodes[anchor_node], para).paint_dy;
-                    let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(point.0, point.1));
-                    // A truncated paragraph answers in DISPLAY bytes (see `DisplaySpan`).
-                    let hit = para.content_offset(hit);
-                    let edit = crate::text::field::offset_mapping_for_node(nodes, r, anchor_node)
-                        .map(|m| m.transformed_to_original(hit))
-                        .unwrap_or(hit);
-                    Some((anchor_node, edit))
-                })();
-                (path, caret)
+                    let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
+                    let caret = (|| {
+                        let &innermost = path.last()?;
+                        let anchor_node = find_anchor_text_node(nodes, &path, innermost)?;
+                        let borrow = nodes[anchor_node].cached_paragraph.try_borrow().ok()?;
+                        let para = borrow.as_ref()?;
+                        let (ax, ay) = node_abs_position(nodes, r, nodes[anchor_node].id);
+                        let (pad_s, pad_t, pad_e, _) =
+                            nodes[anchor_node].modifier.get_padding_sides();
+                        let pad_x = if nodes[anchor_node].layout_direction
+                            == crate::layout::LayoutDirection::Rtl
+                        {
+                            pad_e
+                        } else {
+                            pad_s
+                        };
+                        let tl = crate::text::TextLayout::new(para);
+                        // Map the pointer into the paragraph's own space first (see the pointer module:
+                        // a geometric transform widens the drawn run but not the laid-out one).
+                        let mut point = (local.0 - ax - pad_x, local.1 - ay - pad_t);
+                        if let Some(t) = crate::layout::node::text_transform(&nodes[anchor_node]) {
+                            point.0 = t.unmap_x(point.0, point.1);
+                        }
+                        // A line-height style moves the glyphs inside their box; undo that too.
+                        point.1 -=
+                            crate::layout::node::line_geometry(&nodes[anchor_node], para).paint_dy;
+                        let hit = tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(
+                            point.0, point.1,
+                        ));
+                        // A truncated paragraph answers in DISPLAY bytes (see `DisplaySpan`).
+                        let hit = para.content_offset(hit);
+                        let edit =
+                            crate::text::field::offset_mapping_for_node(nodes, r, anchor_node)
+                                .map(|m| m.transformed_to_original(hit))
+                                .unwrap_or(hit);
+                        Some((anchor_node, edit))
+                    })();
+                    (path, caret)
                 }
             };
             // Pointer dispatch (immutable arena borrow, ends immediately).
@@ -324,10 +400,21 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
             }
         }
         // (ov borrow ended at the Press block above; re-index here.)
-        let nid = pw.overlay.layers[i].composer.layout_root_idx().and_then(|r| {
-            let nodes = pw.overlay.layers[i].composer.arena_nodes();
-            hit_test_with_flights(nodes, r, pw.overlay.layers[i].composer.transition_roots(), local.0, local.1).last().map(|&idx| nodes[idx].id)
-        });
+        let nid = pw.overlay.layers[i]
+            .composer
+            .layout_root_idx()
+            .and_then(|r| {
+                let nodes = pw.overlay.layers[i].composer.arena_nodes();
+                hit_test_with_flights(
+                    nodes,
+                    r,
+                    pw.overlay.layers[i].composer.transition_roots(),
+                    local.0,
+                    local.1,
+                )
+                .last()
+                .map(|&idx| nodes[idx].id)
+            });
         pw.overlay.click = Some((i, local, nid.unwrap_or(0)));
         return true; // event consumed — does not reach the main tree
     }
@@ -382,11 +469,19 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
 pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
     let hit: Vec<(u64, crate::input::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
-        let Some(r) = ov.composer.layout_root_idx() else { return; };
-        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+        let Some(r) = ov.composer.layout_root_idx() else {
+            return;
+        };
+        let path =
+            hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
         path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
-            .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
+            .filter_map(|&i| {
+                nodes[i]
+                    .modifier
+                    .hoverable_interaction()
+                    .map(|s| (nodes[i].slot_key, s.clone()))
+            })
             .collect()
     };
     let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
@@ -395,7 +490,12 @@ pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
             src.emit_hover_enter();
         }
     }
-    let gone: Vec<u64> = ov.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
+    let gone: Vec<u64> = ov
+        .hovered_slots
+        .iter()
+        .copied()
+        .filter(|s| !hit_slots.contains(s))
+        .collect();
     for slot in gone {
         ov.hovered_slots.remove(&slot);
         overlay_exit_hover_at(ov, slot);
@@ -404,7 +504,9 @@ pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
 /// Re-emit Hover Exit for the node at the given slot inside an overlay.
 pub(crate) fn overlay_exit_hover_at(ov: &mut OverlayWindow, slot: u64) {
     let nodes = ov.composer.arena_nodes();
-    let Some(r) = ov.composer.layout_root_idx() else { return; };
+    let Some(r) = ov.composer.layout_root_idx() else {
+        return;
+    };
     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
             if let Some(src) = nodes[idx].modifier.hoverable_interaction() {

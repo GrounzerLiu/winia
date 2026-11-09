@@ -15,10 +15,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use letclone::clone;
 use winia::animation::interpolator::EaseOutCubic;
 use winia::animation::item::ItemAnimationSpec;
 use winia::animation::{SpringSpec, TweenSpec};
-use letclone::clone;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -59,17 +59,23 @@ impl SpecMode {
     fn spec(self) -> ItemAnimationSpec {
         match self {
             SpecMode::Default => ItemAnimationSpec::new(),
-            SpecMode::PlacementOnly => {
-                ItemAnimationSpec::new().without_fade_in().without_fade_out()
-            }
+            SpecMode::PlacementOnly => ItemAnimationSpec::new()
+                .without_fade_in()
+                .without_fade_out(),
             SpecMode::Slow => ItemAnimationSpec::new()
                 .placement(SpringSpec {
                     damping_ratio: 0.72,
                     stiffness: 180.0,
                     ..SpringSpec::default()
                 })
-                .fade_in(TweenSpec::new(Duration::from_millis(450), EaseOutCubic::new()))
-                .fade_out(TweenSpec::new(Duration::from_millis(450), EaseOutCubic::new())),
+                .fade_in(TweenSpec::new(
+                    Duration::from_millis(450),
+                    EaseOutCubic::new(),
+                ))
+                .fade_out(TweenSpec::new(
+                    Duration::from_millis(450),
+                    EaseOutCubic::new(),
+                )),
         }
     }
 }
@@ -83,7 +89,9 @@ fn button(
     Button::new()
         .modifier(Modifier::new().test_tag(tag))
         .on_click(on_click)
-        .build(ctx, |ctx| Text::new(label.into()).font_size(12.0).build(ctx));
+        .build(ctx, |ctx| {
+            Text::new(label.into()).font_size(12.0).build(ctx)
+        });
 }
 
 /// The two colours a card alternates between, so a reorder is easy to follow.
@@ -98,7 +106,13 @@ fn card_color(key: u64) -> Color {
 /// One item. The animation marker sits on the item's ROOT content — the wrapper the list sees, which
 /// is what `wrapper_item_spec` looks for. A marker deeper in the subtree belongs to a nested
 /// container and does not drive this item.
-fn card(ctx: &mut ComposeCtx, keys: State<Vec<u64>>, spec: ItemAnimationSpec, key: u64, index: usize) {
+fn card(
+    ctx: &mut ComposeCtx,
+    keys: State<Vec<u64>>,
+    spec: ItemAnimationSpec,
+    key: u64,
+    index: usize,
+) {
     Stack::new()
         .modifier(
             Modifier::new()
@@ -146,74 +160,74 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 .cross_spacing(6.0)
                 .modifier(Modifier::new().fill_max_width())
                 .build(ctx, |ctx| {
-                button(ctx, "lazy-anim-insert-head", "insert head", {
-                    clone!(keys, next_key);
-                    move || {
-                        let mut next = keys.get();
-                        let id = next_key.get();
-                        next_key.set(id + 1);
-                        next.insert(0, id);
-                        keys.set(next);
-                    }
-                });
-                button(ctx, "lazy-anim-insert-middle", "insert middle", {
-                    clone!(keys, next_key);
-                    move || {
-                        let mut next = keys.get();
-                        let id = next_key.get();
-                        next_key.set(id + 1);
-                        let at = next.len() / 2;
-                        next.insert(at, id);
-                        keys.set(next);
-                    }
-                });
-                button(ctx, "lazy-anim-remove-middle", "remove middle", {
-                    clone!(keys);
-                    move || {
-                        let mut next = keys.get();
-                        if !next.is_empty() {
-                            let at = next.len() / 2;
-                            next.remove(at);
+                    button(ctx, "lazy-anim-insert-head", "insert head", {
+                        clone!(keys, next_key);
+                        move || {
+                            let mut next = keys.get();
+                            let id = next_key.get();
+                            next_key.set(id + 1);
+                            next.insert(0, id);
+                            keys.set(next);
                         }
-                        keys.set(next);
-                    }
-                });
-                button(ctx, "lazy-anim-shuffle", "shuffle", {
-                    clone!(keys);
-                    move || {
-                    // Same keys, different slots: pure placement, no fade at all.
-                    let next = keys.get();
-                    let mid = next.len() / 2;
-                    let (front, back) = next.split_at(mid);
-                    let mut out = Vec::with_capacity(next.len());
-                    for i in 0..front.len().max(back.len()) {
-                        if let Some(value) = back.get(i) {
-                            out.push(*value);
-                        }
-                        if let Some(value) = front.get(i) {
-                            out.push(*value);
-                        }
-                    }
-                    keys.set(out);
-                    }
-                });
-                // The label names the contract that is ACTIVE (tapping cycles to the next one), and it
-                // is read INSIDE the button's own content closure: the dependency then registers on that
-                // group, which re-runs on a change. A label computed out here and captured into the
-                // closure never updates — the FlowRow around it skips, so the closure does not re-run
-                // (the trap component-authoring 3.2 describes).
-                Button::new()
-                    .modifier(Modifier::new().test_tag("lazy-anim-spec"))
-                    .on_click({
-                        clone!(mode);
-                        move || mode.set(mode.get().next())
-                    })
-                    .build(ctx, |ctx| {
-                        Text::new(format!("spec: {}", mode.get().label()))
-                            .font_size(12.0)
-                            .build(ctx);
                     });
-            });
+                    button(ctx, "lazy-anim-insert-middle", "insert middle", {
+                        clone!(keys, next_key);
+                        move || {
+                            let mut next = keys.get();
+                            let id = next_key.get();
+                            next_key.set(id + 1);
+                            let at = next.len() / 2;
+                            next.insert(at, id);
+                            keys.set(next);
+                        }
+                    });
+                    button(ctx, "lazy-anim-remove-middle", "remove middle", {
+                        clone!(keys);
+                        move || {
+                            let mut next = keys.get();
+                            if !next.is_empty() {
+                                let at = next.len() / 2;
+                                next.remove(at);
+                            }
+                            keys.set(next);
+                        }
+                    });
+                    button(ctx, "lazy-anim-shuffle", "shuffle", {
+                        clone!(keys);
+                        move || {
+                            // Same keys, different slots: pure placement, no fade at all.
+                            let next = keys.get();
+                            let mid = next.len() / 2;
+                            let (front, back) = next.split_at(mid);
+                            let mut out = Vec::with_capacity(next.len());
+                            for i in 0..front.len().max(back.len()) {
+                                if let Some(value) = back.get(i) {
+                                    out.push(*value);
+                                }
+                                if let Some(value) = front.get(i) {
+                                    out.push(*value);
+                                }
+                            }
+                            keys.set(out);
+                        }
+                    });
+                    // The label names the contract that is ACTIVE (tapping cycles to the next one), and it
+                    // is read INSIDE the button's own content closure: the dependency then registers on that
+                    // group, which re-runs on a change. A label computed out here and captured into the
+                    // closure never updates — the FlowRow around it skips, so the closure does not re-run
+                    // (the trap component-authoring 3.2 describes).
+                    Button::new()
+                        .modifier(Modifier::new().test_tag("lazy-anim-spec"))
+                        .on_click({
+                            clone!(mode);
+                            move || mode.set(mode.get().next())
+                        })
+                        .build(ctx, |ctx| {
+                            Text::new(format!("spec: {}", mode.get().label()))
+                                .font_size(12.0)
+                                .build(ctx);
+                        });
+                });
 
             let spec = mode.get().spec();
             let keys_now = keys.get();
@@ -221,7 +235,11 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 "{} items | spec {} | fade {}",
                 keys_now.len(),
                 mode.get().label(),
-                if mode.get() == SpecMode::PlacementOnly { "off" } else { "on" },
+                if mode.get() == SpecMode::PlacementOnly {
+                    "off"
+                } else {
+                    "on"
+                },
             ))
             .modifier(Modifier::new().test_tag("lazy-anim-info"))
             .font_size(12.0)
@@ -238,9 +256,13 @@ fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
                 .spacing(8.0)
                 .content_padding(4.0, 4.0)
                 .beyond_bounds(2)
-                .items_from(Arc::new(keys_now), |key| *key, move |ctx, index, key| {
-                    card(ctx, keys.clone(), spec.clone(), *key, index);
-                })
+                .items_from(
+                    Arc::new(keys_now),
+                    |key| *key,
+                    move |ctx, index, key| {
+                        card(ctx, keys.clone(), spec.clone(), *key, index);
+                    },
+                )
                 .build(ctx);
         });
 }

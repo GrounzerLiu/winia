@@ -96,22 +96,24 @@ impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
         let key = format!("entry:{}", entry.content_key());
         crate::layout::components::Column::new()
             .modifier(
-                Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
-                    scope.shared_content_state(&key),
-                    crate::components::animated_visibility::VisibilityTransition::fade_in(
-                        crate::animation::TweenSpec::default(),
+                Modifier::new()
+                    .fill_max_size()
+                    .shared_bounds_with_overlay_clip(
+                        scope.shared_content_state(&key),
+                        crate::components::animated_visibility::VisibilityTransition::fade_in(
+                            crate::animation::TweenSpec::default(),
+                        ),
+                        crate::components::animated_visibility::VisibilityTransition::fade_out(
+                            crate::animation::TweenSpec::default(),
+                        ),
+                        crate::transition::BoundsTransform::default(),
+                        crate::transition::ResizeMode::scale_to_bounds(),
+                        crate::transition::PlaceHolderSize::AnimatedSize,
+                        crate::transition::PathMotion::Linear,
+                        0.0,
+                        true,
+                        crate::transition::OverlayClip::Bounds,
                     ),
-                    crate::components::animated_visibility::VisibilityTransition::fade_out(
-                        crate::animation::TweenSpec::default(),
-                    ),
-                    crate::transition::BoundsTransform::default(),
-                    crate::transition::ResizeMode::scale_to_bounds(),
-                    crate::transition::PlaceHolderSize::AnimatedSize,
-                    crate::transition::PathMotion::Linear,
-                    0.0,
-                    true,
-                    crate::transition::OverlayClip::Bounds,
-                ),
             )
             .build(ctx, |ctx| inner(ctx));
     }
@@ -132,4 +134,3 @@ impl<K: NavKey> NavEntryDecorator<K> for BackStackAwareDecorator {
         debug_log!("[nav] entry popped: content_key={}", _content_key);
     }
 }
-

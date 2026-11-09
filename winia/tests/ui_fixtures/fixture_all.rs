@@ -5,28 +5,28 @@
 //! cleared for the upcoming refactor; the dispatcher remains so the harness and the one-binary
 //! build model stay in place.
 
-#[path = "../../examples/flow_features_demo.rs"]
-mod flow_features;
-#[path = "../../examples/item_animation_demo.rs"]
-mod item_animation;
-#[path = "../../examples/flex_layout_demo.rs"]
-mod flex_layout;
 #[path = "../../examples/box_layout_demo.rs"]
 mod box_layout;
+#[path = "../../examples/flex_layout_demo.rs"]
+mod flex_layout;
+#[path = "../../examples/flexbox_demo.rs"]
+mod flexbox_demo;
+#[path = "../../examples/flow_features_demo.rs"]
+mod flow_features;
+#[path = "../../examples/grid_demo.rs"]
+mod grid_demo;
+#[path = "../../examples/item_animation_demo.rs"]
+mod item_animation;
+#[path = "../../examples/lazy_grid_demo.rs"]
+mod lazy_grid_demo;
+#[path = "../../examples/lazy_item_animation_demo.rs"]
+mod lazy_item_animation;
 #[path = "../../examples/lazy_layout_demo.rs"]
 mod lazy_layout;
 #[path = "../../examples/lazy_ops_demo.rs"]
 mod lazy_ops_demo;
-#[path = "../../examples/lazy_item_animation_demo.rs"]
-mod lazy_item_animation;
-#[path = "../../examples/grid_demo.rs"]
-mod grid_demo;
-#[path = "../../examples/lazy_grid_demo.rs"]
-mod lazy_grid_demo;
 #[path = "../../examples/lazy_staggered_demo.rs"]
 mod lazy_staggered_demo;
-#[path = "../../examples/flexbox_demo.rs"]
-mod flexbox_demo;
 
 #[path = "../../examples/text_demo.rs"]
 mod text_demo;

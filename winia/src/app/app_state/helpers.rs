@@ -33,8 +33,15 @@ impl AppState {
     pub(crate) fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, pending: PendingWindow) {
         let mut a = winit::window::WindowAttributes::default();
         a.window_icon = crate::assets::window_icon();
-        a.title = if pending.title.is_empty() { "Winia".into() } else { pending.title.clone() };
-        a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(pending.width as f64, pending.height as f64)));
+        a.title = if pending.title.is_empty() {
+            "Winia".into()
+        } else {
+            pending.title.clone()
+        };
+        a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+            pending.width as f64,
+            pending.height as f64,
+        )));
         a.resizable = pending.options.resizable;
         a.decorations = pending.options.decorations;
         a.visible = false;
@@ -42,7 +49,8 @@ impl AppState {
         let window_id = w.id();
         let sf = w.scale_factor();
         // Match the frame interval to the screen refresh rate (refresh_rate_millihertz: 60000 = 60 Hz) — must be read before `w` is moved.
-        let mhz_opt = w.current_monitor()
+        let mhz_opt = w
+            .current_monitor()
             .and_then(|m| m.current_video_mode())
             .and_then(|v| v.refresh_rate_millihertz())
             .map(|m| m.get());
@@ -55,7 +63,9 @@ impl AppState {
         // be read without it).
         debug_log!(
             "[refresh] create: monitor={}mHz interval={:?}",
-            mhz_opt.map(|m| m.to_string()).unwrap_or_else(|| "unknown".into()),
+            mhz_opt
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "unknown".into()),
             frame_interval
         );
         let skia_window = SkiaWindow::new(event_loop, w);
@@ -105,8 +115,9 @@ impl AppState {
                 .or_else(|| crate::runtime::saveable::persist::load_saved(key))
                 .unwrap_or_default();
             pw.saveable_key = Some(key);
-            pw.composer
-                .set_saveable_registry(crate::runtime::saveable::SaveableStateRegistry::new(restored));
+            pw.composer.set_saveable_registry(
+                crate::runtime::saveable::SaveableStateRegistry::new(restored),
+            );
         }
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
@@ -121,39 +132,52 @@ impl AppState {
         // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
         let density = crate::runtime::density::density_with_system_font_scale(sf as f32);
         crate::runtime::density::with_density(density, || {
-        // The first frame also gets the window size injected (adaptive components are correct immediately) and the reactive State attached.
-        pw.composer.set_adaptive_window_size(pending.width, pending.height);
-        let slot = &pw.window_size_state;
-        let (w0, h0) = (pending.width, pending.height);
-        pw.composer.compose(|ctx| {
-            let existing = slot.borrow().clone();
-            let size_state = existing.unwrap_or_else(|| {
-                ctx.key("winia_window_size_state", |ctx| {
-                    let s = ctx.remember(|| (w0, h0));
-                    *slot.borrow_mut() = Some(s.clone());
-                    *pw.window_size_backchannel.borrow_mut() = Some(s.as_backchannel());
-                    s
-                })
-            });
-            if let Some(b) = pw.window_size_backchannel.borrow().as_ref() {
-                crate::layout::adaptive::sync_window_size_state(b, (w0, h0));
-            }
-            crate::layout::adaptive::set_window_size_state(size_state);
-            (pw.content)(ctx);
-        });
-        pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
-        let bg = pw.theme.applied.colors.background;
-        if let Some(root_idx) = pw.composer.layout_root_idx() {
-            let nodes = pw.composer.arena_nodes();
-            if let Some(ref mut sw) = pw.skia_window {
-                let sf2 = sf as f32;
-                sw.draw(|surface| {
-                    let canvas = surface.canvas(); canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
-                    canvas.save(); canvas.scale((sf2, sf2)); render::render_with_menu(nodes, root_idx, canvas, pw.input.selection_menu.as_ref(), (pw.width, pw.height)); pw.composer.render_layer(canvas); canvas.restore();
+            // The first frame also gets the window size injected (adaptive components are correct immediately) and the reactive State attached.
+            pw.composer
+                .set_adaptive_window_size(pending.width, pending.height);
+            let slot = &pw.window_size_state;
+            let (w0, h0) = (pending.width, pending.height);
+            pw.composer.compose(|ctx| {
+                let existing = slot.borrow().clone();
+                let size_state = existing.unwrap_or_else(|| {
+                    ctx.key("winia_window_size_state", |ctx| {
+                        let s = ctx.remember(|| (w0, h0));
+                        *slot.borrow_mut() = Some(s.clone());
+                        *pw.window_size_backchannel.borrow_mut() = Some(s.as_backchannel());
+                        s
+                    })
                 });
-                sw.set_visible(true);
+                if let Some(b) = pw.window_size_backchannel.borrow().as_ref() {
+                    crate::layout::adaptive::sync_window_size_state(b, (w0, h0));
+                }
+                crate::layout::adaptive::set_window_size_state(size_state);
+                (pw.content)(ctx);
+            });
+            pw.composer
+                .layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
+            let bg = pw.theme.applied.colors.background;
+            if let Some(root_idx) = pw.composer.layout_root_idx() {
+                let nodes = pw.composer.arena_nodes();
+                if let Some(ref mut sw) = pw.skia_window {
+                    let sf2 = sf as f32;
+                    sw.draw(|surface| {
+                        let canvas = surface.canvas();
+                        canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
+                        canvas.save();
+                        canvas.scale((sf2, sf2));
+                        render::render_with_menu(
+                            nodes,
+                            root_idx,
+                            canvas,
+                            pw.input.selection_menu.as_ref(),
+                            (pw.width, pw.height),
+                        );
+                        pw.composer.render_layer(canvas);
+                        canvas.restore();
+                    });
+                    sw.set_visible(true);
+                }
             }
-        }
         });
         self.windows.insert(window_id, pw);
         if self.parent_window_id.is_none() {
@@ -162,4 +186,3 @@ impl AppState {
         }
     }
 }
-

@@ -18,7 +18,11 @@ impl TextFieldValue {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let len = text.len();
-        Self { text, selection: len..len, composing_range: None }
+        Self {
+            text,
+            selection: len..len,
+            composing_range: None,
+        }
     }
 
     /// Apply a committed IME edit. The caller removes any active preedit first; this method only
@@ -30,11 +34,15 @@ impl TextFieldValue {
 
         match edit {
             crate::layout::node::ImeEdit::Commit(text) => {
-                self.text.replace_range(selection_start..selection_end, text);
+                self.text
+                    .replace_range(selection_start..selection_end, text);
                 let caret = selection_start + text.len();
                 self.selection = caret..caret;
             }
-            crate::layout::node::ImeEdit::DeleteSurrounding { before_bytes, after_bytes } => {
+            crate::layout::node::ImeEdit::DeleteSurrounding {
+                before_bytes,
+                after_bytes,
+            } => {
                 let start = self
                     .text
                     .floor_char_boundary(selection_start.saturating_sub(*before_bytes));
@@ -126,7 +134,12 @@ impl UndoManager {
     }
 
     /// 编辑前调用：记录 (text, selection, composing_range) 快照；新编辑丢弃 redo 分支
-    pub(crate) fn push(&mut self, text: &str, selection: &Range<usize>, composing: Option<Range<usize>>) {
+    pub(crate) fn push(
+        &mut self,
+        text: &str,
+        selection: &Range<usize>,
+        composing: Option<Range<usize>>,
+    ) {
         if let Some(last) = self.undo_stack.last_mut() {
             if last.0 == text {
                 // 同文本：只更新 selection 与 composing（光标移动/组合态变化不产生新条目）
@@ -135,7 +148,8 @@ impl UndoManager {
                 return;
             }
         }
-        self.undo_stack.push((text.to_string(), selection.clone(), composing));
+        self.undo_stack
+            .push((text.to_string(), selection.clone(), composing));
         self.redo_stack.clear();
         if self.undo_stack.len() > UNDO_MAX_SNAPSHOTS {
             self.undo_stack.remove(0);
@@ -143,14 +157,20 @@ impl UndoManager {
     }
 
     /// 撤销：当前状态入 redo 栈，返回上一快照
-    pub(crate) fn undo(&mut self, current: (String, Range<usize>, Option<Range<usize>>)) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
+    pub(crate) fn undo(
+        &mut self,
+        current: (String, Range<usize>, Option<Range<usize>>),
+    ) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
         let s = self.undo_stack.pop()?;
         self.redo_stack.push(current);
         Some(s)
     }
 
     /// 重做：当前状态入 undo 栈，返回 redo 快照
-    pub(crate) fn redo(&mut self, current: (String, Range<usize>, Option<Range<usize>>)) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
+    pub(crate) fn redo(
+        &mut self,
+        current: (String, Range<usize>, Option<Range<usize>>),
+    ) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
         let s = self.redo_stack.pop()?;
         self.undo_stack.push(current);
         Some(s)
@@ -165,7 +185,8 @@ pub(crate) fn end_composition(val: &mut TextFieldValue) {
         let len = comp.len();
         val.text.replace_range(comp.clone(), "");
         let shift = len.min(val.selection.start.saturating_sub(comp.start));
-        val.selection = (val.selection.start - shift)..(val.selection.end - shift.min(val.selection.end));
+        val.selection =
+            (val.selection.start - shift)..(val.selection.end - shift.min(val.selection.end));
         val.composing_range = None;
         let text_len = val.text.len();
         val.selection = val.selection.start.min(text_len)..val.selection.end.min(text_len);
@@ -199,7 +220,10 @@ mod ime_edit_tests {
     fn delete_surrounding_deletes_around_the_caret() {
         let mut value = TextFieldValue::new("hello world");
         value.selection = 5..5;
-        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 2, after_bytes: 2 });
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding {
+            before_bytes: 2,
+            after_bytes: 2,
+        });
         assert_eq!(value.text, "helorld");
         assert_eq!(value.selection, 3..3);
     }
@@ -208,12 +232,18 @@ mod ime_edit_tests {
     fn delete_surrounding_clamps_at_the_edges() {
         let mut value = TextFieldValue::new("hello");
         value.selection = 5..5;
-        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 99, after_bytes: 0 });
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding {
+            before_bytes: 99,
+            after_bytes: 0,
+        });
         assert_eq!(value.text, "");
 
         let mut value = TextFieldValue::new("hello");
         value.selection = 0..0;
-        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 0, after_bytes: 99 });
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding {
+            before_bytes: 0,
+            after_bytes: 99,
+        });
         assert_eq!(value.text, "");
     }
 
@@ -221,9 +251,11 @@ mod ime_edit_tests {
     fn delete_surrounding_does_not_split_a_multibyte_character() {
         let mut value = TextFieldValue::new("año");
         value.selection = 3..3;
-        value.apply_ime_edit(&ImeEdit::DeleteSurrounding { before_bytes: 1, after_bytes: 0 });
+        value.apply_ime_edit(&ImeEdit::DeleteSurrounding {
+            before_bytes: 1,
+            after_bytes: 0,
+        });
         assert_eq!(value.text, "ao");
         assert_eq!(value.selection, 1..1);
     }
 }
-

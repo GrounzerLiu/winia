@@ -55,9 +55,9 @@
 
 use std::sync::Arc;
 
+use crate::graphics::Color;
 use crate::modifier::{DrawWrapNode, Modifier};
-use crate::graphics::{Color};
-use skia_safe::{Canvas as SkCanvas, Paint, Path, Rect as SkRect, RRect};
+use skia_safe::{Canvas as SkCanvas, Paint, Path, RRect, Rect as SkRect};
 
 /// The drawing surface handed to a [`Canvas`] / [`draw_behind`] / [`draw_with_content`] closure.
 ///
@@ -71,7 +71,11 @@ pub struct DrawScope<'a> {
 
 impl<'a> DrawScope<'a> {
     pub(crate) fn new(canvas: &'a SkCanvas, rect: SkRect, density: f32) -> Self {
-        Self { canvas, rect, density }
+        Self {
+            canvas,
+            rect,
+            density,
+        }
     }
 
     /// The region this scope draws into (the node's rect, in logical pixels).
@@ -187,10 +191,21 @@ impl<'a> DrawScope<'a> {
     /// text goes through the same path a `Text` node uses rather than a second one — and returns
     /// [`TextMetrics`], so a caller can act on the measured size (centre the run, size a badge around
     /// it, reserve space) instead of re-deriving the layout or hard-coding an estimate.
-    pub fn draw_text(&self, text: &str, x: f32, y: f32, font_size: f32, color: Color) -> TextMetrics {
-        let paragraph = crate::text::build_plain_paragraph(text, font_size, color, self.rect.width().max(1.0));
+    pub fn draw_text(
+        &self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+    ) -> TextMetrics {
+        let paragraph =
+            crate::text::build_plain_paragraph(text, font_size, color, self.rect.width().max(1.0));
         paragraph.paint(self.canvas, x, y);
-        TextMetrics { paragraph, origin: (x, y) }
+        TextMetrics {
+            paragraph,
+            origin: (x, y),
+        }
     }
 }
 
@@ -292,7 +307,9 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new() -> Self {
-        Self { modifier: Modifier::new() }
+        Self {
+            modifier: Modifier::new(),
+        }
     }
 
     pub fn modifier(mut self, m: Modifier) -> Self {
@@ -300,7 +317,11 @@ impl Canvas {
         self
     }
 
-    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, draw: impl Fn(&DrawScope) + Send + Sync + 'static) {
+    pub fn build(
+        self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        draw: impl Fn(&DrawScope) + Send + Sync + 'static,
+    ) {
         let key = ctx.next_key();
         let draw = Arc::new(draw);
         let node = CanvasNode { draw };
@@ -328,21 +349,25 @@ impl std::fmt::Debug for CanvasNode {
 }
 
 impl DrawWrapNode for CanvasNode {
-    fn draw_before(
-        &self,
-        canvas: &SkCanvas,
-        rect: SkRect,
-        modifier: &Modifier,
-    ) {
-        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
+    fn draw_before(&self, canvas: &SkCanvas, rect: SkRect, modifier: &Modifier) {
+        let scope = DrawScope::new(
+            canvas,
+            rect,
+            crate::runtime::density::current_density().density,
+        );
         (self.draw)(&scope);
         let _ = modifier;
     }
 }
 
 /// Compose's `drawBehind`: draw behind the node's content.
-pub fn draw_behind(modifier: Modifier, draw: impl Fn(&DrawScope) + Send + Sync + 'static) -> Modifier {
-    modifier.draw_wrap_node(BehindNode { draw: Arc::new(draw) })
+pub fn draw_behind(
+    modifier: Modifier,
+    draw: impl Fn(&DrawScope) + Send + Sync + 'static,
+) -> Modifier {
+    modifier.draw_wrap_node(BehindNode {
+        draw: Arc::new(draw),
+    })
 }
 
 /// Compose's `drawWithContent`: draw around the node's content — `before` first, content, then
@@ -370,7 +395,11 @@ impl std::fmt::Debug for BehindNode {
 
 impl DrawWrapNode for BehindNode {
     fn draw_before(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
+        let scope = DrawScope::new(
+            canvas,
+            rect,
+            crate::runtime::density::current_density().density,
+        );
         (self.draw)(&scope);
     }
 }
@@ -388,12 +417,20 @@ impl std::fmt::Debug for WithContentNode {
 
 impl DrawWrapNode for WithContentNode {
     fn draw_before(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
+        let scope = DrawScope::new(
+            canvas,
+            rect,
+            crate::runtime::density::current_density().density,
+        );
         (self.before)(&scope);
     }
 
     fn draw_after(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
+        let scope = DrawScope::new(
+            canvas,
+            rect,
+            crate::runtime::density::current_density().density,
+        );
         (self.after)(&scope);
     }
 }
@@ -401,8 +438,8 @@ impl DrawWrapNode for WithContentNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
+    use crate::runtime::composer::Composer;
     use skia_safe::surfaces;
 
     /// Compose a single leaf with `modifier`, lay it out in a 300x300 window, render it on white and
@@ -444,7 +481,10 @@ mod tests {
             let (cx, cy) = scope.center();
             scope.draw_circle(cx, cy, 20.0, Color::RED);
         });
-        assert!(is_red(render_pixel(md.clone(), 50, 50)), "circle centre should be red");
+        assert!(
+            is_red(render_pixel(md.clone(), 50, 50)),
+            "circle centre should be red"
+        );
         assert!(is_white(render_pixel(md, 5, 5)), "corner should stay white");
     }
 
@@ -458,7 +498,8 @@ mod tests {
         composer.compose(|ctx| {
             let modifier = Modifier::new().size(80.0, 40.0);
             let md = draw_behind(modifier, move |scope| {
-                *seen_in.lock().unwrap() = Some((scope.width(), scope.height(), scope.center(), scope.rect()));
+                *seen_in.lock().unwrap() =
+                    Some((scope.width(), scope.height(), scope.center(), scope.rect()));
             });
             let key = ctx.next_key();
             ctx.start_leaf(key, md);
@@ -496,9 +537,17 @@ mod tests {
             composer.arena_nodes()[root].measured_size
         };
         let zero = measured(Modifier::new());
-        assert_eq!((zero.width, zero.height), (0.0, 0.0), "no size means no size");
+        assert_eq!(
+            (zero.width, zero.height),
+            (0.0, 0.0),
+            "no size means no size"
+        );
         let sized = measured(Modifier::new().size(64.0, 32.0));
-        assert_eq!((sized.width, sized.height), (64.0, 32.0), "the modifier's size is used");
+        assert_eq!(
+            (sized.width, sized.height),
+            (64.0, 32.0),
+            "the modifier's size is used"
+        );
     }
 
     /// `draw_with_content` draws on both sides of the content, and the "after" side lands on top —
@@ -516,8 +565,14 @@ mod tests {
                 scope.draw_rect(skia_safe::Rect::new(0.0, 0.0, 100.0, 20.0), Color::RED);
             },
         );
-        assert!(is_red(render_pixel(md.clone(), 50, 10)), "the after-pass band is red");
-        assert!(is_white(render_pixel(md, 50, 50)), "below the band the background shows");
+        assert!(
+            is_red(render_pixel(md.clone(), 50, 10)),
+            "the after-pass band is red"
+        );
+        assert!(
+            is_white(render_pixel(md, 50, 50)),
+            "below the band the background shows"
+        );
     }
 
     /// The `Dp` accessors carry the same numbers as the raw ones — that is their whole contract. The
@@ -583,8 +638,15 @@ mod tests {
         let runs = seen.lock().unwrap().clone();
         let (short_w, short_h, long_w, long_h, origin, rect) = runs[0];
         assert!(short_h > 0.0, "a drawn run has height");
-        assert!(long_w > short_w, "\"a much longer run\" must measure wider than \"i\": {long_w} vs {short_w}");
-        assert_eq!(origin, (0.0, 0.0), "the metrics carry the origin they were drawn at");
+        assert!(
+            long_w > short_w,
+            "\"a much longer run\" must measure wider than \"i\": {long_w} vs {short_w}"
+        );
+        assert_eq!(
+            origin,
+            (0.0, 0.0),
+            "the metrics carry the origin they were drawn at"
+        );
         assert_eq!(
             (rect.left, rect.top, rect.width(), rect.height()),
             (0.0, 0.0, short_w, short_h),
@@ -608,9 +670,7 @@ mod tests {
                 run.draw_centered(scope, 200.0, 100.0);
                 let lm = run.paragraph().get_line_metrics();
                 let (baseline, ascent) = (lm[0].baseline as f32, lm[0].ascent as f32);
-                *seen_in.lock().unwrap() = Some((
-                    baseline, ascent, run.height(), run.width(),
-                ));
+                *seen_in.lock().unwrap() = Some((baseline, ascent, run.height(), run.width()));
             });
             let key = ctx.next_key();
             ctx.start_leaf(key, md);
@@ -638,7 +698,10 @@ mod tests {
             "centred run's top edge should land at {expected_top}, got {top_edge}"
         );
         let centred_x = (200.0 - width) / 2.0;
-        assert!(centred_x >= 0.0 && centred_x + width <= 200.0, "the run fits the box it is centred in");
+        assert!(
+            centred_x >= 0.0 && centred_x + width <= 200.0,
+            "the run fits the box it is centred in"
+        );
     }
 
     /// Every primitive in the scope must survive a real draw call — they are thin Skia wrappers, and
@@ -650,7 +713,11 @@ mod tests {
         let modifier = Modifier::new().size(200.0, 200.0);
         let md = draw_behind(modifier, |scope| {
             scope.draw_rect(skia_safe::Rect::new(0.0, 0.0, 40.0, 40.0), Color::RED);
-            scope.draw_round_rect(skia_safe::Rect::new(50.0, 0.0, 90.0, 40.0), 8.0, Color::GREEN);
+            scope.draw_round_rect(
+                skia_safe::Rect::new(50.0, 0.0, 90.0, 40.0),
+                8.0,
+                Color::GREEN,
+            );
             scope.draw_circle(120.0, 20.0, 20.0, Color::BLUE);
             scope.draw_oval(skia_safe::Rect::new(150.0, 0.0, 190.0, 40.0), Color::BLACK);
             scope.draw_line((0.0, 60.0), (200.0, 60.0), 2.0, Color::BLACK);

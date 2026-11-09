@@ -29,12 +29,12 @@
 
 use crate::composable;
 use crate::graphics::Shape;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::layout::{Constraints, LayoutDirection};
 use crate::input::interaction::MutableInteractionSource;
-use crate::runtime::state::Backchannel;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::layout::{Constraints, LayoutDirection};
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::Backchannel;
 use crate::unit::{Offset, Size};
 
 /// `ButtonGroupSmallTokens.ContainerHeight` — also
@@ -143,7 +143,11 @@ impl ButtonGroupDefaults {
 
     /// The shapes for the item at `index` in a row of `count`: leading, middle or trailing.
     /// A lone item takes the leading set, which rounds its start corners.
-    pub fn item_shapes(index: usize, count: usize, direction: LayoutDirection) -> ButtonGroupShapes {
+    pub fn item_shapes(
+        index: usize,
+        count: usize,
+        direction: LayoutDirection,
+    ) -> ButtonGroupShapes {
         if index == 0 {
             Self::connected_leading_shapes(direction)
         } else if index + 1 >= count {
@@ -162,7 +166,9 @@ pub struct ButtonGroupMenuState {
 
 impl ButtonGroupMenuState {
     pub fn new() -> Self {
-        Self { is_showing: crate::runtime::state::State::new(false) }
+        Self {
+            is_showing: crate::runtime::state::State::new(false),
+        }
     }
 
     pub fn is_showing(&self) -> bool {
@@ -218,9 +224,7 @@ impl ButtonGroupItem {
     /// `clickableItem` and `toggleableItem` attach `EnlargeOnPressElement` to every item they
     /// build, in the plain group as much as the connected one (`ButtonGroup.kt:1075-1126`). An
     /// item that ignores the source simply never grows, which is upstream's `customItem`.
-    pub fn new(
-        item: impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static,
-    ) -> Self {
+    pub fn new(item: impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static) -> Self {
         Self {
             weight: 0.0,
             press: None,
@@ -232,10 +236,7 @@ impl ButtonGroupItem {
 
     /// What this item looks like in the overflow menu. Without one it simply does not appear in
     /// the menu, which is the honest thing: winia's items carry no label of their own.
-    pub fn menu(
-        mut self,
-        menu: impl Fn(&mut ComposeCtx, ButtonGroupMenuState) + 'static,
-    ) -> Self {
+    pub fn menu(mut self, menu: impl Fn(&mut ComposeCtx, ButtonGroupMenuState) + 'static) -> Self {
         self.menu = Some(Box::new(menu));
         self
     }
@@ -398,8 +399,7 @@ impl ButtonGroup {
         // (no state layer, no ripple) and leaves the group reading `pressed = false` for ever.
         // The backchannel is the write-only handle that persists the grown list without asking for
         // a recomposition.
-        let store: Backchannel<Vec<MutableInteractionSource>> =
-            ctx.remember_backchannel(Vec::new);
+        let store: Backchannel<Vec<MutableInteractionSource>> = ctx.remember_backchannel(Vec::new);
         let wanted = self.children.len();
         let mut sources = store.peek();
         if sources.len() < wanted {
@@ -420,7 +420,9 @@ impl ButtonGroup {
             let target = if down { 1.0 } else { 0.0 };
             progress.push(ctx.animate_float_as_state(
                 target,
-                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
+                crate::animation::AnimationSpec::Spring(
+                    crate::animation::SpringSpec::spatial_fast(),
+                ),
             ));
         }
         // Which EDGE a squeezed item's content is pinned to. Only a pressed item takes room from
@@ -499,17 +501,19 @@ impl ButtonGroup {
                         // so the menu drops from the indicator rather than the row's start —
                         // `DropdownMenu::build` anchors to whatever its anchor closure composed
                         // and its group is just another child of this policy.
-                        crate::components::dropdown_menu::DropdownMenu::new(menu_state.expanded_state())
-                            .on_dismiss_request(move || state_for_dismiss.dismiss())
-                            .build(
-                                ctx,
-                                |_ctx| {},
-                                move |ctx| {
-                                    for row in &hidden {
-                                        row(ctx, state_for_rows.clone());
-                                    }
-                                },
-                            );
+                        crate::components::dropdown_menu::DropdownMenu::new(
+                            menu_state.expanded_state(),
+                        )
+                        .on_dismiss_request(move || state_for_dismiss.dismiss())
+                        .build(
+                            ctx,
+                            |_ctx| {},
+                            move |ctx| {
+                                for row in &hidden {
+                                    row(ctx, state_for_rows.clone());
+                                }
+                            },
+                        );
                     }
                 }
             }
@@ -543,11 +547,7 @@ fn hidden_rows<T>(rows: &mut [Option<T>], shown: usize) -> Vec<T> {
 }
 
 /// Wraps one item in its own group node, so the group can hang a render-time layer on it.
-fn wrap_item(
-    ctx: &mut ComposeCtx,
-    modifier: Modifier,
-    content: impl FnOnce(&mut ComposeCtx),
-) {
+fn wrap_item(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) {
     let key = ctx.next_key();
     // `propagate_min_constraints`: the row measures this wrapper at the SLOT width, and the item
     // inside has to see that as a minimum or it keeps its natural width — a text item whose slot
@@ -603,7 +603,11 @@ impl MeasurePolicy for ButtonGroupPolicy {
         let n = children.len();
         // The items are the first `item_count` children; an indicator, when present, is the last.
         let items = self.item_count.min(n);
-        let indicator_index = if self.has_indicator && n > items { Some(items) } else { None };
+        let indicator_index = if self.has_indicator && n > items {
+            Some(items)
+        } else {
+            None
+        };
         let weight_of = |i: usize| self.weights.get(i).copied().unwrap_or(0.0);
 
         // The indicator is measured FIRST, because it is what leaves room for the items —
@@ -624,7 +628,11 @@ impl MeasurePolicy for ButtonGroupPolicy {
         } else {
             max_w
         };
-        let gaps = if items > 1 { self.spacing * (items as f32 - 1.0) } else { 0.0 };
+        let gaps = if items > 1 {
+            self.spacing * (items as f32 - 1.0)
+        } else {
+            0.0
+        };
         let total_weight: f32 = (0..items).map(weight_of).sum();
 
         // Pass 1: the unweighted items at their natural width. That is what the leftover is
@@ -852,7 +860,11 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 // Where that node sits inside the row's slot. Zero for a direct child — the painted
                 // box is then already in its own coordinates — and whatever the wrapper's own layout
                 // placed it at otherwise (`Alignment::Start` puts it at the slot's start).
-                let local = if host == child { 0.0 } else { nodes[host].position.x };
+                let local = if host == child {
+                    0.0
+                } else {
+                    nodes[host].position.x
+                };
                 let inset = nodes[host]
                     .modifier
                     .get_minimum_interactive_size()
@@ -869,7 +881,8 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 // slot edge never moves).
                 let content_x = inset;
                 let top = (nodes[host].measured_size.height - ch) / 2.0;
-                nodes[host].minimum_interactive_painted = Some((content_x - local, top, painted_w, ch));
+                nodes[host].minimum_interactive_painted =
+                    Some((content_x - local, top, painted_w, ch));
 
                 // The content inside the node. The modifier placed it against the box the child
                 // MEASURED (its touch target), so it has to follow the container this frame paints:
@@ -928,7 +941,5 @@ fn paint_host(nodes: &[LayoutNode], child: usize) -> usize {
     child
 }
 
-
 #[cfg(test)]
 mod tests;
-

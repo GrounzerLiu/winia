@@ -49,7 +49,11 @@ impl MonoSpline {
                 }
             }
         }
-        Self { times, values, tangents }
+        Self {
+            times,
+            values,
+            tangents,
+        }
     }
 
     /// `getPos`: extrapolates past the ends with the end slope (MonoSplineIsExtrapolate = true).
@@ -68,7 +72,14 @@ impl MonoSpline {
             if t < self.times[i + 1] {
                 let h = self.times[i + 1] - self.times[i];
                 let x = (t - self.times[i]) / h;
-                return hermite_interpolate(h, x, self.values[i], self.values[i + 1], self.tangents[i], self.tangents[i + 1]);
+                return hermite_interpolate(
+                    h,
+                    x,
+                    self.values[i],
+                    self.values[i + 1],
+                    self.tangents[i],
+                    self.tangents[i + 1],
+                );
             }
         }
         self.values[n - 1]
@@ -82,7 +93,14 @@ impl MonoSpline {
             if t <= self.times[i + 1] {
                 let h = self.times[i + 1] - self.times[i];
                 let x = (t - self.times[i]) / h;
-                return hermite_differential(h, x, self.values[i], self.values[i + 1], self.tangents[i], self.tangents[i + 1]) / h;
+                return hermite_differential(
+                    h,
+                    x,
+                    self.values[i],
+                    self.values[i + 1],
+                    self.tangents[i],
+                    self.tangents[i + 1],
+                ) / h;
             }
         }
         0.0
@@ -142,9 +160,11 @@ impl KeyframesWithSplineSpec {
     pub fn same_parameter(&self, other: &Self) -> bool {
         self.duration == other.duration
             && self.frames.len() == other.frames.len()
-            && self.frames.iter().zip(&other.frames).all(|(a, b)| {
-                a.0 == b.0 && a.1 == b.1 && a.2.same_parameter(&*b.2)
-            })
+            && self
+                .frames
+                .iter()
+                .zip(&other.frames)
+                .all(|(a, b)| a.0 == b.0 && a.1 == b.1 && a.2.same_parameter(&*b.2))
     }
 
     fn spline(&self) -> MonoSpline {
@@ -159,12 +179,20 @@ impl KeyframesWithSplineSpec {
 pub struct KeyframesWithSplineOf {
     from: f32,
     to: f32,
-    frames: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)>,
+    frames: Vec<(
+        u64,
+        f32,
+        Option<std::sync::Arc<dyn interpolator::Interpolator>>,
+    )>,
 }
 
 impl KeyframesWithSplineOf {
     pub fn between(from: f32, to: f32) -> Self {
-        Self { from, to, frames: Vec::new() }
+        Self {
+            from,
+            to,
+            frames: Vec::new(),
+        }
     }
 
     pub fn at(mut self, millis: u64, value: f32) -> Self {
@@ -172,14 +200,23 @@ impl KeyframesWithSplineOf {
         self
     }
 
-    pub fn at_with(mut self, millis: u64, value: f32, easing: std::sync::Arc<dyn interpolator::Interpolator>) -> Self {
+    pub fn at_with(
+        mut self,
+        millis: u64,
+        value: f32,
+        easing: std::sync::Arc<dyn interpolator::Interpolator>,
+    ) -> Self {
         self.frames.push((millis, value, Some(easing)));
         self
     }
 
     pub fn build(mut self) -> KeyframesWithSplineSpec {
         self.frames.sort_by_key(|(millis, _, _)| *millis);
-        let mut deduped: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)> = Vec::new();
+        let mut deduped: Vec<(
+            u64,
+            f32,
+            Option<std::sync::Arc<dyn interpolator::Interpolator>>,
+        )> = Vec::new();
         for frame in self.frames.drain(..) {
             match deduped.last_mut() {
                 Some(last) if last.0 == frame.0 => *last = frame,
@@ -194,12 +231,21 @@ impl KeyframesWithSplineOf {
             // (unreachable: the last frame defines the duration)
         }
         let span = self.to - self.from;
-        let linear: std::sync::Arc<dyn interpolator::Interpolator> = std::sync::Arc::new(interpolator::Linear::new());
+        let linear: std::sync::Arc<dyn interpolator::Interpolator> =
+            std::sync::Arc::new(interpolator::Linear::new());
         let mut frames: Vec<(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)> = deduped
             .into_iter()
             .map(|(millis, value, easing)| {
-                let progress = if duration_ms == 0 { 0.0 } else { millis as f32 / duration_ms as f32 };
-                let fraction = if span.abs() <= f32::EPSILON { 0.0 } else { (value - self.from) / span };
+                let progress = if duration_ms == 0 {
+                    0.0
+                } else {
+                    millis as f32 / duration_ms as f32
+                };
+                let fraction = if span.abs() <= f32::EPSILON {
+                    0.0
+                } else {
+                    (value - self.from) / span
+                };
                 (progress, fraction, easing.unwrap_or_else(|| linear.clone()))
             })
             .collect();
@@ -208,6 +254,9 @@ impl KeyframesWithSplineOf {
         if frames.last().map(|(p, _, _)| *p).unwrap_or(0.0) < 1.0 {
             frames.push((1.0, 1.0, linear));
         }
-        KeyframesWithSplineSpec { duration: Duration::from_millis(duration_ms.max(1)), frames }
+        KeyframesWithSplineSpec {
+            duration: Duration::from_millis(duration_ms.max(1)),
+            frames,
+        }
     }
 }

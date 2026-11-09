@@ -27,9 +27,9 @@
 
 use super::{GridCells, ItemHeightCache, LazyAxis};
 use crate::layout::axis::Axis as _;
+use crate::layout::container::build_container;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
 use crate::layout::staggered::assign_lanes;
-use crate::layout::container::build_container;
 use crate::layout::{Constraints, LayoutDirection, Stack};
 use crate::modifier::{Modifier, ScrollState};
 use crate::runtime::composer::ComposeCtx;
@@ -118,13 +118,22 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
             main_max
         } else {
             let cached = self.viewport_main.peek();
-            if cached > 0.0 { cached } else { FIRST_FRAME_VIEWPORT }
+            if cached > 0.0 {
+                cached
+            } else {
+                FIRST_FRAME_VIEWPORT
+            }
         };
         let cross_extent = if cross_max < f32::MAX {
             cross_max
         } else {
             let cached = self.viewport_cross.peek();
-            if cached > 0.0 { cached } else { self.lanes.max(1) as f32 * 200.0 }.max(1.0)
+            if cached > 0.0 {
+                cached
+            } else {
+                self.lanes.max(1) as f32 * 200.0
+            }
+            .max(1.0)
         };
         let lanes = self.lanes.max(1);
         let usable = (cross_extent
@@ -215,8 +224,16 @@ impl<A: LazyAxis> MeasurePolicy for StaggeredPolicy<A> {
         let placed_bottom = placements
             .iter()
             .map(|placement| {
-                let main = if A::VERTICAL { placement.position.y } else { placement.position.x };
-                let size = if A::VERTICAL { placement.size.height } else { placement.size.width };
+                let main = if A::VERTICAL {
+                    placement.position.y
+                } else {
+                    placement.position.x
+                };
+                let size = if A::VERTICAL {
+                    placement.size.height
+                } else {
+                    placement.size.width
+                };
                 main + size
             })
             .fold(0.0f32, f32::max);
@@ -420,8 +437,12 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         // build READS them, so the write wakes this group. A Mutex field changes nothing the Skip
         // decision compares, and the recomputed window/lane count/extent were silently discarded
         // (that was the root cause of both ignored tests).
-        let viewport_main = ctx.remember(|| crate::runtime::state::State::new(0.0f32)).peek();
-        let viewport_cross = ctx.remember(|| crate::runtime::state::State::new(0.0f32)).peek();
+        let viewport_main = ctx
+            .remember(|| crate::runtime::state::State::new(0.0f32))
+            .peek();
+        let viewport_cross = ctx
+            .remember(|| crate::runtime::state::State::new(0.0f32))
+            .peek();
         let cached_cross = viewport_cross.get();
         let lanes = match self.cells {
             GridCells::Fixed(cells) => cells.max(1),
@@ -510,7 +531,11 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
         // Before the first measure there is no viewport to window against: compose a generous default
         // instead of a zero-height strip, or the bottom of the grid stays empty until a scroll forces
         // another build (measured on the demo: ~450 dp of content for a 600 dp viewport).
-        let viewport = if viewport > 0.0 { viewport } else { FIRST_FRAME_VIEWPORT };
+        let viewport = if viewport > 0.0 {
+            viewport
+        } else {
+            FIRST_FRAME_VIEWPORT
+        };
         let window_start = (content_offset - self.beyond_bounds).max(0.0);
         let window_end = content_offset + viewport + self.beyond_bounds;
         let mut window: Vec<usize> = Vec::new();
@@ -611,15 +636,17 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
             .then(A::scroll(state.clone()))
             // A reader hears a COLLECTION of `count` rows (or columns) and can ask it to bring an item
             // into view — Compose's `LazyStaggeredGridSemantics`.
-            .then(Modifier::new().semantics(
-                crate::semantics::SemanticsConfig::new()
-                    .collection_info(if A::VERTICAL {
-                        crate::semantics::CollectionInfo::rows(count_for_semantics)
-                    } else {
-                        crate::semantics::CollectionInfo::columns(count_for_semantics)
-                    })
-                    .scroll_to_index_action(jump),
-            ))
+            .then(
+                Modifier::new().semantics(
+                    crate::semantics::SemanticsConfig::new()
+                        .collection_info(if A::VERTICAL {
+                            crate::semantics::CollectionInfo::rows(count_for_semantics)
+                        } else {
+                            crate::semantics::CollectionInfo::columns(count_for_semantics)
+                        })
+                        .scroll_to_index_action(jump),
+                ),
+            )
             .then(self.modifier);
         build_container(ctx, modifier, policy, |ctx| {
             for index in window {
@@ -633,8 +660,9 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
                     // walking anonymous children (Compose's CollectionItemInfo on ogni item).
                     Stack::new()
                         .modifier(Modifier::new().semantics(
-                            crate::semantics::SemanticsConfig::new()
-                                .collection_item_info(crate::semantics::CollectionItemInfo::new(index)),
+                            crate::semantics::SemanticsConfig::new().collection_item_info(
+                                crate::semantics::CollectionItemInfo::new(index),
+                            ),
                         ))
                         .build(ctx, |ctx| content(ctx, index));
                 });
@@ -646,7 +674,7 @@ impl<A: LazyAxis> LazyStaggeredGrid<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Stack, Constraints};
+    use crate::layout::{Constraints, Stack};
     use crate::runtime::composer::Composer;
 
     fn grid_frame(composer: &mut Composer, state: &ScrollState, count: usize, height: f32) {
@@ -690,7 +718,10 @@ mod tests {
         assert_eq!(items.len(), 4, "all four items fit the 200 dp viewport");
         // The items keep their own 10 dp width (a cell places them, it does not stretch them), so the
         // CELL is read off the second lane's x offset: (300 - 4) / 2 + 4.
-        assert_eq!(composer.arena_nodes()[items[0]].position, Offset::new(0.0, 0.0));
+        assert_eq!(
+            composer.arena_nodes()[items[0]].position,
+            Offset::new(0.0, 0.0)
+        );
         assert_eq!(
             composer.arena_nodes()[items[1]].position,
             Offset::new(152.0, 0.0),
@@ -707,10 +738,6 @@ mod tests {
             "and the fourth follows the second"
         );
     }
-
-
-
-
 
     /// The height cache is keyed by the item's KEY: with keys that are not indices, a cache written by
     /// index never hit and every item stayed priced at the estimate (so the extent, and the scroll
@@ -803,7 +830,9 @@ mod tests {
             })
             .collect();
         assert!(
-            first_three.iter().all(|(_, y)| (*y - first_three[0].1).abs() < 0.5),
+            first_three
+                .iter()
+                .all(|(_, y)| (*y - first_three[0].1).abs() < 0.5),
             "a 300 dp grid at 90 dp per cell fits three lanes: {first_three:?}"
         );
         assert!(
@@ -811,7 +840,6 @@ mod tests {
             "and the lanes run across: {first_three:?}"
         );
     }
-
 
     /// A WRAP-CONTENT parent hands both axes f32::MAX. The grid must still report a usable size and
     /// compose its window instead of collapsing to zero or poisoning the parent with the sentinel.
@@ -844,18 +872,21 @@ mod tests {
             composer.layout(Constraints::UNBOUNDED);
         }
         let root = composer.layout_root().unwrap();
-        assert!(root.measured_size.height > 0.0, "a usable height: {:?}", root.measured_size);
+        assert!(
+            root.measured_size.height > 0.0,
+            "a usable height: {:?}",
+            root.measured_size
+        );
         assert!(
             root.measured_size.width < 100_000.0,
             "and the cross sentinel never reaches the parent: {:?}",
             root.measured_size
         );
-        assert!(!root.children.is_empty(), "the window composes under an unbounded parent");
+        assert!(
+            !root.children.is_empty(),
+            "the window composes under an unbounded parent"
+        );
     }
-
-
-
-
 
     /// The waterfall's GEOMETRY must not move while scrolling: with uniform tiles in two lanes, items
     /// 2i and 2i+1 share a content y and the ladder steps by one tile plus one gap, at ANY offset. Before
@@ -1023,10 +1054,16 @@ mod tests {
         grid_frame(&mut composer, &state, 200, 40.0);
         grid_frame(&mut composer, &state, 200, 40.0);
         let root = composer.layout_root().unwrap();
-        let (top, bottom) = root.children.iter().fold((f32::MAX, 0.0f32), |(top, bottom), child| {
-            let node = &composer.arena_nodes()[*child];
-            (top.min(node.position.y), bottom.max(node.position.y + node.measured_size.height))
-        });
+        let (top, bottom) =
+            root.children
+                .iter()
+                .fold((f32::MAX, 0.0f32), |(top, bottom), child| {
+                    let node = &composer.arena_nodes()[*child];
+                    (
+                        top.min(node.position.y),
+                        bottom.max(node.position.y + node.measured_size.height),
+                    )
+                });
         assert!(
             top <= 4000.0 && bottom >= 4200.0,
             "the composed block spans the 200 dp viewport at the 4000 dp offset: {top}..{bottom}"
@@ -1068,7 +1105,8 @@ mod tests {
         let items: Vec<usize> = root.children.clone();
         assert_eq!(items.len(), 2);
         assert_eq!(
-            composer.arena_nodes()[items[0]].position.y, 30.0,
+            composer.arena_nodes()[items[0]].position.y,
+            30.0,
             "the content starts 30 dp in"
         );
     }
@@ -1088,7 +1126,11 @@ mod tests {
         grid_frame(&mut composer, &state, 4, 40.0);
         state.offset.set(10000.0);
         grid_frame(&mut composer, &state, 4, 40.0);
-        assert_eq!(state.offset.get(), 0.0, "a grid whose content fits cannot scroll");
+        assert_eq!(
+            state.offset.get(),
+            0.0,
+            "a grid whose content fits cannot scroll"
+        );
 
         // A tall grid: the clamp is extent - viewport. 200 items of 40 dp in two lanes with the
         // helper's 4 dp spacing are (100 * 44) - 4 = 4396, so 4396 - 200 = 4196.

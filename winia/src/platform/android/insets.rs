@@ -4,7 +4,7 @@
 //! logical pixels and records visibility separately from size.
 
 use jni::objects::JObject;
-use jni::{jni_sig, jni_str, JValue};
+use jni::{JValue, jni_sig, jni_str};
 use winit::platform::android::activity::AndroidApp;
 
 use crate::window::insets::{Insets, InsetsKind, WindowInsets};
@@ -88,13 +88,7 @@ fn read_modern(
     let tappable = read_inset(env, root, tappable)?;
 
     Ok(build(
-        status,
-        navigation,
-        ime,
-        cutout,
-        gestures,
-        tappable,
-        density,
+        status, navigation, ime, cutout, gestures, tappable, density,
     ))
 }
 
@@ -147,7 +141,8 @@ fn type_id(
     types: &jni::objects::JClass<'_>,
     name: &jni::strings::JNIStr,
 ) -> jni::errors::Result<i32> {
-    env.call_static_method(types, name, jni_sig!("()I"), &[])?.i()
+    env.call_static_method(types, name, jni_sig!("()I"), &[])?
+        .i()
 }
 
 fn read_inset(

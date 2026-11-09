@@ -18,12 +18,17 @@ pub struct DeferredTargetAnimation<T: AnimatableValue + Send + Sync + 'static> {
 }
 
 impl<T: AnimatableValue + Send + Sync + 'static> Default for DeferredTargetAnimation<T> {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: AnimatableValue + Send + Sync + 'static> DeferredTargetAnimation<T> {
     pub fn new() -> Self {
-        Self { state: None, target: None }
+        Self {
+            state: None,
+            target: None,
+        }
     }
 
     /// Compose's `updateTarget`: returns the current value of the animation, or `None` on the very
@@ -48,11 +53,16 @@ impl<T: AnimatableValue + Send + Sync + 'static> DeferredTargetAnimation<T> {
     }
 
     /// The current value, `None` before the first [`Self::update_target`].
-    pub fn value(&self) -> Option<T> { self.state.as_ref().map(|s| s.peek()) }
+    pub fn value(&self) -> Option<T> {
+        self.state.as_ref().map(|s| s.peek())
+    }
 
     /// Whether a motion is currently running for this value.
     pub fn is_running(&self) -> bool {
-        self.state.as_ref().map(|s| is_animating_state(s.state_id())).unwrap_or(false)
+        self.state
+            .as_ref()
+            .map(|s| is_animating_state(s.state_id()))
+            .unwrap_or(false)
     }
 
     /// Compose's `reset`: forget the value, so the next target creates it again.

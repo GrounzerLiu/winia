@@ -18,12 +18,42 @@ mod settings;
 
 fn palette(i: usize) -> Color {
     const COLORS: [Color; 6] = [
-        Color { r: 0x4C, g: 0xAF, b: 0x50, a: 255 },
-        Color { r: 0x21, g: 0x96, b: 0xF3, a: 255 },
-        Color { r: 0xFF, g: 0x98, b: 0x00, a: 255 },
-        Color { r: 0x9C, g: 0x27, b: 0xB0, a: 255 },
-        Color { r: 0x00, g: 0xBC, b: 0xD4, a: 255 },
-        Color { r: 0xE9, g: 0x1E, b: 0x63, a: 255 },
+        Color {
+            r: 0x4C,
+            g: 0xAF,
+            b: 0x50,
+            a: 255,
+        },
+        Color {
+            r: 0x21,
+            g: 0x96,
+            b: 0xF3,
+            a: 255,
+        },
+        Color {
+            r: 0xFF,
+            g: 0x98,
+            b: 0x00,
+            a: 255,
+        },
+        Color {
+            r: 0x9C,
+            g: 0x27,
+            b: 0xB0,
+            a: 255,
+        },
+        Color {
+            r: 0x00,
+            g: 0xBC,
+            b: 0xD4,
+            a: 255,
+        },
+        Color {
+            r: 0xE9,
+            g: 0x1E,
+            b: 0x63,
+            a: 255,
+        },
     ];
     COLORS[i % COLORS.len()]
 }
@@ -68,7 +98,9 @@ fn lazy_grid_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("Lazy grids — every knob live").font_size(18.0).build(ctx);
+            Text::new("Lazy grids — every knob live")
+                .font_size(18.0)
+                .build(ctx);
             Text::new(format!(
                 "{} cells | {} items | gap {:.0}/{:.0} | {}",
                 if adaptive.get() {

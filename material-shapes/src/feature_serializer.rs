@@ -1,7 +1,7 @@
-use regex::Regex;
 use crate::cubic::Cubic;
 use crate::feature::Feature;
 use crate::utils::require;
+use regex::Regex;
 
 /**
  * The [FeatureSerializer] is used to both serialize and parse [Feature] objects. This is beneficial
@@ -26,34 +26,34 @@ use crate::utils::require;
 pub struct FeatureSerializer;
 impl FeatureSerializer {
     /**
-    * Serializes a list of [Feature] objects into a string representation, adhering to version
-    * 1 of the feature serialization format.
-    *
-    * **Format:**
-    * 1. **Version Identifier:** A 'V' followed by the version number (e.g., 'V1').
-    * 2. **Feature Serialization:** Each [Feature] is serialized individually and concatenated.
-    *     - **Feature Tag:** A single-character tag identifies the feature type:
-    *         - 'n': Edge
-    *         - 'x': Convex Corner
-    *         - 'o': Concave Corner
-    *     - **Cubic Serialization:** Each [Cubic] within a feature is serialized as a sequence
-    *       of comma-separated x,y coordinates. Subsequent cubics within a feature omit their
-    *       first anchor points, as they're identical to their predecessors' last anchor
-    *       points.
-    *
-    * **Example:** Given two features:
-    * - An edge with one [Cubic]: { (0, 0), (1, 1), (2, 2), (3, 3) }
-    * - A convex corner with two [Cubic] objects: { (0, 0), (1, 1), (2, 2), (3, 3) }, { (3, 3),
-    *   (4, 4), (5, 5), (6, 6) }
-    *
-    * The serialized string would be:
-    * ```text
-    * V1 n 0,0, 1,1, 2,2, 3,3  x 0,0, 1,1, 2,2, 3,3, 4,4, 5,5, 6,6
-    * ```
-    *
-    * @param features The list of [Feature] objects to serialize.
-    * @return The serialized string representation of the [features]
-    */
+     * Serializes a list of [Feature] objects into a string representation, adhering to version
+     * 1 of the feature serialization format.
+     *
+     * **Format:**
+     * 1. **Version Identifier:** A 'V' followed by the version number (e.g., 'V1').
+     * 2. **Feature Serialization:** Each [Feature] is serialized individually and concatenated.
+     *     - **Feature Tag:** A single-character tag identifies the feature type:
+     *         - 'n': Edge
+     *         - 'x': Convex Corner
+     *         - 'o': Concave Corner
+     *     - **Cubic Serialization:** Each [Cubic] within a feature is serialized as a sequence
+     *       of comma-separated x,y coordinates. Subsequent cubics within a feature omit their
+     *       first anchor points, as they're identical to their predecessors' last anchor
+     *       points.
+     *
+     * **Example:** Given two features:
+     * - An edge with one [Cubic]: { (0, 0), (1, 1), (2, 2), (3, 3) }
+     * - A convex corner with two [Cubic] objects: { (0, 0), (1, 1), (2, 2), (3, 3) }, { (3, 3),
+     *   (4, 4), (5, 5), (6, 6) }
+     *
+     * The serialized string would be:
+     * ```text
+     * V1 n 0,0, 1,1, 2,2, 3,3  x 0,0, 1,1, 2,2, 3,3, 4,4, 5,5, 6,6
+     * ```
+     *
+     * @param features The list of [Feature] objects to serialize.
+     * @return The serialized string representation of the [features]
+     */
     pub fn serialize(features: &Vec<Feature>) -> String {
         let mut result = String::new();
         result.push_str("V1");
@@ -62,7 +62,6 @@ impl FeatureSerializer {
         }
         result
     }
-
 
     /**
      * Parses a serialized string representation of [Feature] into their object representations,
@@ -119,13 +118,11 @@ impl FeatureSerializer {
             } else {
                 serialized_features.len()
             };
-            features.push(
-                Self::parse_feature(
-                    serialized_features,
-                    start_index,
-                    end_index
-                )
-            );
+            features.push(Self::parse_feature(
+                serialized_features,
+                start_index,
+                end_index,
+            ));
         }
         features
     }
@@ -137,7 +134,11 @@ impl FeatureSerializer {
                 result.push_str(Self::serialize_cubics(&edge.cubics).as_str());
             }
             Feature::Corner(corner) => {
-                let convex_flag = if corner.convex { Self::CONVEX_CORNER_CHAR } else { Self::CONCAVE_CORNER_CHAR };
+                let convex_flag = if corner.convex {
+                    Self::CONVEX_CORNER_CHAR
+                } else {
+                    Self::CONCAVE_CORNER_CHAR
+                };
                 result.push(convex_flag);
                 result.push_str(Self::serialize_cubics(&corner.cubics).as_str());
             }
@@ -159,7 +160,9 @@ impl FeatureSerializer {
             if count > 1 {
                 result.push_str(separator);
             }
-            if let Some(limit) = limit && count <= limit {
+            if let Some(limit) = limit
+                && count <= limit
+            {
                 result.push_str(transform(item).as_str());
             } else if limit.is_none() {
                 result.push_str(transform(item).as_str());
@@ -182,9 +185,13 @@ impl FeatureSerializer {
         let mut result = String::new();
         for cubic in cubics.iter() {
             result.push_str(
-                Self::join_to(&cubic.points, Self::SEPARATOR.to_string().as_str(), 6, |p|{
-                    remove_trailing_zeroes(*p)
-                }).as_str()
+                Self::join_to(
+                    &cubic.points,
+                    Self::SEPARATOR.to_string().as_str(),
+                    6,
+                    |p| remove_trailing_zeroes(*p),
+                )
+                .as_str(),
             )
         }
         let last_cubic = cubics.last().unwrap();
@@ -194,34 +201,26 @@ impl FeatureSerializer {
         result
     }
 
-    fn parse_feature(
-        serialized: &str,
-        start_index: usize,
-        end_index: usize,
-    ) -> Feature {
-        let feature_tag = &serialized[start_index..start_index+1];
+    fn parse_feature(serialized: &str, start_index: usize, end_index: usize) -> Feature {
+        let feature_tag = &serialized[start_index..start_index + 1];
         let edge_str = String::from(Self::EDGE_CHAR);
         let convex_str = String::from(Self::CONVEX_CORNER_CHAR);
         let concave_str = String::from(Self::CONCAVE_CORNER_CHAR);
         if feature_tag == edge_str {
-            Feature::edge(
-                Self::parse_cubics(serialized, start_index + 1, end_index)
-            )
+            Feature::edge(Self::parse_cubics(serialized, start_index + 1, end_index))
         } else if feature_tag == convex_str {
             Feature::corner(
                 Self::parse_cubics(serialized, start_index + 1, end_index),
-                true
+                true,
             )
         } else if feature_tag == concave_str {
             Feature::corner(
                 Self::parse_cubics(serialized, start_index + 1, end_index),
-                false
+                false,
             )
         } else {
             // default to edge for unknown tags
-            Feature::edge(
-                Self::parse_cubics(serialized, start_index + 1, end_index)
-            )
+            Feature::edge(Self::parse_cubics(serialized, start_index + 1, end_index))
         }
     }
 
@@ -248,7 +247,7 @@ impl FeatureSerializer {
         let separator_str = Self::SEPARATOR.to_string();
         while point_end < end_index {
             // the number is still going, move to next character
-            if serialized[point_end..point_end+1] != separator_str {
+            if serialized[point_end..point_end + 1] != separator_str {
                 point_end += 1;
                 continue;
             }
@@ -273,24 +272,24 @@ impl FeatureSerializer {
 
             point_end += 1;
         }
-        require(
-            point_count + 1 == window_size,
-            {
-                let needed_points = if serialized[point_start..end_index].parse::<f32>().is_ok() {
-                    window_size - (point_count + 1)
-                } else {
-                    window_size - point_count
-                };
-                format!(
-                    "Received a feature with an insufficient amount of numbers for substring '{}'. Wanted to create {} continuous cubic bezier curves for this feature, but the last one is missing $neededPoints more numbers separated by '{}'.",
-                    &serialized[start_index..end_index],
-                    cubics.len() + 1,
-                    Self::SEPARATOR
-                )
-            }
-        );
+        require(point_count + 1 == window_size, {
+            let needed_points = if serialized[point_start..end_index].parse::<f32>().is_ok() {
+                window_size - (point_count + 1)
+            } else {
+                window_size - point_count
+            };
+            format!(
+                "Received a feature with an insufficient amount of numbers for substring '{}'. Wanted to create {} continuous cubic bezier curves for this feature, but the last one is missing $neededPoints more numbers separated by '{}'.",
+                &serialized[start_index..end_index],
+                cubics.len() + 1,
+                Self::SEPARATOR
+            )
+        });
         // add last point and last cubic
-        points.insert(window_size -1, serialized[point_start..end_index].parse::<f32>().unwrap());
+        points.insert(
+            window_size - 1,
+            serialized[point_start..end_index].parse::<f32>().unwrap(),
+        );
         cubics.push(Cubic::from_array(&points));
         cubics
     }

@@ -43,17 +43,31 @@ impl Composer {
                     .enter
                     .clone()
                     .map(|enter| (enter, m.exit.clone().unwrap_or_default()));
-                (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path, fx)
+                (
+                    m.transform.spec.clone(),
+                    shared_clip_for_kind(&m.kind),
+                    m.path,
+                    fx,
+                )
             }
-            None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
+            None => (
+                BoundsTransform::default().spec,
+                false,
+                PathMotion::Linear,
+                None,
+            ),
         };
         let (tw, th, modifier) = {
             let n = &self.arena.nodes[tidx];
-            (n.measured_size.width, n.measured_size.height, n.modifier.clone())
+            (
+                n.measured_size.width,
+                n.measured_size.height,
+                n.modifier.clone(),
+            )
         };
         let radius_to = shared_shape_radii(&modifier, tw, th);
-        let radius_from =
-            radius_from_override.unwrap_or_else(|| shared_shape_radii(&modifier, start.width, start.height));
+        let radius_from = radius_from_override
+            .unwrap_or_else(|| shared_shape_radii(&modifier, start.width, start.height));
         // Same node, same frame for both ends — one frozen scroll sum
         // (BLOCKER #1); morphs stay rigid under mid-flight scroll.
         let scroll = {
@@ -83,13 +97,22 @@ impl Composer {
         let id = self.next_flight_id;
         self.next_flight_id += 1;
         let mut flight = Flight::new(id, scope_id, key);
-        let acts = flight.on_event(FlightEvent::CounterpartAppeared { source_slot: slot, target_slot: slot });
+        let acts = flight.on_event(FlightEvent::CounterpartAppeared {
+            source_slot: slot,
+            target_slot: slot,
+        });
         debug_assert_eq!(
             acts,
-            vec![FlightAction::CollectBounds { source_slot: slot, target_slot: slot }]
+            vec![FlightAction::CollectBounds {
+                source_slot: slot,
+                target_slot: slot
+            }]
         );
         let acts = flight.on_event(FlightEvent::BoundsReady { start, end });
-        debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+        debug_assert!(matches!(
+            acts.as_slice(),
+            [FlightAction::StartFlight { .. }]
+        ));
         self.shared_flights.insert(
             id,
             ActiveFlight {
@@ -131,8 +154,19 @@ impl Composer {
             return;
         };
         enum Pending {
-            Fresh { scope_id: u64, key: String, slot: u64, start: SharedBounds, end: SharedBounds },
-            Reopen { id: FlightId, start: SharedBounds, radii: [f32; 4], end: SharedBounds },
+            Fresh {
+                scope_id: u64,
+                key: String,
+                slot: u64,
+                start: SharedBounds,
+                end: SharedBounds,
+            },
+            Reopen {
+                id: FlightId,
+                start: SharedBounds,
+                radii: [f32; 4],
+                end: SharedBounds,
+            },
         }
         let mut pending: Vec<Pending> = Vec::new();
         for (k, slot) in live {
@@ -170,54 +204,55 @@ impl Composer {
             if !overridden {
                 if let Some(prev) = self.shared_last_bounds.get(&bkey) {
                     if size_delta(prev, &cur) > MORPH_EPS {
-                    match self.flight_for_key(k.0, &k.1) {
-                        Some(fid) => {
-                            // Active flight: only morphs reopen (switch flights
-                            // own their ends — documented v1).
-                            let morph = self.shared_flights.get(&fid).is_some_and(|a| {
-                                a.source_idx.is_none() && a.flight.source_slot == a.flight.target_slot
-                            });
-                            if morph {
-                                let a = &self.shared_flights[&fid];
-                                // Unclamped + path-aware like the render path:
-                                // reopen continuity includes spring overshoot
-                                // and any arc bend.
-                                let p = a.progress_value();
-                                let end_prev = a.flight.end.unwrap_or(a.start);
-                                let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
-                                let (rf, rt) = (a.radius_from, a.radius_to);
-                                pending.push(Pending::Reopen {
-                                    id: fid,
-                                    start: s,
-                                    radii: [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p),
-                                    end: cur,
+                        match self.flight_for_key(k.0, &k.1) {
+                            Some(fid) => {
+                                // Active flight: only morphs reopen (switch flights
+                                // own their ends — documented v1).
+                                let morph = self.shared_flights.get(&fid).is_some_and(|a| {
+                                    a.source_idx.is_none()
+                                        && a.flight.source_slot == a.flight.target_slot
                                 });
+                                if morph {
+                                    let a = &self.shared_flights[&fid];
+                                    // Unclamped + path-aware like the render path:
+                                    // reopen continuity includes spring overshoot
+                                    // and any arc bend.
+                                    let p = a.progress_value();
+                                    let end_prev = a.flight.end.unwrap_or(a.start);
+                                    let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
+                                    let (rf, rt) = (a.radius_from, a.radius_to);
+                                    pending.push(Pending::Reopen {
+                                        id: fid,
+                                        start: s,
+                                        radii: [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p),
+                                        end: cur,
+                                    });
+                                }
                             }
-                        }
-                        None => {
-                            // Compose ties a shared element's morph to a TRANSITION: the element
-                            // animates when the transition animating it changes its bounds, not merely
-                            // because a layout pass changed them. Without this gate a window resize
-                            // opened a morph on every marked node whose rect changed (measured:
-                            // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
-                            // resize), i.e. dragging the window animated the UI.
-                            //
-                            // The gate skips only the DECISION — the baseline insert below still runs, as
-                            // the older `overridden` guard does. `continue`-ing here left the baseline
-                            // stale, so an idle resize was replayed as a morph on the first transitioning
-                            // frame instead: the same artefact, one navigation later.
-                            if self.scope_is_transitioning(k.0) {
-                                pending.push(Pending::Fresh {
-                                    scope_id: k.0,
-                                    key: k.1.clone(),
-                                    slot: *slot,
-                                    start: *prev,
-                                    end: cur,
-                                });
+                            None => {
+                                // Compose ties a shared element's morph to a TRANSITION: the element
+                                // animates when the transition animating it changes its bounds, not merely
+                                // because a layout pass changed them. Without this gate a window resize
+                                // opened a morph on every marked node whose rect changed (measured:
+                                // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
+                                // resize), i.e. dragging the window animated the UI.
+                                //
+                                // The gate skips only the DECISION — the baseline insert below still runs, as
+                                // the older `overridden` guard does. `continue`-ing here left the baseline
+                                // stale, so an idle resize was replayed as a morph on the first transitioning
+                                // frame instead: the same artefact, one navigation later.
+                                if self.scope_is_transitioning(k.0) {
+                                    pending.push(Pending::Fresh {
+                                        scope_id: k.0,
+                                        key: k.1.clone(),
+                                        slot: *slot,
+                                        start: *prev,
+                                        end: cur,
+                                    });
+                                }
                             }
                         }
                     }
-                }
                 }
             }
             self.shared_last_bounds.insert(bkey, cur);
@@ -227,7 +262,13 @@ impl Composer {
         self.shared_last_bounds.retain(|k, _| live_keys.contains(k));
         for p in pending {
             match p {
-                Pending::Fresh { scope_id, key, slot, start, end } => {
+                Pending::Fresh {
+                    scope_id,
+                    key,
+                    slot,
+                    start,
+                    end,
+                } => {
                     // anim-trace: morph opens are otherwise invisible in a trace (no `start` event, only
                     // per-frame records), which made "what did the resize animate?" hard to answer.
                     crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
@@ -240,21 +281,31 @@ impl Composer {
                     ));
                     self.begin_morph(scope_id, key, slot, start, end, None);
                 }
-                Pending::Reopen { id, start, radii, end } => {
-                    let meta = self
-                        .shared_flights
-                        .get(&id)
-                        .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
+                Pending::Reopen {
+                    id,
+                    start,
+                    radii,
+                    end,
+                } => {
+                    let meta = self.shared_flights.get(&id).map(|a| {
+                        (
+                            a.flight.scope_id,
+                            a.flight.key.clone(),
+                            a.flight.target_slot,
+                        )
+                    });
                     self.cancel_flight(id, "morph_reopen");
                     if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
-                        crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
-                            format!("flight:{key}"),
-                            "morph_open",
-                            format!(
-                                "reopen {:.0}x{:.0} -> {:.0}x{:.0}",
-                                start.width, start.height, end.width, end.height
+                        crate::debug::animation::record(
+                            crate::debug::animation::TraceRecord::event(
+                                format!("flight:{key}"),
+                                "morph_open",
+                                format!(
+                                    "reopen {:.0}x{:.0} -> {:.0}x{:.0}",
+                                    start.width, start.height, end.width, end.height
+                                ),
                             ),
-                        ));
+                        );
                         self.begin_morph(scope_id, key, slot, start, end, Some(radii));
                     }
                 }
@@ -262,4 +313,3 @@ impl Composer {
         }
     }
 }
-

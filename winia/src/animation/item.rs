@@ -77,19 +77,30 @@ impl ItemAnimationSpec {
     }
 
     /// The default placement spring with no fades.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// The configured placement curve, if any.
-    pub fn placement_spec(&self) -> Option<&AnimationSpec> { self.placement.as_ref() }
+    pub fn placement_spec(&self) -> Option<&AnimationSpec> {
+        self.placement.as_ref()
+    }
     /// The configured fade-in curve, if any.
-    pub fn fade_in_spec(&self) -> Option<&AnimationSpec> { self.fade_in.as_ref() }
+    pub fn fade_in_spec(&self) -> Option<&AnimationSpec> {
+        self.fade_in.as_ref()
+    }
     /// The configured fade-out curve, if any.
-    pub fn fade_out_spec(&self) -> Option<&AnimationSpec> { self.fade_out.as_ref() }
+    pub fn fade_out_spec(&self) -> Option<&AnimationSpec> {
+        self.fade_out.as_ref()
+    }
 
     /// Sets the placement curve.
     pub fn placement(mut self, spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        assert!(usable_channel(&spec), "item placement must settle (got {spec:?})");
+        assert!(
+            usable_channel(&spec),
+            "item placement must settle (got {spec:?})"
+        );
         self.placement = Some(spec);
         self
     }
@@ -115,7 +126,10 @@ impl ItemAnimationSpec {
     /// Sets the fade-in curve.
     pub fn fade_in(mut self, spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        assert!(usable_channel(&spec), "item fade_in must settle (got {spec:?})");
+        assert!(
+            usable_channel(&spec),
+            "item fade_in must settle (got {spec:?})"
+        );
         self.fade_in = Some(spec);
         self
     }
@@ -123,7 +137,10 @@ impl ItemAnimationSpec {
     /// Sets the fade-out curve recorded for the exit layer.
     pub fn fade_out(mut self, spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        assert!(usable_channel(&spec), "item fade_out must settle (got {spec:?})");
+        assert!(
+            usable_channel(&spec),
+            "item fade_out must settle (got {spec:?})"
+        );
         self.fade_out = Some(spec);
         self
     }
@@ -171,9 +188,16 @@ mod tests {
         ] {
             match channel {
                 Some(AnimationSpec::Spring(spring)) => {
-                    assert_eq!(spring.stiffness, SpringSpec::STIFFNESS_MEDIUM_LOW, "{name} uses StiffnessMediumLow (400)");
+                    assert_eq!(
+                        spring.stiffness,
+                        SpringSpec::STIFFNESS_MEDIUM_LOW,
+                        "{name} uses StiffnessMediumLow (400)"
+                    );
                     assert_eq!(spring.damping_ratio, 1.0, "{name} is critically damped");
-                    assert_eq!(spring.threshold, 0.01, "{name} uses the Float visibility threshold");
+                    assert_eq!(
+                        spring.threshold, 0.01,
+                        "{name} uses the Float visibility threshold"
+                    );
                 }
                 other => panic!("{name} must be a spring by default, got {other:?}"),
             }
@@ -190,7 +214,10 @@ mod tests {
                 .fade_in(crate::animation::TweenSpec::default())
                 .fade_out(crate::animation::TweenSpec::default())
         };
-        assert!(build().same_parameter(&build()), "same channels, same curves");
+        assert!(
+            build().same_parameter(&build()),
+            "same channels, same curves"
+        );
         let slower = ItemAnimationSpec::new()
             .placement(crate::animation::SpringSpec::default())
             .fade_in(crate::animation::TweenSpec::new(
@@ -198,9 +225,15 @@ mod tests {
                 crate::animation::interpolator::Linear::new(),
             ))
             .fade_out(crate::animation::TweenSpec::default());
-        assert!(!build().same_parameter(&slower), "a different fade curve is a different contract");
+        assert!(
+            !build().same_parameter(&slower),
+            "a different fade curve is a different contract"
+        );
         let no_fade = ItemAnimationSpec::new().placement(crate::animation::SpringSpec::default());
-        assert!(!build().same_parameter(&no_fade), "adding or dropping a channel re-enters");
+        assert!(
+            !build().same_parameter(&no_fade),
+            "adding or dropping a channel re-enters"
+        );
     }
 
     #[test]
@@ -214,8 +247,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "item fade_out must settle")]
     fn an_even_reverse_repeatable_does_not_reach_the_target() {
-        let _ = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(
-            RepeatableSpec::new(2, RepeatMode::Reverse, TweenSpec::default()),
-        ));
+        let _ = ItemAnimationSpec::new().fade_out(AnimationSpec::Repeatable(RepeatableSpec::new(
+            2,
+            RepeatMode::Reverse,
+            TweenSpec::default(),
+        )));
     }
 }

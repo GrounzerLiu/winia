@@ -11,10 +11,11 @@ use std::sync::{LazyLock, Mutex};
 use tokio::sync::broadcast;
 
 /// Every window ticks it; `with_frame_nanos` waits on it.
-static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)> = LazyLock::new(|| {
-    let (tx, rx) = broadcast::channel(16);
-    (tx, rx)
-});
+static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)> =
+    LazyLock::new(|| {
+        let (tx, rx) = broadcast::channel(16);
+        (tx, rx)
+    });
 
 static FRAME_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 

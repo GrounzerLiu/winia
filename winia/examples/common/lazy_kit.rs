@@ -8,7 +8,12 @@ use winia::prelude::*;
 
 pub(crate) const ITEMS: usize = 200;
 
-pub(crate) fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOnce(&mut ComposeCtx)) {
+pub(crate) fn card(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    title: &str,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
     Column::new()
         .modifier(
             Modifier::new()
@@ -37,7 +42,10 @@ pub(crate) fn tile(ctx: &mut ComposeCtx, tag: String, label: String, w: f32, h: 
                 .background(color, Shape::rounded(6.0)),
         )
         .build(ctx, |ctx| {
-            Text::new(label).font_size(11.0).color(Color::WHITE).build(ctx);
+            Text::new(label)
+                .font_size(11.0)
+                .color(Color::WHITE)
+                .build(ctx);
         });
 }
 
@@ -70,10 +78,14 @@ pub(crate) const STEP: usize = 5;
 /// Pages in the pager row.
 pub(crate) const PAGES: usize = 5;
 
-pub(crate) fn action(ctx: &mut ComposeCtx, tag: &'static str, label: &str, on_click: impl Fn() + Send + Sync + 'static) {
+pub(crate) fn action(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    label: &str,
+    on_click: impl Fn() + Send + Sync + 'static,
+) {
     Button::new()
         .modifier(Modifier::new().test_tag(tag))
         .on_click(on_click)
         .build(ctx, |ctx| Text::new(label).font_size(12.0).build(ctx));
 }
-

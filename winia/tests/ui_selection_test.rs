@@ -39,7 +39,9 @@ fn tap_tag(app: &mut UiTest, tag: &str) {
 fn the_panel_observes_a_drag() {
     let mut app = UiTest::launch("selection");
     assert!(
-        readout(&mut app, "main").iter().any(|t| t.contains("no selection")),
+        readout(&mut app, "main")
+            .iter()
+            .any(|t| t.contains("no selection")),
         "the panel starts empty: {:?}",
         readout(&mut app, "main")
     );
@@ -61,13 +63,17 @@ fn select_all_and_clear_drive_the_container() {
     tap_tag(&mut app, "sel-select-all");
     let lines = readout(&mut app, "main");
     assert!(
-        lines.iter().any(|t| t.contains("first run") && t.contains("second run")),
+        lines
+            .iter()
+            .any(|t| t.contains("first run") && t.contains("second run")),
         "select all covers the whole container: {lines:?}"
     );
 
     tap_tag(&mut app, "sel-clear");
     assert!(
-        readout(&mut app, "main").iter().any(|t| t.contains("no selection")),
+        readout(&mut app, "main")
+            .iter()
+            .any(|t| t.contains("no selection")),
         "clear empties it: {:?}",
         readout(&mut app, "main")
     );
@@ -105,7 +111,10 @@ fn a_double_click_selects_one_word() {
         .clone();
     let inner = quoted.split('"').nth(1).unwrap_or_default();
     assert!(!inner.is_empty(), "a word is selected: {quoted}");
-    assert!(!inner.contains(' '), "one word, not a run of them: {inner:?}");
+    assert!(
+        !inner.contains(' '),
+        "one word, not a run of them: {inner:?}"
+    );
 }
 
 /// The demo is taller than its window, so the body has to scroll — otherwise the lower cards are
@@ -122,14 +131,30 @@ fn the_demo_scrolls_to_reach_the_lower_cards() {
 
     app.scroll(-300.0);
     let scrolled = column(&mut app);
-    let changed = top.iter().zip(scrolled.iter()).filter(|(a, b)| a != b).count();
-    assert!(changed > 10, "scrolling has to move the content, {changed} of {} samples differ", top.len());
+    let changed = top
+        .iter()
+        .zip(scrolled.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        changed > 10,
+        "scrolling has to move the content, {changed} of {} samples differ",
+        top.len()
+    );
 
     // Scrolling back to the top restores it: the offset is bounded, not accumulated forever.
     app.scroll(4000.0);
     let restored = column(&mut app);
-    let same = top.iter().zip(restored.iter()).filter(|(a, b)| a == b).count();
-    assert!(same > top.len() - 8, "scrolling back restores the top: {same} of {} samples match", top.len());
+    let same = top
+        .iter()
+        .zip(restored.iter())
+        .filter(|(a, b)| a == b)
+        .count();
+    assert!(
+        same > top.len() - 8,
+        "scrolling back restores the top: {same} of {} samples match",
+        top.len()
+    );
 }
 /// The Windows clipboard, through PowerShell: the only way to see what OTHER applications would
 /// paste. `Set-Clipboard -Raw` semantics are close enough for a test (trailing newlines trimmed).
@@ -144,24 +169,41 @@ fn read_system_clipboard() -> String {
         ])
         .output()
         .expect("powershell runs");
-    String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n").trim_end().to_string()
+    String::from_utf8_lossy(&out.stdout)
+        .replace("\r\n", "\n")
+        .trim_end()
+        .to_string()
 }
 
 /// Put `text` back after the test. It travels as base64: a command-line argument mangles non-ASCII
 /// (a Chinese clipboard came back as "????"), and writing a file first is refused inside the test
 /// sandbox — the restore silently did nothing and the test's own text stayed on the clipboard.
 fn write_system_clipboard(text: &str) {
-    if text.is_empty() { return; }
+    if text.is_empty() {
+        return;
+    }
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = text.as_bytes();
     let mut encoded = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         encoded.push(ALPHABET[(n >> 18) as usize & 63] as char);
         encoded.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        encoded.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
-        encoded.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+        encoded.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     let script = format!(
         "$b=[Convert]::FromBase64String('{encoded}'); Set-Clipboard -Value ([System.Text.Encoding]::UTF8.GetString($b))"
@@ -178,7 +220,9 @@ fn ctrl_c_puts_the_selection_on_the_clipboard() {
     let b = app.expect_tag("sel-b");
     app.drag(a.0 + 4.0, a.1 + a.3 / 2.0, b.0 + 120.0, b.1 + b.3 / 2.0);
     assert!(
-        readout(&mut app, "main").iter().any(|line| line.contains("first run")),
+        readout(&mut app, "main")
+            .iter()
+            .any(|line| line.contains("first run")),
         "the drag has to select something first: {:?}",
         readout(&mut app, "main")
     );
@@ -187,7 +231,9 @@ fn ctrl_c_puts_the_selection_on_the_clipboard() {
     let mut got = String::new();
     for _ in 0..40 {
         got = read_system_clipboard();
-        if got.contains("first run") { break; }
+        if got.contains("first run") {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     write_system_clipboard(&previous);
@@ -213,13 +259,19 @@ fn the_selection_paints_handles() {
                 let x = from.0 + dx as f32;
                 let y = from.1 + dy as f32;
                 if let Some((r, g, b, _)) = app.pixel_at_logical(x, y) {
-                    if b as i32 > r as i32 + 40 && b > 120 { return true; }
+                    if b as i32 > r as i32 + 40 && b > 120 {
+                        return true;
+                    }
                 }
             }
         }
         false
     };
     let tight = (a.0 - 4.0, a.1 + a.3);
-    let found = bluish(&mut app, tight, (9, 9)) || bluish(&mut app, (a.0, a.1 + a.3 - 2.0), (20, 18));
-    assert!(found, "the start handle has to be painted below the first line (rect {a:?})");
+    let found =
+        bluish(&mut app, tight, (9, 9)) || bluish(&mut app, (a.0, a.1 + a.3 - 2.0), (20, 18));
+    assert!(
+        found,
+        "the start handle has to be painted below the first line (rect {a:?})"
+    );
 }

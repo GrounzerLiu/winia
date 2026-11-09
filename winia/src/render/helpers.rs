@@ -1,5 +1,5 @@
-use super::*;
 use super::paint::*;
+use super::*;
 
 // ── 辅助函数 ──
 
@@ -16,11 +16,21 @@ impl From<&crate::graphics::Color> for Color4f {
 
 /// 开放绘制节点用的背景绘制入口（exp/modifier-node 试点：第三方 DrawNode
 /// 无需复刻背景绘制逻辑，直接调此函数；与枚举 Background 同实现）。
-pub fn draw_background_for_node(canvas: &Canvas, rect: Rect, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
+pub fn draw_background_for_node(
+    canvas: &Canvas,
+    rect: Rect,
+    color: &crate::graphics::Color,
+    shape: &crate::graphics::Shape,
+) {
     draw_background(canvas, rect, color, shape);
 }
 
-pub(super) fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
+pub(super) fn draw_background(
+    canvas: &Canvas,
+    rect: Rect,
+    color: &crate::graphics::Color,
+    shape: &crate::graphics::Shape,
+) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
     paint.set_anti_alias(true);
@@ -52,9 +62,12 @@ pub(super) fn shape_rrect(rect: Rect, shape: &crate::graphics::Shape) -> RRect {
         ),
         crate::graphics::Shape::RightRoundedRect { radius } => rrect_right_rounded(rect, *radius),
         crate::graphics::Shape::LeftRoundedRect { radius } => rrect_left_rounded(rect, *radius),
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
-            rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left)
-        }
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
         crate::graphics::Shape::Pill | crate::graphics::Shape::Circle => {
             let r = rect.width().min(rect.height()) / 2.0;
             RRect::new_rect_xy(rect, r, r)
@@ -93,7 +106,8 @@ pub(super) fn draw_inner_shadow(
     erase.set_anti_alias(true);
     erase.set_blend_mode(BlendMode::DstOut);
     if blur > 0.0 {
-        if let Some(filter) = skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur, None) {
+        if let Some(filter) = skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur, None)
+        {
             erase.set_mask_filter(filter);
         }
     }
@@ -102,11 +116,21 @@ pub(super) fn draw_inner_shadow(
     canvas.restore();
 }
 
-pub(super) fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::graphics::Shape) {
+pub(super) fn paint_shape(
+    canvas: &Canvas,
+    rect: Rect,
+    paint: &Paint,
+    shape: &crate::graphics::Shape,
+) {
     match shape {
-        crate::graphics::Shape::Rectangle => { canvas.draw_rect(rect, paint); }
+        crate::graphics::Shape::Rectangle => {
+            canvas.draw_rect(rect, paint);
+        }
         crate::graphics::Shape::RoundedRect { corner_radius } => {
-            canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), paint);
+            canvas.draw_rrect(
+                RRect::new_rect_xy(rect, *corner_radius, *corner_radius),
+                paint,
+            );
         }
         crate::graphics::Shape::PillToRounded { corner_radius, t } => {
             let percent = rect.width().min(rect.height()) / 2.0;
@@ -114,12 +138,15 @@ pub(super) fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &cr
             canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), paint);
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {
-            let rr = RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             canvas.draw_rrect(rr, paint);
         }
         crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -128,7 +155,12 @@ pub(super) fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &cr
         crate::graphics::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(rect, *radius), paint);
         }
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => {
             canvas.draw_rrect(
                 rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
                 paint,
@@ -152,11 +184,18 @@ pub(super) fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &cr
 ///
 /// The two absolute cases are resolved here, against the node's rect: a gradient's coordinates are
 /// fractions of the bounds (see the [`crate::graphics::brush`] module docs), so a gradient fills any size node.
-pub(super) fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::graphics::Brush, shape: &crate::graphics::Shape) {
+pub(super) fn draw_brush(
+    canvas: &Canvas,
+    rect: Rect,
+    brush: &crate::graphics::Brush,
+    shape: &crate::graphics::Shape,
+) {
     match brush {
         crate::graphics::Brush::Solid(color) => draw_background(canvas, rect, color, shape),
         _ => {
-            let Some(paint) = brush_paint(brush, rect) else { return };
+            let Some(paint) = brush_paint(brush, rect) else {
+                return;
+            };
             paint_shape(canvas, rect, &paint, shape);
         }
     }
@@ -198,10 +237,7 @@ pub(super) fn brush_paint(brush: &crate::graphics::Brush, rect: Rect) -> Option<
 
     // Fractional → absolute, against the node's own rect.
     let absolute = |(fx, fy): (f32, f32)| {
-        skia_safe::Point::new(
-            rect.left + fx * rect.width(),
-            rect.top + fy * rect.height(),
-        )
+        skia_safe::Point::new(rect.left + fx * rect.width(), rect.top + fy * rect.height())
     };
     let (from, to, radius) = geometry;
     let shader = match brush {
@@ -246,4 +282,3 @@ pub(super) fn skia_tile(tile: crate::graphics::BrushTile) -> skia_safe::TileMode
         crate::graphics::BrushTile::Mirror => skia_safe::TileMode::Mirror,
     }
 }
-

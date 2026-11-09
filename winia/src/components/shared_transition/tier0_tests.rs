@@ -4,15 +4,15 @@ use super::*;
 use crate::animation::SpringSpec;
 use crate::animation::visibility::SlideDirection;
 use crate::animation::visibility::SlideOffset;
-use crate::graphics::Shape;
-use crate::runtime::composer::ComposeCtx;
-use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
 use crate::graphics::Color;
-use crate::nav::{NavBackStack, NavDisplay, NavEntry};
+use crate::graphics::Shape;
 use crate::layout::Column;
 use crate::layout::Row;
 use crate::layout::Stack;
+use crate::layout::constraints::Constraints;
+use crate::nav::{NavBackStack, NavDisplay, NavEntry};
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 
 /// Plain box leaf with a shared-element marker (no text — keeps the
 /// mechanics test headless-simple; paint movement is asserted via raster).
@@ -31,7 +31,14 @@ fn hero_leaf(
         Modifier::new()
             .size(w, h)
             .background(color, Shape::rounded(8.0))
-            .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, in_overlay),
+            .shared_element(
+                scope.shared_content_state("hero"),
+                BoundsTransform::default(),
+                PlaceHolderSize::JumpCut,
+                PathMotion::Linear,
+                0.0,
+                in_overlay,
+            ),
     );
     ctx.end_node();
 }
@@ -66,13 +73,15 @@ fn frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    list_screen(ctx, &scope);
-                } else {
-                    detail_screen(ctx, &scope);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        list_screen(ctx, &scope);
+                    } else {
+                        detail_screen(ctx, &scope);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -118,8 +127,7 @@ fn mark_scope_active(composer: &Composer) {
 /// Mirror the app loop: main tree, then the transition layer
 /// (detached sources + elevated endpoints, absolute coords).
 fn render_heads(composer: &Composer) -> skia_safe::Surface {
-    let mut surface =
-        skia_safe::surfaces::raster_n32_premul((400, 400)).expect("raster surface");
+    let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).expect("raster surface");
     surface.canvas().clear(skia_safe::Color::WHITE);
     let nodes = composer.arena_nodes();
     if let Some(root) = composer.layout_root_idx() {
@@ -147,11 +155,16 @@ fn close_enough(c: (u8, u8, u8), e: (u8, u8, u8), tol: u8) -> bool {
 
 fn node_center(composer: &Composer, idx: usize) -> (i32, i32) {
     let n = &composer.arena_nodes()[idx];
-    ((n.position.x + n.measured_size.width / 2.0) as i32, (n.position.y + n.measured_size.height / 2.0) as i32)
+    (
+        (n.position.x + n.measured_size.width / 2.0) as i32,
+        (n.position.y + n.measured_size.height / 2.0) as i32,
+    )
 }
 
 fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
-    crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// A shared container that paints NOTHING itself, wrapping a leaf that fills it with green.
@@ -159,34 +172,32 @@ fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
 /// `tier0_flight_completes_end_to_end` puts the colour on the container's own background, so a
 /// vanished child is invisible to it and it cannot catch this defect.
 fn painted_child_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, h: f32) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        Column::new()
-            .modifier(
-                Modifier::new()
-                    .size(200.0, h)
-                    .shared_bounds(
-                        scope.shared_content_state("painted"),
-                        VisibilityTransition::fade_in(TweenSpec::default()),
-                        VisibilityTransition::fade_out(TweenSpec::default()),
-                        BoundsTransform::default(),
-                        ResizeMode::scale_to_bounds(),
-                        PlaceHolderSize::AnimatedSize,
-                        PathMotion::Linear,
-                        0.0,
-                        true,
-                    ),
-            )
-            .build(ctx, |ctx| {
-                let key = ctx.next_key();
-                ctx.start_leaf(
-                    key,
-                    Modifier::new()
-                        .fill_max_size()
-                        .background(Color::GREEN, Shape::Rectangle),
-                );
-                ctx.end_node();
-            });
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(Modifier::new().size(200.0, h).shared_bounds(
+                    scope.shared_content_state("painted"),
+                    VisibilityTransition::fade_in(TweenSpec::default()),
+                    VisibilityTransition::fade_out(TweenSpec::default()),
+                    BoundsTransform::default(),
+                    ResizeMode::scale_to_bounds(),
+                    PlaceHolderSize::AnimatedSize,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                ))
+                .build(ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(
+                        key,
+                        Modifier::new()
+                            .fill_max_size()
+                            .background(Color::GREEN, Shape::Rectangle),
+                    );
+                    ctx.end_node();
+                });
+        });
 }
 
 /// The two screens, as `#[composable]` wrappers calling the shared helper — the same shape as
@@ -232,7 +243,11 @@ fn scrolled_list_screen(
     scroll: &crate::modifier::ScrollState,
 ) {
     Column::new()
-        .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
+        .modifier(
+            Modifier::new()
+                .height(200.0)
+                .vertical_scroll(scroll.clone()),
+        )
         .build(ctx, |ctx| {
             hero_leaf(ctx, 120.0, 80.0, Color::RED, scope, true);
             gap_leaf(ctx, 400.0, 400.0);
@@ -246,7 +261,11 @@ fn scrolled_detail_screen(
     scroll: &crate::modifier::ScrollState,
 ) {
     Column::new()
-        .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
+        .modifier(
+            Modifier::new()
+                .height(200.0)
+                .vertical_scroll(scroll.clone()),
+        )
         .build(ctx, |ctx| {
             gap_leaf(ctx, 400.0, 140.0);
             hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
@@ -254,26 +273,36 @@ fn scrolled_detail_screen(
 }
 
 /// One app-loop step for the scrolled screens.
-fn scroll_frame(composer: &mut Composer, show: &State<bool>, scroll: &crate::modifier::ScrollState) {
+fn scroll_frame(
+    composer: &mut Composer,
+    show: &State<bool>,
+    scroll: &crate::modifier::ScrollState,
+) {
     let s = show.clone();
     let sc = scroll.clone();
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    scrolled_list_screen(ctx, &scope, &sc);
-                } else {
-                    scrolled_detail_screen(ctx, &scope, &sc);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        scrolled_list_screen(ctx, &scope, &sc);
+                    } else {
+                        scrolled_detail_screen(ctx, &scope, &sc);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
 }
 
-fn scroll_advance(composer: &mut Composer, show: &State<bool>, scroll: &crate::modifier::ScrollState) {
+fn scroll_advance(
+    composer: &mut Composer,
+    show: &State<bool>,
+    scroll: &crate::modifier::ScrollState,
+) {
     crate::animation::update_animations();
     std::thread::sleep(std::time::Duration::from_millis(16));
     scroll_frame(composer, show, scroll);
@@ -283,19 +312,19 @@ fn scroll_advance(composer: &mut Composer, show: &State<bool>, scroll: &crate::m
 /// frame render's `(x, y)` uses at the flight node).
 fn pure_accumulation(composer: &Composer, idx: usize) -> (f32, f32) {
     let nodes = composer.arena_nodes();
-    let id_to_idx: HashMap<u64, usize> =
-        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let id_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let (mut ax, mut ay) = (nodes[idx].position.x, nodes[idx].position.y);
     let mut cur = idx;
     while let Some(pid) = nodes[cur].parent_id {
-        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let Some(&pidx) = id_to_idx.get(&pid) else {
+            break;
+        };
         ax += nodes[pidx].position.x;
         ay += nodes[pidx].position.y;
         cur = pidx;
     }
     (ax, ay)
 }
-
 
 // ── Overlay escape (Compose `renderInOverlayDuringTransition`) ──
 //
@@ -331,7 +360,11 @@ fn escape_detail_screen(
             // Pushes the clipped viewport down to y ≈ 240.
             gap_leaf(ctx, 10.0, 240.0);
             Column::new()
-                .modifier(Modifier::new().size(200.0, 160.0).vertical_scroll(scroll.clone()))
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, 160.0)
+                        .vertical_scroll(scroll.clone()),
+                )
                 .build(ctx, |ctx| {
                     gap_leaf(ctx, 10.0, 30.0);
                     hero_leaf(ctx, 140.0, 80.0, Color::BLUE, scope, in_overlay);
@@ -350,13 +383,15 @@ fn escape_frame(
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    escape_list_screen(ctx, &scope, in_overlay);
-                } else {
-                    escape_detail_screen(ctx, &scope, &sc, in_overlay);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        escape_list_screen(ctx, &scope, in_overlay);
+                    } else {
+                        escape_detail_screen(ctx, &scope, &sc, in_overlay);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -386,11 +421,12 @@ fn flight_probe(composer: &Composer) -> Option<(f32, SharedBounds)> {
 /// Absolute rect (canvas frame) of the nearest scrolled ancestor viewport.
 fn nearest_viewport_abs(composer: &Composer, idx: usize) -> Option<(f32, f32, f32, f32)> {
     let nodes = composer.arena_nodes();
-    let id_to_idx: HashMap<u64, usize> =
-        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let id_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let mut cur = idx;
     while let Some(pid) = nodes[cur].parent_id {
-        let Some(&pidx) = id_to_idx.get(&pid) else { return None };
+        let Some(&pidx) = id_to_idx.get(&pid) else {
+            return None;
+        };
         let n = &nodes[pidx];
         if n.scroll_viewport_height > 0.0 {
             let b = abs_rect_upward(nodes, &id_to_idx, pidx);
@@ -438,7 +474,6 @@ fn escape_to_midflight(
     panic!("flight must pass through the mid-flight window");
 }
 
-
 /// Tier1 pair where the PEER (overlay) target sits inside a clipped
 /// viewport low in the window — the same escape geometry, cross-composer.
 fn escape_cross_frame(
@@ -455,22 +490,30 @@ fn escape_cross_frame(
     cross_frame(
         a,
         b,
-        |ctx| shell(ctx, |ctx| {
-            if sa.get() {
-                hero_leaf(ctx, 60.0, 60.0, Color::RED, &sca, true);
-            }
-        }),
-        |ctx| shell(ctx, |ctx| {
-            if sb.get() {
-                gap_leaf(ctx, 10.0, 240.0);
-                Column::new()
-                    .modifier(Modifier::new().size(200.0, 160.0).vertical_scroll(sc.clone()))
-                    .build(ctx, |ctx| {
-                        gap_leaf(ctx, 10.0, 30.0);
-                        hero_leaf(ctx, 140.0, 80.0, Color::BLUE, &scb, true);
-                    });
-            }
-        }),
+        |ctx| {
+            shell(ctx, |ctx| {
+                if sa.get() {
+                    hero_leaf(ctx, 60.0, 60.0, Color::RED, &sca, true);
+                }
+            })
+        },
+        |ctx| {
+            shell(ctx, |ctx| {
+                if sb.get() {
+                    gap_leaf(ctx, 10.0, 240.0);
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(200.0, 160.0)
+                                .vertical_scroll(sc.clone()),
+                        )
+                        .build(ctx, |ctx| {
+                            gap_leaf(ctx, 10.0, 30.0);
+                            hero_leaf(ctx, 140.0, 80.0, Color::BLUE, &scb, true);
+                        });
+                }
+            })
+        },
     );
 }
 
@@ -523,11 +566,17 @@ fn shared_hero_box(
         Modifier::new()
             .size(w, h)
             .background(color, Shape::rounded(8.0))
-            .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, in_overlay),
+            .shared_element(
+                scope.shared_content_state("hero"),
+                BoundsTransform::default(),
+                PlaceHolderSize::JumpCut,
+                PathMotion::Linear,
+                0.0,
+                in_overlay,
+            ),
     );
     ctx.end_node();
 }
-
 
 /// Pixel delta between two frames of the same size (channel threshold 2 to
 /// ignore antialiasing noise). Backing helper for the same-frame overlay
@@ -574,10 +623,18 @@ fn opt_out_vs_elevated_delta(composer: &mut Composer) -> (usize, u8) {
         let root = composer.layout_root_idx().expect("root");
         let tidx = find_idx_by_slot(composer.arena_nodes(), root, slot).expect("target");
         assert!(
-            !composer.arena.nodes[tidx].transition.as_ref().unwrap().elevated,
+            !composer.arena.nodes[tidx]
+                .transition
+                .as_ref()
+                .unwrap()
+                .elevated,
             "A/B starts from the opt-out state"
         );
-        composer.arena.nodes[tidx].transition.as_mut().unwrap().elevated = true;
+        composer.arena.nodes[tidx]
+            .transition
+            .as_mut()
+            .unwrap()
+            .elevated = true;
         composer.elevated_roots.push(tidx);
         composer.rebuild_layer_order();
     }
@@ -647,33 +704,32 @@ fn under_bar_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, in_over
 
 /// Under-bar scenario with the bar opting into the scope overlay (Compose
 /// `Modifier.renderInSharedTransitionScopeOverlay`).
-fn chrome_frame(
-    composer: &mut Composer,
-    show: &State<bool>,
-    chrome_z: f32,
-    hero_in_overlay: bool,
-) {
+fn chrome_frame(composer: &mut Composer, show: &State<bool>, chrome_z: f32, hero_in_overlay: bool) {
     let s = show.clone();
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("scope");
-            Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        under_bar_list(ctx, &scope, hero_in_overlay);
-                    } else {
-                        under_bar_detail(ctx, &scope, hero_in_overlay);
-                    }
+            Stack::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    Column::new()
+                        .modifier(Modifier::new().fill_max_size())
+                        .build(ctx, |ctx| {
+                            if s.get() {
+                                under_bar_list(ctx, &scope, hero_in_overlay);
+                            } else {
+                                under_bar_detail(ctx, &scope, hero_in_overlay);
+                            }
+                        });
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(400.0, 60.0)
+                                .background(Color::GREEN, Shape::Rectangle)
+                                .render_in_shared_transition_scope_overlay(&scope, chrome_z),
+                        )
+                        .build(ctx, |_| {});
                 });
-                Column::new()
-                    .modifier(
-                        Modifier::new()
-                            .size(400.0, 60.0)
-                            .background(Color::GREEN, Shape::Rectangle)
-                            .render_in_shared_transition_scope_overlay(&scope, chrome_z),
-                    )
-                    .build(ctx, |_| {});
-            });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -801,10 +857,12 @@ fn list_layout_screen(
     resize: ResizeMode,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        marked_block(ctx, scope, 120.0, 60.0, Color::RED, resize, placeholder);
-        block_sibling(ctx);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            marked_block(ctx, scope, 120.0, 60.0, Color::RED, resize, placeholder);
+            block_sibling(ctx);
+        });
 }
 
 #[crate::composable]
@@ -814,10 +872,12 @@ fn detail_layout_screen(
     resize: ResizeMode,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        marked_block(ctx, scope, 300.0, 200.0, Color::BLUE, resize, placeholder);
-        block_sibling(ctx);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            marked_block(ctx, scope, 300.0, 200.0, Color::BLUE, resize, placeholder);
+            block_sibling(ctx);
+        });
 }
 
 /// Compose's layout contract for a flight, as one 4-way matrix:
@@ -883,10 +943,12 @@ fn element_list_screen(
     scope: &SharedTransitionScope,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        marked_element_block(ctx, scope, 120.0, 60.0, Color::RED, placeholder);
-        block_sibling(ctx);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            marked_element_block(ctx, scope, 120.0, 60.0, Color::RED, placeholder);
+            block_sibling(ctx);
+        });
 }
 
 #[crate::composable]
@@ -895,10 +957,12 @@ fn element_detail_screen(
     scope: &SharedTransitionScope,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        marked_element_block(ctx, scope, 300.0, 200.0, Color::BLUE, placeholder);
-        block_sibling(ctx);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            marked_element_block(ctx, scope, 300.0, 200.0, Color::BLUE, placeholder);
+            block_sibling(ctx);
+        });
 }
 
 /// Pixel-level proof for the two `reported != content` combinations that
@@ -950,9 +1014,11 @@ fn stacked_list_screen(
     resize: ResizeMode,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        stacked_marked_block(ctx, scope, 120.0, 60.0, resize, placeholder);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            stacked_marked_block(ctx, scope, 120.0, 60.0, resize, placeholder);
+        });
 }
 
 #[crate::composable]
@@ -962,9 +1028,11 @@ fn stacked_detail_screen(
     resize: ResizeMode,
     placeholder: PlaceHolderSize,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        stacked_marked_block(ctx, scope, 300.0, 200.0, resize, placeholder);
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            stacked_marked_block(ctx, scope, 300.0, 200.0, resize, placeholder);
+        });
 }
 
 /// The LAYER hit path must invert the same transform the paint applied.
@@ -1130,7 +1198,8 @@ fn stale_cancel_drops_the_surviving_peers_layout_override() {
     frame(&mut a, &mut b);
     assert!(a.shared_flights.is_empty(), "the stale flight is cancelled");
     assert_eq!(
-        b.arena_nodes()[tidx].id, node_before,
+        b.arena_nodes()[tidx].id,
+        node_before,
         "the peer node survived the marker drop (materialize reuses it — it is not rebuilt)"
     );
     assert!(
@@ -1163,26 +1232,28 @@ fn circle_hero_screen(
     h: f32,
     color: Color,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        Column::new()
-            .modifier(
-                Modifier::new()
-                    .size(w, h)
-                    .background(color, Shape::Circle)
-                    .shared_bounds(
-                        scope.shared_content_state("hero"),
-                        VisibilityTransition::fade_in(TweenSpec::default()),
-                        VisibilityTransition::fade_out(TweenSpec::default()),
-                        BoundsTransform::default(),
-                        ResizeMode::scale_to_bounds(),
-                        PlaceHolderSize::JumpCut,
-                        PathMotion::Linear,
-                        0.0,
-                        true,
-                    ),
-            )
-            .build(ctx, |_| {});
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(color, Shape::Circle)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+        });
 }
 
 #[crate::composable]
@@ -1200,7 +1271,6 @@ fn circle_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
 /// layout box never moves — would otherwise keep a frozen corner radius for
 /// the whole flight (and any `ScaleToBounds` target with it).
 
-
 /// Hero screen with an arbitrary shape (the demo flies a Circle in the list
 /// to a Rectangle inside the detail container).
 #[crate::composable]
@@ -1212,26 +1282,28 @@ fn shape_hero_screen(
     color: Color,
     shape: Shape,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        Column::new()
-            .modifier(
-                Modifier::new()
-                    .size(w, h)
-                    .background(color, shape)
-                    .shared_bounds(
-                        scope.shared_content_state("hero"),
-                        VisibilityTransition::fade_in(TweenSpec::default()),
-                        VisibilityTransition::fade_out(TweenSpec::default()),
-                        BoundsTransform::default(),
-                        ResizeMode::scale_to_bounds(),
-                        PlaceHolderSize::JumpCut,
-                        PathMotion::Linear,
-                        0.0,
-                        true,
-                    ),
-            )
-            .build(ctx, |_| {});
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(color, shape)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+        });
 }
 
 #[crate::composable]
@@ -1276,11 +1348,17 @@ fn teardown_reaches_a_slot_that_left_the_tree() {
     crate::animation::clear_all_animations();
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-            Column::new()
-                .modifier(Modifier::new().size(120.0, 60.0).background(Color::RED, Shape::rounded(8.0)))
-                .build(ctx, |_| {});
-        });
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .size(120.0, 60.0)
+                            .background(Color::RED, Shape::rounded(8.0)),
+                    )
+                    .build(ctx, |_| {});
+            });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let root = composer.layout_root_idx().expect("root");
@@ -1289,7 +1367,10 @@ fn teardown_reaches_a_slot_that_left_the_tree() {
         (root, nodes[root].children[0])
     };
     let key = composer.arena_nodes()[marked].slot_key;
-    let owner = FlightKey { cid: composer.composer_id, id: 7 };
+    let owner = FlightKey {
+        cid: composer.composer_id,
+        id: 7,
+    };
     composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
         frame: State::new(FlightMeasureFrame {
             content: Some(crate::unit::Size::new(200.0, 90.0)),
@@ -1299,7 +1380,9 @@ fn teardown_reaches_a_slot_that_left_the_tree() {
     });
     // Detach it from the tree the way a retarget does: the parent drops the
     // child and the node loses its parent link.
-    composer.arena.nodes[parent].children.retain(|&c| c != marked);
+    composer.arena.nodes[parent]
+        .children
+        .retain(|&c| c != marked);
     composer.arena.nodes[marked].parent_id = None;
     assert!(
         find_idx_by_slot(composer.arena_nodes(), root, key).is_none(),
@@ -1334,39 +1417,39 @@ fn weighted_hero_row(
     inner: f32,
     hero_weight: f32,
 ) {
-    Row::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        let mut hero = Modifier::new()
-            .height(hero_h)
-            .background(Color::RED, Shape::rounded(8.0))
-            .shared_bounds(
-                scope.shared_content_state("hero"),
-                VisibilityTransition::fade_in(TweenSpec::default()),
-                VisibilityTransition::fade_out(TweenSpec::default()),
-                BoundsTransform::default(),
-                ResizeMode::RemeasureToBounds,
-                PlaceHolderSize::AnimatedSize,
-                PathMotion::Linear,
-                0.0,
-                true,
-            );
-        // FIXED width on one end, weighted on the other: that is what makes the
-        // animated (reported) width differ from the weighted allocation.
-        hero = if hero_weight > 0.0 {
-            hero.layout_weight(hero_weight)
-        } else {
-            hero.width(120.0)
-        };
-        Column::new()
-            .modifier(hero)
-            .build(ctx, |ctx| {
+    Row::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            let mut hero = Modifier::new()
+                .height(hero_h)
+                .background(Color::RED, Shape::rounded(8.0))
+                .shared_bounds(
+                    scope.shared_content_state("hero"),
+                    VisibilityTransition::fade_in(TweenSpec::default()),
+                    VisibilityTransition::fade_out(TweenSpec::default()),
+                    BoundsTransform::default(),
+                    ResizeMode::RemeasureToBounds,
+                    PlaceHolderSize::AnimatedSize,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                );
+            // FIXED width on one end, weighted on the other: that is what makes the
+            // animated (reported) width differ from the weighted allocation.
+            hero = if hero_weight > 0.0 {
+                hero.layout_weight(hero_weight)
+            } else {
+                hero.width(120.0)
+            };
+            Column::new().modifier(hero).build(ctx, |ctx| {
                 let key = ctx.next_key();
                 ctx.start_leaf(key, Modifier::new().size(inner, 24.0));
                 ctx.end_node();
             });
-        let key = ctx.next_key();
-        ctx.start_leaf(key, Modifier::new().size(40.0, 80.0));
-        ctx.end_node();
-    });
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().size(40.0, 80.0));
+            ctx.end_node();
+        });
 }
 
 #[crate::composable]
@@ -1468,7 +1551,6 @@ fn restored_node_keeps_its_content_box() {
 /// resolved radius, at p=1 the TARGET's, for percent->fixed, fixed->percent,
 /// percent->percent and a per-corner shape (`TopRoundedRect`).
 
-
 /// The Tier-0 writer must not hand a flight's visual (or its layout override) to
 /// whatever node happens to sit at the frozen target slot. Slots are positional, so
 /// a recomposition that shifts the target can leave an unrelated element there (R2
@@ -1556,7 +1638,8 @@ fn peer_sourced_tier1_cancel_drops_the_mains_override() {
     frame(&mut a, &mut b);
     assert!(a.shared_flights.is_empty(), "the stale flight is cancelled");
     assert_eq!(
-        a.arena_nodes()[tidx].id, node_before,
+        a.arena_nodes()[tidx].id,
+        node_before,
         "the main node survived the marker drop (so it is the SAME node that leaked)"
     );
     for _ in 0..3 {
@@ -1605,33 +1688,35 @@ fn spilling_hero_screen(
     h: f32,
     clip: OverlayClip,
 ) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        Column::new()
-            .modifier(
-                Modifier::new()
-                    .size(w, h)
-                    .background(Color::RED, Shape::rounded(8.0))
-                    .shared_bounds_with_overlay_clip(
-                        scope.shared_content_state("hero"),
-                        VisibilityTransition::fade_in(TweenSpec::default()),
-                        VisibilityTransition::fade_out(TweenSpec::default()),
-                        BoundsTransform::default(),
-                        ResizeMode::scale_to_bounds(),
-                        PlaceHolderSize::JumpCut,
-                        PathMotion::Linear,
-                        0.0,
-                        true,
-                        clip,
-                    ),
-            )
-            .build(ctx, |ctx| {
-                // A 500-wide band painted from a 120-wide leaf: spills by construction, while the
-                // hero keeps the size its own `size(w, h)` gave it.
-                let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(w, 30.0).draw_node(SpillBand));
-                ctx.end_node();
-            });
-    });
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(Color::RED, Shape::rounded(8.0))
+                        .shared_bounds_with_overlay_clip(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                            clip,
+                        ),
+                )
+                .build(ctx, |ctx| {
+                    // A 500-wide band painted from a 120-wide leaf: spills by construction, while the
+                    // hero keeps the size its own `size(w, h)` gave it.
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(w, 30.0).draw_node(SpillBand));
+                    ctx.end_node();
+                });
+        });
 }
 
 #[crate::composable]
@@ -1712,36 +1797,34 @@ fn overlay_clip_none_lets_content_overflow_the_lerped_rect() {
 /// marked hero with a probe leaf BELOW it, whose y position is the observable — the
 /// parent's idea of the hero's height is whatever the leaf is placed after.
 #[crate::composable]
-fn switch_frame_screen(
-    ctx: &mut ComposeCtx,
-    scope: &SharedTransitionScope,
-    h: f32,
-) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-        Column::new()
-            .modifier(
-                Modifier::new()
-                    .size(200.0, h)
-                    .background(Color::RED, Shape::Rectangle)
-                    .shared_bounds(
-                        scope.shared_content_state("hero"),
-                        VisibilityTransition::fade_in(TweenSpec::default()),
-                        VisibilityTransition::fade_out(TweenSpec::default()),
-                        BoundsTransform::default(),
-                        ResizeMode::scale_to_bounds(),
-                        // The follow-the-flight policy: the parent is told the ANIMATED
-                        // size, which is what makes the stale-layout frame visible.
-                        PlaceHolderSize::AnimatedSize,
-                        PathMotion::Linear,
-                        0.0,
-                        true,
-                    ),
-            )
-            .build(ctx, |_| {});
-        let key = ctx.next_key();
-        ctx.start_leaf(key, Modifier::new().size(40.0, 20.0));
-        ctx.end_node();
-    });
+fn switch_frame_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, h: f32) {
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, h)
+                        .background(Color::RED, Shape::Rectangle)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            // The follow-the-flight policy: the parent is told the ANIMATED
+                            // size, which is what makes the stale-layout frame visible.
+                            PlaceHolderSize::AnimatedSize,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().size(40.0, 20.0));
+            ctx.end_node();
+        });
 }
 
 #[crate::composable]
@@ -1908,13 +1991,15 @@ fn spring_frame(composer: &mut Composer, show: &State<bool>, path: PathMotion) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if show.get() {
-                    spring_list_screen(ctx, &scope, path);
-                } else {
-                    spring_detail_screen(ctx, &scope, path);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if show.get() {
+                        spring_list_screen(ctx, &scope, path);
+                    } else {
+                        spring_detail_screen(ctx, &scope, path);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -1927,10 +2012,15 @@ fn spring_advance(composer: &mut Composer, show: &State<bool>, path: PathMotion)
     spring_frame(composer, show, path);
 }
 
-
 /// Small arc hero (40px): the bend (≈43px) exceeds the half-size, so
 /// edge probes discriminate arc paint from straight paint.
-fn arc_hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+fn arc_hero_leaf(
+    ctx: &mut ComposeCtx,
+    w: f32,
+    h: f32,
+    color: Color,
+    scope: &SharedTransitionScope,
+) {
     let key = ctx.next_key();
     ctx.start_leaf(
         key,
@@ -1975,13 +2065,15 @@ fn arc_frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if show.get() {
-                    arc_list_screen(ctx, &scope);
-                } else {
-                    arc_detail_screen(ctx, &scope);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if show.get() {
+                        arc_list_screen(ctx, &scope);
+                    } else {
+                        arc_detail_screen(ctx, &scope);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -1993,7 +2085,6 @@ fn arc_advance(composer: &mut Composer, show: &State<bool>) {
     std::thread::sleep(std::time::Duration::from_millis(16));
     arc_frame(composer, show);
 }
-
 
 /// The scene registry must not grow forever: entries whose scene is no longer tagged in the tree are
 /// dropped, and a live one is kept. Without this, every scene a display has ever visited kept an entry
@@ -2008,7 +2099,9 @@ fn the_idle_early_out_still_clears_a_stale_disposition() {
     let _g = lock_serial();
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |_| {});
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
@@ -2061,10 +2154,7 @@ fn the_idle_early_out_still_clears_a_stale_disposition() {
 ///
 /// Teeth: remove the `PaintDisposition::Placeholder` early return in `hit_test_recursive` and the tap
 /// below reaches the placeholder again.
-
-
 // ── Phase 3 tests ──
-
 use crate::layout::node::{hit_test, hit_test_with_flights};
 
 /// Marked box with layout-driven width (registers a LAYOUT dep only —
@@ -2076,7 +2166,14 @@ fn morph_leaf(ctx: &mut ComposeCtx, w: &State<f32>, scope: &SharedTransitionScop
         Modifier::new()
             .size(w, 80.0)
             .background(Color::GREEN, Shape::Rectangle)
-            .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
+            .shared_element(
+                scope.shared_content_state("morph"),
+                BoundsTransform::default(),
+                PlaceHolderSize::JumpCut,
+                PathMotion::Linear,
+                0.0,
+                true,
+            ),
     );
     ctx.end_node();
 }
@@ -2091,9 +2188,11 @@ fn morph_compose(composer: &mut Composer, w: &State<f32>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                morph_screen(ctx, &scope, &ww);
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    morph_screen(ctx, &scope, &ww);
+                });
         });
     });
 }
@@ -2107,7 +2206,6 @@ fn advance_layout_only(composer: &mut Composer) {
     composer.poll_shared_flights();
 }
 
-
 /// Marked container with a plain child (container morphs must keep
 /// their subtree hittable mid-flight — MAJOR #3).
 #[crate::composable]
@@ -2117,7 +2215,14 @@ fn morph_parent_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &
             Modifier::new()
                 .size(w, 80.0)
                 .background(Color::GREEN, Shape::Rectangle)
-                .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
+                .shared_element(
+                    scope.shared_content_state("box"),
+                    BoundsTransform::default(),
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                ),
         )
         .build(ctx, |ctx| {
             gap_leaf(ctx, 50.0, 50.0);
@@ -2129,13 +2234,14 @@ fn morph_parent_compose(composer: &mut Composer, w: &State<f32>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                morph_parent_screen(ctx, &scope, &ww);
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    morph_parent_screen(ctx, &scope, &ww);
+                });
         });
     });
 }
-
 
 /// Keyed hero leaf (morph baselines key on (scope, key) — MINOR #5).
 fn keyed_hero_leaf(
@@ -2152,7 +2258,14 @@ fn keyed_hero_leaf(
         Modifier::new()
             .size(w, h)
             .background(color, Shape::rounded(8.0))
-            .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
+            .shared_element(
+                scope.shared_content_state(key),
+                BoundsTransform::default(),
+                PlaceHolderSize::JumpCut,
+                PathMotion::Linear,
+                0.0,
+                true,
+            ),
     );
     ctx.end_node();
 }
@@ -2174,15 +2287,16 @@ fn keyed_frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                keyed_item_screen(ctx, &scope, &s);
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    keyed_item_screen(ctx, &scope, &s);
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     composer.poll_shared_flights();
 }
-
 
 /// z-ordered hero leaf (retained ghosts sort back-to-front by this).
 fn z_hero_leaf(
@@ -2231,13 +2345,15 @@ fn z_frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    z_list_screen(ctx, &scope);
-                } else {
-                    z_detail_screen(ctx, &scope);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        z_list_screen(ctx, &scope);
+                    } else {
+                        z_detail_screen(ctx, &scope);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -2265,7 +2381,8 @@ fn retained_ghosts_sort_back_to_front_by_z() {
         .values()
         .filter_map(|a| a.flight.source_slot.map(|s| (s, a.flight.key.clone())))
         .collect();
-    let ordered: Vec<&str> = composer.transition_layer
+    let ordered: Vec<&str> = composer
+        .transition_layer
         .iter()
         .map(|&idx| {
             key_of
@@ -2274,7 +2391,11 @@ fn retained_ghosts_sort_back_to_front_by_z() {
                 .unwrap_or("?")
         })
         .collect();
-    assert_eq!(ordered, vec!["k2", "k1"], "ascending z paints k1 on top, got {ordered:?}");
+    assert_eq!(
+        ordered,
+        vec!["k2", "k1"],
+        "ascending z paints k1 on top, got {ordered:?}"
+    );
 
     // The sort reads z lazily off the retained markers.
     for &idx in &composer.transition_layer {
@@ -2282,7 +2403,11 @@ fn retained_ghosts_sort_back_to_front_by_z() {
             .expect("retained marker")
             .z_index;
         let key = &key_of[&composer.arena_nodes()[idx].slot_key];
-        assert_eq!(z, if key == "k1" { 1.0 } else { 0.0 }, "z rides the retained node");
+        assert_eq!(
+            z,
+            if key == "k1" { 1.0 } else { 0.0 },
+            "z rides the retained node"
+        );
     }
     crate::animation::clear_all_animations();
 }
@@ -2345,13 +2470,15 @@ fn bounds_frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    bounds_list_screen(ctx, &scope);
-                } else {
-                    bounds_detail_screen(ctx, &scope);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        bounds_list_screen(ctx, &scope);
+                    } else {
+                        bounds_detail_screen(ctx, &scope);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -2363,7 +2490,6 @@ fn bounds_advance(composer: &mut Composer, show: &State<bool>) {
     std::thread::sleep(std::time::Duration::from_millis(16));
     bounds_frame(composer, show);
 }
-
 
 /// sharedBounds hero with expand enter/exit (wipe-in from the top
 /// edge, wipe-out toward it — both faded).
@@ -2411,13 +2537,15 @@ fn expand_frame(composer: &mut Composer, show: &State<bool>) {
     composer.compose(|ctx| {
         SharedTransitionLayout::new().build(ctx, |ctx| {
             let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                if s.get() {
-                    expand_list_screen(ctx, &scope);
-                } else {
-                    expand_detail_screen(ctx, &scope);
-                }
-            });
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |ctx| {
+                    if s.get() {
+                        expand_list_screen(ctx, &scope);
+                    } else {
+                        expand_detail_screen(ctx, &scope);
+                    }
+                });
         });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -2429,7 +2557,6 @@ fn expand_advance(composer: &mut Composer, show: &State<bool>) {
     std::thread::sleep(std::time::Duration::from_millis(16));
     expand_frame(composer, show);
 }
-
 
 /// Morph box persistent across a screen switch + disappearing/appearing
 /// hero pair: a morph flight and a switch flight coexist, then both
@@ -2447,12 +2574,13 @@ fn mixed_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &
     hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
 }
 
-
 // ── Phase 4 Tier1 tests (two-composer harness: A = main, B = overlay) ──
 
 /// Column shell with caller content (keeps slot paths aligned frames).
 fn shell(ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, content);
+    Column::new()
+        .modifier(Modifier::new().fill_max_size())
+        .build(ctx, content);
 }
 
 /// Two-composer app-loop mirror (same canvas): compose + layout + polls,
@@ -2488,16 +2616,20 @@ fn xframe(
     cross_frame(
         a,
         b,
-        |ctx| shell(ctx, |ctx| {
-            if sa.get() {
-                hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
-            }
-        }),
-        |ctx| shell(ctx, |ctx| {
-            if sb.get() {
-                hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &scb, true);
-            }
-        }),
+        |ctx| {
+            shell(ctx, |ctx| {
+                if sa.get() {
+                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
+                }
+            })
+        },
+        |ctx| {
+            shell(ctx, |ctx| {
+                if sb.get() {
+                    hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &scb, true);
+                }
+            })
+        },
     );
 }
 
@@ -2549,7 +2681,6 @@ fn marked_in(composer: &Composer) -> Vec<usize> {
     out
 }
 
-
 /// Keyed hero leaf (multi-pair flights).
 fn hero_keyed_leaf(
     ctx: &mut ComposeCtx,
@@ -2565,11 +2696,17 @@ fn hero_keyed_leaf(
         Modifier::new()
             .size(w, h)
             .background(color, Shape::Rectangle)
-            .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
+            .shared_element(
+                scope.shared_content_state(key),
+                BoundsTransform::default(),
+                PlaceHolderSize::JumpCut,
+                PathMotion::Linear,
+                0.0,
+                true,
+            ),
     );
     ctx.end_node();
 }
-
 
 #[crate::composable]
 fn b_plain(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
@@ -2581,7 +2718,6 @@ fn b_shifted(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
     gap_leaf(ctx, 400.0, 100.0);
     hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
 }
-
 
 // ── Nav scene host (scaffolding for the scene-host test below) ─────────────
 
@@ -2768,15 +2904,14 @@ fn nav_scene_of(composer: &Composer, idx: usize) -> (u64, Option<bool>) {
 /// What it does NOT cover (see `docs/nav-shared-transition.md`): the pop direction, the two-pane
 /// `ListDetailStrategy`, and the `SharedEntryInSceneDecorator`. The flight's own geometry is only
 /// asserted at its two ends and via the raster probe, not frame by frame against wall-clock time.
-
 mod chrome;
 mod escape;
+mod flight;
+mod hit;
 mod measure;
 mod opt_out;
 mod paint;
-mod scroll;
-mod flight;
-mod hit;
 mod scenes;
+mod scroll;
 mod shape;
 mod tier1;

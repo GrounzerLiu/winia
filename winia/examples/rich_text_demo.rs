@@ -7,22 +7,43 @@
 //! Run with: cargo run -p winia --example rich_text_demo
 
 use letclone::clone;
+use winia::components::RichTextScope;
 use winia::prelude::*;
 use winia::text::{AnnotatedString, DecoStyle, SpanStyle, SvgDrawable, TextAlign, TextOverflow};
-use winia::components::RichTextScope;
 
 #[path = "common/settings.rs"]
 mod settings;
 
-const SAMPLE: &str = "Rich text can mix weights, sizes, families and decorations inside one paragraph.";
+const SAMPLE: &str =
+    "Rich text can mix weights, sizes, families and decorations inside one paragraph.";
 
 /// A small star, so the inline-image cards do not need a file.
 const STAR: &str = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><path d='M8 1l2.1 4.6 5 .5-3.8 3.3 1.1 4.9L8 11.7 3.6 14.3l1.1-4.9L1 6.1l5-.5z' fill='#D0BCFF'/></svg>";
 
-const CARD_BG: Color = Color { r: 0x2A, g: 0x27, b: 0x2E, a: 255 };
-const MUTED: Color = Color { r: 0x9E, g: 0x9A, b: 0xA6, a: 255 };
-const ACCENT: Color = Color { r: 0xD0, g: 0xBC, b: 0xFF, a: 255 };
-const WARM: Color = Color { r: 0xFF, g: 0xB4, b: 0xAB, a: 255 };
+const CARD_BG: Color = Color {
+    r: 0x2A,
+    g: 0x27,
+    b: 0x2E,
+    a: 255,
+};
+const MUTED: Color = Color {
+    r: 0x9E,
+    g: 0x9A,
+    b: 0xA6,
+    a: 255,
+};
+const ACCENT: Color = Color {
+    r: 0xD0,
+    g: 0xBC,
+    b: 0xFF,
+    a: 255,
+};
+const WARM: Color = Color {
+    r: 0xFF,
+    g: 0xB4,
+    b: 0xAB,
+    a: 255,
+};
 
 const ALIGNS: [(&str, TextAlign); 6] = [
     ("Left", TextAlign::Left),
@@ -87,7 +108,11 @@ impl Knobs {
             .soft_wrap(self.wrap.get())
             .align(ALIGNS[self.align.get().min(ALIGNS.len() - 1)].1)
             .overflow(OVERFLOWS[self.overflow.get().min(OVERFLOWS.len() - 1)].1)
-            .max_lines(if raw_max == 0 { usize::MAX } else { raw_max.max(min) })
+            .max_lines(if raw_max == 0 {
+                usize::MAX
+            } else {
+                raw_max.max(min)
+            })
             .min_lines(min);
         if self.line_height.get() > 0.0 {
             rich = rich.line_height(self.line_height.get());
@@ -159,7 +184,9 @@ fn labelled(ctx: &mut ComposeCtx, title: &str, control: impl FnOnce(&mut Compose
         .build(ctx, |ctx| {
             Stack::new()
                 .modifier(Modifier::new().width(120.0))
-                .build(ctx, |ctx| Text::new(title).font_size(12.0).color(MUTED).build(ctx));
+                .build(ctx, |ctx| {
+                    Text::new(title).font_size(12.0).color(MUTED).build(ctx)
+                });
             Stack::new()
                 .modifier(Modifier::new().layout_weight(1.0))
                 .build(ctx, control);
@@ -253,16 +280,42 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
                     );
                     rich.build(ctx, |x| k.body(x));
 
-                    labelled(ctx, "font size", |ctx| slider(ctx, k.size.clone(), 8.0, 36.0, "rt-play-size"));
-                    labelled(ctx, "letter spacing", |ctx| slider(ctx, k.spacing.clone(), -1.0, 8.0, "rt-play-spacing"));
-                    labelled(ctx, "word spacing", |ctx| slider(ctx, k.word_spacing.clone(), 0.0, 12.0, "rt-play-word"));
-                    labelled(ctx, "height multiple", |ctx| slider(ctx, k.height_multiple.clone(), 0.0, 3.0, "rt-play-height"));
-                    labelled(ctx, "max lines", |ctx| slider(ctx, k.max_lines.clone(), 0.0, 6.0, "rt-play-max"));
-                    labelled(ctx, "min lines", |ctx| slider(ctx, k.min_lines.clone(), 1.0, 6.0, "rt-play-min"));
-                    labelled(ctx, "line height", |ctx| slider(ctx, k.line_height.clone(), 0.0, 48.0, "rt-play-lh"));
+                    labelled(ctx, "font size", |ctx| {
+                        slider(ctx, k.size.clone(), 8.0, 36.0, "rt-play-size")
+                    });
+                    labelled(ctx, "letter spacing", |ctx| {
+                        slider(ctx, k.spacing.clone(), -1.0, 8.0, "rt-play-spacing")
+                    });
+                    labelled(ctx, "word spacing", |ctx| {
+                        slider(ctx, k.word_spacing.clone(), 0.0, 12.0, "rt-play-word")
+                    });
+                    labelled(ctx, "height multiple", |ctx| {
+                        slider(ctx, k.height_multiple.clone(), 0.0, 3.0, "rt-play-height")
+                    });
+                    labelled(ctx, "max lines", |ctx| {
+                        slider(ctx, k.max_lines.clone(), 0.0, 6.0, "rt-play-max")
+                    });
+                    labelled(ctx, "min lines", |ctx| {
+                        slider(ctx, k.min_lines.clone(), 1.0, 6.0, "rt-play-min")
+                    });
+                    labelled(ctx, "line height", |ctx| {
+                        slider(ctx, k.line_height.clone(), 0.0, 48.0, "rt-play-lh")
+                    });
 
-                    segmented(ctx, "rt-play-align", "align", &["Left", "Center", "Right", "Justify", "Start", "End"], k.align.clone());
-                    segmented(ctx, "rt-play-overflow", "overflow", &["Clip", "Visible", "Ellipsis"], k.overflow.clone());
+                    segmented(
+                        ctx,
+                        "rt-play-align",
+                        "align",
+                        &["Left", "Center", "Right", "Justify", "Start", "End"],
+                        k.align.clone(),
+                    );
+                    segmented(
+                        ctx,
+                        "rt-play-overflow",
+                        "overflow",
+                        &["Clip", "Visible", "Ellipsis"],
+                        k.overflow.clone(),
+                    );
 
                     Row::new().spacing(8.0).build(ctx, |ctx| {
                         switch(ctx, k.bold.clone(), "rt-play-bold", "bold");
@@ -301,11 +354,16 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
                         x.strikethrough(|x| x.text("strike "));
                         x.overline(|x| x.text("overline "));
                         x.style(
-                            |s| s.decoration_color(WARM).decoration_style(DecoStyle::Wavy)
-                                .decoration_mode(winia::text::DecoMode::Gaps),
+                            |s| {
+                                s.decoration_color(WARM)
+                                    .decoration_style(DecoStyle::Wavy)
+                                    .decoration_mode(winia::text::DecoMode::Gaps)
+                            },
                             |x| x.underline(|x| x.text("wavy warm ")),
                         );
-                        x.background(Color::from_argb(80, 0xD0, 0xBC, 0xFF), |x| x.text("highlighted"));
+                        x.background(Color::from_argb(80, 0xD0, 0xBC, 0xFF), |x| {
+                            x.text("highlighted")
+                        });
                         x.foreground_color(ACCENT, |x| x.text(" foreground-coloured"));
                     });
             });
@@ -349,7 +407,10 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
 
             // 6. Paragraph parameters, shown side by side (these were T-3).
             card(ctx, "params", "paragraph parameters", |ctx| {
-                Text::new("max_lines(1) + Ellipsis, nowrap").font_size(11.0).color(MUTED).build(ctx);
+                Text::new("max_lines(1) + Ellipsis, nowrap")
+                    .font_size(11.0)
+                    .color(MUTED)
+                    .build(ctx);
                 RichText::new()
                     .soft_wrap(false)
                     .max_lines(1)
@@ -362,7 +423,10 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
                     )
                     .build(ctx, |x| x.text(SAMPLE));
 
-                Text::new("max_lines(1) + Clip").font_size(11.0).color(MUTED).build(ctx);
+                Text::new("max_lines(1) + Clip")
+                    .font_size(11.0)
+                    .color(MUTED)
+                    .build(ctx);
                 RichText::new()
                     .max_lines(1)
                     .overflow(TextOverflow::Clip)
@@ -382,7 +446,10 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
                         x.text("one line\nsecond, shorter line");
                     });
 
-                Text::new("min_lines(3) reserves the box").font_size(11.0).color(MUTED).build(ctx);
+                Text::new("min_lines(3) reserves the box")
+                    .font_size(11.0)
+                    .color(MUTED)
+                    .build(ctx);
                 RichText::new()
                     .min_lines(3)
                     .modifier(
@@ -430,19 +497,15 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
             });
             // 9. ProvideTextStyle: a rich block inherits the base style, spans override it.
             card(ctx, "inherit", "inherits ProvideTextStyle", |ctx| {
-                ProvideTextStyle(
-                    TextStyle::new().font_size(18.0).color(WARM),
-                    ctx,
-                    |ctx| {
-                        RichText::new()
-                            .modifier(Modifier::new().fill_max_width())
-                            .build(ctx, |x| {
-                                x.text("inherits 18 sp warm, ");
-                                x.font_size(12.0, |x| x.text("a 12 sp span, "));
-                                x.bold(|x| x.text("a bold span"));
-                            });
-                    },
-                );
+                ProvideTextStyle(TextStyle::new().font_size(18.0).color(WARM), ctx, |ctx| {
+                    RichText::new()
+                        .modifier(Modifier::new().fill_max_width())
+                        .build(ctx, |x| {
+                            x.text("inherits 18 sp warm, ");
+                            x.font_size(12.0, |x| x.text("a 12 sp span, "));
+                            x.bold(|x| x.text("a bold span"));
+                        });
+                });
             });
         });
 }

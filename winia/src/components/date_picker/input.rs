@@ -81,7 +81,10 @@ impl DateInputFormat {
         if !names_each_field_once {
             return None;
         }
-        Some(Self { pattern_with_delimiters, delimiter })
+        Some(Self {
+            pattern_with_delimiters,
+            delimiter,
+        })
     }
 
     /// The pattern as the field displays it in its placeholder, `MM/dd/yyyy`.
@@ -178,8 +181,7 @@ impl VisualTransformation for DateVisualTransformation {
         let mut transformed = String::with_capacity(self.date_format_length + 2);
         for (index, c) in trimmed.chars().enumerate() {
             transformed.push(c);
-            if index + 1 == self.first_delimiter_offset
-                || index + 2 == self.second_delimiter_offset
+            if index + 1 == self.first_delimiter_offset || index + 2 == self.second_delimiter_offset
             {
                 transformed.push(self.delimiter);
             }
@@ -295,10 +297,14 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     let effect_error = error.clone();
     LaunchedEffect::new(selected).build(ctx, move |_scope| {
         async move {
-            let Some(millis) = effect_selected else { return };
+            let Some(millis) = effect_selected else {
+                return;
+            };
             // `TextFieldValue::new` puts the caret at the end, which is the right place for a value
             // this field just filled in wholesale.
-            effect_text.set(TextFieldValue::new(effect_model.format_with_pattern(millis, &effect_format)));
+            effect_text.set(TextFieldValue::new(
+                effect_model.format_with_pattern(millis, &effect_format),
+            ));
             effect_error.set(String::new());
         }
     });
@@ -307,16 +313,16 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     // animated in, and a caret that arrives mid-motion is a caret the user never chose. Compose
     // waits `MotionTokens.DurationMedium2` for the same reason
     // (`LaunchedEffect(Unit) { delay(...); focusRequester?.requestFocus() }`, `DateInput.kt:259-266`).
-    let focus = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+    let focus = ctx
+        .remember(|| crate::modifier::FocusRequester::new())
+        .get();
     let effect_focus = focus.clone();
-    LaunchedEffect::new(()).build(ctx, move |_scope| {
-        async move {
-            tokio::time::sleep(std::time::Duration::from_millis(
-                MODAL_MODE_SWITCH_FOCUS_DELAY_MS,
-            ))
-            .await;
-            effect_focus.request_focus();
-        }
+    LaunchedEffect::new(()).build(ctx, move |_scope| async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            MODAL_MODE_SWITCH_FOCUS_DELAY_MS,
+        ))
+        .await;
+        effect_focus.request_focus();
     });
 
     // Anything that is not a digit, or that runs past a full entry, is refused outright: the field
@@ -345,18 +351,20 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     };
 
     let label_pattern = pattern.clone();
-        let mut field = TextField::new(text.clone())
+    let mut field = TextField::new(text.clone())
         .outlined()
         .single_line(true)
         .visual_transformation(transformation)
         .label(move |ctx| {
             Text::new(DATE_INPUT_LABEL)
-                .modifier(Modifier::new().semantics(
-                    crate::semantics::SemanticsConfig::new()
-                        // The label names the field and the shape it wants, so a reader says what to
-                        // type before the user types it (`DateInput.kt:93-98`).
-                        .content_description(format!("{DATE_INPUT_LABEL}, {label_pattern}")),
-                ))
+                .modifier(
+                    Modifier::new().semantics(
+                        crate::semantics::SemanticsConfig::new()
+                            // The label names the field and the shape it wants, so a reader says what to
+                            // type before the user types it (`DateInput.kt:93-98`).
+                            .content_description(format!("{DATE_INPUT_LABEL}, {label_pattern}")),
+                    ),
+                )
                 .build(ctx);
         })
         .placeholder(move |ctx| {
@@ -379,7 +387,11 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
             on_value_change_error.set(message.clone());
             // Commit only what the validator passed, so the calendar never shows a date the field
             // is currently calling wrong.
-            let millis = if message.is_empty() { parsed.map(|d| d.start_of_day_millis()) } else { None };
+            let millis = if message.is_empty() {
+                parsed.map(|d| d.start_of_day_millis())
+            } else {
+                None
+            };
             on_value_change_state.set_selected_date_millis(millis);
         })
         .is_error(is_error);
@@ -388,7 +400,11 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     }
     // The error's own line of supporting text brings its own padding, so the bottom padding is only
     // there to keep the container the same height either way (`DateInput.kt:152-162`).
-    let bottom = if is_error { 0.0 } else { INPUT_TEXT_NON_ERROROUS_BOTTOM_PADDING };
+    let bottom = if is_error {
+        0.0
+    } else {
+        INPUT_TEXT_NON_ERROROUS_BOTTOM_PADDING
+    };
     field
         .modifier(
             Modifier::new()
@@ -429,4 +445,3 @@ pub(super) fn display_mode_toggle(
                 .build(ctx);
         });
 }
-

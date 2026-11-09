@@ -43,14 +43,14 @@
 //!   [`ModalNavigationDrawer::scrim_color`].
 
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
-use crate::layout::{Alignment, BoxLayout, LayoutDirection};
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::overlay::anchored_draggable::AnchoredDraggableState;
 use crate::input::interaction::MutableInteractionSource;
 use crate::layout::components::{Column, Row, Stack};
+use crate::layout::{Alignment, BoxLayout, LayoutDirection};
+use crate::modifier::Modifier;
+use crate::overlay::anchored_draggable::AnchoredDraggableState;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::theme::WiniaTheme;
 use crate::unit::Dp;
 use std::sync::Arc;
@@ -138,7 +138,8 @@ impl DrawerState {
         &mut self,
         f: impl Fn(DrawerValue) -> bool + Send + Sync + 'static,
     ) {
-        self.anchored.set_confirm_value_change(move |v: &DrawerValue| f(*v));
+        self.anchored
+            .set_confirm_value_change(move |v: &DrawerValue| f(*v));
     }
 
     /// Recompute the anchors for a sheet `width` px wide, and keep a settled drawer on
@@ -205,7 +206,8 @@ impl DrawerState {
         if self.anchored.offset().is_nan() {
             return 0.0;
         }
-        self.anchored.progress(&DrawerValue::Closed, &DrawerValue::Open)
+        self.anchored
+            .progress(&DrawerValue::Closed, &DrawerValue::Open)
     }
 
     /// [`Self::progress`] without registering a dependency — the render-time read.
@@ -213,7 +215,8 @@ impl DrawerState {
         if self.anchored.offset_state().peek().is_nan() {
             return 0.0;
         }
-        self.anchored.peek_progress(&DrawerValue::Closed, &DrawerValue::Open)
+        self.anchored
+            .peek_progress(&DrawerValue::Closed, &DrawerValue::Open)
     }
 
     /// Current offset in px (NaN before the first layout).
@@ -271,7 +274,9 @@ impl DrawerState {
 
 impl Clone for DrawerState {
     fn clone(&self) -> Self {
-        Self { anchored: self.anchored.clone() }
+        Self {
+            anchored: self.anchored.clone(),
+        }
     }
 }
 
@@ -289,8 +294,12 @@ impl DrawerDefaults {
     /// the side that faces the content, square against the window edge.
     pub fn shape(direction: LayoutDirection) -> Shape {
         match direction {
-            LayoutDirection::Ltr => Shape::RightRoundedRect { radius: DRAWER_CORNER_RADIUS },
-            LayoutDirection::Rtl => Shape::LeftRoundedRect { radius: DRAWER_CORNER_RADIUS },
+            LayoutDirection::Ltr => Shape::RightRoundedRect {
+                radius: DRAWER_CORNER_RADIUS,
+            },
+            LayoutDirection::Rtl => Shape::LeftRoundedRect {
+                radius: DRAWER_CORNER_RADIUS,
+            },
         }
     }
 
@@ -371,19 +380,35 @@ pub struct NavigationDrawerItemColors {
 
 impl NavigationDrawerItemColors {
     pub fn container(&self, selected: bool) -> Color {
-        if selected { self.selected_container } else { self.unselected_container }
+        if selected {
+            self.selected_container
+        } else {
+            self.unselected_container
+        }
     }
     pub fn icon(&self, selected: bool) -> Color {
-        if selected { self.selected_icon } else { self.unselected_icon }
+        if selected {
+            self.selected_icon
+        } else {
+            self.unselected_icon
+        }
     }
     pub fn text(&self, selected: bool) -> Color {
-        if selected { self.selected_text } else { self.unselected_text }
+        if selected {
+            self.selected_text
+        } else {
+            self.unselected_text
+        }
     }
     /// The badge's color. It defaults to the LABEL's, not the icon's: they agree at the token
     /// defaults (`OnSecondaryContainer` / `OnSurfaceVariant` for both), so this only shows when a
     /// caller overrides one of the two.
     pub fn badge(&self, selected: bool) -> Color {
-        if selected { self.selected_badge } else { self.unselected_badge }
+        if selected {
+            self.selected_badge
+        } else {
+            self.unselected_badge
+        }
     }
 }
 
@@ -425,7 +450,12 @@ impl NavigationDrawerItem {
     /// Text label shorthand (the common case).
     pub fn text_label(label: impl Into<String>, selected: bool) -> Self {
         let label = label.into();
-        Self::new(move |ctx| { crate::components::Text::new(label).build(ctx); }, selected)
+        Self::new(
+            move |ctx| {
+                crate::components::Text::new(label).build(ctx);
+            },
+            selected,
+        )
     }
 
     pub fn on_click(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
@@ -470,7 +500,9 @@ impl NavigationDrawerItem {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| DrawerDefaults::item_colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| DrawerDefaults::item_colors(&theme));
         let selected = self.selected;
         // `ActiveIndicatorShape` = CornerFull → the pill.
         let shape = self.shape.unwrap_or(Shape::Pill);
@@ -558,9 +590,13 @@ impl NavigationDrawerItem {
                             });
                         if has_badge {
                             if let Some(badge) = badge {
-                                WiniaTheme::with_content_color(colors.badge(selected), ctx, |ctx| {
-                                    badge(ctx);
-                                });
+                                WiniaTheme::with_content_color(
+                                    colors.badge(selected),
+                                    ctx,
+                                    |ctx| {
+                                        badge(ctx);
+                                    },
+                                );
                             }
                         }
                     });
@@ -699,7 +735,10 @@ impl DrawerSheet {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         ctx.changed(&self.shape);
         ctx.changed(&self.container_color);
@@ -708,7 +747,9 @@ impl DrawerSheet {
         ctx.changed(&self.kind);
         ctx.changed(&self.content_padding);
         let shape = self.shape.unwrap_or_else(|| self.kind.shape(direction));
-        let container = self.container_color.unwrap_or_else(|| self.kind.container_color(&theme));
+        let container = self
+            .container_color
+            .unwrap_or_else(|| self.kind.container_color(&theme));
         let content_color = self.content_color.unwrap_or(theme.on_surface);
         let elevation = self.elevation;
         let padding = self.content_padding;
@@ -837,7 +878,10 @@ impl ModalNavigationDrawer {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         let rtl = direction == LayoutDirection::Rtl;
         ctx.changed(&direction);
         ctx.changed(&self.gestures_enabled);
@@ -1037,9 +1081,9 @@ impl DismissibleNavigationDrawer {
             GroupStatus::Enter => {
                 let sheet_modifier = Modifier::new().width(sheet_w).fill_max_height();
                 match drawer_content {
-                    Some(drawer_content) => {
-                        Stack::new().modifier(sheet_modifier).build(ctx, drawer_content)
-                    }
+                    Some(drawer_content) => Stack::new()
+                        .modifier(sheet_modifier)
+                        .build(ctx, drawer_content),
                     // The policy reads `children[0]` as the sheet, so the slot stays even when the
                     // caller gave none — it is simply never seen.
                     None => Stack::new().modifier(sheet_modifier).build(ctx, |_| {}),
@@ -1185,12 +1229,7 @@ impl PermanentNavigationDrawer {
 /// No drag of its own: `clickable` is not a gesture element, so a down here already
 /// falls through to the host's `on_drag` — measured both ways, with and without one
 /// wired here. The tap is what this node owns.
-fn scrim(
-    ctx: &mut ComposeCtx,
-    state: &DrawerState,
-    color: Color,
-    sheet_width: f32,
-) {
+fn scrim(ctx: &mut ComposeCtx, state: &DrawerState, color: Color, sheet_width: f32) {
     let key = ctx.next_key();
     ctx.changed(&color);
     ctx.changed(&sheet_width);
@@ -1199,10 +1238,10 @@ fn scrim(
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
             let offset = state.current_offset(); // get(): this slot depends on the offset
-            let closed = state.anchored_draggable().peek_position_of(&DrawerValue::Closed);
-            let parked_closed = offset.is_nan()
-                || closed.is_nan()
-                || (offset - closed).abs() < 0.5;
+            let closed = state
+                .anchored_draggable()
+                .peek_position_of(&DrawerValue::Closed);
+            let parked_closed = offset.is_nan() || closed.is_nan() || (offset - closed).abs() < 0.5;
             if !parked_closed {
                 let fade = state.clone();
                 let dismiss = state.clone();
@@ -1214,7 +1253,8 @@ fn scrim(
                                 move || {
                                     let a = (fade.peek_progress() * color.a as f32)
                                         .round()
-                                        .clamp(0.0, 255.0) as u8;
+                                        .clamp(0.0, 255.0)
+                                        as u8;
                                     Color::from_argb(a, color.r, color.g, color.b)
                                 },
                                 Shape::Rectangle,
@@ -1227,7 +1267,6 @@ fn scrim(
     }
     ctx.end_restartable_group();
 }
-
 
 #[cfg(test)]
 mod tests;

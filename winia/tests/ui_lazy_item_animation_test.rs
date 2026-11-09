@@ -78,7 +78,12 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
         app.refresh();
         app.find_tag("lazy-anim-item-0").is_none()
     });
-    assert_eq!(count(&mut app), 11, "and the data lost that key: {:?}", info(&mut app));
+    assert_eq!(
+        count(&mut app),
+        11,
+        "and the data lost that key: {:?}",
+        info(&mut app)
+    );
 
     // INSERT in the MIDDLE: the rows below open a gap and animate into it, and the new key fades in.
     // (An insert at the HEAD is silent only while the list is SCROLLED, where the viewport moves with
@@ -109,7 +114,10 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     // SHUFFLE: same keys, new slots — pure placement, nothing appears or disappears.
     click_tag(&mut app, "lazy-anim-shuffle");
     app.refresh();
-    assert!(info(&mut app).contains("12 items"), "a shuffle changes no key count");
+    assert!(
+        info(&mut app).contains("12 items"),
+        "a shuffle changes no key count"
+    );
     assert!(
         saw_animation(&mut app, "spring(", Some("components=2")),
         "a reorder animates the placement"
@@ -140,7 +148,9 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     // computed in the parent and captured there never updates, because the FlowRow around it skips
     // (measured: the button kept saying "spec: default" while the status line cycled).
     assert!(
-        app.all_texts().iter().any(|text| text.contains("spec: slow")),
+        app.all_texts()
+            .iter()
+            .any(|text| text.contains("spec: slow")),
         "the spec button names the contract it is in: {:?}",
         app.all_texts()
     );
@@ -169,7 +179,10 @@ fn lazy_item_animation_animates_inserts_reorders_and_removals() {
     click_tag(&mut app, "lazy-anim-insert-middle");
     app.refresh();
     let animations = app.animations();
-    assert!(!animations.is_empty(), "the animation report answered: {animations:?}");
+    assert!(
+        !animations.is_empty(),
+        "the animation report answered: {animations:?}"
+    );
     assert!(
         !animations.iter().any(|line| line.contains("tween(450ms)")),
         "without_fade_in/out leaves no item fade running: {animations:?}"

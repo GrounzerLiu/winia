@@ -1,6 +1,6 @@
 //! The input subsystem: pointer events and gesture recognition (Compose `pointerInput` semantics).
-pub(crate) mod gesture;
 pub mod events;
+pub(crate) mod gesture;
 pub mod interaction;
 pub use events::{
     KbEvent, KbEventType, PenKind, PointerButton, PointerEvent, PointerEventType, PointerKind,
@@ -70,11 +70,9 @@ impl PointerIcon {
     /// Vertical resize.
     pub const RESIZE_NORTH_SOUTH: Self = Self::new(winit::cursor::CursorIcon::NsResize);
     /// Diagonal resize (top-left / bottom-right).
-    pub const RESIZE_NORTH_WEST_SOUTH_EAST: Self =
-        Self::new(winit::cursor::CursorIcon::NwseResize);
+    pub const RESIZE_NORTH_WEST_SOUTH_EAST: Self = Self::new(winit::cursor::CursorIcon::NwseResize);
     /// Diagonal resize (top-right / bottom-left).
-    pub const RESIZE_NORTH_EAST_SOUTH_WEST: Self =
-        Self::new(winit::cursor::CursorIcon::NeswResize);
+    pub const RESIZE_NORTH_EAST_SOUTH_WEST: Self = Self::new(winit::cursor::CursorIcon::NeswResize);
 }
 
 impl From<winit::cursor::CursorIcon> for PointerIcon {

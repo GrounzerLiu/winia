@@ -13,20 +13,20 @@
 //!   图标位、同一 `NavigationBarItemColors` 7 色槽
 //! - 容器高 80（TallContainerHeight）、surfaceContainer 底色、item 间距 8、RTL 镜像
 
+use crate::components::navigation_bar::{
+    NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING, NavigationBarItem, NavigationBarItemColors,
+    NavigationItemIconPosition,
+};
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::constraints::Constraints;
-use crate::layout::node::{MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
-use crate::layout::LayoutDirection;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
-use crate::components::navigation_bar::{
-    NavigationBarItem, NavigationBarItemColors, NavigationItemIconPosition, NAVIGATION_BAR_HEIGHT,
-    NAVIGATION_BAR_ITEM_SPACING,
-};
+use crate::layout::LayoutDirection;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{MeasurePolicy, Placement};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 
 /// ShortNavigationBar 的 item 排布（对齐 androidx ShortNavigationBarArrangement）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +60,9 @@ pub struct ShortNavigationBarItem {
 
 impl ShortNavigationBarItem {
     pub fn new(selected: bool, icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
-        Self { item: NavigationBarItem::new(selected, icon) }
+        Self {
+            item: NavigationBarItem::new(selected, icon),
+        }
     }
 
     pub fn label(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
@@ -147,10 +149,16 @@ impl ShortNavigationBar {
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.surface_container);
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let content = self.content;
-        let policy = ShortNavigationBarLayoutPolicy { arrangement: self.arrangement, direction };
+        let policy = ShortNavigationBarLayoutPolicy {
+            arrangement: self.arrangement,
+            direction,
+        };
         let root_modifier = Modifier::new()
             .fill_max_width()
             .height(NAVIGATION_BAR_HEIGHT)
@@ -201,7 +209,9 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
                 let mut ws = Vec::with_capacity(n);
                 for &child in children {
                     let (size, _) = crate::layout::node::measure_node(
-                        nodes, policies, child,
+                        nodes,
+                        policies,
+                        child,
                         Constraints::new(0.0, width, 0.0, c.max_height),
                     );
                     ws.push(size.width);
@@ -228,7 +238,9 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
         for (index, &child) in children.iter().enumerate() {
             let item_w = widths[index];
             let (size, _) = crate::layout::node::measure_node(
-                nodes, policies, child,
+                nodes,
+                policies,
+                child,
                 Constraints::new(item_w, item_w, 0.0, c.max_height),
             );
             let px = if self.direction == LayoutDirection::Ltr {
@@ -236,7 +248,10 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
             } else {
                 width - x - item_w
             };
-            placements.push(Placement { size, position: Offset::new(px, 0.0) });
+            placements.push(Placement {
+                size,
+                position: Offset::new(px, 0.0),
+            });
             x += item_w + NAVIGATION_BAR_ITEM_SPACING;
         }
         (Size::new(width, height), placements)
@@ -258,9 +273,9 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::node::LayoutNode;
     use crate::modifier::Modifier as M;
+    use crate::runtime::composer::Composer;
 
     fn item(ctx: &mut ComposeCtx, selected: bool, start: bool, icon_w: f32) {
         let mut b = ShortNavigationBarItem::new(selected, move |ctx| {
@@ -276,7 +291,12 @@ mod tests {
         b.build(ctx);
     }
 
-    fn compose_bar(arrangement: ShortNavigationBarArrangement, n: usize, start: bool, icon_w: f32) -> Composer {
+    fn compose_bar(
+        arrangement: ShortNavigationBarArrangement,
+        n: usize,
+        start: bool,
+        icon_w: f32,
+    ) -> Composer {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             let mut bar = ShortNavigationBar::new(move |ctx| {
@@ -304,7 +324,10 @@ mod tests {
         let expected = (360.0 - 2.0 * NAVIGATION_BAR_ITEM_SPACING) / 3.0;
         for i in 0..3 {
             let item = child(nodes, root, i);
-            assert!((item.measured_size.width - expected).abs() < 0.01, "item{i} 等分");
+            assert!(
+                (item.measured_size.width - expected).abs() < 0.01,
+                "item{i} 等分"
+            );
         }
         // 首项贴 leading
         assert_eq!(child(nodes, root, 0).position.x, 0.0);
@@ -323,7 +346,10 @@ mod tests {
         // 居中：左右边距对称
         let left = first.position.x;
         let right = 360.0 - (last.position.x + last.measured_size.width);
-        assert!((left - right).abs() < 0.5, "居中对称 left={left} right={right}");
+        assert!(
+            (left - right).abs() < 0.5,
+            "居中对称 left={left} right={right}"
+        );
     }
 
     #[test]

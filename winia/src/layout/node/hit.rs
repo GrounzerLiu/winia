@@ -63,7 +63,9 @@ pub fn hit_test_with_flights(
         }
         // Painted back-to-front, so the LAST entry is on top — test in reverse.
         for &tidx in transition_roots.iter().rev() {
-            let Some(node) = nodes.get(tidx) else { continue };
+            let Some(node) = nodes.get(tidx) else {
+                continue;
+            };
             if node.paint == PaintDisposition::InLayer && node.transition.is_none() {
                 // Chrome elevated for the flight: it paints above the flying
                 // pair, so it must also be HIT before them — otherwise a tap
@@ -75,7 +77,9 @@ pub fn hit_test_with_flights(
                 }
                 continue;
             }
-            let Some(t) = node.transition.as_ref() else { continue };
+            let Some(t) = node.transition.as_ref() else {
+                continue;
+            };
             let hit = match t.role {
                 TransitionRole::Source => hit_through_ghost(nodes, root, &id_to_idx, tidx, x, y),
                 TransitionRole::Target | TransitionRole::Morph => {
@@ -105,7 +109,9 @@ pub(crate) fn ancestor_prefix(
     let mut cur = idx;
     let mut ok = idx == root;
     while let Some(pid) = nodes[cur].parent_id {
-        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let Some(&pidx) = id_to_idx.get(&pid) else {
+            break;
+        };
         if pidx == root {
             prefix.push(root);
             ok = true;
@@ -382,7 +388,11 @@ pub(crate) fn hit_test_recursive(
         // retained sources are unreachable from the root walk anyway, and a
         // Source visual must never take input (its ghost routes to the live
         // target through the transition-roots prefix instead).
-        if nodes[c].transition.as_ref().is_some_and(|t| t.role == TransitionRole::Source) {
+        if nodes[c]
+            .transition
+            .as_ref()
+            .is_some_and(|t| t.role == TransitionRole::Source)
+        {
             continue;
         }
         if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {
@@ -423,7 +433,11 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
             // RTL: the offset's meaning is mirrored — the content translation is total - viewport -
             // offset (content_w is 0 before the first write-back, which degrades to -offset clamped at
             // 0, matching what the render pass does on that frame)
-            let content_w = if node.scroll_content_width > 0.0 { node.scroll_content_width } else { 0.0 };
+            let content_w = if node.scroll_content_width > 0.0 {
+                node.scroll_content_width
+            } else {
+                0.0
+            };
             (content_w - node.scroll_viewport_width - state.offset.peek()).max(0.0)
         } else {
             state.offset.peek()
@@ -446,7 +460,10 @@ pub(crate) fn collect_position_callbacks(
     nodes: &mut [LayoutNode],
     root: usize,
     origin: (f32, f32),
-) -> (Vec<(PositionCallback, GlobalPosition)>, Vec<(PositionCallback, GlobalPosition)>) {
+) -> (
+    Vec<(PositionCallback, GlobalPosition)>,
+    Vec<(PositionCallback, GlobalPosition)>,
+) {
     let mut placed = Vec::new();
     let mut global = Vec::new();
     // The composer origin is the walk's starting point, so the box stored by the change gate is
@@ -472,15 +489,13 @@ pub(crate) fn collect_position_callbacks_at(
         nodes[idx].measured_size.height,
     );
     let rect = position.rect();
-    let has_callbacks = nodes[idx]
-        .modifier
-        .elements()
-        .iter()
-        .any(|el| matches!(
+    let has_callbacks = nodes[idx].modifier.elements().iter().any(|el| {
+        matches!(
             el,
             crate::modifier::ModifierElement::OnPlaced { .. }
                 | crate::modifier::ModifierElement::OnGloballyPositioned { .. }
-        ));
+        )
+    });
     if has_callbacks {
         if nodes[idx].last_global_position != Some(rect) {
             nodes[idx].last_global_position = Some(rect);
@@ -532,5 +547,3 @@ pub(crate) fn scene_to_node_local(
     }
     (x - ox, y - oy)
 }
-
-

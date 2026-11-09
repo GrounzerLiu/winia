@@ -18,11 +18,11 @@
 //!   的 ContentTransform——`NavEnter`/`NavExit` 原语成对组合，默认 fade；
 //!   graphics_layer 渲染期 peek 零重组）。
 
-use crate::runtime::state::State;
-use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::modifier::Modifier;
 use crate::animation::push_animatable;
+use crate::composable;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 // The slide distance is shared with `AnimatedVisibility`; nav used to declare its own copy.
 use crate::animation::SlideOffset;
 use crate::graphics::GraphicsLayerParams;
@@ -60,13 +60,14 @@ pub(crate) struct EntryStateScope {
 
 /// entry 状态作用域 CompositionLocal——NavDisplay 渲染 entry 时 provides，
 /// `remember_entry_state` 读 current（try_current 区分作用域内外）
-static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<EntryStateScope>> =
-    std::sync::LazyLock::new(|| {
-        // default 不可达（try_current 不调 default）——占位
-        crate::runtime::composition_local::CompositionLocal::new(|| {
-            panic!("ENTRY_STATE_SCOPE 无默认值——必须经 NavDisplay 提供")
-        })
-    });
+static ENTRY_STATE_SCOPE: std::sync::LazyLock<
+    crate::runtime::composition_local::CompositionLocal<EntryStateScope>,
+> = std::sync::LazyLock::new(|| {
+    // default 不可达（try_current 不调 default）——占位
+    crate::runtime::composition_local::CompositionLocal::new(|| {
+        panic!("ENTRY_STATE_SCOPE 无默认值——必须经 NavDisplay 提供")
+    })
+});
 
 /// 在 entry 内容中记住状态——跨导航（pop/push）保持。
 ///
@@ -92,11 +93,11 @@ static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::runtime::composition_local:
 /// 注意：只有本函数（外部状态池）保证跨 pop/push 保持；entry 内容里的普通
 /// `ctx.remember` 依赖组合槽位置，双层过渡的槽位按调用序分配，pop/push 边界
 /// 不保证存活（见 [`RememberStateDecorator`] 文档）。
-pub fn remember_entry_state<T: Clone + PartialEq + 'static>(
-    init: impl FnOnce() -> T,
-) -> State<T> {
+pub fn remember_entry_state<T: Clone + PartialEq + 'static>(init: impl FnOnce() -> T) -> State<T> {
     let Some(scope) = ENTRY_STATE_SCOPE.try_current() else {
-        panic!("remember_entry_state 必须在 NavDisplay 的 entry 内容内调用（CompositionLocal 作用域外）");
+        panic!(
+            "remember_entry_state 必须在 NavDisplay 的 entry 内容内调用（CompositionLocal 作用域外）"
+        );
     };
     // 槽 key = (entry key, 调用序号, 类型)——类型参与 key：不同 T 不撞槽，
     // 命中即类型正确（无需 downcast 失败回退）
@@ -106,7 +107,8 @@ pub fn remember_entry_state<T: Clone + PartialEq + 'static>(
     let mut pool = scope.pool.lock().unwrap();
     if let Some(b) = pool.get(&slot_key) {
         // TypeId 参与 key——命中必是 State<T>（fail-fast 防御）
-        return b.downcast_ref::<State<T>>()
+        return b
+            .downcast_ref::<State<T>>()
             .expect("状态池槽类型不匹配（TypeId 相同但 downcast 失败——内部错误）")
             .clone();
     }
@@ -121,7 +123,10 @@ pub fn remember_entry_state<T: Clone + PartialEq + 'static>(
 }
 
 /// 清理 entry 状态（pop 时由装饰器调用——对标 Nav3 removeState）
-pub(crate) fn clear_entry_state(key: u64, pool: &std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>) {
+pub(crate) fn clear_entry_state(
+    key: u64,
+    pool: &std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>,
+) {
     let mut p = pool.lock().unwrap();
     p.retain(|(k, _, _), _| *k != key);
 }
@@ -138,7 +143,9 @@ fn fnv_hash(value: &impl std::hash::Hash) -> u64 {
     use std::hash::Hasher;
     struct FnvHasher(u64);
     impl std::hash::Hasher for FnvHasher {
-        fn finish(&self) -> u64 { self.0 }
+        fn finish(&self) -> u64 {
+            self.0
+        }
         fn write(&mut self, bytes: &[u8]) {
             for &b in bytes {
                 self.0 ^= b as u64;

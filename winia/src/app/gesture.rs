@@ -135,12 +135,14 @@ impl SelectionMenu {
     pub(crate) fn progress(&self, now: std::time::Instant) -> f32 {
         let t = match self.closing {
             None => now.duration_since(self.opened_at).as_millis() as f32 / Self::OPEN_MS as f32,
-            Some(since) => 1.0 - now.duration_since(since).as_millis() as f32 / Self::CLOSE_MS as f32,
+            Some(since) => {
+                1.0 - now.duration_since(since).as_millis() as f32 / Self::CLOSE_MS as f32
+            }
         };
         let t = t.clamp(0.0, 1.0);
         // Ease-out, so the menu arrives quickly and settles.
         1.0 - (1.0 - t).powi(3)
-}
+    }
 
     /// Whether the menu is still interactive (a closing one is not).
     pub(crate) fn is_open(&self) -> bool {
@@ -204,22 +206,38 @@ pub(crate) fn fire_gesture_action(
     let mut fired = false;
     for el in nodes[idx].modifier.elements() {
         match (el, action) {
-            (E::TapOnPress { cb }, G::Press(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::TapOnTap { cb }, G::Tap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnPress { cb }, G::Press(p)) => {
+                (cb)((p.0 - ax, p.1 - ay));
+                fired = true;
+            }
+            (E::TapOnTap { cb }, G::Tap(p)) => {
+                (cb)((p.0 - ax, p.1 - ay));
+                fired = true;
+            }
             (E::TapOnDoubleTap { cb }, G::DoubleTap(p)) => {
                 (cb)((p.0 - ax, p.1 - ay));
                 fired = true;
             }
-            (E::TapOnLongPress { cb }, G::LongPress(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::DragOnStart { cb }, G::DragStart(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnLongPress { cb }, G::LongPress(p)) => {
+                (cb)((p.0 - ax, p.1 - ay));
+                fired = true;
+            }
+            (E::DragOnStart { cb }, G::DragStart(p)) => {
+                (cb)((p.0 - ax, p.1 - ay));
+                fired = true;
+            }
             (E::DragOnMove { cb }, G::DragMove(p, delta)) => {
                 (cb)((p.0 - ax, p.1 - ay), delta);
                 fired = true;
             }
             (E::DragOnEnd { cb }, G::DragEnd) => {
-                (cb)(); fired = true;
+                (cb)();
+                fired = true;
             }
-            (E::DragOnCancel { cb }, G::DragCancel) => { (cb)(); fired = true; }
+            (E::DragOnCancel { cb }, G::DragCancel) => {
+                (cb)();
+                fired = true;
+            }
             _ => {}
         }
     }
@@ -228,18 +246,24 @@ pub(crate) fn fire_gesture_action(
 
 /// Index of the innermost scroll container on the hit path (the first vertical/horizontal scroll state from rev).
 pub(crate) fn path_scroll_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
-    path.iter().rev().find(|&&n| {
-        // A container whose input is disabled (a list with `user_scroll(false)`) keeps clipping and
-        // programmatic scrolling but must not swallow the gesture: it falls through to its parent.
-        !nodes[n].modifier.is_scroll_input_disabled()
-            && (nodes[n].modifier.vertical_scroll_state().is_some()
-                || nodes[n].modifier.horizontal_scroll_state().is_some())
-    }).copied()
+    path.iter()
+        .rev()
+        .find(|&&n| {
+            // A container whose input is disabled (a list with `user_scroll(false)`) keeps clipping and
+            // programmatic scrolling but must not swallow the gesture: it falls through to its parent.
+            !nodes[n].modifier.is_scroll_input_disabled()
+                && (nodes[n].modifier.vertical_scroll_state().is_some()
+                    || nodes[n].modifier.horizontal_scroll_state().is_some())
+        })
+        .copied()
 }
 
 /// Index of the innermost drag-gesture component on the hit path (has_drag_gesture).
 pub(crate) fn path_drag_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
-    path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied()
+    path.iter()
+        .rev()
+        .find(|&&n| nodes[n].modifier.has_drag_gesture())
+        .copied()
 }
 
 /// The core "content scrolling wins" decision (matching Compose): an inner draggable component (a slider/switch inside
@@ -248,7 +272,7 @@ pub(crate) fn path_drag_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usiz
 pub(crate) fn inner_component_drag(drag: Option<usize>, scroll: Option<usize>) -> bool {
     match (drag, scroll) {
         (Some(d), Some(s)) => d > s, // larger drag index = closer to the leaf = the component is inside the scroll
-        (Some(_), None) => true,     // no scroll container: a standalone draggable component (do not downgrade)
+        (Some(_), None) => true, // no scroll container: a standalone draggable component (do not downgrade)
         _ => false,
     }
 }
@@ -268,10 +292,16 @@ pub(crate) fn press_gesture_target(
     path: &[usize],
 ) -> Option<(u64, u64, bool)> {
     let scroll_idx = path_scroll_idx(nodes, path);
-    let gid = path.iter().rev()
+    let gid = path
+        .iter()
+        .rev()
         .find(|&&i| {
-            if !nodes[i].modifier.has_gesture() { return false; }
-            if !nodes[i].modifier.has_drag_gesture() { return true; } // non-drag gestures (tap) are never skipped
+            if !nodes[i].modifier.has_gesture() {
+                return false;
+            }
+            if !nodes[i].modifier.has_drag_gesture() {
+                return true;
+            } // non-drag gestures (tap) are never skipped
             inner_component_drag(Some(i), scroll_idx)
         })
         .copied()?;
@@ -333,14 +363,18 @@ pub(crate) fn fire_in_gesture_arena(
     match arena {
         None => {
             let nodes = pw.composer.arena_nodes();
-            let Some(r) = pw.composer.layout_root_idx() else { return false; };
+            let Some(r) = pw.composer.layout_root_idx() else {
+                return false;
+            };
             fire_gesture_action(nodes, r, slot, action)
         }
         Some(id) => match pw.overlay.layers.iter().position(|o| o.id == id) {
             Some(i) => {
                 let ov = &pw.overlay.layers[i];
                 let nodes = ov.composer.arena_nodes();
-                let Some(r) = ov.composer.layout_root_idx() else { return false; };
+                let Some(r) = ov.composer.layout_root_idx() else {
+                    return false;
+                };
                 fire_gesture_action(nodes, r, slot, action)
             }
             None => false,
@@ -365,7 +399,9 @@ pub(crate) fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64)
             None => return false,
         },
     };
-    let Some(r) = r else { return false; };
+    let Some(r) = r else {
+        return false;
+    };
     crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
         .and_then(|nid| crate::layout::node::find_node_by_id(nodes, r, nid))
         .map(|idx| nodes[idx].modifier.has_double_tap())
@@ -395,8 +431,16 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     // Resolve the gesture target first (the borrow is released as soon as the block ends — `pw` is borrowed mutably below for the pending tap).
     let hit = {
         let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+        let Some(r) = pw.composer.layout_root_idx() else {
+            return;
+        };
+        let path = hit_test_with_flights(
+            nodes,
+            r,
+            pw.composer.transition_roots(),
+            scene_pos.0,
+            scene_pos.1,
+        );
         press_gesture_target(nodes, &path)
     };
     let Some((node_id, slot, has_drag)) = hit else {
@@ -408,16 +452,23 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     };
     #[cfg(debug_assertions)]
     if drag_trace_enabled() {
-        eprintln!("[gesture-down] target id={node_id} slot={slot} has_drag={has_drag} at {scene_pos:?}");
+        eprintln!(
+            "[gesture-down] target id={node_id} slot={slot} has_drag={has_drag} at {scene_pos:?}"
+        );
     }
 
     process_pending_taps_on_down(pw, node_id);
 
     // The double-tap context is isolated per node (Compose per-pointerInput semantics) — different nodes do not share it.
-    let ctx = pw.input.tap_ctx.take()
+    let ctx = pw
+        .input
+        .tap_ctx
+        .take()
         .filter(|(n, _, _)| *n == node_id)
         .map(|(_, t, p)| (t, p));
-    pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
+    pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(
+        node_id, scene_pos, has_drag, ctx,
+    ));
     pw.input.node = Some(node_id);
     pw.input.slot = Some(slot);
     pw.input.arena = None; // the main tree
@@ -426,8 +477,15 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.input.arena_origin = (0.0, 0.0);
     // Fire on_press immediately (local coordinates).
     let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return; };
-    fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(scene_pos));
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return;
+    };
+    fire_gesture_action(
+        nodes,
+        r,
+        slot,
+        crate::input::gesture::GestureAction::Press(scene_pos),
+    );
 }
 
 /// Pointer-move gesture entry point: route whenever a tracker exists (capture — independent of hit testing).
@@ -439,7 +497,9 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 /// The decision is taken ONCE and holds for the rest of the gesture: handing over mid-gesture
 /// would mean replaying the deltas the component already consumed.
 pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.input.slot else { return false; };
+    let Some(slot) = pw.input.slot else {
+        return false;
+    };
     let Some(local) = gesture_arena_pos(pw, scene_pos) else {
         end_gesture(pw); // the target's overlay vanished mid-drag
         return false;
@@ -486,10 +546,15 @@ pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
             || pw.input.axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
     #[cfg(debug_assertions)]
     if drag_trace_enabled() {
-        eprintln!("[gesture-move] local={local:?} axis_undecided={axis_undecided} scroll_slot={:?} allow_drag={allow_drag}", pw.input.scroll_slot);
+        eprintln!(
+            "[gesture-move] local={local:?} axis_undecided={axis_undecided} scroll_slot={:?} allow_drag={allow_drag}",
+            pw.input.scroll_slot
+        );
     }
     let action = {
-        let Some(t) = pw.input.tracker.as_mut() else { return false; };
+        let Some(t) = pw.input.tracker.as_mut() else {
+            return false;
+        };
         t.on_move(local, allow_drag)
     };
     #[cfg(debug_assertions)]
@@ -517,21 +582,30 @@ pub(crate) fn end_gesture(pw: &mut PerWindow) {
 /// Drag-scroll end: enough velocity → inertial fling (content velocity = -finger velocity — flicking the finger up
 /// keeps the content moving up, i.e. the offset grows). Not enough velocity → just clear the scrolling marker.
 pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
-    let Some(ds) = pw.input.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
+    let Some(ds) = pw.input.drag_scroll.take() else {
+        eprintln!("[DBG-DS] up but no drag_scroll");
+        return;
+    };
     let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
     let target: Option<usize> = (|| {
         let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return None };
+        let Some(r) = pw.composer.layout_root_idx() else {
+            return None;
+        };
         let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
         crate::layout::node::find_node_by_id(nodes, r, id)
     })();
     #[cfg(debug_assertions)]
     if drag_trace_enabled() {
-        eprintln!("[drag-up] slot={:?} target_idx={:?} v=({},{})",
-            ds.slot, target, vx, vy);
+        eprintln!(
+            "[drag-up] slot={:?} target_idx={:?} v=({},{})",
+            ds.slot, target, vx, vy
+        );
     }
     let Some(idx) = target else { return };
-    let Some(root) = pw.composer.layout_root_idx() else { return };
+    let Some(root) = pw.composer.layout_root_idx() else {
+        return;
+    };
     // Finger velocity → scroll velocity (content velocity = -finger velocity), through the nested scroll pre/post fling chain.
     let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
     let _ = dispatch_nested_scroll_fling(pw.composer.arena_nodes_mut(), root, idx, velocity);
@@ -539,8 +613,12 @@ pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
 
 /// Pointer-up gesture entry point: decide on up (tap/double-tap/long-press/drag-end) → destroy the tracker.
 pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.input.slot else { return false; };
-    let Some(gid) = pw.input.node else { return false; };
+    let Some(slot) = pw.input.slot else {
+        return false;
+    };
+    let Some(gid) = pw.input.node else {
+        return false;
+    };
     // The tracker recorded positions in the target's arena, so its action carries arena-local
     // coordinates already; the arena itself decides where the action is dispatched — captured here
     // because `end_gesture` clears it before the dispatch below.
@@ -550,7 +628,9 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
         return false;
     }
     let action = {
-        let Some(mut t) = pw.input.tracker.take() else { return false; };
+        let Some(mut t) = pw.input.tracker.take() else {
+            return false;
+        };
         // ⚠ on_up must run first (the Tap branch records last_tap) and only then read tap_context —
         // in the reverse order the double-tap context is always None (ctx is read before the up decision).
         let action = t.on_up();
@@ -566,7 +646,11 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     // was already cancelled on the second down); on timeout/pressing another node → fire the deferred Tap (fire_pending_tap).
     if let crate::input::gesture::GestureAction::Tap(pos) = action {
         if slot_has_double_tap(pw, arena, slot) {
-            pw.input.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
+            pw.input
+                .pending_taps
+                .push(crate::input::gesture::PendingTap::new(
+                    slot, gid, pos, arena,
+                ));
             return false;
         }
         return fire_in_gesture_arena(pw, arena, slot, action);

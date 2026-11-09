@@ -20,10 +20,14 @@ use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 pub struct Dp(pub f32);
 
 impl Dp {
-    pub fn value(&self) -> f32 { self.0 }
+    pub fn value(&self) -> f32 {
+        self.0
+    }
 
     /// Convert to physical pixels through a [`Density`].
-    pub fn to_px(&self, density: Density) -> f32 { self.0 * density.density }
+    pub fn to_px(&self, density: Density) -> f32 {
+        self.0 * density.density
+    }
 
     /// This dp as a **layout coordinate**.
     ///
@@ -38,42 +42,62 @@ impl Dp {
     /// 360dp drawer with `to_px` at 1.5x density asks for 540 *logical* px, which silently
     /// fills a 520-wide window. Use this one in layout code; `to_px` is for a length that
     /// leaves the layout system (the platform, a canvas in device space).
-    pub fn to_logical(&self) -> f32 { self.0 }
+    pub fn to_logical(&self) -> f32 {
+        self.0
+    }
 }
 
 // ── Dp arithmetic ──
 
 impl Add for Dp {
     type Output = Dp;
-    fn add(self, rhs: Dp) -> Dp { Dp(self.0 + rhs.0) }
+    fn add(self, rhs: Dp) -> Dp {
+        Dp(self.0 + rhs.0)
+    }
 }
 impl AddAssign for Dp {
-    fn add_assign(&mut self, rhs: Dp) { self.0 += rhs.0; }
+    fn add_assign(&mut self, rhs: Dp) {
+        self.0 += rhs.0;
+    }
 }
 impl Sub for Dp {
     type Output = Dp;
-    fn sub(self, rhs: Dp) -> Dp { Dp(self.0 - rhs.0) }
+    fn sub(self, rhs: Dp) -> Dp {
+        Dp(self.0 - rhs.0)
+    }
 }
 impl SubAssign for Dp {
-    fn sub_assign(&mut self, rhs: Dp) { self.0 -= rhs.0; }
+    fn sub_assign(&mut self, rhs: Dp) {
+        self.0 -= rhs.0;
+    }
 }
 impl Mul<f32> for Dp {
     type Output = Dp;
-    fn mul(self, rhs: f32) -> Dp { Dp(self.0 * rhs) }
+    fn mul(self, rhs: f32) -> Dp {
+        Dp(self.0 * rhs)
+    }
 }
 impl Div<f32> for Dp {
     type Output = Dp;
-    fn div(self, rhs: f32) -> Dp { Dp(self.0 / rhs) }
+    fn div(self, rhs: f32) -> Dp {
+        Dp(self.0 / rhs)
+    }
 }
 impl Neg for Dp {
     type Output = Dp;
-    fn neg(self) -> Dp { Dp(-self.0) }
+    fn neg(self) -> Dp {
+        Dp(-self.0)
+    }
 }
 impl From<f32> for Dp {
-    fn from(v: f32) -> Self { Dp(v) }
+    fn from(v: f32) -> Self {
+        Dp(v)
+    }
 }
 impl From<Dp> for f32 {
-    fn from(d: Dp) -> Self { d.0 }
+    fn from(d: Dp) -> Self {
+        d.0
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -90,7 +114,9 @@ impl From<Dp> for f32 {
 pub struct Sp(pub f32);
 
 impl Sp {
-    pub fn value(&self) -> f32 { self.0 }
+    pub fn value(&self) -> f32 {
+        self.0
+    }
 
     /// Convert to physical pixels, applying both the density and the font scale.
     pub fn to_px(&self, density: Density) -> f32 {
@@ -102,25 +128,37 @@ impl Sp {
 
 impl Add for Sp {
     type Output = Sp;
-    fn add(self, rhs: Sp) -> Sp { Sp(self.0 + rhs.0) }
+    fn add(self, rhs: Sp) -> Sp {
+        Sp(self.0 + rhs.0)
+    }
 }
 impl Sub for Sp {
     type Output = Sp;
-    fn sub(self, rhs: Sp) -> Sp { Sp(self.0 - rhs.0) }
+    fn sub(self, rhs: Sp) -> Sp {
+        Sp(self.0 - rhs.0)
+    }
 }
 impl Mul<f32> for Sp {
     type Output = Sp;
-    fn mul(self, rhs: f32) -> Sp { Sp(self.0 * rhs) }
+    fn mul(self, rhs: f32) -> Sp {
+        Sp(self.0 * rhs)
+    }
 }
 impl Div<f32> for Sp {
     type Output = Sp;
-    fn div(self, rhs: f32) -> Sp { Sp(self.0 / rhs) }
+    fn div(self, rhs: f32) -> Sp {
+        Sp(self.0 / rhs)
+    }
 }
 impl From<f32> for Sp {
-    fn from(v: f32) -> Self { Sp(v) }
+    fn from(v: f32) -> Self {
+        Sp(v)
+    }
 }
 impl From<Sp> for f32 {
-    fn from(s: Sp) -> Self { s.0 }
+    fn from(s: Sp) -> Self {
+        s.0
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -141,18 +179,29 @@ pub struct Density {
 
 impl Density {
     pub const fn from_density(density: f32) -> Self {
-        Self { density, font_scale: 1.0 }
+        Self {
+            density,
+            font_scale: 1.0,
+        }
     }
 
     /// A density that also carries the user's text scale (Compose's `Density(density, fontScale)`).
     pub const fn from_density_and_font_scale(density: f32, font_scale: f32) -> Self {
-        Self { density, font_scale }
+        Self {
+            density,
+            font_scale,
+        }
     }
     pub const fn standard() -> Self {
-        Self { density: 1.0, font_scale: 1.0 }
+        Self {
+            density: 1.0,
+            font_scale: 1.0,
+        }
     }
 
-    pub fn to_px(&self, dp: Dp) -> f32 { dp.0 * self.density }
+    pub fn to_px(&self, dp: Dp) -> f32 {
+        dp.0 * self.density
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -169,20 +218,28 @@ pub struct Offset {
 impl Offset {
     pub const ZERO: Offset = Offset { x: 0.0, y: 0.0 };
 
-    pub fn new(x: f32, y: f32) -> Self { Offset { x, y } }
+    pub fn new(x: f32, y: f32) -> Self {
+        Offset { x, y }
+    }
 }
 
 impl Add for Offset {
     type Output = Offset;
-    fn add(self, rhs: Offset) -> Offset { Offset::new(self.x + rhs.x, self.y + rhs.y) }
+    fn add(self, rhs: Offset) -> Offset {
+        Offset::new(self.x + rhs.x, self.y + rhs.y)
+    }
 }
 impl Sub for Offset {
     type Output = Offset;
-    fn sub(self, rhs: Offset) -> Offset { Offset::new(self.x - rhs.x, self.y - rhs.y) }
+    fn sub(self, rhs: Offset) -> Offset {
+        Offset::new(self.x - rhs.x, self.y - rhs.y)
+    }
 }
 impl Neg for Offset {
     type Output = Offset;
-    fn neg(self) -> Offset { Offset::new(-self.x, -self.y) }
+    fn neg(self) -> Offset {
+        Offset::new(-self.x, -self.y)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -197,9 +254,14 @@ pub struct Size {
 }
 
 impl Size {
-    pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
+    pub const ZERO: Size = Size {
+        width: 0.0,
+        height: 0.0,
+    };
 
-    pub fn new(width: f32, height: f32) -> Self { Size { width, height } }
+    pub fn new(width: f32, height: f32) -> Self {
+        Size { width, height }
+    }
 
     /// Whether a point falls inside this size's rectangle.
     pub fn contains(&self, offset: Offset) -> bool {
@@ -209,11 +271,15 @@ impl Size {
 
 impl Add for Size {
     type Output = Size;
-    fn add(self, rhs: Size) -> Size { Size::new(self.width + rhs.width, self.height + rhs.height) }
+    fn add(self, rhs: Size) -> Size {
+        Size::new(self.width + rhs.width, self.height + rhs.height)
+    }
 }
 impl Sub for Size {
     type Output = Size;
-    fn sub(self, rhs: Size) -> Size { Size::new(self.width - rhs.width, self.height - rhs.height) }
+    fn sub(self, rhs: Size) -> Size {
+        Size::new(self.width - rhs.width, self.height - rhs.height)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -230,13 +296,29 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub const ZERO: Rect = Rect { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 };
+    pub const ZERO: Rect = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+    };
     pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Rect { left, top, right, bottom }
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
-    pub fn width(&self) -> f32 { self.right - self.left }
-    pub fn height(&self) -> f32 { self.bottom - self.top }
-    pub fn size(&self) -> Size { Size::new(self.width(), self.height()) }
+    pub fn width(&self) -> f32 {
+        self.right - self.left
+    }
+    pub fn height(&self) -> f32 {
+        self.bottom - self.top
+    }
+    pub fn size(&self) -> Size {
+        Size::new(self.width(), self.height())
+    }
 }
 
 /// A 2-D integer offset (Compose's `IntOffset`).
@@ -248,7 +330,9 @@ pub struct IntOffset {
 
 impl IntOffset {
     pub const ZERO: IntOffset = IntOffset { x: 0, y: 0 };
-    pub fn new(x: i32, y: i32) -> Self { IntOffset { x, y } }
+    pub fn new(x: i32, y: i32) -> Self {
+        IntOffset { x, y }
+    }
 }
 
 /// A 2-D integer size (Compose's `IntSize`).
@@ -259,8 +343,13 @@ pub struct IntSize {
 }
 
 impl IntSize {
-    pub const ZERO: IntSize = IntSize { width: 0, height: 0 };
-    pub fn new(width: i32, height: i32) -> Self { IntSize { width, height } }
+    pub const ZERO: IntSize = IntSize {
+        width: 0,
+        height: 0,
+    };
+    pub fn new(width: i32, height: i32) -> Self {
+        IntSize { width, height }
+    }
 }
 
 /// A 2-D offset in `Dp` (Compose's `DpOffset`).
@@ -271,8 +360,13 @@ pub struct DpOffset {
 }
 
 impl DpOffset {
-    pub const ZERO: DpOffset = DpOffset { x: Dp(0.0), y: Dp(0.0) };
-    pub fn new(x: Dp, y: Dp) -> Self { DpOffset { x, y } }
+    pub const ZERO: DpOffset = DpOffset {
+        x: Dp(0.0),
+        y: Dp(0.0),
+    };
+    pub fn new(x: Dp, y: Dp) -> Self {
+        DpOffset { x, y }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -280,10 +374,18 @@ impl DpOffset {
 // ═══════════════════════════════════════════════════════════
 
 impl crate::animation::AnimatableValue for Dp {
-    fn lerp(&self, to: &Dp, t: f32) -> Dp { Dp(self.0 + (to.0 - self.0) * t) }
-    fn to_f32(&self) -> f32 { self.0 }
-    fn from_f32(v: f32) -> Dp { Dp(v) }
-    fn supports_spring() -> bool { true }
+    fn lerp(&self, to: &Dp, t: f32) -> Dp {
+        Dp(self.0 + (to.0 - self.0) * t)
+    }
+    fn to_f32(&self) -> f32 {
+        self.0
+    }
+    fn from_f32(v: f32) -> Dp {
+        Dp(v)
+    }
+    fn supports_spring() -> bool {
+        true
+    }
 }
 
 impl crate::animation::AnimatableValue for i32 {
@@ -291,27 +393,47 @@ impl crate::animation::AnimatableValue for i32 {
         let from = *self as f32;
         (from + (*to as f32 - from) * t).round() as i32
     }
-    fn to_f32(&self) -> f32 { *self as f32 }
-    fn from_f32(v: f32) -> i32 { v.round() as i32 }
-    fn supports_spring() -> bool { true }
+    fn to_f32(&self) -> f32 {
+        *self as f32
+    }
+    fn from_f32(v: f32) -> i32 {
+        v.round() as i32
+    }
+    fn supports_spring() -> bool {
+        true
+    }
 }
 
 impl crate::animation::AnimatableValue for Sp {
-    fn lerp(&self, to: &Sp, t: f32) -> Sp { Sp(self.0 + (to.0 - self.0) * t) }
-    fn to_f32(&self) -> f32 { self.0 }
-    fn from_f32(v: f32) -> Sp { Sp(v) }
-    fn supports_spring() -> bool { true }
+    fn lerp(&self, to: &Sp, t: f32) -> Sp {
+        Sp(self.0 + (to.0 - self.0) * t)
+    }
+    fn to_f32(&self) -> f32 {
+        self.0
+    }
+    fn from_f32(v: f32) -> Sp {
+        Sp(v)
+    }
+    fn supports_spring() -> bool {
+        true
+    }
 }
 
 impl crate::animation::AnimatableValue for Offset {
     fn lerp(&self, to: &Offset, t: f32) -> Offset {
         Offset::new(self.x + (to.x - self.x) * t, self.y + (to.y - self.y) * t)
     }
-    fn to_f32(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
-    fn from_f32(v: f32) -> Offset { Offset::new(v, v) }
+    fn to_f32(&self) -> f32 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+    fn from_f32(v: f32) -> Offset {
+        Offset::new(v, v)
+    }
     // One spring per axis, exactly as Compose's `Offset.VectorConverter` expands it, so a Spring
     // never has to fall back to a Tween.
-    fn supports_spring() -> bool { true }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -327,13 +449,22 @@ impl crate::animation::AnimatableValue for Offset {
 
 impl crate::animation::AnimatableValue for Size {
     fn lerp(&self, to: &Size, t: f32) -> Size {
-        Size::new(self.width + (to.width - self.width) * t, self.height + (to.height - self.height) * t)
+        Size::new(
+            self.width + (to.width - self.width) * t,
+            self.height + (to.height - self.height) * t,
+        )
     }
-    fn to_f32(&self) -> f32 { (self.width * self.width + self.height * self.height).sqrt() }
-    fn from_f32(v: f32) -> Size { Size::new(v, v) }
+    fn to_f32(&self) -> f32 {
+        (self.width * self.width + self.height * self.height).sqrt()
+    }
+    fn from_f32(v: f32) -> Size {
+        Size::new(v, v)
+    }
     // One spring per dimension, matching Compose's `IntSize.VectorConverter`: both axes reach
     // their targets instead of sharing one displacement along the diagonal.
-    fn supports_spring() -> bool { true }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -356,10 +487,16 @@ impl crate::animation::AnimatableValue for Rect {
             self.bottom + (to.bottom - self.bottom) * t,
         )
     }
-    fn to_f32(&self) -> f32 { self.width() }
-    fn from_f32(v: f32) -> Rect { Rect::new(0.0, 0.0, v, v) }
+    fn to_f32(&self) -> f32 {
+        self.width()
+    }
+    fn from_f32(v: f32) -> Rect {
+        Rect::new(0.0, 0.0, v, v)
+    }
     // Compose's `Rect.VectorConverter`: four components, one spring each.
-    fn supports_spring() -> bool { true }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -383,10 +520,16 @@ impl crate::animation::AnimatableValue for IntOffset {
             (fy + (to.y as f32 - fy) * t).round() as i32,
         )
     }
-    fn to_f32(&self) -> f32 { self.x as f32 }
-    fn from_f32(v: f32) -> IntOffset { IntOffset::new(v.round() as i32, v.round() as i32) }
+    fn to_f32(&self) -> f32 {
+        self.x as f32
+    }
+    fn from_f32(v: f32) -> IntOffset {
+        IntOffset::new(v.round() as i32, v.round() as i32)
+    }
     // Compose's `IntOffset.VectorConverter`: two components, rounded on the way back.
-    fn supports_spring() -> bool { true }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -408,9 +551,15 @@ impl crate::animation::AnimatableValue for IntSize {
             (fh + (to.height as f32 - fh) * t).round() as i32,
         )
     }
-    fn to_f32(&self) -> f32 { self.width as f32 }
-    fn from_f32(v: f32) -> IntSize { IntSize::new(v.round() as i32, v.round() as i32) }
-    fn supports_spring() -> bool { true }
+    fn to_f32(&self) -> f32 {
+        self.width as f32
+    }
+    fn from_f32(v: f32) -> IntSize {
+        IntSize::new(v.round() as i32, v.round() as i32)
+    }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -431,9 +580,15 @@ impl crate::animation::AnimatableValue for DpOffset {
             Dp(self.y.0 + (to.y.0 - self.y.0) * t),
         )
     }
-    fn to_f32(&self) -> f32 { self.x.0 }
-    fn from_f32(v: f32) -> DpOffset { DpOffset::new(Dp(v), Dp(v)) }
-    fn supports_spring() -> bool { true }
+    fn to_f32(&self) -> f32 {
+        self.x.0
+    }
+    fn from_f32(v: f32) -> DpOffset {
+        DpOffset::new(Dp(v), Dp(v))
+    }
+    fn supports_spring() -> bool {
+        true
+    }
     fn write_components(
         &self,
         out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
@@ -457,13 +612,19 @@ pub trait DpExt {
 }
 
 impl DpExt for f32 {
-    fn dp(self) -> Dp { Dp(self) }
+    fn dp(self) -> Dp {
+        Dp(self)
+    }
 }
 impl DpExt for i32 {
-    fn dp(self) -> Dp { Dp(self as f32) }
+    fn dp(self) -> Dp {
+        Dp(self as f32)
+    }
 }
 impl DpExt for u32 {
-    fn dp(self) -> Dp { Dp(self as f32) }
+    fn dp(self) -> Dp {
+        Dp(self as f32)
+    }
 }
 
 /// A number as `Sp` (`14.sp()`, Compose's `14.sp`).
@@ -472,13 +633,19 @@ pub trait SpExt {
 }
 
 impl SpExt for f32 {
-    fn sp(self) -> Sp { Sp(self) }
+    fn sp(self) -> Sp {
+        Sp(self)
+    }
 }
 impl SpExt for i32 {
-    fn sp(self) -> Sp { Sp(self as f32) }
+    fn sp(self) -> Sp {
+        Sp(self as f32)
+    }
 }
 impl SpExt for u32 {
-    fn sp(self) -> Sp { Sp(self as f32) }
+    fn sp(self) -> Sp {
+        Sp(self as f32)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -502,13 +669,19 @@ pub trait PxExt {
 }
 
 impl PxExt for f32 {
-    fn px(self) -> Px { Px(self) }
+    fn px(self) -> Px {
+        Px(self)
+    }
 }
 impl PxExt for i32 {
-    fn px(self) -> Px { Px(self as f32) }
+    fn px(self) -> Px {
+        Px(self as f32)
+    }
 }
 impl PxExt for u32 {
-    fn px(self) -> Px { Px(self as f32) }
+    fn px(self) -> Px {
+        Px(self as f32)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -556,17 +729,25 @@ impl TextUnit {
 impl Default for TextUnit {
     /// Zero `sp` — the neutral value a style means when it says nothing (Compose uses
     /// `TextUnit.Unspecified`, which would need a third state in every comparison).
-    fn default() -> Self { TextUnit::Sp(Sp(0.0)) }
+    fn default() -> Self {
+        TextUnit::Sp(Sp(0.0))
+    }
 }
 
 impl From<f32> for TextUnit {
-    fn from(v: f32) -> Self { TextUnit::Sp(Sp(v)) }
+    fn from(v: f32) -> Self {
+        TextUnit::Sp(Sp(v))
+    }
 }
 impl From<Sp> for TextUnit {
-    fn from(s: Sp) -> Self { TextUnit::Sp(s) }
+    fn from(s: Sp) -> Self {
+        TextUnit::Sp(s)
+    }
 }
 impl From<Px> for TextUnit {
-    fn from(p: Px) -> Self { TextUnit::Px(p) }
+    fn from(p: Px) -> Self {
+        TextUnit::Px(p)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -596,7 +777,10 @@ mod tests {
     fn font_scale_multiplies_sp_only() {
         let plain = Density::from_density(2.0);
         let scaled = Density::from_density_and_font_scale(2.0, 1.5);
-        assert_eq!(plain.font_scale, 1.0, "from_density leaves the text scale alone");
+        assert_eq!(
+            plain.font_scale, 1.0,
+            "from_density leaves the text scale alone"
+        );
         assert_eq!(TextUnit::Sp(Sp(10.0)).to_logical_px(plain), 10.0);
         assert_eq!(TextUnit::Sp(Sp(10.0)).to_logical_px(scaled), 15.0);
         assert_eq!(Dp(10.0).to_px(scaled), 20.0, "a dp ignores the text scale");
@@ -720,7 +904,9 @@ mod tests {
     }
 
     fn scan_dir(dir: &std::path::Path, offenders: &mut Vec<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -734,7 +920,9 @@ mod tests {
             if !is_rust || is_this_file {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             for (i, line) in text.lines().enumerate() {
                 // Comments are skipped: the doc comments that explain this trap quote the
                 // wrong call on purpose.

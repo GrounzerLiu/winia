@@ -1,6 +1,6 @@
-use super::*;
 use super::decorator::wrap_entry;
-use super::key::{next_nav_host_id, DRAINING_SCOPE, RESULT_EVENT_BUS_SCOPE};
+use super::key::{DRAINING_SCOPE, RESULT_EVENT_BUS_SCOPE, next_nav_host_id};
+use super::*;
 
 // ═══════════════════════════════════════════════════════════
 // NavTransition — 导航滑动过渡（对标 Nav3 transitionSpec 的 push/pop 动画）
@@ -134,7 +134,10 @@ impl NavTransitionSpec {
 
     /// 自定义缓动曲线（对标 animationSpec.easing——动画系统内置插值器任意选：
     /// `EaseInOutCubic`/`EaseOutCubic`/`EaseInCubic`/`Linear`/`EaseOutBack` 等）
-    pub fn easing(mut self, f: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>) -> Self {
+    pub fn easing(
+        mut self,
+        f: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
+    ) -> Self {
         self.interpolator = f;
         self
     }
@@ -146,12 +149,20 @@ impl NavTransitionSpec {
     pub fn horizontal_slide() -> (Self, Self) {
         (
             Self::new(
-                NavEnter::SlideIn { initial_offset_x: SlideOffset::Fraction(1.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fraction(-0.3) },
+                NavEnter::SlideIn {
+                    initial_offset_x: SlideOffset::Fraction(1.0),
+                },
+                NavExit::SlideAndFadeOut {
+                    target_offset_x: SlideOffset::Fraction(-0.3),
+                },
             ),
             Self::new(
-                NavEnter::SlideIn { initial_offset_x: SlideOffset::Fraction(-0.3) },
-                NavExit::SlideOut { target_offset_x: SlideOffset::Fraction(1.0) },
+                NavEnter::SlideIn {
+                    initial_offset_x: SlideOffset::Fraction(-0.3),
+                },
+                NavExit::SlideOut {
+                    target_offset_x: SlideOffset::Fraction(1.0),
+                },
             ),
         )
     }
@@ -160,12 +171,20 @@ impl NavTransitionSpec {
     pub fn shared_axis() -> (Self, Self) {
         (
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(-30.0) },
+                NavEnter::SlideAndFadeIn {
+                    initial_offset_x: SlideOffset::Fixed(30.0),
+                },
+                NavExit::SlideAndFadeOut {
+                    target_offset_x: SlideOffset::Fixed(-30.0),
+                },
             ),
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(-30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(30.0) },
+                NavEnter::SlideAndFadeIn {
+                    initial_offset_x: SlideOffset::Fixed(-30.0),
+                },
+                NavExit::SlideAndFadeOut {
+                    target_offset_x: SlideOffset::Fixed(30.0),
+                },
             ),
         )
     }
@@ -364,7 +383,11 @@ impl<K: NavKey> NavTransition<K> {
         let host_id = self.host_id;
         // 过渡规格：优先用启动时固化的快照；无进行中过渡时用当前配置
         // （此时 previous 为 None，所有公式在 active 门下归位，取值无效果）
-        let spec = self.active_spec.peek().clone().unwrap_or_else(|| spec.clone());
+        let spec = self
+            .active_spec
+            .peek()
+            .clone()
+            .unwrap_or_else(|| spec.clone());
         let prev = self.previous.peek();
         let forward = self.forward.peek();
         // 过渡进行中 = previous 非空——cur 层位移以此为门：静置（启动/无过渡）
@@ -392,59 +415,61 @@ impl<K: NavKey> NavTransition<K> {
                 .fill_max_size()
                 .scene_tag(layer_scene_id)
                 .graphics_layer(move || {
-                let p = progress.peek();
-                let w = width.peek().max(1.0);
-                let mut params = GraphicsLayerParams::default();
-                if is_prev {
-                    // 退出原语（对标 ExitTransition）
-                    match spec.exit {
-                        NavExit::None => {}
-                        NavExit::FadeOut => params.alpha = p,
-                        NavExit::SlideOut { target_offset_x } => {
-                            params.translation_x = target_offset_x.resolve(w) * (1.0 - p);
+                    let p = progress.peek();
+                    let w = width.peek().max(1.0);
+                    let mut params = GraphicsLayerParams::default();
+                    if is_prev {
+                        // 退出原语（对标 ExitTransition）
+                        match spec.exit {
+                            NavExit::None => {}
+                            NavExit::FadeOut => params.alpha = p,
+                            NavExit::SlideOut { target_offset_x } => {
+                                params.translation_x = target_offset_x.resolve(w) * (1.0 - p);
+                            }
+                            NavExit::SlideAndFadeOut { target_offset_x } => {
+                                params.translation_x = target_offset_x.resolve(w) * (1.0 - p);
+                                params.alpha = p;
+                            }
+                            NavExit::ScaleOut { target_scale } => {
+                                // p=1（过渡起点）scale=1.0 → p=0（终点）scale=target
+                                params.scale_x = 1.0 + (target_scale - 1.0) * (1.0 - p);
+                                params.scale_y = 1.0 + (target_scale - 1.0) * (1.0 - p);
+                            }
                         }
-                        NavExit::SlideAndFadeOut { target_offset_x } => {
-                            params.translation_x = target_offset_x.resolve(w) * (1.0 - p);
-                            params.alpha = p;
-                        }
-                        NavExit::ScaleOut { target_scale } => {
-                            // p=1（过渡起点）scale=1.0 → p=0（终点）scale=target
-                            params.scale_x = 1.0 + (target_scale - 1.0) * (1.0 - p);
-                            params.scale_y = 1.0 + (target_scale - 1.0) * (1.0 - p);
+                    } else {
+                        // 进入原语（对标 EnterTransition）——以 active 为门：
+                        // 无过渡静置时 progress 静置值语义无效，必须归位
+                        match spec.enter {
+                            NavEnter::None => {}
+                            NavEnter::FadeIn => {
+                                if active {
+                                    params.alpha = 1.0 - p;
+                                }
+                            }
+                            NavEnter::SlideIn { initial_offset_x } => {
+                                if active {
+                                    params.translation_x = initial_offset_x.resolve(w) * p;
+                                }
+                            }
+                            NavEnter::SlideAndFadeIn { initial_offset_x } => {
+                                if active {
+                                    params.translation_x = initial_offset_x.resolve(w) * p;
+                                    params.alpha = 1.0 - p;
+                                }
+                            }
+                            NavEnter::ScaleIn { initial_scale } => {
+                                if active {
+                                    // p=1（起点）scale=initial → p=0（终点）scale=1.0
+                                    params.scale_x =
+                                        initial_scale + (1.0 - initial_scale) * (1.0 - p);
+                                    params.scale_y =
+                                        initial_scale + (1.0 - initial_scale) * (1.0 - p);
+                                }
+                            }
                         }
                     }
-                } else {
-                    // 进入原语（对标 EnterTransition）——以 active 为门：
-                    // 无过渡静置时 progress 静置值语义无效，必须归位
-                    match spec.enter {
-                        NavEnter::None => {}
-                        NavEnter::FadeIn => {
-                            if active {
-                                params.alpha = 1.0 - p;
-                            }
-                        }
-                        NavEnter::SlideIn { initial_offset_x } => {
-                            if active {
-                                params.translation_x = initial_offset_x.resolve(w) * p;
-                            }
-                        }
-                        NavEnter::SlideAndFadeIn { initial_offset_x } => {
-                            if active {
-                                params.translation_x = initial_offset_x.resolve(w) * p;
-                                params.alpha = 1.0 - p;
-                            }
-                        }
-                        NavEnter::ScaleIn { initial_scale } => {
-                            if active {
-                                // p=1（起点）scale=initial → p=0（终点）scale=1.0
-                                params.scale_x = initial_scale + (1.0 - initial_scale) * (1.0 - p);
-                                params.scale_y = initial_scale + (1.0 - initial_scale) * (1.0 - p);
-                            }
-                        }
-                    }
-                }
-                params
-            });
+                    params
+                });
             crate::layout::components::Column::new()
                 .modifier(m)
                 .build(ctx, |ctx| {
@@ -486,9 +511,10 @@ impl<K: NavKey> NavTransition<K> {
                                 is_prev: layer_is_prev,
                             },
                             || {
-                                let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
-                                    render_entry(ctx, e, draining || is_prev);
-                                };
+                                let layer_render =
+                                    |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
+                                        render_entry(ctx, e, draining || is_prev);
+                                    };
                                 scene.content(ctx, &layer_render);
                             },
                         );
@@ -538,10 +564,14 @@ impl<K: NavKey> NavTransition<K> {
                 // 从不安插这种层。
                 let displaces = matches!(
                     self.active_spec.peek().as_ref().unwrap_or(&spec).exit,
-                    NavExit::SlideOut { .. } | NavExit::SlideAndFadeOut { .. } | NavExit::ScaleOut { .. }
+                    NavExit::SlideOut { .. }
+                        | NavExit::SlideAndFadeOut { .. }
+                        | NavExit::ScaleOut { .. }
                 ) || matches!(
                     self.active_spec.peek().as_ref().unwrap_or(&spec).enter,
-                    NavEnter::SlideIn { .. } | NavEnter::SlideAndFadeIn { .. } | NavEnter::ScaleIn { .. }
+                    NavEnter::SlideIn { .. }
+                        | NavEnter::SlideAndFadeIn { .. }
+                        | NavEnter::ScaleIn { .. }
                 );
                 if active && displaces {
                     crate::layout::components::Column::new()
@@ -551,7 +581,6 @@ impl<K: NavKey> NavTransition<K> {
             });
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Scene / SceneStrategy — 多 entry 渲染（对标 Nav3 的 Scene/SceneStrategy，
@@ -586,7 +615,9 @@ pub trait Scene<K: NavKey>: 'static {
     /// metadata**；过渡覆盖优先级：过渡中 NavEntry.metadata > Scene.metadata >
     /// NavDisplay 默认）。自定义场景可覆盖以提供场景级过渡/装饰信息。
     fn metadata(&self) -> &NavMetadata {
-        self.entries().last().map(|e| e.metadata_ref())
+        self.entries()
+            .last()
+            .map(|e| e.metadata_ref())
             .unwrap_or_else(|| empty_nav_metadata())
     }
 
@@ -611,7 +642,6 @@ fn empty_nav_metadata() -> &'static NavMetadata {
     &EMPTY
 }
 
-
 /// 单栏场景（对标 Nav3 `SinglePaneScene`）——渲染栈顶 entry
 struct SinglePaneScene<K: NavKey> {
     entries: Vec<NavEntry<K>>,
@@ -619,7 +649,10 @@ struct SinglePaneScene<K: NavKey> {
 
 impl<K: NavKey> Scene<K> for SinglePaneScene<K> {
     fn scene_key(&self) -> u64 {
-        fnv_hash(&(SINGLE_PANE_SCENE_TAG, self.entries.last().map(|e| e.content_key())))
+        fnv_hash(&(
+            SINGLE_PANE_SCENE_TAG,
+            self.entries.last().map(|e| e.content_key()),
+        ))
     }
 
     fn entries(&self) -> &[NavEntry<K>] {
@@ -726,7 +759,9 @@ pub(crate) fn calculate_scene<K: NavKey>(
             return scene;
         }
     }
-    Box::new(SinglePaneScene { entries: entries.to_vec() })
+    Box::new(SinglePaneScene {
+        entries: entries.to_vec(),
+    })
 }
 
 /// SinglePane 策略——渲染栈顶（对标 Nav3 `SinglePaneSceneStrategy`；
@@ -735,7 +770,9 @@ pub struct SinglePaneStrategy;
 
 impl<K: NavKey> SceneStrategy<K> for SinglePaneStrategy {
     fn calculate_scene(&self, entries: &[NavEntry<K>]) -> Option<Box<dyn Scene<K>>> {
-        Some(Box::new(SinglePaneScene { entries: entries.to_vec() }))
+        Some(Box::new(SinglePaneScene {
+            entries: entries.to_vec(),
+        }))
     }
 }
 
@@ -756,7 +793,10 @@ impl<K: NavKey> SceneStrategy<K> for ListDetailStrategy {
             // list = 倒数第二、detail = 栈顶——**只取末两位**（栈更深时右栏跟随
             // 栈顶变化；场景不持有的 entry 由下层场景渲染）
             Some(Box::new(ListDetailScene {
-                entries: vec![entries[entries.len() - 2].clone(), entries[entries.len() - 1].clone()],
+                entries: vec![
+                    entries[entries.len() - 2].clone(),
+                    entries[entries.len() - 1].clone(),
+                ],
             }))
         } else {
             None
@@ -798,7 +838,9 @@ pub(super) fn is_pop<K: NavKey>(old: &[K], new: &[K]) -> bool {
 /// 切换（entries 未变）判定用
 fn same_entry_ids<K: NavKey>(a: &[NavEntry<K>], b: &[NavEntry<K>]) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b.iter()).all(|(x, y)| x.content_key() == y.content_key())
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.content_key() == y.content_key())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -905,7 +947,10 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
     /// 设置 scene 装饰策略链（对标 Nav3 `sceneDecoratorStrategies`——依次包装
     /// 计算出的 scene；**对话框场景豁免**——overlay 独立动画不参与装饰）。
     /// 后加入的在外层（先加入的先被包装）。
-    pub fn scene_decorator_strategies(mut self, strategies: Vec<Box<dyn SceneDecoratorStrategy<K>>>) -> Self {
+    pub fn scene_decorator_strategies(
+        mut self,
+        strategies: Vec<Box<dyn SceneDecoratorStrategy<K>>>,
+    ) -> Self {
         self.scene_decorator_strategies = strategies;
         self
     }
@@ -932,8 +977,9 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         let stack = self.back_stack.stack();
         // entry 状态池（跨帧稳定——NavDisplay 的 remember；Arc<Mutex> 内部可变，
         // 不依赖组合槽——对标 Nav3 SaveableStateHolder 的外部状态池）
-        let entry_pool: State<std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>> =
-            ctx.remember(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())));
+        let entry_pool: State<
+            std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>,
+        > = ctx.remember(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())));
         let entry_pool = entry_pool.get();
         // 结果总线（跨帧稳定——对标 Nav3 rememberResultEventBus；每个 NavDisplay
         // 实例一个总线，entry 内容经 RESULT_EVENT_BUS_SCOPE 读取）
@@ -942,8 +988,10 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         // 为整栈构建 entries（对标 Nav3 rememberDecoratedNavEntries——全量构建，
         // route 元信息映射需要非渲染位 entry 的 contentKey/过渡覆盖；导航栈短，
         // 代价可接受。⚠ entry_provider 应为纯函数：同 key → 同 contentKey/覆盖）
-        let entries: Vec<NavEntry<K>> =
-            stack.iter().map(|k| (self.entry_provider)(ctx, k)).collect();
+        let entries: Vec<NavEntry<K>> = stack
+            .iter()
+            .map(|k| (self.entry_provider)(ctx, k))
+            .collect();
         // route hash → entry 元信息映射（跨帧 remember——被移除 key 不在当前
         // entries 里：on_pop 的 contentKey、pop 方向的过渡覆盖均取上一帧映射）
         let route_meta = ctx.remember_backchannel(|| HashMap::new());
@@ -1020,83 +1068,92 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             scene.into()
         });
         if let Some(scene) = &scene {
-        // 导航过渡状态机（跨帧 remember——scene key 维度）
-        let transition = NavTransition::init(ctx, scene.scene_key());
-        // 方向：isPop 列表差分（对标 NavDisplay.isPop）
-        let forward = !is_pop(&prev, &stack);
-        // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
-        // "transitioning NavEntry.metadata > NavDisplay defaults"——前景 =
-        // push 新场景末位 entry / pop 被弹出的旧条目；旧条目覆盖取上一帧映射）
-        let spec = if forward {
-            scene
-                .entries()
-                .last()
-                .and_then(|e| e.transition_spec_override())
-                .unwrap_or(self.transition_spec)
-        } else {
-            let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
-            popped
-                .and_then(|m| m.pop_transition_spec.clone())
-                .unwrap_or(self.pop_transition_spec)
-        };
-        // 上一帧渲染的场景对象（退场层来源）——读取须在 last_scene 更新前
-        let last_scene = ctx.remember_backchannel(|| None);
-        let prev_frame = last_scene.peek().clone().unwrap_or_else(|| {
-            // 首帧无上一帧场景——用当前场景兜底（首帧 key 必相同，不会触发过渡）
-            SceneHolder { key: scene.scene_key(), scene: std::sync::Arc::clone(&scene) }
-        });
-        let scene_holder = SceneHolder { key: scene.scene_key(), scene: std::sync::Arc::clone(&scene) };
-        // 检测导航变化并启动过渡
-        transition.detect(&scene_holder, forward, &spec, Some(prev_frame));
-        // 渲染双场景过渡（Stack 层叠：旧场景退出 + 新场景进入）
-        // 状态作用域：过渡期两场景的 entries 都提供（滑出层只读——draining）
-        let decorators = &self.entry_decorators;
-        let entry_pool = entry_pool.clone();
-        let result_bus = result_bus.clone();
-        let render_entry = |ctx: &mut ComposeCtx, entry: &NavEntry<K>, draining: bool| {
-            let counter = ctx.remember_backchannel(|| 0u32);
-            counter.set(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
-            let scope = EntryStateScope {
-                pool: entry_pool.clone(),
-                key: entry.content_key(),
-                counter,
-                draining,
+            // 导航过渡状态机（跨帧 remember——scene key 维度）
+            let transition = NavTransition::init(ctx, scene.scene_key());
+            // 方向：isPop 列表差分（对标 NavDisplay.isPop）
+            let forward = !is_pop(&prev, &stack);
+            // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
+            // "transitioning NavEntry.metadata > NavDisplay defaults"——前景 =
+            // push 新场景末位 entry / pop 被弹出的旧条目；旧条目覆盖取上一帧映射）
+            let spec = if forward {
+                scene
+                    .entries()
+                    .last()
+                    .and_then(|e| e.transition_spec_override())
+                    .unwrap_or(self.transition_spec)
+            } else {
+                let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
+                popped
+                    .and_then(|m| m.pop_transition_spec.clone())
+                    .unwrap_or(self.pop_transition_spec)
             };
-            // CompositionLocal provides——PopGuard 自动弹栈（panic/嵌套安全）。
-            // draining 内容**裸渲染**：跳过 ctx.key（同 contentKey 已在别处渲染时
-            // 会 dup-key）且状态池只读（draining 作用域——remember_entry_state
-            // miss 不入池），对标 Nav3 contentKey 去重 + movableContent 语义
-            ENTRY_STATE_SCOPE.provides(scope, || {
-                // 结果总线作用域（对标 Nav3 ResultEventBusNavEntryDecorator 的
-                // LocalResultEventBus provides——entry 内容经 result_event_bus() 读取）
-                RESULT_EVENT_BUS_SCOPE.provides(result_bus.clone(), || {
-                    // draining 标记作用域（entry 内容经 nav_is_draining() 查询——
-                    // 一次性副作用跳过退场帧）
-                    DRAINING_SCOPE.provides(draining, || {
-                        if draining {
-                            entry.build(ctx);
-                        } else {
-                            wrap_entry(ctx, entry, decorators);
-                        }
+            // 上一帧渲染的场景对象（退场层来源）——读取须在 last_scene 更新前
+            let last_scene = ctx.remember_backchannel(|| None);
+            let prev_frame = last_scene.peek().clone().unwrap_or_else(|| {
+                // 首帧无上一帧场景——用当前场景兜底（首帧 key 必相同，不会触发过渡）
+                SceneHolder {
+                    key: scene.scene_key(),
+                    scene: std::sync::Arc::clone(&scene),
+                }
+            });
+            let scene_holder = SceneHolder {
+                key: scene.scene_key(),
+                scene: std::sync::Arc::clone(&scene),
+            };
+            // 检测导航变化并启动过渡
+            transition.detect(&scene_holder, forward, &spec, Some(prev_frame));
+            // 渲染双场景过渡（Stack 层叠：旧场景退出 + 新场景进入）
+            // 状态作用域：过渡期两场景的 entries 都提供（滑出层只读——draining）
+            let decorators = &self.entry_decorators;
+            let entry_pool = entry_pool.clone();
+            let result_bus = result_bus.clone();
+            let render_entry = |ctx: &mut ComposeCtx, entry: &NavEntry<K>, draining: bool| {
+                let counter = ctx.remember_backchannel(|| 0u32);
+                counter.set(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
+                let scope = EntryStateScope {
+                    pool: entry_pool.clone(),
+                    key: entry.content_key(),
+                    counter,
+                    draining,
+                };
+                // CompositionLocal provides——PopGuard 自动弹栈（panic/嵌套安全）。
+                // draining 内容**裸渲染**：跳过 ctx.key（同 contentKey 已在别处渲染时
+                // 会 dup-key）且状态池只读（draining 作用域——remember_entry_state
+                // miss 不入池），对标 Nav3 contentKey 去重 + movableContent 语义
+                ENTRY_STATE_SCOPE.provides(scope, || {
+                    // 结果总线作用域（对标 Nav3 ResultEventBusNavEntryDecorator 的
+                    // LocalResultEventBus provides——entry 内容经 result_event_bus() 读取）
+                    RESULT_EVENT_BUS_SCOPE.provides(result_bus.clone(), || {
+                        // draining 标记作用域（entry 内容经 nav_is_draining() 查询——
+                        // 一次性副作用跳过退场帧）
+                        DRAINING_SCOPE.provides(draining, || {
+                            if draining {
+                                entry.build(ctx);
+                            } else {
+                                wrap_entry(ctx, entry, decorators);
+                            }
+                        });
                     });
                 });
+            };
+            // 场景 key 驱动渲染语句的组合身份（keyed_stmt）：策略/场景切换时
+            // scene key 变化 → 渲染语句组换新 → 强制 Enter（否则语句组 params
+            // 比较看不见策略变化 → Skip 重放旧子树）。内部 ctx.key(scene_key)
+            // 同理作用于场景内容子树
+            ctx.key(scene_holder.key, |ctx| {
+                transition.render(
+                    ctx,
+                    transition
+                        .previous_scene()
+                        .as_ref()
+                        .map(|h| h.scene.as_ref()),
+                    scene.as_ref(),
+                    &render_entry,
+                    &spec,
+                );
             });
-        };
-        // 场景 key 驱动渲染语句的组合身份（keyed_stmt）：策略/场景切换时
-        // scene key 变化 → 渲染语句组换新 → 强制 Enter（否则语句组 params
-        // 比较看不见策略变化 → Skip 重放旧子树）。内部 ctx.key(scene_key)
-        // 同理作用于场景内容子树
-        ctx.key(scene_holder.key, |ctx| {
-            transition.render(
-                ctx,
-                transition.previous_scene().as_ref().map(|h| h.scene.as_ref()),
-                scene.as_ref(),
-                &render_entry,
-                &spec,
-            );
-        });
-        // Record this frame's scene (next frame's exit source).
-        last_scene.set(Some(scene_holder));
+            // Record this frame's scene (next frame's exit source).
+            last_scene.set(Some(scene_holder));
         }
         // dialog 覆盖层：栈顶 dialog entry 注册为模态覆盖层（渲染于主树之上，
         // 主树不渲染其内容；dismiss = 弹栈）。winia overlay v1 单层限制 →
@@ -1108,14 +1165,17 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         // 注册方 Skip → sync 视为"无记录保留" → 关闭的对话框残留。
         // 但仅当栈顶 dialog 存在时有内容可渲染——visible=false 时 build 不渲染
         let dialog_visible = dialog_len > 0;
-        let dialog_top = (dialog_len > 0).then(|| dialog_entries.last().cloned()).flatten();
+        let dialog_top = (dialog_len > 0)
+            .then(|| dialog_entries.last().cloned())
+            .flatten();
         let bs = self.back_stack.clone();
         let pool = entry_pool.clone();
         // 栈顶 dialog 的 key——dismiss 回调幂等防护用（直接 key 相等比较——
         // K: PartialEq + Eq；不用 hash：避免 FNV 碰撞击穿防护误弹下层 entry）
         let dialog_key = dialog_top.as_ref().map(|t| t.key.clone());
         // 对话框属性（对标 Nav3 dialog(dialogProperties)——dismiss_on_click_outside）
-        let dialog_dismiss_outside = dialog_top.as_ref()
+        let dialog_dismiss_outside = dialog_top
+            .as_ref()
             .and_then(|t| t.dialog_properties())
             .map(|p| p.dismiss_on_click_outside)
             .unwrap_or(true);

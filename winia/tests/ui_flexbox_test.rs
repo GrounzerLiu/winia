@@ -111,10 +111,13 @@ fn flexbox_lays_out_both_axes() {
         app.find_tag("fb-align-2-on").is_some() && app.find_tag("fb-align-0-on").is_none()
     });
     app.click_tag("fb-lines-2-off");
-    app.expect_eventually("the Between lines segment becomes the selected one", |app| {
-        app.refresh();
-        app.find_tag("fb-lines-2-on").is_some()
-    });
+    app.expect_eventually(
+        "the Between lines segment becomes the selected one",
+        |app| {
+            app.refresh();
+            app.find_tag("fb-lines-2-on").is_some()
+        },
+    );
 
     // Item animation: the switch turns the marker on (it is off by default), and the item list is what
     // the springs animate. The ghost itself is pinned by the unit tests; here the geometry shows the
@@ -139,7 +142,11 @@ fn flexbox_lays_out_both_axes() {
     // The list is what the springs animate; the slot geometry depends on the justification the earlier
     // steps left behind, so only the list itself is asserted here (the spring's origin is pinned by
     // layout::flexbox's own test).
-    assert_eq!(tile_count(&mut app), 5, "removing takes one item out of the list");
+    assert_eq!(
+        tile_count(&mut app),
+        5,
+        "removing takes one item out of the list"
+    );
     assert!(
         app.find_tag("fb-tile-1").is_some(),
         "the remaining items keep their identity"
@@ -147,7 +154,10 @@ fn flexbox_lays_out_both_axes() {
     app.click_tag("fb-add");
     app.expect_eventually("adding appends a tile", |app| {
         app.refresh();
-        (0..16u32).filter(|id| app.find_tag(&format!("fb-tile-{id}")).is_some()).count() == 6
+        (0..16u32)
+            .filter(|id| app.find_tag(&format!("fb-tile-{id}")).is_some())
+            .count()
+            == 6
     });
 
     // grow shares the FREE space: the strip holds a grow-2 tile, a grow-1 tile and a fixed 60 dp one,

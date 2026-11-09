@@ -1,28 +1,30 @@
-use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::movable::MovableContent;
-use crate::runtime::state::State;
-use crate::layout::{Arrangement, Constraints, LayoutDirection, MeasurePolicy};
-use crate::layout::node::{measure_node, Placement};
-use crate::unit::{Offset, Size};
-use crate::modifier::Modifier;
-use crate::graphics::{Color, Shape};
-use crate::components::navigation_bar::NavigationItemIconPosition;
-use crate::components::short_navigation_bar::{ShortNavigationBar, ShortNavigationBarArrangement, ShortNavigationBarItem};
-use crate::theme::WiniaTheme;
-use crate::layout::components::{Column, Row, Stack};
-use crate::layout::Alignment;
 use crate::components::navigation_bar::NAVIGATION_BAR_HEIGHT;
+use crate::components::navigation_bar::NavigationItemIconPosition;
+use crate::components::navigation_drawer::{DrawerSheet, NavigationDrawerItem};
 use crate::components::navigation_rail::{
     NavigationRail, NavigationRailItem, WideNavigationRail, WideNavigationRailItem,
     WideNavigationRailState,
 };
-use crate::components::navigation_drawer::{DrawerSheet, NavigationDrawerItem};
+use crate::components::short_navigation_bar::{
+    ShortNavigationBar, ShortNavigationBarArrangement, ShortNavigationBarItem,
+};
+use crate::composable;
+use crate::graphics::{Color, Shape};
+use crate::layout::Alignment;
+use crate::layout::components::{Column, Row, Stack};
+use crate::layout::node::{Placement, measure_node};
+use crate::layout::{Arrangement, Constraints, LayoutDirection, MeasurePolicy};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::movable::MovableContent;
+use crate::runtime::state::State;
+use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 use super::types::{
-    navigation_suite_type, NavigationSuiteColors, NavigationSuiteDefaults, NavigationSuiteItem,
-    NavigationSuiteItems, NavigationSuiteScaffoldState, NavigationSuiteType,
+    NavigationSuiteColors, NavigationSuiteDefaults, NavigationSuiteItem, NavigationSuiteItems,
+    NavigationSuiteScaffoldState, NavigationSuiteType, navigation_suite_type,
 };
 
 /// 自适应导航套件脚手架：items + content，按窗口尺寸类选择导航形态。
@@ -195,13 +197,21 @@ impl NavigationSuiteScaffold {
         let bar_item_colors = item_colors.short_navigation_bar;
         let rail_item_colors = item_colors.wide_navigation_rail;
         let content_color = self.content_color.unwrap_or(theme.on_background);
-        let bar_container = self.container_color.unwrap_or(suite_colors.short_navigation_bar_container);
-        let rail_container = self.container_color.unwrap_or(suite_colors.wide_navigation_rail_container);
+        let bar_container = self
+            .container_color
+            .unwrap_or(suite_colors.short_navigation_bar_container);
+        let rail_container = self
+            .container_color
+            .unwrap_or(suite_colors.wide_navigation_rail_container);
         // HIDDEN keeps the SHAPE and only animates the navigation away — upstream's model, where
         // `animationProgress` goes to 0 and the layout type never changes (`NavigationSuiteScaffold
         // Layout`, `:411-475`). The content takes the freed space and the primary action rides the
         // same animation: in a bar layout it ends up 16dp from the bottom edge rather than vanishing.
-        let hidden = self.state.as_ref().map(|s| !s.is_visible()).unwrap_or(false);
+        let hidden = self
+            .state
+            .as_ref()
+            .map(|s| !s.is_visible())
+            .unwrap_or(false);
         let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
         ctx.changed(&hidden);
         let content = self.content;
@@ -243,7 +253,11 @@ impl NavigationSuiteScaffold {
         // 检测帧 target 仍为 1.0（peek==target 不推送动画）→ is_animating=false
         // → 自驱帧链断裂，morph 冻结到下一个外部事件才走一帧（表现为卡顿）
         let progress = ctx.animate_float_as_state(
-            if hidden || phase.get() == SuitePhase::Collapsing { 0.0 } else { 1.0 },
+            if hidden || phase.get() == SuitePhase::Collapsing {
+                0.0
+            } else {
+                1.0
+            },
             crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                 std::time::Duration::from_millis(220),
                 crate::animation::interpolator::Linear::new(),
@@ -280,7 +294,8 @@ impl NavigationSuiteScaffold {
         // Enter the actual shape hosts so the latest payloads reach their stored child scopes. Merely
         // staging a Backchannel would leave a clean bar/rail wrapper displaying the previous closure.
         ctx.mark_subtree_dirty();
-        let mut handles: Vec<(MovableContent, MovableContent)> = Vec::with_capacity(self.items.len());
+        let mut handles: Vec<(MovableContent, MovableContent)> =
+            Vec::with_capacity(self.items.len());
         for index in 0..self.items.len() {
             let icon_source = payloads.clone();
             let icon = ctx.remember_movable_content(move |ctx| {
@@ -296,7 +311,11 @@ impl NavigationSuiteScaffold {
             // rail needs, which is what the rail branch used to pass inline.
             let label = ctx.remember_movable_content(move |ctx| {
                 ctx.key(("suite-item-label", index), |ctx| {
-                    match label_source.get().get(index).and_then(|item| item.label.clone()) {
+                    match label_source
+                        .get()
+                        .get(index)
+                        .and_then(|item| item.label.clone())
+                    {
                         Some(label) => label(ctx),
                         None => {
                             crate::components::Text::new("").build(ctx);
@@ -343,9 +362,13 @@ impl NavigationSuiteScaffold {
             // (`NavigationSuite.kt:632-683`). No morph: upstream switches these with a plain `when`, and
             // the classic rail and drawer carry their own animation.
             NavigationSuiteType::NavigationRail => {
-
                 Row::new()
-                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .fill_max_height()
+                            .then(self.modifier),
+                    )
                     .build(ctx, |ctx| {
                         build_classic_rail_shape(
                             ctx,
@@ -360,7 +383,12 @@ impl NavigationSuiteScaffold {
             }
             NavigationSuiteType::NavigationDrawer => {
                 Row::new()
-                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .fill_max_height()
+                            .then(self.modifier),
+                    )
                     .build(ctx, |ctx| {
                         build_drawer_shape(
                             ctx,
@@ -374,9 +402,15 @@ impl NavigationSuiteScaffold {
             }
             NavigationSuiteType::None => {
                 let k = ctx.next_key();
-                match ctx.start_restartable_group(k, content_modifier, crate::layout::BoxLayout::new()) {
+                match ctx.start_restartable_group(
+                    k,
+                    content_modifier,
+                    crate::layout::BoxLayout::new(),
+                ) {
                     GroupStatus::Skip => {}
-                    GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
+                    GroupStatus::Enter => {
+                        WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx))
+                    }
                 }
                 ctx.end_restartable_group();
             }
@@ -405,7 +439,12 @@ impl NavigationSuiteScaffold {
                 };
                 // A Stack even without a primary action: it is what floats one above the bar.
                 Stack::new()
-                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .fill_max_height()
+                            .then(self.modifier),
+                    )
                     // A child that does not fill lands at the END, which is where the primary action
                     // goes; the Column below fills, so the alignment does not move it.
                     .alignment(match primary_action_alignment {
@@ -414,102 +453,126 @@ impl NavigationSuiteScaffold {
                         _ => Alignment::End,
                     })
                     .build(ctx, |ctx| {
-                Column::new()
-                    .modifier(Modifier::new().fill_max_width().fill_max_height())
-                    .build(ctx, |ctx| {
-                        let k = ctx.next_key();
-                        match ctx.start_restartable_group(k, content_modifier.layout_weight(1.0), crate::layout::BoxLayout::new()) {
-                            GroupStatus::Skip => {}
-                            GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
-                        }
-                        ctx.end_restartable_group();
-                        let mk = ctx.next_key();
-                        // morph 包裹（bar：高度轴）。clip 常驻——收拢期裁剪溢出内容，
-                        // scale=1 时裁剪到全界无视觉差异（避免 modifier 翻转导致
-                        // 槽位重进 → FnOnce items 重复消费）
-                        let morph_modifier = if self.transition {
-                            Modifier::new().clip(Shape::Rectangle)
-                        } else {
-                            Modifier::new()
-                        };
-                        let morph = SuiteMorphPolicy { progress: progress.clone(), axis: MorphAxis::Height };
-                        match ctx.start_restartable_group(mk, morph_modifier, morph) {
-                            GroupStatus::Skip => {}
-                            GroupStatus::Enter => {
-                                build_bar_shape(
-                                    ctx,
-                                    items_for_shape.clone(),
-                                    arrangement,
-                                    icon_position,
-                                    bar_container,
-                                    bar_item_colors,
-                                );
-                            }
-                        }
-                        ctx.end_restartable_group();
-                    });
-                // `primaryActionContent`: `NavigationSuiteScaffoldLayout` places it at
-                // `layoutHeight - h - PrimaryActionContentPadding(16) - navigationHeight`, with the
-                // horizontal alignment picking the x (`:440-470`).
-                if let Some(primary_action) = primary_action {
-                    // The insets are PADDING, not a policy that reports the whole box: the hit test
-                    // tests a node's CONTENT box, so a full-box layer above the content swallowed
-                    // every click in the layout (measured: the bar's items and the content's button
-                    // both stopped responding). With the insets as padding the node's content box is
-                    // exactly the action's own rect, and clicking it still works.
-                    let anim = progress.clone();
-                    // The insets are an OFFSET, never padding. Padding grows the node, and hit testing
-                    // walks NODE rects (`content_box()` IS `measured_size`), so a padded container
-                    // reached down over the bar and swallowed the part of the last item to its right
-                    // (reported on the demo: `Profile` right of the action was dead). An offset leaves
-                    // the node exactly the action's own rect, so only the action is hittable.
-                    // The alignment ITSELF mirrors (`Alignment::Start` is the left edge in LTR and the
-                    // right one in RTL, `layout/node.rs`'s `anchor`), but `absolute_offset` does NOT —
-                    // that is what the modifier documents. So the inset's sign follows the mirrored
-                    // side, not the caller's word: without the flip an RTL `End` action was pushed
-                    // another 16dp off the left edge instead of being inset from it.
-                    // `Stretch` is not a horizontal placement for a floating child, so it takes the
-                    // trailing edge like `End` rather than falling through to a sign nobody chose.
-                    let x = match (primary_action_alignment, rtl) {
-                        (Alignment::Center, _) => 0.0,
-                        (Alignment::Start, false) | (Alignment::End, true) => PRIMARY_ACTION_PADDING,
-                        (Alignment::End, false) | (Alignment::Start, true) => -PRIMARY_ACTION_PADDING,
-                        _ => -PRIMARY_ACTION_PADDING,
-                    };
-                    Stack::new()
-                        .modifier(
-                            Modifier::new()
-                                .absolute_offset(
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_width().fill_max_height())
+                            .build(ctx, |ctx| {
+                                let k = ctx.next_key();
+                                match ctx.start_restartable_group(
+                                    k,
+                                    content_modifier.layout_weight(1.0),
+                                    crate::layout::BoxLayout::new(),
+                                ) {
+                                    GroupStatus::Skip => {}
+                                    GroupStatus::Enter => {
+                                        WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                                            content(ctx)
+                                        })
+                                    }
+                                }
+                                ctx.end_restartable_group();
+                                let mk = ctx.next_key();
+                                // morph 包裹（bar：高度轴）。clip 常驻——收拢期裁剪溢出内容，
+                                // scale=1 时裁剪到全界无视觉差异（避免 modifier 翻转导致
+                                // 槽位重进 → FnOnce items 重复消费）
+                                let morph_modifier = if self.transition {
+                                    Modifier::new().clip(Shape::Rectangle)
+                                } else {
+                                    Modifier::new()
+                                };
+                                let morph = SuiteMorphPolicy {
+                                    progress: progress.clone(),
+                                    axis: MorphAxis::Height,
+                                };
+                                match ctx.start_restartable_group(mk, morph_modifier, morph) {
+                                    GroupStatus::Skip => {}
+                                    GroupStatus::Enter => {
+                                        build_bar_shape(
+                                            ctx,
+                                            items_for_shape.clone(),
+                                            arrangement,
+                                            icon_position,
+                                            bar_container,
+                                            bar_item_colors,
+                                        );
+                                    }
+                                }
+                                ctx.end_restartable_group();
+                            });
+                        // `primaryActionContent`: `NavigationSuiteScaffoldLayout` places it at
+                        // `layoutHeight - h - PrimaryActionContentPadding(16) - navigationHeight`, with the
+                        // horizontal alignment picking the x (`:440-470`).
+                        if let Some(primary_action) = primary_action {
+                            // The insets are PADDING, not a policy that reports the whole box: the hit test
+                            // tests a node's CONTENT box, so a full-box layer above the content swallowed
+                            // every click in the layout (measured: the bar's items and the content's button
+                            // both stopped responding). With the insets as padding the node's content box is
+                            // exactly the action's own rect, and clicking it still works.
+                            let anim = progress.clone();
+                            // The insets are an OFFSET, never padding. Padding grows the node, and hit testing
+                            // walks NODE rects (`content_box()` IS `measured_size`), so a padded container
+                            // reached down over the bar and swallowed the part of the last item to its right
+                            // (reported on the demo: `Profile` right of the action was dead). An offset leaves
+                            // the node exactly the action's own rect, so only the action is hittable.
+                            // The alignment ITSELF mirrors (`Alignment::Start` is the left edge in LTR and the
+                            // right one in RTL, `layout/node.rs`'s `anchor`), but `absolute_offset` does NOT —
+                            // that is what the modifier documents. So the inset's sign follows the mirrored
+                            // side, not the caller's word: without the flip an RTL `End` action was pushed
+                            // another 16dp off the left edge instead of being inset from it.
+                            // `Stretch` is not a horizontal placement for a floating child, so it takes the
+                            // trailing edge like `End` rather than falling through to a sign nobody chose.
+                            let x = match (primary_action_alignment, rtl) {
+                                (Alignment::Center, _) => 0.0,
+                                (Alignment::Start, false) | (Alignment::End, true) => {
+                                    PRIMARY_ACTION_PADDING
+                                }
+                                (Alignment::End, false) | (Alignment::Start, true) => {
+                                    -PRIMARY_ACTION_PADDING
+                                }
+                                _ => -PRIMARY_ACTION_PADDING,
+                            };
+                            Stack::new()
+                                .modifier(Modifier::new().absolute_offset(
                                     x,
-                                // The action RIDES the navigation's animation — upstream places it at
-                                // `layoutHeight - h - 16 - navigationHeight * animationProgress`
-                                // (`:461-468`), so as the bar slides away it comes down to 16dp from the
-                                // bottom edge and goes back up with the bar.
+                                    // The action RIDES the navigation's animation — upstream places it at
+                                    // `layoutHeight - h - 16 - navigationHeight * animationProgress`
+                                    // (`:461-468`), so as the bar slides away it comes down to 16dp from the
+                                    // bottom edge and goes back up with the bar.
                                     crate::layout::Dimension::Dynamic(Arc::new(move || {
                                         -(PRIMARY_ACTION_PADDING
                                             + NAVIGATION_BAR_HEIGHT * anim.get().clamp(0.0, 1.0))
                                     })),
-                                ),
-                        )
-                        .build(ctx, primary_action);
-                }
+                                ))
+                                .build(ctx, primary_action);
+                        }
                     });
             }
             // 宽轨形态：Row { rail, content(fill) }
-            NavigationSuiteType::WideNavigationRailCollapsed | NavigationSuiteType::WideNavigationRailExpanded => {
+            NavigationSuiteType::WideNavigationRailCollapsed
+            | NavigationSuiteType::WideNavigationRailExpanded => {
                 let expanded = suite_type == NavigationSuiteType::WideNavigationRailExpanded;
                 let rail_state = WideNavigationRailState::new(ctx);
-                if expanded { rail_state.expand(); } else { rail_state.collapse(); }
+                if expanded {
+                    rail_state.expand();
+                } else {
+                    rail_state.collapse();
+                }
                 // The item morph progress, on the same token the rail's own items use
                 // (`material3/NavigationRail.kt:271`: `FastSpatial` = 0.9 / 1400). It drives the item
                 // shape while the container runs `DefaultSpatial`, exactly as Compose's wide rail
                 // splits them (`WideNavigationRail.kt:230`).
                 let rail_item_progress = ctx.animate_float_as_state(
                     if expanded { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
+                    crate::animation::AnimationSpec::Spring(
+                        crate::animation::SpringSpec::spatial_fast(),
+                    ),
                 );
                 Row::new()
-                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .fill_max_height()
+                            .then(self.modifier),
+                    )
                     .build(ctx, |ctx| {
                         // morph 包裹（rail：宽度轴）——clip 常驻理由同 bar 分支
                         let mk = ctx.next_key();
@@ -518,7 +581,10 @@ impl NavigationSuiteScaffold {
                         } else {
                             Modifier::new()
                         };
-                        let morph = SuiteMorphPolicy { progress: progress.clone(), axis: MorphAxis::Width };
+                        let morph = SuiteMorphPolicy {
+                            progress: progress.clone(),
+                            axis: MorphAxis::Width,
+                        };
                         match ctx.start_restartable_group(mk, morph_modifier, morph) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
@@ -537,9 +603,17 @@ impl NavigationSuiteScaffold {
                         }
                         ctx.end_restartable_group();
                         let k = ctx.next_key();
-                        match ctx.start_restartable_group(k, content_modifier, crate::layout::BoxLayout::new()) {
+                        match ctx.start_restartable_group(
+                            k,
+                            content_modifier,
+                            crate::layout::BoxLayout::new(),
+                        ) {
                             GroupStatus::Skip => {}
-                            GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
+                            GroupStatus::Enter => {
+                                WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                                    content(ctx)
+                                })
+                            }
                         }
                         ctx.end_restartable_group();
                     });
@@ -566,7 +640,6 @@ fn form_kind(t: NavigationSuiteType) -> u8 {
 /// `PrimaryActionContentPadding` (`NavigationSuiteScaffoldLayout.kt:1591`).
 pub(super) const PRIMARY_ACTION_PADDING: f32 = 16.0;
 
-
 /// morph 容器：子项按全尺寸松约束测量、原点放置，容器报告按 progress 缩放
 /// 的尺寸——溢出内容由节点 clip 裁剪。progress 读取注册 layout_deps——
 /// 过渡帧只重测不重组。
@@ -590,9 +663,22 @@ impl MeasurePolicy for SuiteMorphPolicy {
         if let Some(&child) = children.first() {
             let loose = Constraints::new(0.0, c.max_width, 0.0, c.max_height);
             let (size, _) = measure_node(nodes, policies, child, loose);
-            let sw = size.width * if self.axis == MorphAxis::Width { p } else { 1.0 };
-            let sh = size.height * if self.axis == MorphAxis::Height { p } else { 1.0 };
-            placements.push(Placement { size, position: Offset::new(0.0, 0.0) });
+            let sw = size.width
+                * if self.axis == MorphAxis::Width {
+                    p
+                } else {
+                    1.0
+                };
+            let sh = size.height
+                * if self.axis == MorphAxis::Height {
+                    p
+                } else {
+                    1.0
+                };
+            placements.push(Placement {
+                size,
+                position: Offset::new(0.0, 0.0),
+            });
             out = Size::new(sw.min(c.max_width), sh.min(c.max_height));
         }
         (out, placements)
@@ -723,14 +809,18 @@ pub(super) fn build_rail_shape(
                     crate::components::Text::new("").build(ctx);
                 })
             });
-            let b = WideNavigationRailItem::new(item.selected, move |ctx| icon(ctx), move |ctx| label(ctx))
-                .colors(item_colors)
-                .progress(progress.clone())
-                .on_click(move || {
-                    if let Some(cb) = item.on_click.as_ref() {
-                        cb()
-                    }
-                });
+            let b = WideNavigationRailItem::new(
+                item.selected,
+                move |ctx| icon(ctx),
+                move |ctx| label(ctx),
+            )
+            .colors(item_colors)
+            .progress(progress.clone())
+            .on_click(move || {
+                if let Some(cb) = item.on_click.as_ref() {
+                    cb()
+                }
+            });
             b.build(ctx);
         }
     })
@@ -785,4 +875,3 @@ fn render_bar_item(
     }
     b.build(ctx);
 }
-

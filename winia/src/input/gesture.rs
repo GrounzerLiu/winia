@@ -137,7 +137,12 @@ pub(crate) struct PendingTap {
 }
 
 impl PendingTap {
-    pub(crate) fn new(slot_key: u64, node_id: u64, pos: (f32, f32), overlay_id: Option<u64>) -> Self {
+    pub(crate) fn new(
+        slot_key: u64,
+        node_id: u64,
+        pos: (f32, f32),
+        overlay_id: Option<u64>,
+    ) -> Self {
         Self {
             slot_key,
             node_id,
@@ -176,7 +181,12 @@ pub(crate) fn pending_tap_on_down(
 }
 
 impl GestureTracker {
-    pub(crate) fn new(node_id: u64, pos: (f32, f32), has_drag: bool, last_tap: Option<(Instant, (f32, f32))>) -> Self {
+    pub(crate) fn new(
+        node_id: u64,
+        pos: (f32, f32),
+        has_drag: bool,
+        last_tap: Option<(Instant, (f32, f32))>,
+    ) -> Self {
         Self {
             node_id,
             down_pos: pos,
@@ -272,7 +282,8 @@ impl GestureTracker {
             let dt = Instant::now().duration_since(lt).as_millis();
             let dx = self.down_pos.0 - lp.0;
             let dy = self.down_pos.1 - lp.1;
-            if dt < DOUBLE_TAP_TIMEOUT_MS && dx * dx + dy * dy <= DOUBLE_TAP_SLOP * DOUBLE_TAP_SLOP {
+            if dt < DOUBLE_TAP_TIMEOUT_MS && dx * dx + dy * dy <= DOUBLE_TAP_SLOP * DOUBLE_TAP_SLOP
+            {
                 // Double tap hit — clear the record (a third tap starts counting afresh).
                 self.last_tap_time = None;
                 self.last_tap_pos = None;
@@ -310,7 +321,12 @@ impl GestureTracker {
     /// A tracker that believes the press started at `down_time` — the clock the deadline arithmetic
     /// reads. Test-only: production creates trackers at the real press moment.
     #[cfg(test)]
-    pub(crate) fn with_down_time(node_id: u64, pos: (f32, f32), has_drag: bool, down_time: Instant) -> Self {
+    pub(crate) fn with_down_time(
+        node_id: u64,
+        pos: (f32, f32),
+        has_drag: bool,
+        down_time: Instant,
+    ) -> Self {
         let mut tracker = Self::new(node_id, pos, has_drag, None);
         tracker.down_time = down_time;
         tracker
@@ -346,7 +362,11 @@ mod tests {
         // Moving less than the slop still counts as a tap.
         let mut t = tracker(false);
         assert_eq!(t.on_move((14.0, 12.0), true), GestureAction::None);
-        assert_eq!(t.on_up(), GestureAction::Tap((10.0, 10.0)), "moving inside the slop is still a tap");
+        assert_eq!(
+            t.on_up(),
+            GestureAction::Tap((10.0, 10.0)),
+            "moving inside the slop is still a tap"
+        );
     }
 
     #[test]
@@ -354,7 +374,11 @@ mod tests {
         // Moving past the slop without a drag callback → the tap is cancelled.
         let mut t = tracker(false);
         assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::None);
-        assert_eq!(t.on_up(), GestureAction::None, "a tap that moves past the slop is cancelled");
+        assert_eq!(
+            t.on_up(),
+            GestureAction::None,
+            "a tap that moves past the slop is cancelled"
+        );
     }
 
     #[test]
@@ -363,7 +387,10 @@ mod tests {
         // Below the slop: no action.
         assert_eq!(t.on_move((15.0, 10.0), true), GestureAction::None);
         // Past the slop: DragStart (first time).
-        assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::DragStart((30.0, 10.0)));
+        assert_eq!(
+            t.on_move((30.0, 10.0), true),
+            GestureAction::DragStart((30.0, 10.0))
+        );
         // Afterwards: DragMove(pos, delta).
         assert_eq!(
             t.on_move((50.0, 20.0), true),
@@ -401,7 +428,10 @@ mod tests {
         assert_eq!(t.node_id, 7);
         assert_eq!(t.pos, (3.0, 4.0));
         assert_eq!(t.overlay_id, None, "a main-tree tap carries no overlay id");
-        assert!(t.deadline > std::time::Instant::now(), "the deadline lies beyond the double-tap window");
+        assert!(
+            t.deadline > std::time::Instant::now(),
+            "the deadline lies beyond the double-tap window"
+        );
     }
 
     #[test]
@@ -409,17 +439,45 @@ mod tests {
         use std::time::{Duration, Instant};
         let now = Instant::now();
         // Already timed out → send it late.
-        let expired = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now - Duration::from_millis(1) };
-        assert_eq!(pending_tap_on_down(&expired, now, 7), PendingTapAction::Fire);
-        assert_eq!(pending_tap_on_down(&expired, now, 99), PendingTapAction::Fire, "a timeout does not depend on which node is pressed");
+        let expired = PendingTap {
+            slot_key: 1,
+            node_id: 7,
+            pos: (0.0, 0.0),
+            overlay_id: None,
+            deadline: now - Duration::from_millis(1),
+        };
+        assert_eq!(
+            pending_tap_on_down(&expired, now, 7),
+            PendingTapAction::Fire
+        );
+        assert_eq!(
+            pending_tap_on_down(&expired, now, 99),
+            PendingTapAction::Fire,
+            "a timeout does not depend on which node is pressed"
+        );
         // A second press on the same node inside the window → cancel.
-        let live = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: Some(3), deadline: now + Duration::from_millis(100) };
+        let live = PendingTap {
+            slot_key: 1,
+            node_id: 7,
+            pos: (0.0, 0.0),
+            overlay_id: Some(3),
+            deadline: now + Duration::from_millis(100),
+        };
         assert_eq!(pending_tap_on_down(&live, now, 7), PendingTapAction::Cancel);
         // A press on another node inside the window → keep (neither sent early nor cancelled).
         assert_eq!(pending_tap_on_down(&live, now, 99), PendingTapAction::Keep);
         // Boundary: deadline == now → treated as timed out and sent late.
-        let boundary = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now };
-        assert_eq!(pending_tap_on_down(&boundary, now, 7), PendingTapAction::Fire);
+        let boundary = PendingTap {
+            slot_key: 1,
+            node_id: 7,
+            pos: (0.0, 0.0),
+            overlay_id: None,
+            deadline: now,
+        };
+        assert_eq!(
+            pending_tap_on_down(&boundary, now, 7),
+            PendingTapAction::Fire
+        );
     }
 
     #[test]
@@ -428,7 +486,11 @@ mod tests {
         t1.on_up();
         // Position difference above 50: not a double tap.
         let mut t2 = GestureTracker::new(1, (80.0, 10.0), false, t1.tap_context());
-        assert_eq!(t2.on_up(), GestureAction::Tap((80.0, 10.0)), "too far apart to be a double tap");
+        assert_eq!(
+            t2.on_up(),
+            GestureAction::Tap((80.0, 10.0)),
+            "too far apart to be a double tap"
+        );
     }
 
     #[test]
@@ -451,15 +513,27 @@ mod tests {
         let start = Instant::now();
         let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
         let deadline = start + LONG_PRESS_TIMEOUT;
-        assert_eq!(t.long_press_deadline(), Some(deadline), "the deadline is the press + the timeout");
+        assert_eq!(
+            t.long_press_deadline(),
+            Some(deadline),
+            "the deadline is the press + the timeout"
+        );
 
-        assert_eq!(t.poll_long_press(start + LONG_PRESS_TIMEOUT / 2), None, "not yet");
+        assert_eq!(
+            t.poll_long_press(start + LONG_PRESS_TIMEOUT / 2),
+            None,
+            "not yet"
+        );
         assert_eq!(
             t.poll_long_press(deadline),
             Some(GestureAction::LongPress((10.0, 10.0))),
             "at the deadline, with the finger still down"
         );
-        assert_eq!(t.poll_long_press(deadline + LONG_PRESS_TIMEOUT), None, "and only once");
+        assert_eq!(
+            t.poll_long_press(deadline + LONG_PRESS_TIMEOUT),
+            None,
+            "and only once"
+        );
     }
 
     #[test]
@@ -479,7 +553,11 @@ mod tests {
         let start = Instant::now();
         let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
         t.on_move((40.0, 10.0), true);
-        assert_eq!(t.long_press_deadline(), None, "a moving finger is not a hold");
+        assert_eq!(
+            t.long_press_deadline(),
+            None,
+            "a moving finger is not a hold"
+        );
         assert_eq!(t.poll_long_press(start + LONG_PRESS_TIMEOUT * 2), None);
     }
 
@@ -498,9 +576,18 @@ mod tests {
         // must not silently swallow the press. It fires here, once.
         let start = Instant::now();
         let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
-        std::thread::sleep(std::time::Duration::from_millis(LONG_PRESS_TIMEOUT_MS as u64 + 20));
-        assert_eq!(t.on_up(), GestureAction::LongPress((10.0, 10.0)), "the hold still counts");
-        assert!(t.long_press_fired, "and it is recorded, so nothing fires again");
+        std::thread::sleep(std::time::Duration::from_millis(
+            LONG_PRESS_TIMEOUT_MS as u64 + 20,
+        ));
+        assert_eq!(
+            t.on_up(),
+            GestureAction::LongPress((10.0, 10.0)),
+            "the hold still counts"
+        );
+        assert!(
+            t.long_press_fired,
+            "and it is recorded, so nothing fires again"
+        );
     }
 
     #[test]
@@ -536,7 +623,10 @@ mod tests {
         // there — a drag that was merely held back is not cancelled.
         let mut t = tracker(true);
         t.on_move((17.0, 15.0), false);
-        assert_eq!(t.on_move((30.0, 15.0), true), GestureAction::DragStart((30.0, 15.0)));
+        assert_eq!(
+            t.on_move((30.0, 15.0), true),
+            GestureAction::DragStart((30.0, 15.0))
+        );
         assert_eq!(
             t.on_move((40.0, 15.0), true),
             GestureAction::DragMove((40.0, 15.0), (10.0, 0.0))

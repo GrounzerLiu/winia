@@ -4,8 +4,8 @@
 //! window's compose pass must not consume another's pending close request, and the only object that
 //! can keep them apart is the one that runs the pass. `app/window.rs` sets and reads it.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Per-Composer lifecycle state for declarative Window nodes.
 ///

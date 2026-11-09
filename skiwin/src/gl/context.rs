@@ -72,15 +72,23 @@ impl GlRenderContext {
             .make_current(&surface)
             .map_err(|e| SkiwinError::OpenGl(format!("making the context current: {e}")))?;
 
-        let skia_interface = gl::Interface::new_load_with_cstr(|name| display.get_proc_address(name))
-            .ok_or_else(|| SkiwinError::OpenGl("Skia could not load the GL interface".into()))?;
+        let skia_interface =
+            gl::Interface::new_load_with_cstr(|name| display.get_proc_address(name)).ok_or_else(
+                || SkiwinError::OpenGl("Skia could not load the GL interface".into()),
+            )?;
 
         let skia_ctx = direct_contexts::make_gl(skia_interface, None)
             .ok_or_else(|| SkiwinError::OpenGl("Skia could not create a GL context".into()))?;
 
-        let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
+        let _ =
+            surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
 
-        Ok(GlRenderer::new(window, surface, context, Arc::new(Mutex::new(skia_ctx))))
+        Ok(GlRenderer::new(
+            window,
+            surface,
+            context,
+            Arc::new(Mutex::new(skia_ctx)),
+        ))
     }
 
     fn init_display(
@@ -149,8 +157,11 @@ impl GlRenderContext {
             .window_handle()
             .map(|h| h.as_raw())
             .map_err(|e| SkiwinError::OpenGl(format!("no window handle: {e}")))?;
-        let surface_attrs =
-            SurfaceAttributesBuilder::<WindowSurface>::new().build(raw_window_handle, width, height);
+        let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            raw_window_handle,
+            width,
+            height,
+        );
 
         unsafe { display.create_window_surface(config, &surface_attrs) }
             .map_err(|e| SkiwinError::OpenGl(format!("creating the window surface: {e}")))

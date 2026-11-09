@@ -2,28 +2,30 @@ use super::*;
 
 #[test]
 fn flight_measure_frame_reaches_the_parent_layout() {
-    use crate::unit::Size;
     use crate::transition::{FlightMeasure, FlightMeasureFrame};
+    use crate::unit::Size;
     let _g = lock_serial();
     let frame_state = State::new(FlightMeasureFrame::IDLE);
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-            Column::new()
-                .modifier(
-                    Modifier::new()
-                        .size(120.0, 60.0)
-                        .background(Color::RED, Shape::rounded(8.0)),
-                )
-                .build(ctx, |ctx| {
-                    let key = ctx.next_key();
-                    ctx.start_leaf(key, Modifier::new().fill_max_width().height(20.0));
-                    ctx.end_node();
-                });
-            let key = ctx.next_key();
-            ctx.start_leaf(key, Modifier::new().size(40.0, 10.0));
-            ctx.end_node();
-        });
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .size(120.0, 60.0)
+                            .background(Color::RED, Shape::rounded(8.0)),
+                    )
+                    .build(ctx, |ctx| {
+                        let key = ctx.next_key();
+                        ctx.start_leaf(key, Modifier::new().fill_max_width().height(20.0));
+                        ctx.end_node();
+                    });
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().size(40.0, 10.0));
+                ctx.end_node();
+            });
     });
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let root = composer.layout_root_idx().expect("root");
@@ -32,7 +34,10 @@ fn flight_measure_frame_reaches_the_parent_layout() {
         let marked = nodes[root].children[0];
         (marked, nodes[root].children[1], nodes[marked].children[0])
     };
-    assert_eq!(composer.arena_nodes()[marked].measured_size, Size::new(120.0, 60.0));
+    assert_eq!(
+        composer.arena_nodes()[marked].measured_size,
+        Size::new(120.0, 60.0)
+    );
     assert_eq!(
         composer.arena_nodes()[sibling].position.y,
         60.0,
@@ -48,7 +53,10 @@ fn flight_measure_frame_reaches_the_parent_layout() {
     let key = composer.arena_nodes()[marked].slot_key;
     composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
         frame: frame_state.clone(),
-        owner: FlightKey { cid: composer.composer_id, id: 1 },
+        owner: FlightKey {
+            cid: composer.composer_id,
+            id: 1,
+        },
     });
     frame_state.set(FlightMeasureFrame {
         content: Some(Size::new(200.0, 90.0)),
@@ -108,10 +116,30 @@ fn flight_measure_frame_reaches_the_parent_layout() {
 fn flight_layout_contract_matrix() {
     let _g = lock_serial();
     for (resize, placeholder, sibling_moves, content_follows) in [
-        (ResizeMode::scale_to_bounds(), PlaceHolderSize::JumpCut, false, false),
-        (ResizeMode::scale_to_bounds(), PlaceHolderSize::AnimatedSize, true, false),
-        (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize, false, true),
-        (ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize, true, true),
+        (
+            ResizeMode::scale_to_bounds(),
+            PlaceHolderSize::JumpCut,
+            false,
+            false,
+        ),
+        (
+            ResizeMode::scale_to_bounds(),
+            PlaceHolderSize::AnimatedSize,
+            true,
+            false,
+        ),
+        (
+            ResizeMode::RemeasureToBounds,
+            PlaceHolderSize::ContentSize,
+            false,
+            true,
+        ),
+        (
+            ResizeMode::RemeasureToBounds,
+            PlaceHolderSize::AnimatedSize,
+            true,
+            true,
+        ),
     ] {
         crate::animation::clear_all_animations();
         LAYOUT_SCENARIO_BUILDS.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -136,7 +164,11 @@ fn flight_layout_contract_matrix() {
         frame(&mut composer);
         show.set(false);
         frame(&mut composer);
-        assert_eq!(composer.shared_flights.len(), 1, "flight opened ({resize:?}/{placeholder:?})");
+        assert_eq!(
+            composer.shared_flights.len(),
+            1,
+            "flight opened ({resize:?}/{placeholder:?})"
+        );
         let builds_at_start = LAYOUT_SCENARIO_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
         assert!(builds_at_start > 0, "the counter must be live");
 
@@ -186,7 +218,11 @@ fn flight_layout_contract_matrix() {
         );
         // CONTENT BOX: always the size the content was measured at — what
         // render/clip/hit use, never the placeholder size.
-        let want_box = if content_follows { (210.0, 130.0) } else { (300.0, 200.0) };
+        let want_box = if content_follows {
+            (210.0, 130.0)
+        } else {
+            (300.0, 200.0)
+        };
         assert!(
             (content_box.width - want_box.0).abs() <= 1.0
                 && (content_box.height - want_box.1).abs() <= 1.0,
@@ -374,8 +410,7 @@ fn shared_element_re_measures_and_honours_animated_size() {
         let marked = marked_in(&composer)[0];
         let parent = nodes[marked].parent_id.expect("parent");
         let root = composer.layout_root_idx().expect("root");
-        let pidx =
-            crate::layout::node::find_node_by_id(nodes, root, parent).expect("parent index");
+        let pidx = crate::layout::node::find_node_by_id(nodes, root, parent).expect("parent index");
         let sibling = nodes[pidx]
             .children
             .iter()
@@ -445,9 +480,15 @@ fn elevated_remeasure_hit_lands_on_the_same_child_as_the_tree_walk() {
     let marked = marked_in(&composer)[0];
     let (bands, content_h) = {
         let nodes = composer.arena_nodes();
-        (nodes[marked].children.clone(), nodes[marked].content_box().height)
+        (
+            nodes[marked].children.clone(),
+            nodes[marked].content_box().height,
+        )
     };
-    assert!((content_h - 130.0).abs() <= 1.0, "content box is the animated height");
+    assert!(
+        (content_h - 130.0).abs() <= 1.0,
+        "content box is the animated height"
+    );
     // Tap inside the lerped rect. y=80 must map to the 5th 20px band: a
     // wrong mapping stays INSIDE the content box (so it is not rejected)
     // but lands on a different band — that is what makes this load-bearing.
@@ -532,7 +573,10 @@ fn tier1_default_contract_does_not_touch_the_peer_layout() {
     b.layout_dirty_keys.insert(key);
     b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let control = MEASURE_COUNT.with(|c| c.get());
-    assert!(control > 0, "control: seeding must re-measure (got {control})");
+    assert!(
+        control > 0,
+        "control: seeding must re-measure (got {control})"
+    );
     crate::animation::clear_all_animations();
 }
 

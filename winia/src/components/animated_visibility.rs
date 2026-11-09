@@ -66,15 +66,15 @@
 //!   progress a modifier would need, and winia's content applies it through its own modifier chain.
 
 use crate::animation::push_animatable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
-use crate::modifier::{Modifier};
 pub use crate::animation::visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
+use crate::unit::{Offset, Size};
 
 /// The visibility container: its content appears and disappears smoothly with the `visible` State.
 pub struct AnimatedVisibility {
@@ -272,7 +272,13 @@ impl AnimatedVisibility {
         // (`EnterExitTransition.kt:304-306`, `:529-535`, `:409-415`), so channels can run out of step —
         // `fade_in(delayed) + expand_in(spring)` fades late while the box already grows. The SIZE channel
         // is the one the container's layout reads, and it is the scope's `progress`.
-        let initial = || if vis && !self.animate_on_appear { 1.0 } else { 0.0 };
+        let initial = || {
+            if vis && !self.animate_on_appear {
+                1.0
+            } else {
+                0.0
+            }
+        };
         let size: State<f32> = ctx.remember(initial);
         let alpha: State<f32> = ctx.remember(initial);
         let slide_ch: State<f32> = ctx.remember(initial);
@@ -376,8 +382,7 @@ impl AnimatedVisibility {
         let anchor_v = ctx.remember_backchannel(|| cfg.expand_from);
         let anchor_h = ctx.remember_backchannel(|| cfg.expand_from_h);
         let settled = size.peek() <= 0.001 || size.peek() >= 0.999;
-        if settled && (anchor_v.peek() != cfg.expand_from || anchor_h.peek() != cfg.expand_from_h)
-        {
+        if settled && (anchor_v.peek() != cfg.expand_from || anchor_h.peek() != cfg.expand_from_h) {
             anchor_v.set(cfg.expand_from);
             anchor_h.set(cfg.expand_from_h);
         }
@@ -467,7 +472,10 @@ impl MeasurePolicy for VisibilityPolicy {
             let (size, _) = measure_node(nodes, policies, c, constraints);
             max_w = max_w.max(size.width);
             max_h = max_h.max(size.height);
-            placements.push(Placement { size, position: Offset::ZERO });
+            placements.push(Placement {
+                size,
+                position: Offset::ZERO,
+            });
         }
         self.content_size.set((max_w, max_h));
         let w = if self.expand_h { max_w * p } else { max_w };
@@ -503,7 +511,6 @@ impl MeasurePolicy for VisibilityPolicy {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests;

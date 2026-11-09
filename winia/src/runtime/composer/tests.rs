@@ -1,5 +1,5 @@
-use super::*;
 use super::slot_table::Slot;
+use super::*;
 
 mod core_tests {
     use super::*;
@@ -16,11 +16,12 @@ mod core_tests {
         let write = seen.clone();
         composer.compose(move |ctx| {
             let key = ctx.next_key();
-            let modifier = Modifier::new()
-                .size(50.0, 20.0)
-                .on_globally_positioned(move |position| {
-                    write.lock().unwrap().push((position.x, position.y));
-                });
+            let modifier =
+                Modifier::new()
+                    .size(50.0, 20.0)
+                    .on_globally_positioned(move |position| {
+                        write.lock().unwrap().push((position.x, position.y));
+                    });
             ctx.start_leaf(key, modifier);
             ctx.end_node();
         });
@@ -125,7 +126,8 @@ mod core_tests {
                     // (c) A direct child of the reading scope: re-entered, because a captured value
                     // cannot be compared here (this is the documented deviation).
                     let middle_key = ctx.next_key();
-                    match ctx.start_restartable_group(middle_key, Modifier::new(), BoxLayout::new()) {
+                    match ctx.start_restartable_group(middle_key, Modifier::new(), BoxLayout::new())
+                    {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             middle_runs.set(middle_runs.get() + 1);
@@ -144,7 +146,10 @@ mod core_tests {
         };
         composer.compose(build);
         layout(&mut composer);
-        assert_eq!((sibling_runs.get(), middle_runs.get(), grandchild_runs.get()), (1, 1, 1));
+        assert_eq!(
+            (sibling_runs.get(), middle_runs.get(), grandchild_runs.get()),
+            (1, 1, 1)
+        );
         composer.recompose(build);
         layout(&mut composer);
         assert_eq!(
@@ -153,9 +158,16 @@ mod core_tests {
             "an idle frame re-runs nothing"
         );
         counter.set(1);
-        assert!(composer.recompose(build), "the write must request a recomposition");
+        assert!(
+            composer.recompose(build),
+            "the write must request a recomposition"
+        );
         layout(&mut composer);
-        assert_eq!(sibling_runs.get(), 1, "a sibling of the component is untouched");
+        assert_eq!(
+            sibling_runs.get(),
+            1,
+            "a sibling of the component is untouched"
+        );
         assert_eq!(
             middle_runs.get(),
             2,
@@ -177,10 +189,21 @@ mod core_tests {
         // key = fnv(base, 序号)（mix_key 全 64 位混合）——同 base 相邻序号 key 不同
         assert_ne!(key, key2);
         // 序号混合应改变低 32 位（fnv 扩散）——不要求高 32 位相同（旧拼接语义）
-        assert_ne!(key as u32, key2 as u32, "序号应扩散到低 32 位（mix_key 全 64 位混合）");
+        assert_ne!(
+            key as u32, key2 as u32,
+            "序号应扩散到低 32 位（mix_key 全 64 位混合）"
+        );
         // mix_key 本身：不同序号 → 不同 key（跨 base 也不碰撞丢熵）
-        assert_ne!(mix_key(0x1234, 0), mix_key(0x1234, 1), "同 base 不同序号 key 不同");
-        assert_ne!(mix_key(0x1234, 0), mix_key(0x1235, 0), "不同 base 同序号 key 不同");
+        assert_ne!(
+            mix_key(0x1234, 0),
+            mix_key(0x1234, 1),
+            "同 base 不同序号 key 不同"
+        );
+        assert_ne!(
+            mix_key(0x1234, 0),
+            mix_key(0x1235, 0),
+            "不同 base 同序号 key 不同"
+        );
     }
 
     /// Phase 4.1：ScaleFactorChanged → request_recomposition → build 重跑并读到
@@ -205,7 +228,10 @@ mod core_tests {
         // 模拟 ScaleFactorChanged：request_recomposition + density 变为 1.0
         composer.request_recomposition(0);
         crate::runtime::density::with_density(crate::unit::Density::from_density(1.0), || {
-            assert!(composer.recompose(build), "request_recomposition 应驱动重组");
+            assert!(
+                composer.recompose(build),
+                "request_recomposition 应驱动重组"
+            );
         });
         assert_eq!(seen.get(), 1.0, "重组后 build 读到新 density 1.0");
         // 无 request 时 recompose 应跳过（needs_recomposition 已消费）
@@ -221,11 +247,19 @@ mod core_tests {
 
         composer_a.lifecycle.set_pending_remove(7);
         assert_eq!(composer_a.pending_window_close_id(), Some(7));
-        assert_eq!(composer_b.pending_window_close_id(), None, "window close request must stay scoped to the owning Composer");
+        assert_eq!(
+            composer_b.pending_window_close_id(),
+            None,
+            "window close request must stay scoped to the owning Composer"
+        );
 
         composer_b.lifecycle.set_pending_remove(9);
         composer_b.lifecycle.mark_rebuilt();
-        assert_eq!(composer_b.pending_window_close_id(), None, "rebuilt window should not report pending close");
+        assert_eq!(
+            composer_b.pending_window_close_id(),
+            None,
+            "rebuilt window should not report pending close"
+        );
         assert_eq!(composer_a.pending_window_close_id(), Some(7));
 
         composer_a.reset_pending_window_remove();
@@ -284,7 +318,7 @@ mod core_tests {
         });
     }
 
-use crate::layout::BoxLayout;
+    use crate::layout::BoxLayout;
 
     /// Popup 锚点：当前作用域最后一个兄弟的 slot key（无兄弟 → None）
     #[test]
@@ -308,7 +342,10 @@ use crate::layout::BoxLayout;
             ctx.end_node();
             observed.push(ctx.prev_sibling_slot_key());
         });
-        assert_eq!(observed, vec![Some(leaf1_key), Some(leaf2_key), Some(root_key)]);
+        assert_eq!(
+            observed,
+            vec![Some(leaf1_key), Some(leaf2_key), Some(root_key)]
+        );
 
         // 重组帧：上一帧有 A/B/C 三个兄弟，本帧只重组合 A 后查询——
         // 必须返回 A（而非残留的 C）——复现 Popup 锚点错位到 Dialog 按钮的 bug
@@ -327,7 +364,11 @@ use crate::layout::BoxLayout;
             ctx.end_node();
             recomposed = ctx.prev_sibling_slot_key();
         });
-        assert_eq!(recomposed, Some(a_key), "重组帧应锚到本帧刚组合的兄弟 A，而非残留的旧兄弟");
+        assert_eq!(
+            recomposed,
+            Some(a_key),
+            "重组帧应锚到本帧刚组合的兄弟 A，而非残留的旧兄弟"
+        );
     }
 
     /// 测试 restartable group 的 skip → replay 路径：
@@ -339,7 +380,11 @@ use crate::layout::BoxLayout;
         // Frame 1: 建立初始树
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // 子 1: state-dependent leaf
@@ -352,7 +397,11 @@ use crate::layout::BoxLayout;
 
                     // 子 2: clean restartable group
                     let btn_key = ctx.next_key();
-                    match ctx.start_restartable_group(btn_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        btn_key,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let content_key = ctx.next_key();
@@ -368,14 +417,34 @@ use crate::layout::BoxLayout;
 
         // 断言 Frame 1 树结构
         let root = composer.layout_root_idx().expect("root should exist");
-        assert_eq!(composer.arena_nodes()[root].children.len(), 2, "root should have 2 children");
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 0, "text should be leaf");
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[1]].children.len(), 1, "button should have 1 child (content)");
+        assert_eq!(
+            composer.arena_nodes()[root].children.len(),
+            2,
+            "root should have 2 children"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]]
+                .children
+                .len(),
+            0,
+            "text should be leaf"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[1]]
+                .children
+                .len(),
+            1,
+            "button should have 1 child (content)"
+        );
 
         // Frame 2: recompose（button 应被 skip/replay）
         composer.recompose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let text_key = ctx.next_key();
@@ -386,7 +455,11 @@ use crate::layout::BoxLayout;
                     ctx.end_node();
 
                     let btn_key = ctx.next_key();
-                    match ctx.start_restartable_group(btn_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        btn_key,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let content_key = ctx.next_key();
@@ -402,9 +475,26 @@ use crate::layout::BoxLayout;
 
         // 断言 Frame 2 树结构仍正确
         let root = composer.layout_root_idx().expect("root should exist");
-        assert_eq!(composer.arena_nodes()[root].children.len(), 2, "after recompose: root should have 2 children, got {}", composer.arena_nodes()[root].children.len());
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 0, "after recompose: text should still be leaf");
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[1]].children.len(), 1, "after recompose: button should still have 1 child");
+        assert_eq!(
+            composer.arena_nodes()[root].children.len(),
+            2,
+            "after recompose: root should have 2 children, got {}",
+            composer.arena_nodes()[root].children.len()
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]]
+                .children
+                .len(),
+            0,
+            "after recompose: text should still be leaf"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[1]]
+                .children
+                .len(),
+            1,
+            "after recompose: button should still have 1 child"
+        );
     }
 
     /// 3 层嵌套 restartable group: Column → Column → Text，验证深层 replay 正确性
@@ -415,12 +505,20 @@ use crate::layout::BoxLayout;
         // Frame 1: compose 3-level tree
         composer.compose(|ctx| {
             let key1 = ctx.next_key();
-            match ctx.start_restartable_group(key1, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                key1,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // Level 2: nested restartable group
                     let key2 = ctx.next_key();
-                    match ctx.start_restartable_group(key2, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        key2,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             // Level 3: state-dependent leaf
@@ -445,17 +543,35 @@ use crate::layout::BoxLayout;
 
         // Verify Frame 1: root → [level2 → [leaf1, leaf2]]
         let root = composer.layout_root_idx().unwrap();
-        assert_eq!(composer.arena_nodes()[root].children.len(), 1, "Frame1: root has 1 child");
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 2, "Frame1: level2 has 2 children");
+        assert_eq!(
+            composer.arena_nodes()[root].children.len(),
+            1,
+            "Frame1: root has 1 child"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]]
+                .children
+                .len(),
+            2,
+            "Frame1: level2 has 2 children"
+        );
 
         // Frame 2: recompose (level2 and leaf2 should be clean → skip/replay)
         composer.recompose(|ctx| {
             let key1 = ctx.next_key();
-            match ctx.start_restartable_group(key1, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                key1,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let key2 = ctx.next_key();
-                    match ctx.start_restartable_group(key2, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        key2,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let leaf_key = ctx.next_key();
@@ -478,8 +594,18 @@ use crate::layout::BoxLayout;
 
         // Verify Frame 2: structure should be identical
         let root = composer.layout_root_idx().unwrap();
-        assert_eq!(composer.arena_nodes()[root].children.len(), 1, "Frame2: root has 1 child");
-        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 2, "Frame2: level2 has 2 children (leaf1 + leaf2)");
+        assert_eq!(
+            composer.arena_nodes()[root].children.len(),
+            1,
+            "Frame2: root has 1 child"
+        );
+        assert_eq!(
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]]
+                .children
+                .len(),
+            2,
+            "Frame2: level2 has 2 children (leaf1 + leaf2)"
+        );
     }
 
     /// 验证 compose 时 slot 计数功能正常（增量重组的前提）
@@ -491,27 +617,44 @@ use crate::layout::BoxLayout;
         // Frame 1: 初始 compose
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get();
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                    }
                     ctx.end_node();
                 }
             }
             ctx.end_restartable_group();
         });
-        assert_eq!(composer.compose_dirty_count, 2, "initial: root + leaf both new");
+        assert_eq!(
+            composer.compose_dirty_count, 2,
+            "initial: root + leaf both new"
+        );
         assert_eq!(composer.compose_clean_count, 0, "initial: no clean slots");
 
         // Frame 2: recompose
         composer.recompose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get();
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                    }
                     ctx.end_node();
                 }
             }
@@ -527,11 +670,22 @@ use crate::layout::BoxLayout;
         // is repaired at the start of every compose from the tree, so the container can Skip here.
         // Nothing about the resulting tree changes: the skip path re-attaches the node's children from
         // the index, which is what the count below checks.
-        assert_eq!(composer.compose_clean_count, 1, "frame 2 visits the root slot only");
-        assert_eq!(composer.compose_dirty_count, 0, "…and it is clean, so the content is skipped");
-        let root = composer.layout_root_idx().expect("the tree survives the skip");
-        assert_eq!(composer.arena_nodes()[root].children.len(), 1,
-            "the skipped container's child was re-attached from the index");
+        assert_eq!(
+            composer.compose_clean_count, 1,
+            "frame 2 visits the root slot only"
+        );
+        assert_eq!(
+            composer.compose_dirty_count, 0,
+            "…and it is clean, so the content is skipped"
+        );
+        let root = composer
+            .layout_root_idx()
+            .expect("the tree survives the skip");
+        assert_eq!(
+            composer.arena_nodes()[root].children.len(),
+            1,
+            "the skipped container's child was re-attached from the index"
+        );
     }
 }
 
@@ -629,7 +783,10 @@ fn test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent() {
     });
     composer.layout(constraints);
     assert!(
-        composer.layout_deps.get(&width_id).is_some_and(|keys| keys.contains(&parent_key)),
+        composer
+            .layout_deps
+            .get(&width_id)
+            .is_some_and(|keys| keys.contains(&parent_key)),
         "the parent's dependency must survive its children going away — a dependency parked on a \
          child's slot is dropped with the child"
     );
@@ -656,7 +813,11 @@ fn test_parameter_boxes_are_recycled_across_frames() {
                 let key = ctx.next_key();
                 // One declared parameter per row, the shape a list has.
                 let _ = ctx.changed(&(tick + row as i64));
-                match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                match ctx.start_restartable_group(
+                    key,
+                    Modifier::new(),
+                    crate::layout::BoxLayout::new(),
+                ) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         let leaf = ctx.next_key();
@@ -691,7 +852,10 @@ fn test_parameter_boxes_are_recycled_across_frames() {
     param_alloc::reset();
     frame(&mut composer, 2);
     let third = param_alloc::count();
-    assert!(third <= 2, "and it keeps recycling: got {third} allocations on the third frame");
+    assert!(
+        third <= 2,
+        "and it keeps recycling: got {third} allocations on the third frame"
+    );
 }
 
 /// 阶段4 键修复验证：复用索引（slot_key → 节点）改用 slot_key 后，
@@ -704,11 +868,18 @@ fn test_is_skip_after_clean_frame() {
 
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let _ = count.get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -716,24 +887,35 @@ fn test_is_skip_after_clean_frame() {
     });
 
     // layout 一次：填充复用索引（真实流程：compose → layout → 下帧 compose）
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 100.0, 0.0, 100.0,
+    ));
 
     // 帧2：无状态变化 → root slot Clean → 索引按 slot_key 命中 → Skip
     let mut skip_happened = false;
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => skip_happened = true,
             GroupStatus::Enter => {
                 let _ = count.get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
         ctx.end_restartable_group();
     });
-    assert!(skip_happened,
-        "无变化帧的 clean group 应 Skip（复用索引按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
+    assert!(
+        skip_happened,
+        "无变化帧的 clean group 应 Skip（复用索引按 slot_key 命中）——若 Enter 说明 is_skip 键 miss"
+    );
 }
 
 /// 回归：同帧二次 compose（recompose 循环）——首次物化后 drain 了 prev_node_by_key，
@@ -746,10 +928,17 @@ fn test_same_frame_second_compose_retains_tree() {
     // 帧 1：初始 compose + layout（prev 构建）
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -763,10 +952,17 @@ fn test_same_frame_second_compose_retains_tree() {
     // Skip 无缓存 → 按 Enter 重建（dirty 重测）——不塌缩、内容正确
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -774,10 +970,17 @@ fn test_same_frame_second_compose_retains_tree() {
     });
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -787,16 +990,26 @@ fn test_same_frame_second_compose_retains_tree() {
     let root2 = composer.layout_root_idx().expect("帧2 root");
     // 树完整（root 有效 + 内容保留——降级重建不塌缩）
     let nodes = composer.arena_nodes();
-    assert!(nodes[root2].children.len() == 1, "root 仍有一个 leaf 子节点（未塌缩）");
+    assert!(
+        nodes[root2].children.len() == 1,
+        "root 仍有一个 leaf 子节点（未塌缩）"
+    );
 
     // 帧 3：prev 空（帧2 无 layout——collect 未跑）→ 降级重建（不塌缩、内容正确）
     let nodes2 = composer.arena_nodes().len();
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -804,15 +1017,25 @@ fn test_same_frame_second_compose_retains_tree() {
     });
     let nodes3 = composer.arena_nodes().len();
     let root3 = composer.layout_root_idx().expect("帧3 root");
-    assert!(composer.arena_nodes()[root3].children.len() == 1, "帧3 重建后树完整");
+    assert!(
+        composer.arena_nodes()[root3].children.len() == 1,
+        "帧3 重建后树完整"
+    );
 
     // 帧 4：帧3 已 collect → 恢复 Skip 复用（节点数不再增长）
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -833,11 +1056,18 @@ fn test_is_skip_with_scope_layer() {
     composer.compose(|ctx| {
         ctx.start_scope();
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let _ = count.get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
@@ -846,26 +1076,37 @@ fn test_is_skip_with_scope_layer() {
     });
 
     // layout 一次：填充复用索引（真实流程：compose → layout → 下帧 compose）
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 100.0, 0.0, 100.0,
+    ));
 
     // 帧2：无状态变化 → group slot Clean → 索引按 slot_key 命中 → Skip（尽管 scope 层在 slot 树中）
     let mut skip_happened = false;
     composer.compose(|ctx| {
         ctx.start_scope();
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => skip_happened = true,
             GroupStatus::Enter => {
                 let _ = count.get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
         }
         ctx.end_restartable_group();
         ctx.end_scope();
     });
-    assert!(skip_happened,
-        "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
+    assert!(
+        skip_happened,
+        "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归"
+    );
     // 自清洁：帧2 后 layout（复位依赖记录模式——take_deps 等价）
 }
 
@@ -929,10 +1170,14 @@ fn test_param_equal_skip_integration() {
             // 组件（模拟 `#[composable]`）：参数声明（start group 前）
             let _changed = ctx.changed(&title.to_string());
             let key = ctx.next_key();
-            let status = ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new());
+            let status =
+                ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new());
             *out = Some(status);
             if let GroupStatus::Enter = status {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                }
                 ctx.end_node();
             }
             ctx.end_restartable_group();
@@ -943,17 +1188,29 @@ fn test_param_equal_skip_integration() {
     compose_once(&mut composer, &title, &mut last_status);
     assert_eq!(last_status, Some(GroupStatus::Enter), "首次应 Enter");
     // layout（填充复用索引）
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 100.0, 0.0, 100.0,
+    ));
 
     // 帧2：参数未变 → Skip（参数相等 + slot clean）
     compose_once(&mut composer, &title, &mut last_status);
-    assert_eq!(last_status, Some(GroupStatus::Skip), "参数未变 + clean 应 Skip");
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    assert_eq!(
+        last_status,
+        Some(GroupStatus::Skip),
+        "参数未变 + clean 应 Skip"
+    );
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 100.0, 0.0, 100.0,
+    ));
 
     // 帧3：参数变化 → Enter（即使 slot clean）
     title = "world".to_string();
     compose_once(&mut composer, &title, &mut last_status);
-    assert_eq!(last_status, Some(GroupStatus::Enter), "参数变化应 Enter（绕过 clean-skip）");
+    assert_eq!(
+        last_status,
+        Some(GroupStatus::Enter),
+        "参数变化应 Enter（绕过 clean-skip）"
+    );
 }
 
 /// 阶段5 边界：changed 调用次数变化（上帧 2 参，本帧 1 参）→ 保守 Enter（不等）。
@@ -969,7 +1226,9 @@ fn test_changed_count_change_enters() {
         let k = ctx.next_key();
         let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
         last_status = Some(s);
-        if let GroupStatus::Enter = s { ctx.end_node(); }
+        if let GroupStatus::Enter = s {
+            ctx.end_node();
+        }
         ctx.end_restartable_group();
     });
 
@@ -979,11 +1238,16 @@ fn test_changed_count_change_enters() {
         let k = ctx.next_key();
         let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
         last_status = Some(s);
-        if let GroupStatus::Enter = s { ctx.end_node(); }
+        if let GroupStatus::Enter = s {
+            ctx.end_node();
+        }
         ctx.end_restartable_group();
     });
-    assert_eq!(last_status, Some(GroupStatus::Enter),
-        "changed 次数变化（2→1）应保守 Enter");
+    assert_eq!(
+        last_status,
+        Some(GroupStatus::Enter),
+        "changed 次数变化（2→1）应保守 Enter"
+    );
 
     // 帧3：恢复 2 参（与帧2 的 1 参比较 → 数量不等 → Enter）
     composer.compose(|ctx| {
@@ -992,10 +1256,16 @@ fn test_changed_count_change_enters() {
         let k = ctx.next_key();
         let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
         last_status = Some(s);
-        if let GroupStatus::Enter = s { ctx.end_node(); }
+        if let GroupStatus::Enter = s {
+            ctx.end_node();
+        }
         ctx.end_restartable_group();
     });
-    assert_eq!(last_status, Some(GroupStatus::Enter), "次数恢复 1→2 应保守 Enter");
+    assert_eq!(
+        last_status,
+        Some(GroupStatus::Enter),
+        "次数恢复 1→2 应保守 Enter"
+    );
 }
 
 /// 阶段5 边界：组件结构切换（参数组件 → 无参数容器）→ 保守 Enter，不错 Skip。
@@ -1010,7 +1280,9 @@ fn test_param_to_plain_switch_enters() {
         let k = ctx.next_key();
         let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
         last_status = Some(s);
-        if let GroupStatus::Enter = s { ctx.end_node(); }
+        if let GroupStatus::Enter = s {
+            ctx.end_node();
+        }
         ctx.end_restartable_group();
     });
 
@@ -1019,11 +1291,16 @@ fn test_param_to_plain_switch_enters() {
         let k = ctx.next_key();
         let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
         last_status = Some(s);
-        if let GroupStatus::Enter = s { ctx.end_node(); }
+        if let GroupStatus::Enter = s {
+            ctx.end_node();
+        }
         ctx.end_restartable_group();
     });
-    assert_eq!(last_status, Some(GroupStatus::Enter),
-        "参数组件→无参数容器切换应保守 Enter");
+    assert_eq!(
+        last_status,
+        Some(GroupStatus::Enter),
+        "参数组件→无参数容器切换应保守 Enter"
+    );
 }
 
 /// 量化：无变化帧的重组粒度——clean（可跳过/复用缓存）vs dirty（需重建）占比。
@@ -1038,17 +1315,33 @@ fn test_quantify_reuse_ratio() {
         composer.compose(|ctx| {
             ctx.start_scope();
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     for _ in 0..7 {
-                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 标题
+                        {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new());
+                            ctx.end_node();
+                        } // 标题
                         let g = ctx.next_key();
-                        match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                        match ctx.start_restartable_group(
+                            g,
+                            Modifier::new(),
+                            crate::layout::BoxLayout::new(),
+                        ) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 let _ = count.get();
-                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                                {
+                                    let k = ctx.next_key();
+                                    ctx.start_leaf(k, Modifier::new());
+                                    ctx.end_node();
+                                }
                             }
                         }
                         ctx.end_restartable_group();
@@ -1058,7 +1351,7 @@ fn test_quantify_reuse_ratio() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        };
+    };
 
     build_tree(&mut composer);
     let clean1 = composer.compose_clean_count;
@@ -1069,9 +1362,20 @@ fn test_quantify_reuse_ratio() {
     build_tree(&mut composer);
     let clean2 = composer.compose_clean_count;
     let dirty2 = composer.compose_dirty_count;
-    eprintln!("[quant] 帧2(无变化): clean={} dirty={}  → clean占比 {:.0}%",
-        clean2, dirty2, if clean2+dirty2>0 { clean2*100/(clean2+dirty2) } else { 0 });
-    assert!(clean2 >= dirty2, "无变化帧 clean 应 ≥ dirty（增量重组生效）");
+    eprintln!(
+        "[quant] 帧2(无变化): clean={} dirty={}  → clean占比 {:.0}%",
+        clean2,
+        dirty2,
+        if clean2 + dirty2 > 0 {
+            clean2 * 100 / (clean2 + dirty2)
+        } else {
+            0
+        }
+    );
+    assert!(
+        clean2 >= dirty2,
+        "无变化帧 clean 应 ≥ dirty（增量重组生效）"
+    );
 }
 
 /// 阶段D：节点复用生效验证——连续 compose+layout 多帧，arena 节点数应稳定
@@ -1085,17 +1389,33 @@ fn test_arena_reuse_stabilizes() {
         composer.compose(|ctx| {
             ctx.start_scope();
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     for _ in 0..5 {
-                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                        {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new());
+                            ctx.end_node();
+                        }
                         let g = ctx.next_key();
-                        match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                        match ctx.start_restartable_group(
+                            g,
+                            Modifier::new(),
+                            crate::layout::BoxLayout::new(),
+                        ) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 let _ = count.get();
-                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                                {
+                                    let k = ctx.next_key();
+                                    ctx.start_leaf(k, Modifier::new());
+                                    ctx.end_node();
+                                }
                             }
                         }
                         ctx.end_restartable_group();
@@ -1105,7 +1425,7 @@ fn test_arena_reuse_stabilizes() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        };
+    };
 
     build(&mut composer);
     let n1 = composer.arena.nodes.len();
@@ -1113,11 +1433,18 @@ fn test_arena_reuse_stabilizes() {
     for _ in 0..10 {
         build(&mut composer);
     }
-    eprintln!("[key-stable] 帧2 clean={} dirty={}", composer.compose_clean_count, composer.compose_dirty_count);
+    eprintln!(
+        "[key-stable] 帧2 clean={} dirty={}",
+        composer.compose_clean_count, composer.compose_dirty_count
+    );
     let n2 = composer.arena.nodes.len();
     eprintln!("[reuse-check] frame11 nodes={}", n2);
-    assert!(n2 <= n1 + 2,
-        "节点复用应使 arena 稳定：frame1={} frame11={}（无复用会持续增长）", n1, n2);
+    assert!(
+        n2 <= n1 + 2,
+        "节点复用应使 arena 稳定：frame1={} frame11={}（无复用会持续增长）",
+        n1,
+        n2
+    );
 }
 
 /// 遗留问题验证：policy 池是否每帧增长（节点复用但 policy 每帧 alloc → 内存泄漏）
@@ -1128,22 +1455,37 @@ fn test_policy_pool_growth() {
     let build = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get();
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                        ctx.end_node();
+                    }
                 }
             }
             ctx.end_restartable_group();
         });
-        };
+    };
     build(&mut composer);
     let p1 = composer.arena.policies.len();
-    for _ in 0..20 { build(&mut composer); }
+    for _ in 0..20 {
+        build(&mut composer);
+    }
     let p2 = composer.arena.policies.len();
     eprintln!("[policy-growth] frame1={} frame21={}", p1, p2);
-    assert!(p2 <= p1 + 1, "policy 池应稳定（复用 policy）——frame1={} frame21={}", p1, p2);
+    assert!(
+        p2 <= p1 + 1,
+        "policy 池应稳定（复用 policy）——frame1={} frame21={}",
+        p1,
+        p2
+    );
 }
 
 /// 回归测试（review 发现的 Blocking bug）：复用节点必须按 slot_status 设 dirty——
@@ -1160,7 +1502,11 @@ fn test_reused_node_remeasures_on_state_change() {
             let s = ctx.remember(|| 0.0f32);
             *holder.borrow_mut() = Some(s.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = s.get();
@@ -1172,7 +1518,9 @@ fn test_reused_node_remeasures_on_state_change() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
@@ -1189,8 +1537,12 @@ fn test_reused_node_remeasures_on_state_change() {
     let w1 = composer.arena_nodes()[root_idx].children[0];
     let size2 = composer.arena_nodes()[w1].measured_size.width;
     eprintln!("[remeasure] frame2 w={}", size2);
-    assert!(size2 > size1 + 10.0,
-        "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
+    assert!(
+        size2 > size1 + 10.0,
+        "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）",
+        size1,
+        size2
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1203,17 +1555,31 @@ fn test_dependency_reverse_graph_rebuilds_from_forward_reads() {
     let first = StateId::new(1);
     let second = StateId::new(2);
 
-    composer.compose_slot_reads.insert(10, HashSet::from([first, second]));
-    composer.compose_slot_reads.insert(20, HashSet::from([first]));
+    composer
+        .compose_slot_reads
+        .insert(10, HashSet::from([first, second]));
+    composer
+        .compose_slot_reads
+        .insert(20, HashSet::from([first]));
     composer.rebuild_compose_reverse_deps();
-    assert_eq!(composer.slot_deps.get(&first), Some(&HashSet::from([10, 20])));
+    assert_eq!(
+        composer.slot_deps.get(&first),
+        Some(&HashSet::from([10, 20]))
+    );
     assert_eq!(composer.slot_deps.get(&second), Some(&HashSet::from([10])));
 
-    composer.layout_slot_reads.insert(30, HashSet::from([second]));
-    composer.layout_slot_reads.insert(40, HashSet::from([first, second]));
+    composer
+        .layout_slot_reads
+        .insert(30, HashSet::from([second]));
+    composer
+        .layout_slot_reads
+        .insert(40, HashSet::from([first, second]));
     composer.rebuild_layout_reverse_deps();
     assert_eq!(composer.layout_deps.get(&first), Some(&HashSet::from([40])));
-    assert_eq!(composer.layout_deps.get(&second), Some(&HashSet::from([30, 40])));
+    assert_eq!(
+        composer.layout_deps.get(&second),
+        Some(&HashSet::from([30, 40]))
+    );
     composer.debug_assert_dependency_graphs();
 }
 
@@ -1227,7 +1593,11 @@ fn test_layout_dep_recording_split() {
         let s = ctx.remember(|| 0.0f32);
         *holder.borrow_mut() = Some(s.clone());
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let _ = s.get(); // 组合期读 → slot_deps
@@ -1238,19 +1608,28 @@ fn test_layout_dep_recording_split() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
 
     let s = holder.borrow().clone().unwrap();
     let sid = s.signal_id();
-    assert!(composer.slot_deps.contains_key(&sid),
-        "组合期 get() 应注册进 slot_deps");
-    assert!(composer.layout_deps.contains_key(&sid),
-        "布局期（SizeDynamic）get() 应注册进 layout_deps");
+    assert!(
+        composer.slot_deps.contains_key(&sid),
+        "组合期 get() 应注册进 slot_deps"
+    );
+    assert!(
+        composer.layout_deps.contains_key(&sid),
+        "布局期（SizeDynamic）get() 应注册进 layout_deps"
+    );
     // 同一 State 双通道（组合+布局）各自记录
     let keys_layout = composer.layout_deps.get(&sid).unwrap();
     assert_eq!(keys_layout.len(), 1, "layout_deps 应含叶子节点 key");
     let leaf_key = *keys_layout.iter().next().unwrap();
-    assert_eq!(composer.layout_slot_reads.get(&leaf_key).unwrap(), &std::collections::HashSet::from([sid]));
+    assert_eq!(
+        composer.layout_slot_reads.get(&leaf_key).unwrap(),
+        &std::collections::HashSet::from([sid])
+    );
 }
 
 /// A measured slot with no dynamic read must replace its previous forward reads.
@@ -1265,14 +1644,19 @@ fn test_layout_slot_reads_remove_empty_remeasure() {
             let state = ctx.remember(|| 10.0f32);
             *holder.borrow_mut() = Some(state.clone());
             let key = ctx.next_key();
-            ctx.start_leaf(key, if use_dynamic.get() {
-                Modifier::new().size(&state, 10.0)
-            } else {
-                Modifier::new().size(20.0, 10.0)
-            });
+            ctx.start_leaf(
+                key,
+                if use_dynamic.get() {
+                    Modifier::new().size(&state, 10.0)
+                } else {
+                    Modifier::new().size(20.0, 10.0)
+                },
+            );
             ctx.end_node();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
@@ -1283,13 +1667,34 @@ fn test_layout_slot_reads_remove_empty_remeasure() {
     use_dynamic.set(false);
     // The external mode switch itself is not reactive. Queue a layout-only
     // invalidation so the next layout pass really measures this slot.
-    holder.borrow().as_ref().unwrap().as_raw().set_animating(11.0);
+    holder
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .as_raw()
+        .set_animating(11.0);
     build(&mut composer);
-    assert!(!composer.layout_deps.contains_key(&state_id), "空读取重测应移除 reverse edge");
-    assert!(composer.layout_slot_reads.values().all(|reads| !reads.contains(&state_id)));
+    assert!(
+        !composer.layout_deps.contains_key(&state_id),
+        "空读取重测应移除 reverse edge"
+    );
+    assert!(
+        composer
+            .layout_slot_reads
+            .values()
+            .all(|reads| !reads.contains(&state_id))
+    );
 
-    holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
-    assert!(!composer.has_pending_states(), "移除布局读取后 State 不应继续入队");
+    holder
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .as_raw()
+        .set_animating(300.0);
+    assert!(
+        !composer.has_pending_states(),
+        "移除布局读取后 State 不应继续入队"
+    );
 }
 
 /// A cached sibling that is not remeasured must retain its forward layout reads.
@@ -1306,7 +1711,11 @@ fn test_layout_slot_reads_preserve_untouched_cached_slot() {
             *first_holder.borrow_mut() = Some(first.clone());
             *second_holder.borrow_mut() = Some(second.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let first_key = ctx.next_key();
@@ -1319,23 +1728,50 @@ fn test_layout_slot_reads_preserve_untouched_cached_slot() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
     let first_id = first_holder.borrow().as_ref().unwrap().signal_id();
     let second_id = second_holder.borrow().as_ref().unwrap().signal_id();
-    let second_key = *composer.layout_deps.get(&second_id).unwrap().iter().next().unwrap();
+    let second_key = *composer
+        .layout_deps
+        .get(&second_id)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
     let second_reads = composer.layout_slot_reads.get(&second_key).unwrap().clone();
 
     // Only the first leaf is dirty. The second leaf hits the measure cache and
     // must keep its previous forward edge instead of being treated as empty.
-    first_holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
+    first_holder
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .as_raw()
+        .set_animating(300.0);
     build(&mut composer);
 
-    assert_eq!(composer.layout_slot_reads.get(&second_key), Some(&second_reads));
-    assert!(composer.layout_deps.get(&second_id).unwrap().contains(&second_key));
-    assert!(composer.layout_deps.get(&first_id).is_some_and(|keys| !keys.is_empty()));
+    assert_eq!(
+        composer.layout_slot_reads.get(&second_key),
+        Some(&second_reads)
+    );
+    assert!(
+        composer
+            .layout_deps
+            .get(&second_id)
+            .unwrap()
+            .contains(&second_key)
+    );
+    assert!(
+        composer
+            .layout_deps
+            .get(&first_id)
+            .is_some_and(|keys| !keys.is_empty())
+    );
 }
 
 /// Removing a composed node must remove its layout forward and reverse edges.
@@ -1355,7 +1791,11 @@ fn test_layout_slot_reads_remove_removed_slot() {
             *first_holder.borrow_mut() = Some(first.clone());
             *removed_holder.borrow_mut() = Some(removed.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     if show.get() {
@@ -1370,12 +1810,20 @@ fn test_layout_slot_reads_remove_removed_slot() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
     let removed_id = removed_holder.borrow().as_ref().unwrap().signal_id();
-    let removed_key = *composer.layout_deps.get(&removed_id).unwrap().iter().next().unwrap();
+    let removed_key = *composer
+        .layout_deps
+        .get(&removed_id)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
     assert!(composer.layout_slot_reads.contains_key(&removed_key));
 
     show_holder.borrow().as_ref().unwrap().set(false);
@@ -1383,10 +1831,23 @@ fn test_layout_slot_reads_remove_removed_slot() {
 
     assert!(!composer.layout_slot_reads.contains_key(&removed_key));
     assert!(!composer.layout_deps.contains_key(&removed_id));
-    removed_holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
-    assert!(!composer.has_pending_states(), "removed layout signal must be unsubscribed");
-    assert!(composer.layout_deps.contains_key(&first_holder.borrow().as_ref().unwrap().signal_id()) == false,
-        "the branch removes both dynamic leaves");
+    removed_holder
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .as_raw()
+        .set_animating(300.0);
+    assert!(
+        !composer.has_pending_states(),
+        "removed layout signal must be unsubscribed"
+    );
+    assert!(
+        composer
+            .layout_deps
+            .contains_key(&first_holder.borrow().as_ref().unwrap().signal_id())
+            == false,
+        "the branch removes both dynamic leaves"
+    );
 }
 
 /// An empty composition clears the forward graph and all reverse subscriptions.
@@ -1400,18 +1861,28 @@ fn test_layout_slot_reads_clear_when_root_removed() {
         ctx.start_leaf(key, Modifier::new().width(&watched).height(10.0));
         ctx.end_node();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
     assert!(!composer.layout_slot_reads.is_empty());
 
     composer.compose(|_ctx| {});
     watched.as_raw().set_animating(200.0);
-    assert!(composer.has_pending_states(), "empty root test must start with a queued layout notification");
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    assert!(
+        composer.has_pending_states(),
+        "empty root test must start with a queued layout notification"
+    );
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
 
     assert!(composer.layout_slot_reads.is_empty());
     assert!(composer.layout_deps.is_empty());
     assert!(composer.layout_signal_handles.is_empty());
-    assert!(!composer.has_pending_states(), "empty root must consume stale layout notification");
+    assert!(
+        !composer.has_pending_states(),
+        "empty root must consume stale layout notification"
+    );
 }
 
 /// A panic while measuring must roll back subscriptions learned by that layout frame.
@@ -1433,40 +1904,72 @@ fn test_layout_dependency_panic_rolls_back_new_subscription() {
     });
     composer.layout(constraints);
     let stable_id = stable.signal_id();
-    let stable_key = *composer.layout_deps.get(&stable_id).unwrap().iter().next().unwrap();
+    let stable_key = *composer
+        .layout_deps
+        .get(&stable_id)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap();
 
     let panic_signal = panic_state.clone();
     let panic_flag = should_panic.clone();
     composer.compose(|ctx| {
         let key = ctx.next_key();
-        ctx.start_leaf(key, Modifier::new().width(move || {
-            let _ = panic_signal.get();
-            if panic_flag.load(AtomicOrdering::Relaxed) {
-                panic!("layout dependency panic");
-            }
-            20.0
-        }).height(10.0));
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .width(move || {
+                    let _ = panic_signal.get();
+                    if panic_flag.load(AtomicOrdering::Relaxed) {
+                        panic!("layout dependency panic");
+                    }
+                    20.0
+                })
+                .height(10.0),
+        );
         ctx.end_node();
     });
     stable.as_raw().set_animating(11.0);
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| composer.layout(constraints)));
     assert!(result.is_err());
 
-    assert!(composer.layout_deps.get(&stable_id).is_some_and(|keys| keys.contains(&stable_key)),
-        "panic must preserve the last committed layout graph");
-    assert!(!composer.layout_signal_handles.contains_key(&panic_state.signal_id()),
-        "panic-only signal handle must not survive the failed layout");
-    assert!(!composer.layout_deps.contains_key(&panic_state.signal_id()),
-        "panic-only signal must not remain subscribed");
-    assert!(composer.pending_states.pending_ids().contains(&stable_id),
-        "the consumed layout invalidation must be retained for retry");
+    assert!(
+        composer
+            .layout_deps
+            .get(&stable_id)
+            .is_some_and(|keys| keys.contains(&stable_key)),
+        "panic must preserve the last committed layout graph"
+    );
+    assert!(
+        !composer
+            .layout_signal_handles
+            .contains_key(&panic_state.signal_id()),
+        "panic-only signal handle must not survive the failed layout"
+    );
+    assert!(
+        !composer.layout_deps.contains_key(&panic_state.signal_id()),
+        "panic-only signal must not remain subscribed"
+    );
+    assert!(
+        composer.pending_states.pending_ids().contains(&stable_id),
+        "the consumed layout invalidation must be retained for retry"
+    );
     panic_state.as_raw().set_animating(21.0);
-    assert!(!composer.pending_states.pending_ids().contains(&panic_state.signal_id()),
-        "rolled-back signal must not enqueue Composer");
+    assert!(
+        !composer
+            .pending_states
+            .pending_ids()
+            .contains(&panic_state.signal_id()),
+        "rolled-back signal must not enqueue Composer"
+    );
 
     should_panic.store(false, AtomicOrdering::Relaxed);
     composer.layout(constraints);
-    assert!(!composer.has_pending_states(), "retry should consume the retained invalidation");
+    assert!(
+        !composer.has_pending_states(),
+        "retry should consume the retained invalidation"
+    );
 }
 
 /// A panic while measuring must leave the reuse index as it was.
@@ -1499,18 +2002,24 @@ fn test_layout_panic_restores_reuse_index() {
         let width_state = layout_state.clone();
         composer.compose(|ctx| {
             let key = ctx.next_key();
-            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new())
+            {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let leaf = ctx.next_key();
                     *leaf_key = leaf;
-                    ctx.start_leaf(leaf, Modifier::new().width(move || {
-                        let value = width_state.get();
-                        if flag.load(AtomicOrdering::Relaxed) {
-                            panic!("measure panic");
-                        }
-                        value
-                    }).height(10.0));
+                    ctx.start_leaf(
+                        leaf,
+                        Modifier::new()
+                            .width(move || {
+                                let value = width_state.get();
+                                if flag.load(AtomicOrdering::Relaxed) {
+                                    panic!("measure panic");
+                                }
+                                value
+                            })
+                            .height(10.0),
+                    );
                     ctx.end_node();
                 }
             }
@@ -1520,7 +2029,10 @@ fn test_layout_panic_restores_reuse_index() {
 
     build(&mut composer, &layout_state, &should_panic, &mut leaf_key);
     composer.layout(constraints);
-    assert!(composer.prev_node_by_key.contains_key(&leaf_key), "layout must index the leaf");
+    assert!(
+        composer.prev_node_by_key.contains_key(&leaf_key),
+        "layout must index the leaf"
+    );
 
     // A DIRECT layout that panics, with no compose in between: compose drains `prev_node_by_key` as it
     // claims nodes, so this is the frame shape in which the index is non-empty when layout takes it.
@@ -1530,9 +2042,14 @@ fn test_layout_panic_restores_reuse_index() {
     assert!(result.is_err(), "the measure panic must reach the caller");
 
     // The index layout took is back: the failed frame must not have consumed the previous frame's one.
-    assert!(composer.prev_node_by_key.contains_key(&leaf_key),
-        "rollback must restore the node index the failed layout took");
-    assert!(composer.arena.root.is_some(), "rollback must restore the tree");
+    assert!(
+        composer.prev_node_by_key.contains_key(&leaf_key),
+        "rollback must restore the node index the failed layout took"
+    );
+    assert!(
+        composer.arena.root.is_some(),
+        "rollback must restore the tree"
+    );
 
     // And the restored cache is USABLE: the retry lays out, and the frame after it Skips the container.
     should_panic.store(false, AtomicOrdering::Relaxed);
@@ -1546,7 +2063,10 @@ fn test_layout_panic_restores_reuse_index() {
         }
         ctx.end_restartable_group();
     });
-    assert!(skipped, "the frame after a rolled-back layout must be able to Skip from the restored cache");
+    assert!(
+        skipped,
+        "the frame after a rolled-back layout must be able to Skip from the restored cache"
+    );
 }
 
 /// T2 布局失效传播：layout_dirty_keys 命中的节点 + 祖先链全部标 layout_dirty
@@ -1559,7 +2079,11 @@ fn test_layout_dirty_propagates_to_ancestors() {
         let s = ctx.remember(|| 0.0f32);
         *holder.borrow_mut() = Some(s.clone());
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let k = ctx.next_key();
@@ -1569,7 +2093,9 @@ fn test_layout_dirty_propagates_to_ancestors() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
 
     let root_idx = composer.layout_root_idx().unwrap();
     let leaf_idx = composer.arena_nodes()[root_idx].children[0];
@@ -1595,7 +2121,11 @@ fn test_layout_dep_remesures_without_recompose() {
             let s = ctx.remember(|| 0.0f32);
             *holder.borrow_mut() = Some(s.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let k = ctx.next_key();
@@ -1605,7 +2135,9 @@ fn test_layout_dep_remesures_without_recompose() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
@@ -1621,10 +2153,18 @@ fn test_layout_dep_remesures_without_recompose() {
     let leaf_idx = composer.arena_nodes()[root_idx].children[0];
     let size2 = composer.arena_nodes()[leaf_idx].measured_size.width;
 
-    assert!(size2 > size1 + 10.0, "布局依赖 State 变化应重测：frame1 w={} frame2 w={}", size1, size2);
+    assert!(
+        size2 > size1 + 10.0,
+        "布局依赖 State 变化应重测：frame1 w={} frame2 w={}",
+        size1,
+        size2
+    );
     // 关键断言：不重组——leaf slot 应为 Clean（layout_dirty 不触发组合级 dirty）
-    assert_eq!(composer.compose_dirty_count, 0,
-        "布局动画值变化不应触发组合级 dirty（只重测不重组）——dirty_count={}", composer.compose_dirty_count);
+    assert_eq!(
+        composer.compose_dirty_count, 0,
+        "布局动画值变化不应触发组合级 dirty（只重测不重组）——dirty_count={}",
+        composer.compose_dirty_count
+    );
 }
 
 /// T4 常量折叠保留布局依赖：折叠帧不重新注册 → layout_deps 旧项保留；notify 后重测
@@ -1638,7 +2178,11 @@ fn test_layout_dep_survives_const_fold() {
             let s = ctx.remember(|| 0.0f32);
             *holder.borrow_mut() = Some(s.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let k = ctx.next_key();
@@ -1648,29 +2192,41 @@ fn test_layout_dep_survives_const_fold() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
     let sid = holder.borrow().clone().unwrap().signal_id();
-    assert!(composer.layout_deps.contains_key(&sid), "帧1 应注册布局依赖");
+    assert!(
+        composer.layout_deps.contains_key(&sid),
+        "帧1 应注册布局依赖"
+    );
 
     // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
     use crate::layout::node::MEASURE_COUNT;
     let m1 = MEASURE_COUNT.with(|c| c.get());
     build(&mut composer);
     let m2 = MEASURE_COUNT.with(|c| c.get());
-    assert_eq!(m1, m2,
-        "折叠帧不应重新 measure（m1={} m2={}——若重测则依赖续期而非折叠保留，T4 语义失效）", m1, m2);
-    assert!(composer.layout_deps.contains_key(&sid),
-        "常量折叠帧（未重新 measure）应保留旧布局依赖——丢失则布局动画冻结");
+    assert_eq!(
+        m1, m2,
+        "折叠帧不应重新 measure（m1={} m2={}——若重测则依赖续期而非折叠保留，T4 语义失效）",
+        m1, m2
+    );
+    assert!(
+        composer.layout_deps.contains_key(&sid),
+        "常量折叠帧（未重新 measure）应保留旧布局依赖——丢失则布局动画冻结"
+    );
     let leaf_key = {
         let root_idx = composer.layout_root_idx().unwrap();
         let leaf_idx = composer.arena_nodes()[root_idx].children[0];
         composer.arena_nodes()[leaf_idx].slot_key
     };
-    assert!(composer.layout_deps.get(&sid).unwrap().contains(&leaf_key),
-        "旧依赖项（state→leaf key）应保留");
+    assert!(
+        composer.layout_deps.get(&sid).unwrap().contains(&leaf_key),
+        "旧依赖项（state→leaf key）应保留"
+    );
 
     // 帧3：notify → 重测并维持依赖
     let s = holder.borrow().clone().unwrap();
@@ -1716,7 +2272,10 @@ fn test_overlay_composer_invalidated_by_main_tree_state() {
     // 主树 set：两个队列都应入队（fan-out）
     items.set(vec!["x".into(), "y".into(), "z".into()]);
     assert!(main.has_pending_states());
-    assert!(ov.has_pending_states(), "跨 Composer 读取应建立订阅——否则 overlay 永不更新");
+    assert!(
+        ov.has_pending_states(),
+        "跨 Composer 读取应建立订阅——否则 overlay 永不更新"
+    );
 
     // overlay recompose：消费 pending、读到新值、依赖续期
     let ran = {
@@ -1748,7 +2307,11 @@ fn test_compose_read_removal_unsubscribes_stale_state() {
     let build = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     if gate.get() {
@@ -1770,10 +2333,16 @@ fn test_compose_read_removal_unsubscribes_stale_state() {
 
     gate.set(false);
     build(&mut composer);
-    assert!(!composer.slot_deps.contains_key(&watched_id), "旧读取边应被移除");
+    assert!(
+        !composer.slot_deps.contains_key(&watched_id),
+        "旧读取边应被移除"
+    );
 
     watched.set(1);
-    assert!(!composer.has_pending_states(), "移除读取后 State 不应再使 Composer 入队");
+    assert!(
+        !composer.has_pending_states(),
+        "移除读取后 State 不应再使 Composer 入队"
+    );
 }
 
 /// Composer drop removes its queue from every StateSignal it read.
@@ -1814,8 +2383,14 @@ fn test_runtime_frame_restores_tls_after_panic_and_nested_drop() {
     }));
     assert!(result.is_err());
     assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), baseline_active);
-    assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), baseline_groups);
-    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), baseline_stmts);
+    assert_eq!(
+        GROUP_STACK.with(|groups| groups.borrow().clone()),
+        baseline_groups
+    );
+    assert_eq!(
+        STMT_STACK.with(|stmts| stmts.borrow().clone()),
+        baseline_stmts
+    );
 
     let outer = begin_runtime_frame();
     set_active_slot_key(21);
@@ -1829,11 +2404,20 @@ fn test_runtime_frame_restores_tls_after_panic_and_nested_drop() {
     }
     assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), 21);
     assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), vec![21]);
-    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), vec![(21, 21)]);
+    assert_eq!(
+        STMT_STACK.with(|stmts| stmts.borrow().clone()),
+        vec![(21, 21)]
+    );
     drop(outer);
     assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), baseline_active);
-    assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), baseline_groups);
-    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), baseline_stmts);
+    assert_eq!(
+        GROUP_STACK.with(|groups| groups.borrow().clone()),
+        baseline_groups
+    );
+    assert_eq!(
+        STMT_STACK.with(|stmts| stmts.borrow().clone()),
+        baseline_stmts
+    );
 }
 
 #[test]
@@ -1884,7 +2468,12 @@ fn test_layout_only_pending_consumed_without_recompose() {
     composer.layout(constraints);
     let root = composer.layout_root_idx().unwrap();
     let after = composer.arena_nodes()[root].measured_size.width;
-    assert!(after > before + 10.0, "layout-only State 应直接触发重测：{} -> {}", before, after);
+    assert!(
+        after > before + 10.0,
+        "layout-only State 应直接触发重测：{} -> {}",
+        before,
+        after
+    );
     assert!(!composer.has_pending_states());
 }
 
@@ -1914,12 +2503,18 @@ fn test_mixed_compose_layout_pending_reaches_recompose() {
         ctx.start_leaf(key, Modifier::new().size(&size, 10.0));
         ctx.end_node();
     }));
-    assert!(!composer.has_pending_states(), "mixed invalidation should be consumed by recompose");
+    assert!(
+        !composer.has_pending_states(),
+        "mixed invalidation should be consumed by recompose"
+    );
 
     composer.layout(constraints);
     let root = composer.layout_root_idx().unwrap();
     let after = composer.arena_nodes()[root].measured_size.width;
-    assert!(after > before + 10.0, "mixed State should still drive layout: {before} -> {after}");
+    assert!(
+        after > before + 10.0,
+        "mixed State should still drive layout: {before} -> {after}"
+    );
 }
 
 /// 回归测试（review 发现）：register_modifier_deps_recursive（scroll 等 modifier 内
@@ -1934,7 +2529,11 @@ fn test_modifier_scroll_dep_registered() {
             let ss = ctx.remember(|| crate::modifier::ScrollState::new()).get();
             *holder.borrow_mut() = Some(ss.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let k = ctx.next_key();
@@ -1944,19 +2543,26 @@ fn test_modifier_scroll_dep_registered() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer);
     let sid = holder.borrow().as_ref().unwrap().offset.signal_id();
-    assert!(composer.slot_deps.contains_key(&sid),
-        "scroll offset 应注册组合依赖（register_modifier_deps_recursive）——丢失则滚动不刷新");
+    assert!(
+        composer.slot_deps.contains_key(&sid),
+        "scroll offset 应注册组合依赖（register_modifier_deps_recursive）——丢失则滚动不刷新"
+    );
 
     // offset 变化 → 下帧该 slot 组合级 dirty（滚动触发重组）
     holder.borrow().as_ref().unwrap().offset.set(50.0);
     build(&mut composer);
-    assert!(composer.compose_dirty_count > 0,
-        "scroll 变化应触发组合级 dirty（dirty_count={}）", composer.compose_dirty_count);
+    assert!(
+        composer.compose_dirty_count > 0,
+        "scroll 变化应触发组合级 dirty（dirty_count={}）",
+        composer.compose_dirty_count
+    );
 }
 
 /// A panic from late node cleanup must restore the last committed dependency graph.
@@ -1981,7 +2587,9 @@ fn test_compose_late_cleanup_panic_restores_dependency_graph() {
         );
         ctx.end_node();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
     assert!(composer.slot_deps.contains_key(&committed.signal_id()));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1992,18 +2600,30 @@ fn test_compose_late_cleanup_panic_restores_dependency_graph() {
         });
     }));
     assert!(result.is_err(), "late cleanup should panic");
-    assert!(composer.slot_deps.contains_key(&committed.signal_id()),
-        "panic must restore the committed compose dependency");
-    assert!(!composer.slot_deps.contains_key(&failed.signal_id()),
-        "failed compose dependency must not remain committed");
-    assert!(!composer.has_pending_states(),
-        "failed-frame notifications must be removed during dependency rollback");
+    assert!(
+        composer.slot_deps.contains_key(&committed.signal_id()),
+        "panic must restore the committed compose dependency"
+    );
+    assert!(
+        !composer.slot_deps.contains_key(&failed.signal_id()),
+        "failed compose dependency must not remain committed"
+    );
+    assert!(
+        !composer.has_pending_states(),
+        "failed-frame notifications must be removed during dependency rollback"
+    );
 
     committed.as_raw().set_animating(4);
-    assert!(composer.has_pending_states(), "restored signal must remain subscribed");
+    assert!(
+        composer.has_pending_states(),
+        "restored signal must remain subscribed"
+    );
     composer.pending_states.drain();
     failed.as_raw().set_animating(4);
-    assert!(!composer.has_pending_states(), "failed signal must be unsubscribed after rollback");
+    assert!(
+        !composer.has_pending_states(),
+        "failed signal must be unsubscribed after rollback"
+    );
 }
 
 /// 崩溃边界（P3-3）前提验证：content panic 后（catch_unwind 捕获），
@@ -2031,7 +2651,10 @@ fn test_compose_runtime_snapshot_restores_key_context_after_panic() {
         ctx.start_leaf(key, Modifier::new());
         ctx.end_node();
     });
-    assert!(composer.layout_root_idx().is_some(), "next compose should rebuild after rollback");
+    assert!(
+        composer.layout_root_idx().is_some(),
+        "next compose should rebuild after rollback"
+    );
 }
 
 #[test]
@@ -2044,7 +2667,11 @@ fn test_compose_panic_recovers_next_frame() {
             panic!("模拟用户 content panic");
         }
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let k = ctx.next_key();
@@ -2064,12 +2691,20 @@ fn test_compose_panic_recovers_next_frame() {
     // 帧2：恢复正常内容 → 自愈
     should_panic.set(false);
     composer.compose(content);
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
-    assert!(composer.layout_root_idx().is_some(), "panic 后下帧应自愈（树重建）");
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
+    assert!(
+        composer.layout_root_idx().is_some(),
+        "panic 后下帧应自愈（树重建）"
+    );
     let root_idx = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root_idx].children.len(), 1, "自愈后结构正确");
+    assert_eq!(
+        composer.arena_nodes()[root_idx].children.len(),
+        1,
+        "自愈后结构正确"
+    );
 }
-
 
 /// The batch boundary, clause 1: a write during a compose PASS is not acted on by that pass, and is
 /// not lost either — the next pass re-enters the group that reads it.
@@ -2118,8 +2753,15 @@ fn test_a_write_during_content_recomposes_the_next_pass() {
         ctx.end_node();
         let _ = value;
     }));
-    assert_eq!(runs.get(), 2, "the next pass re-enters the group — the notification was not lost");
-    assert!(!composer.has_pending_states(), "and the next pass consumes it");
+    assert_eq!(
+        runs.get(),
+        2,
+        "the next pass re-enters the group — the notification was not lost"
+    );
+    assert!(
+        !composer.has_pending_states(),
+        "and the next pass consumes it"
+    );
 }
 
 /// The batch boundary, clause 2: a write DURING MEASURE is not consumed by the layout pass that
@@ -2161,21 +2803,29 @@ fn test_a_write_during_measure_is_next_layout_batch() {
         let effect = written.clone();
         let flag = width_flag.clone();
         let calls = calls_for_closure.clone();
-        ctx.start_leaf(key, Modifier::new().width(move || {
-            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let w = width_for_measure.get();
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                effect.as_raw().set_animating(w + 1.0);
-            }
-            w
-        }).height(10.0));
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .width(move || {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = width_for_measure.get();
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        effect.as_raw().set_animating(w + 1.0);
+                    }
+                    w
+                })
+                .height(10.0),
+        );
         ctx.end_node();
         // A second node reads the written state during measure, giving it a layout dependency.
         let read_key = ctx.next_key();
         let source = written_by_measure.clone();
-        ctx.start_leaf(read_key, Modifier::new().width(move || {
-            source.get().max(1.0)
-        }).height(10.0));
+        ctx.start_leaf(
+            read_key,
+            Modifier::new()
+                .width(move || source.get().max(1.0))
+                .height(10.0),
+        );
         ctx.end_node();
         ctx.end_node();
     });
@@ -2200,19 +2850,27 @@ fn test_a_write_during_measure_is_next_layout_batch() {
         let calls = calls_frame2.clone();
         let flag = write_flag_frame2.clone();
         let effect = effect_frame2.clone();
-        ctx.start_leaf(key, Modifier::new().width(move || {
-            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let w = source_a.get();
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                effect.as_raw().set_animating(w + 1.0);
-            }
-            w
-        }).height(10.0));
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .width(move || {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = source_a.get();
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        effect.as_raw().set_animating(w + 1.0);
+                    }
+                    w
+                })
+                .height(10.0),
+        );
         ctx.end_node();
         let read_key = ctx.next_key();
-        ctx.start_leaf(read_key, Modifier::new().width(move || {
-            source_b.get().max(1.0)
-        }).height(10.0));
+        ctx.start_leaf(
+            read_key,
+            Modifier::new()
+                .width(move || source_b.get().max(1.0))
+                .height(10.0),
+        );
         ctx.end_node();
         ctx.end_node();
     });
@@ -2241,7 +2899,10 @@ fn test_a_write_during_measure_is_next_layout_batch() {
     // And the next layout pass consumes it.
     write_flag.store(false, std::sync::atomic::Ordering::Relaxed);
     composer.layout(forced);
-    assert!(!composer.has_pending_states(), "the next layout pass consumes the queued write");
+    assert!(
+        !composer.has_pending_states(),
+        "the next layout pass consumes the queued write"
+    );
 }
 
 /// The batch boundary, clause 3: it is per PHASE, not per frame — a LAYOUT-ONLY write made during
@@ -2271,7 +2932,10 @@ fn test_a_layout_only_write_during_compose_is_consumed_by_that_frames_layout() {
             let root_key = ctx.next_key();
             ctx.start_container(root_key, Modifier::new(), crate::layout::BoxLayout::new());
             let leaf_key = ctx.next_key();
-            ctx.start_leaf(leaf_key, Modifier::new().width(move || w.get()).height(10.0));
+            ctx.start_leaf(
+                leaf_key,
+                Modifier::new().width(move || w.get()).height(10.0),
+            );
             ctx.end_node();
             ctx.end_node();
             if let Some(value) = write {
@@ -2304,7 +2968,10 @@ fn test_a_layout_only_write_during_compose_is_consumed_by_that_frames_layout() {
         "the same frame's layout consumed the layout-only write and measured the NEW value — \
          layout runs after compose, so there is nothing stale to protect"
     );
-    assert!(!composer.has_pending_states(), "and the layout pass consumed it");
+    assert!(
+        !composer.has_pending_states(),
+        "and the layout pass consumed it"
+    );
 }
 
 /// Two top-level nodes in one compose: only ONE of them becomes the tree's root.
@@ -2337,8 +3004,7 @@ fn test_only_one_top_level_node_becomes_the_root() {
     let nodes = composer.arena_nodes();
     assert_eq!(nodes.len(), 2, "both nodes were materialized");
     assert_eq!(
-        nodes[root].measured_size.width,
-        20.0,
+        nodes[root].measured_size.width, 20.0,
         "the LAST top-level desc is the root (the second leaf here)"
     );
     assert_eq!(
@@ -2363,11 +3029,17 @@ fn test_compose_notification_during_frame_is_next_batch() {
         }
     });
 
-    assert!(composer.has_pending_states(), "in-frame notification must remain pending");
+    assert!(
+        composer.has_pending_states(),
+        "in-frame notification must remain pending"
+    );
     assert!(composer.recompose(|_ctx| {
         let _ = state.get();
     }));
-    assert!(!composer.has_pending_states(), "the next batch should consume the notification");
+    assert!(
+        !composer.has_pending_states(),
+        "the next batch should consume the notification"
+    );
 }
 
 /// A State read at the very root of a composer's content — no scope, no node — must still
@@ -2380,7 +3052,10 @@ fn test_root_level_read_subscribes_the_composer() {
         let _ = state.get();
     });
     state.set(1);
-    assert!(composer.has_pending_states(), "a root read must leave the composer subscribed");
+    assert!(
+        composer.has_pending_states(),
+        "a root read must leave the composer subscribed"
+    );
 }
 
 /// A panic after compose consumes its pending batch must restore that batch for
@@ -2405,13 +3080,18 @@ fn test_compose_pending_batch_restored_after_panic() {
         });
     }));
     assert!(result.is_err());
-    assert!(composer.pending_states.pending_ids().contains(&state_id),
-        "panic must restore the consumed compose batch");
+    assert!(
+        composer.pending_states.pending_ids().contains(&state_id),
+        "panic must restore the consumed compose batch"
+    );
 
     assert!(composer.recompose(|_ctx| {
         let _ = state.get();
     }));
-    assert!(!composer.has_pending_states(), "retry should consume the restored batch");
+    assert!(
+        !composer.has_pending_states(),
+        "retry should consume the restored batch"
+    );
 }
 
 /// 组合场景：drain 后帧内新到的通知与已消费批在 panic 恢复时同时保留——
@@ -2457,7 +3137,10 @@ fn test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification() {
     // 两者都在队列中（去重后各一次）
     let recovered = composer.pending_states.pending_ids();
     assert!(recovered.contains(&id_a), "consumed batch must be restored");
-    assert!(recovered.contains(&id_b), "in-frame notification must remain queued");
+    assert!(
+        recovered.contains(&id_b),
+        "in-frame notification must remain queued"
+    );
     assert_eq!(
         recovered.iter().filter(|&&id| id == id_a).count(),
         1,
@@ -2489,7 +3172,11 @@ fn test_panic_residual_desc_cleared_by_next_compose_reset() {
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let k = ctx.next_key();
@@ -2512,7 +3199,11 @@ fn test_panic_residual_desc_cleared_by_next_compose_reset() {
     // 帧2：compose 开头 reset() 清空残留 desc → Clean 复用不再误收集
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let k = ctx.next_key();
@@ -2550,7 +3241,10 @@ fn test_removed_read_notification_during_compose_is_dropped() {
         watched.as_raw().set_animating(1);
     });
 
-    assert!(!composer.has_pending_states(), "removed read must not leave a stale pending ID");
+    assert!(
+        !composer.has_pending_states(),
+        "removed read must not leave a stale pending ID"
+    );
 }
 
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
@@ -2566,33 +3260,52 @@ fn test_data_driven_structure_change() {
             *holder.borrow_mut() = Some(s.clone());
             ctx.start_scope();
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = s.get();
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                        ctx.end_node();
+                    }
                     if two_leaves {
-                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                        {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new());
+                            ctx.end_node();
+                        }
                     }
                 }
             }
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        };
+    };
 
     // 帧1：1 leaf（Enter）
     build(&mut composer, false);
     let root = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root].children.len(), 1, "帧1 应有 1 leaf");
+    assert_eq!(
+        composer.arena_nodes()[root].children.len(),
+        1,
+        "帧1 应有 1 leaf"
+    );
 
     // 帧2：s 变化 → Enter → 2 leaf（数据驱动结构变化）
     let s = holder.borrow().clone().unwrap();
     s.set(1);
     build(&mut composer, true);
     let root = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root].children.len(), 2,
-        "数据驱动结构变化：s.set → Enter → 新增 leaf 应生效");
+    assert_eq!(
+        composer.arena_nodes()[root].children.len(),
+        2,
+        "数据驱动结构变化：s.set → Enter → 新增 leaf 应生效"
+    );
     eprintln!("[struct-change] ok: 1 leaf → 2 leaf（数据驱动）");
 
     // 帧3：s 再变 → 结构回退 1 leaf（未复用节点回收）
@@ -2600,8 +3313,11 @@ fn test_data_driven_structure_change() {
     s.set(2);
     build(&mut composer, false);
     let root = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root].children.len(), 1,
-        "结构回退：移除 leaf 应生效（未复用节点回收）");
+    assert_eq!(
+        composer.arena_nodes()[root].children.len(),
+        1,
+        "结构回退：移除 leaf 应生效（未复用节点回收）"
+    );
 }
 
 /// 回归测试（23ad6a7）：Skip/Enter 交替时 key 稳定性——
@@ -2625,34 +3341,70 @@ fn test_key_stable_across_skip_enter() {
             *row_holder.borrow_mut() = Some(row_state.clone());
             ctx.start_scope();
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get(); // root 依赖（root scope 内注册——帧2 count 变 → root Enter）
                     // Row（帧2 依赖 row_state 未变 → Clean → Skip——content 不执行）
                     let row_key = ctx.next_key();
-                    match ctx.start_restartable_group(row_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        row_key,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let _ = row_state.get(); // Row 依赖
-                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
-                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
-                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                            {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, Modifier::new());
+                                ctx.end_node();
+                            }
+                            {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, Modifier::new());
+                                ctx.end_node();
+                            }
+                            {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, Modifier::new());
+                                ctx.end_node();
+                            }
                         }
                     }
                     ctx.end_restartable_group();
                     // scroll Column（依赖 count——帧2 Enter：count 变 → scroll 重跑）
                     let scroll_key = ctx.next_key();
-                    match ctx.start_restartable_group(scroll_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        scroll_key,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let _ = count.get(); // scroll 依赖（帧2 count 变 → scroll Enter）
                             for _ in 0..2 {
-                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 标题
+                                {
+                                    let k = ctx.next_key();
+                                    ctx.start_leaf(k, Modifier::new());
+                                    ctx.end_node();
+                                } // 标题
                                 let g = ctx.next_key();
-                                match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                                match ctx.start_restartable_group(
+                                    g,
+                                    Modifier::new(),
+                                    crate::layout::BoxLayout::new(),
+                                ) {
                                     GroupStatus::Skip => {}
-                                    GroupStatus::Enter => { { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } }
+                                    GroupStatus::Enter => {
+                                        let k = ctx.next_key();
+                                        ctx.start_leaf(k, Modifier::new());
+                                        ctx.end_node();
+                                    }
                                 }
                                 ctx.end_restartable_group();
                             }
@@ -2664,7 +3416,7 @@ fn test_key_stable_across_skip_enter() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        };
+    };
 
     // 帧1：全 Enter（count + row_state 首次 → dirty）
     build(&mut composer);
@@ -2677,10 +3429,16 @@ fn test_key_stable_across_skip_enter() {
     let s = count_holder.borrow().clone().unwrap();
     s.set(1);
     build(&mut composer);
-    eprintln!("[key-stable] 帧2 clean={} dirty={}", composer.compose_clean_count, composer.compose_dirty_count);
+    eprintln!(
+        "[key-stable] 帧2 clean={} dirty={}",
+        composer.compose_clean_count, composer.compose_dirty_count
+    );
     let n2 = composer.arena.nodes.len();
     eprintln!("[key-stable] 帧2 nodes={}", n2);
-    assert_eq!(n1, n2, "Row Skip 时 scroll 节点 key 应稳定（每路径 counter）——旧全局 counter 会平移 → arena 增长");
+    assert_eq!(
+        n1, n2,
+        "Row Skip 时 scroll 节点 key 应稳定（每路径 counter）——旧全局 counter 会平移 → arena 增长"
+    );
 }
 
 /// 回归测试（TextField 输入不显示 bug）：文本内容变化（依赖注册在父容器 →
@@ -2697,38 +3455,45 @@ fn test_text_content_change_remeasures() {
             let value = ctx.remember(|| "".to_string());
             *holder.borrow_mut() = Some(value.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = value.get(); // 依赖注册到容器 scope（对标 TextField）
                     let k = ctx.next_key();
                     // TextContent leaf（content 来自 value——但内容在 build 时快照）
-                    let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
-                        content: text.to_string(),
-                        font_size: 14.0,
-                        color: crate::graphics::Color::from_argb(255, 0, 0, 0),
-                        font_weight: crate::text::FontWeight::NORMAL,
-                        font_style: crate::text::FontSlant::Upright,
-                        max_lines: usize::MAX,
-                        align: crate::text::TextAlign::Left,
-                        overflow: crate::text::TextOverflow::Clip,
-                        soft_wrap: true,
-                        letter_spacing: 0.0,
-                        line_height: None,
-                        min_lines: 1,
-                        underline: false,
-                        line_through: false,
-                        font_family: None,
-                        on_text_layout: None,
-                        auto_size: None,
-                    });
+                    let modifier =
+                        Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                            content: text.to_string(),
+                            font_size: 14.0,
+                            color: crate::graphics::Color::from_argb(255, 0, 0, 0),
+                            font_weight: crate::text::FontWeight::NORMAL,
+                            font_style: crate::text::FontSlant::Upright,
+                            max_lines: usize::MAX,
+                            align: crate::text::TextAlign::Left,
+                            overflow: crate::text::TextOverflow::Clip,
+                            soft_wrap: true,
+                            letter_spacing: 0.0,
+                            line_height: None,
+                            min_lines: 1,
+                            underline: false,
+                            line_through: false,
+                            font_family: None,
+                            on_text_layout: None,
+                            auto_size: None,
+                        });
                     ctx.start_leaf(k, modifier);
                     ctx.end_node();
                 }
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer, "");
@@ -2745,7 +3510,12 @@ fn test_text_content_change_remeasures() {
     let leaf = composer.arena_nodes()[root].children[0];
     let w2 = composer.arena_nodes()[leaf].measured_size.width;
     eprintln!("[text-change] frame2 w={}", w2);
-    assert!(w2 > w1, "文本内容变化后复用 leaf 应重测（宽度变）：frame1 w={} frame2 w={}（冻结则 bug 复发）", w1, w2);
+    assert!(
+        w2 > w1,
+        "文本内容变化后复用 leaf 应重测（宽度变）：frame1 w={} frame2 w={}（冻结则 bug 复发）",
+        w1,
+        w2
+    );
 }
 
 /// A text STYLE change must re-measure too, not just a content change.
@@ -2767,31 +3537,36 @@ fn test_text_style_change_remeasures() {
             let value = ctx.remember(|| "".to_string());
             *holder.borrow_mut() = Some(value.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = value.get(); // 依赖注册到容器 scope（对标 TextField）
                     let k = ctx.next_key();
-                    let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
-                        content: "hello".to_string(),
-                        font_size: 14.0,
-                        // The only thing that differs between the two frames.
-                        color: crate::graphics::Color::from_argb(alpha, 0, 0, 0),
-                        font_weight: crate::text::FontWeight::NORMAL,
-                        font_style: crate::text::FontSlant::Upright,
-                        max_lines: usize::MAX,
-                        align: crate::text::TextAlign::Left,
-                        overflow: crate::text::TextOverflow::Clip,
-                        soft_wrap: true,
-                        letter_spacing: 0.0,
-                        line_height: None,
-                        min_lines: 1,
-                        underline: false,
-                        line_through: false,
-                        font_family: None,
-                        on_text_layout: None,
-                        auto_size: None,
-                    });
+                    let modifier =
+                        Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                            content: "hello".to_string(),
+                            font_size: 14.0,
+                            // The only thing that differs between the two frames.
+                            color: crate::graphics::Color::from_argb(alpha, 0, 0, 0),
+                            font_weight: crate::text::FontWeight::NORMAL,
+                            font_style: crate::text::FontSlant::Upright,
+                            max_lines: usize::MAX,
+                            align: crate::text::TextAlign::Left,
+                            overflow: crate::text::TextOverflow::Clip,
+                            soft_wrap: true,
+                            letter_spacing: 0.0,
+                            line_height: None,
+                            min_lines: 1,
+                            underline: false,
+                            line_through: false,
+                            font_family: None,
+                            on_text_layout: None,
+                            auto_size: None,
+                        });
                     ctx.start_leaf(k, modifier);
                     ctx.end_node();
                 }
@@ -2801,10 +3576,15 @@ fn test_text_style_change_remeasures() {
     };
 
     build(&mut composer, 0); // invisible
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
     let root = composer.layout_root_idx().unwrap();
     let leaf = composer.arena_nodes()[root].children[0];
-    assert!(!composer.arena_nodes()[leaf].dirty, "precondition: frame 1 measured and folded");
+    assert!(
+        !composer.arena_nodes()[leaf].dirty,
+        "precondition: frame 1 measured and folded"
+    );
 
     // 帧2：alpha 0 → 255（容器 Enter，leaf slot 仍 Clean）→ 必须判定为变化
     let s = holder.borrow().clone().unwrap();
@@ -2853,7 +3633,10 @@ fn test_stmt_key_stable_across_structure_change() {
         ctx.end_scope();
         keys_frame2.push((k1, k2));
     });
-    assert_eq!(keys_frame1[0], keys_frame2[0], "同语句 id 跨帧 key 应稳定（结构变化不漂移）");
+    assert_eq!(
+        keys_frame1[0], keys_frame2[0],
+        "同语句 id 跨帧 key 应稳定（结构变化不漂移）"
+    );
 }
 
 #[test]
@@ -2894,7 +3677,7 @@ fn test_key_override_stable() {
             ctx.end_scope();
             keys.push(k);
         });
-        }
+    }
     assert_eq!(keys[0], keys[1], "显式 key() 跨帧稳定");
 }
 
@@ -2934,7 +3717,10 @@ fn test_stmt_guard_drops_on_scope_exit() {
             assert_eq!(id, 7, "guard 生效：栈顶 id=7");
             let _ = seq;
         } // 块退出——guard drop
-        assert!(STMT_STACK.with(|s| s.borrow().is_empty()), "提前退出后栈应自动恢复（无泄漏）");
+        assert!(
+            STMT_STACK.with(|s| s.borrow().is_empty()),
+            "提前退出后栈应自动恢复（无泄漏）"
+        );
         // guard 存活期间显式 pop 配对（guard 仍持有——drop 时再 pop 一次无害）
         let _g8 = ctx.enter_stmt(8);
         ctx.pop_stmt(); // 显式配对也正常
@@ -2965,7 +3751,11 @@ fn test_stmt_seq_inherits_outer_iteration_position() {
                     // 行容器语句（每迭代执行）——seq = 兄弟 index = 迭代位置
                     let _g = ctx.enter_stmt(6);
                     let k = ctx.next_key();
-                    match ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        k,
+                        Modifier::new(),
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         crate::runtime::composer::GroupStatus::Skip => {}
                         crate::runtime::composer::GroupStatus::Enter => {
                             // content 内语句（仅 Enter 执行）——继承外层迭代位置
@@ -2982,21 +3772,27 @@ fn test_stmt_seq_inherits_outer_iteration_position() {
                 }
             });
         }));
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 400.0, 0.0, 600.0,
+        ));
     };
     // 首帧：30 行全 Enter（全部执行）
     scene(&mut composer, 0);
-    keys_first.borrow_mut().extend(keys_recompose.borrow().iter().copied());
+    keys_first
+        .borrow_mut()
+        .extend(keys_recompose.borrow().iter().copied());
     keys_recompose.borrow_mut().clear();
     // 重组：前 29 行 content Skip（只 start 不 Enter），第 30 行 Enter——
     // 行容器 index 仍 0..29（start_slot 无条件）→ 第 30 行 key 与首帧一致
     scene(&mut composer, 29);
     assert_eq!(
-        keys_first.borrow()[29], keys_recompose.borrow()[0],
+        keys_first.borrow()[29],
+        keys_recompose.borrow()[0],
         "content 内语句继承外层迭代位置——滚动后 key 与首帧一致（防 text29 撞 text0）"
     );
     assert_ne!(
-        keys_first.borrow()[0], keys_first.borrow()[29],
+        keys_first.borrow()[0],
+        keys_first.borrow()[29],
         "迭代 key 互异——30 行 key 全同（无 seq 分量时代）会让槽树错乱"
     );
 }
@@ -3028,14 +3824,8 @@ fn test_stmt_seq_isolated_across_functions() {
     // 新语义（seq = 链哈希位置）：A 的 3 次迭代位置互异（行实例区分）；
     // B 的位置含"A 在其前"的兄弟序号——与 B_alone（无 A）位置不同是正确
     // 行为（位置不同 = 不同 key = 各自独立，非"基数泄漏"）
-    assert_ne!(
-        keys_a[0], keys_a[1],
-        "函数 A 内迭代位置互异（行实例区分）"
-    );
-    assert_ne!(
-        keys_a[1], keys_a[2],
-        "函数 A 内迭代位置互异（行实例区分）"
-    );
+    assert_ne!(keys_a[0], keys_a[1], "函数 A 内迭代位置互异（行实例区分）");
+    assert_ne!(keys_a[1], keys_a[2], "函数 A 内迭代位置互异（行实例区分）");
 }
 
 /// 串位 bug 回归：两个不同 scope（不同源码哈希）内**相同的语句 id**（同 push_stmt(5)）
@@ -3067,7 +3857,10 @@ fn test_scope_isolates_stmt_key_across_functions() {
     // 断言 key 基（高位）不同——旧 bug（scope=0）下两函数 base 相同（仅 counter 区分）
     let base_a = keys[0].0 >> 32;
     let base_b = keys[0].1 >> 32;
-    assert_ne!(base_a, base_b, "不同 scope 的 key 基必须不同（scope 隔离）——旧 bug 下 base 相同（scope=0）跨函数碰撞");
+    assert_ne!(
+        base_a, base_b,
+        "不同 scope 的 key 基必须不同（scope 隔离）——旧 bug 下 base 相同（scope=0）跨函数碰撞"
+    );
 }
 
 /// 手动 start_scope（push None）与宏 start_scope_keyed（push Some）混用——配对正确
@@ -3107,7 +3900,9 @@ fn test_component_param_change_forces_reenter() {
             let _ = ctx;
         });
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0)); // 复用索引在 layout 更新
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 800.0, 0.0, 600.0,
+    )); // 复用索引在 layout 更新
     assert_eq!(run_count.get(), 1, "首帧 content 执行");
 
     // 帧 2：spacing 10（参数变化 → Enter——content 重跑）
@@ -3118,7 +3913,9 @@ fn test_component_param_change_forces_reenter() {
             let _ = ctx;
         });
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 800.0, 0.0, 600.0,
+    ));
     assert_eq!(run_count.get(), 1, "参数变化 → content 重跑");
 
     // 帧 3：spacing 10（参数未变 + clean → Skip——content 不跑）
@@ -3129,7 +3926,9 @@ fn test_component_param_change_forces_reenter() {
             let _ = ctx;
         });
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 800.0, 0.0, 600.0,
+    ));
     assert_eq!(run_count.get(), 0, "参数未变 → Skip（content 不执行）");
 }
 
@@ -3178,12 +3977,20 @@ fn test_container_modifier_comparison_skips_rebuilt_modifiers_and_enters_on_chan
 
     // Rebuilt modifier, same number → Skip (content does NOT re-run).
     frame(&mut composer);
-    assert_eq!(runs.get(), 1, "a rebuilt-but-numerically-equal modifier must still Skip");
+    assert_eq!(
+        runs.get(),
+        1,
+        "a rebuilt-but-numerically-equal modifier must still Skip"
+    );
 
     // Changed number → Enter (content re-runs).
     padding.set(16.0);
     frame(&mut composer);
-    assert_eq!(runs.get(), 2, "a changed modifier parameter must re-run the content");
+    assert_eq!(
+        runs.get(),
+        2,
+        "a changed modifier parameter must re-run the content"
+    );
 
     // And the node carries the new value, which is what the next frame's comparison reads.
     let root = composer.layout_root_idx().unwrap();
@@ -3191,7 +3998,10 @@ fn test_container_modifier_comparison_skips_rebuilt_modifiers_and_enters_on_chan
         .modifier
         .get_padding_horizontal()
         .0;
-    assert_eq!(node_pad, 16.0, "the applied modifier must hold the new padding");
+    assert_eq!(
+        node_pad, 16.0,
+        "the applied modifier must hold the new padding"
+    );
     assert_ne!(key, 0, "sanity: the container has a real slot key");
 }
 
@@ -3213,7 +4023,11 @@ fn test_second_compose_in_a_frame_still_skips_unchanged_containers() {
         let runs = runs.clone();
         composer.compose(move |ctx| {
             let key = ctx.next_key();
-            match ctx.start_restartable_group(key, Modifier::new().padding(8.0), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                key,
+                Modifier::new().padding(8.0),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     runs.set(runs.get() + 1);
@@ -3242,7 +4056,11 @@ fn test_second_compose_in_a_frame_still_skips_unchanged_containers() {
 
     // …and a THIRD pass still sees the same thing (the refill is not a one-shot).
     build(&mut composer);
-    assert_eq!(runs.get(), 1, "later passes in the same frame behave the same way");
+    assert_eq!(
+        runs.get(),
+        1,
+        "later passes in the same frame behave the same way"
+    );
 }
 
 /// 参数变化后布局层必须更新（should-fix 回归：Enter 时置 dirty——
@@ -3275,20 +4093,25 @@ fn test_param_change_updates_layout() {
     let nodes = &composer.arena.nodes;
     // b 的 position（相对 Column——spacing 10 后应 > spacing 0 时）
     // 子 Text 的 position（相对 Column）：a 在 0，b 在 a 高 + spacing 之后
-    let positions: Vec<f32> = nodes.iter().filter(|n| n.slot_key != 0 && n.measured_size.height > 0.0)
-        .map(|n| n.position.y).collect();
+    let positions: Vec<f32> = nodes
+        .iter()
+        .filter(|n| n.slot_key != 0 && n.measured_size.height > 0.0)
+        .map(|n| n.position.y)
+        .collect();
     assert!(positions.len() >= 2, "两个子节点应有 position");
     let max_y = positions.iter().cloned().fold(0.0_f32, f32::max);
-    assert!(max_y >= 19.0 + 10.0 - 0.5,
-        "参数变化后子位置应反映 spacing=10（b 应在 a 高 19 + spacing 10 之后——实际 {positions:?}）");
+    assert!(
+        max_y >= 19.0 + 10.0 - 0.5,
+        "参数变化后子位置应反映 spacing=10（b 应在 a 高 19 + spacing 10 之后——实际 {positions:?}）"
+    );
 }
 
 /// ③ 布局树独立缓存边界：结构变化删除的节点槽位应回收复用（free 池）——
 /// arena 容量不随结构变化持续增长
 #[test]
 fn test_arena_recycles_freed_slots() {
-    use crate::layout::components::Column;
     use crate::components::text::Text;
+    use crate::layout::components::Column;
     let mut composer = Composer::new();
     let show = crate::runtime::state::State::new(true);
     let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
@@ -3334,8 +4157,10 @@ fn test_arena_recycles_freed_slots() {
     }));
     composer.layout(c);
     let cap3 = composer.arena.nodes.len();
-    assert!(cap3 <= cap1 + 2, "槽位应复用（帧3 容量 {cap3} 不应远超帧1 {cap1}——free 池回收）");
-
+    assert!(
+        cap3 <= cap1 + 2,
+        "槽位应复用（帧3 容量 {cap3} 不应远超帧1 {cap1}——free 池回收）"
+    );
 }
 
 #[test]
@@ -3348,13 +4173,25 @@ fn test_materialize_structure_change_window_insert() {
     // 帧1：false（无 Window 分支）
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 show = Some(ctx.remember(|| false));
                 let _ = show.as_ref().unwrap().get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
             }
         }
         ctx.end_restartable_group();
@@ -3366,40 +4203,76 @@ fn test_materialize_structure_change_window_insert() {
     show.as_ref().unwrap().set(true);
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let _ = show.as_ref().unwrap().get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
                 if show.as_ref().unwrap().get() {
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                        ctx.end_node();
+                    }
                 }
             }
         }
         ctx.end_restartable_group();
     });
     let r = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧2 应 2 leaf（if 插入后）");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        2,
+        "帧2 应 2 leaf（if 插入后）"
+    );
 
     // 帧3：false（结构回退）
     show.as_ref().unwrap().set(false);
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let _ = show.as_ref().unwrap().get();
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
             }
         }
         ctx.end_restartable_group();
     });
     let r = composer.layout_root_idx().unwrap();
-    eprintln!("[t3] root children={} nodes={}", composer.arena_nodes()[r].children.len(), composer.arena_nodes().len());
+    eprintln!(
+        "[t3] root children={} nodes={}",
+        composer.arena_nodes()[r].children.len(),
+        composer.arena_nodes().len()
+    );
     for c in composer.arena_nodes()[r].children.clone() {
-        eprintln!("[t3] child key={} dirty={}", composer.arena_nodes()[c].slot_key >> 32, composer.arena_nodes()[c].dirty);
+        eprintln!(
+            "[t3] child key={} dirty={}",
+            composer.arena_nodes()[c].slot_key >> 32,
+            composer.arena_nodes()[c].dirty
+        );
     }
-    assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧3 应 1 leaf（回退）");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        1,
+        "帧3 应 1 leaf（回退）"
+    );
 }
 
 #[test]
@@ -3415,8 +4288,16 @@ fn test_materialize_skip_restores_subtree() {
         match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
             }
         }
         ctx.end_restartable_group();
@@ -3438,12 +4319,28 @@ fn test_materialize_skip_restores_subtree() {
     });
     composer.layout(c);
     let r = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "Skip 应恢复上帧 2 leaf");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        2,
+        "Skip 应恢复上帧 2 leaf"
+    );
     for ci in composer.arena_nodes()[r].children.clone() {
         let n = &composer.arena_nodes()[ci];
         assert!(!n.dirty, "恢复的 leaf 不应 dirty（缓存测量保留）");
-        assert!(n.cached_constraints.is_some(), "恢复的 leaf 应保留测量缓存（cached_constraints）");
-        assert_eq!(n.slot_key, composer.arena_nodes()[r].children.iter().find(|&&x| x == ci).map(|_| composer.arena_nodes()[ci].slot_key).unwrap(), "恢复的 leaf slot_key 保留");
+        assert!(
+            n.cached_constraints.is_some(),
+            "恢复的 leaf 应保留测量缓存（cached_constraints）"
+        );
+        assert_eq!(
+            n.slot_key,
+            composer.arena_nodes()[r]
+                .children
+                .iter()
+                .find(|&&x| x == ci)
+                .map(|_| composer.arena_nodes()[ci].slot_key)
+                .unwrap(),
+            "恢复的 leaf slot_key 保留"
+        );
     }
 }
 
@@ -3462,7 +4359,9 @@ fn test_materialize_reuse_refreshes_layout_direction() {
         match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
             }
         }
         ctx.end_restartable_group();
@@ -3485,7 +4384,9 @@ fn test_materialize_reuse_refreshes_layout_direction() {
         ) {
             GroupStatus::Skip => panic!("方向变化应 Enter（param_eq 不等）"),
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
             }
         }
         ctx.end_restartable_group();
@@ -3511,14 +4412,22 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
     let mut leaf_key = 0u64;
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let k = ctx.next_key();
                 leaf_key = k;
                 ctx.start_leaf(k, Modifier::new());
-                ctx.set_current_node_ime_callback(Box::new(|_text: &str, _c: Option<(usize, usize)>| {}));
-                ctx.set_current_node_ime_edit_callback(Box::new(|_edit: crate::layout::node::ImeEdit| {}));
+                ctx.set_current_node_ime_callback(Box::new(
+                    |_text: &str, _c: Option<(usize, usize)>| {},
+                ));
+                ctx.set_current_node_ime_edit_callback(Box::new(
+                    |_edit: crate::layout::node::ImeEdit| {},
+                ));
                 ctx.set_current_node_cursor_and_callback(0, false, Box::new(|_i: usize| {}));
                 ctx.end_node();
             }
@@ -3528,40 +4437,52 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
     composer.layout(c);
     let root = composer.layout_root_idx().unwrap();
     let leaf = composer.arena_nodes()[root].children[0];
-    assert!(composer.arena_nodes()[leaf].ime_callback.borrow().is_some(),
-        "帧1 应有 IME 回调（TextField 场景）");
-    assert!(composer.arena_nodes()[leaf].ime_edit_callback.borrow().is_some(),
-        "帧1 应有 IME 提交/删除回调（TextField 场景）");
+    assert!(
+        composer.arena_nodes()[leaf].ime_callback.borrow().is_some(),
+        "帧1 应有 IME 回调（TextField 场景）"
+    );
+    assert!(
+        composer.arena_nodes()[leaf]
+            .ime_edit_callback
+            .borrow()
+            .is_some(),
+        "帧1 应有 IME 提交/删除回调（TextField 场景）"
+    );
 
     // 帧2：同位置变成普通 Text——无 IME/cursor 回调 → 复用节点应清理残留
     // 根容器加 size 参数强制 Enter（否则参数/结构不变 → Skip 导致 build 不执行）
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new().size(100.0, 100.0), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new().size(100.0, 100.0),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 let k = ctx.next_key();
                 assert_eq!(k, leaf_key, "同位置 leaf key 应稳定");
                 // 普通 Text 叶子：仅 TextContent，无 IME/cursor 回调
-                let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
-                    content: "plain".to_string(),
-                    font_size: 14.0,
-                    color: crate::graphics::Color::from_argb(255, 0, 0, 0),
-                    font_weight: crate::text::FontWeight::NORMAL,
-                    font_style: crate::text::FontSlant::Upright,
-                    max_lines: usize::MAX,
-                    align: crate::text::TextAlign::Left,
-                    overflow: crate::text::TextOverflow::Clip,
-                    soft_wrap: true,
-                    letter_spacing: 0.0,
-                    line_height: None,
-                    min_lines: 1,
-                    underline: false,
-                    line_through: false,
-                    font_family: None,
-                    on_text_layout: None,
-                    auto_size: None,
-                });
+                let modifier =
+                    Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                        content: "plain".to_string(),
+                        font_size: 14.0,
+                        color: crate::graphics::Color::from_argb(255, 0, 0, 0),
+                        font_weight: crate::text::FontWeight::NORMAL,
+                        font_style: crate::text::FontSlant::Upright,
+                        max_lines: usize::MAX,
+                        align: crate::text::TextAlign::Left,
+                        overflow: crate::text::TextOverflow::Clip,
+                        soft_wrap: true,
+                        letter_spacing: 0.0,
+                        line_height: None,
+                        min_lines: 1,
+                        underline: false,
+                        line_through: false,
+                        font_family: None,
+                        on_text_layout: None,
+                        auto_size: None,
+                    });
                 ctx.start_leaf(k, modifier);
                 ctx.end_node();
             }
@@ -3573,17 +4494,26 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
     let root = composer.layout_root_idx().unwrap();
     let leaf = composer.arena_nodes()[root].children[0];
     let has_text = composer.arena_nodes()[leaf].has_text_content;
-    assert!(has_text, "帧2 leaf 应有 has_text_content=true（modifier 含 TextContent）");
+    assert!(
+        has_text,
+        "帧2 leaf 应有 has_text_content=true（modifier 含 TextContent）"
+    );
     assert!(
         composer.arena_nodes()[leaf].ime_callback.borrow().is_none(),
         "角色切换后 IME 回调应被清理（残留会污染普通 Text）"
     );
     assert!(
-        composer.arena_nodes()[leaf].ime_edit_callback.borrow().is_none(),
+        composer.arena_nodes()[leaf]
+            .ime_edit_callback
+            .borrow()
+            .is_none(),
         "角色切换后 IME 提交/删除回调应被清理"
     );
     assert!(
-        composer.arena_nodes()[leaf].cursor_callback.borrow().is_none(),
+        composer.arena_nodes()[leaf]
+            .cursor_callback
+            .borrow()
+            .is_none(),
         "角色切换后 cursor 回调应被清理"
     );
 }
@@ -3651,11 +4581,19 @@ fn test_skip_recovery_structure_change_by_state() {
             let show_b = ctx.remember(|| true);
             *holder.borrow_mut() = Some(show_b.clone());
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // A 叶子（始终在）
-                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new());
+                        ctx.end_node();
+                    }
                     // B 分支（show_b 控制）
                     if show_b.get() {
                         let k = ctx.next_key();
@@ -3666,28 +4604,45 @@ fn test_skip_recovery_structure_change_by_state() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer, &holder);
     let r = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应有 A+B 两个 leaf");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        2,
+        "帧1 应有 A+B 两个 leaf"
+    );
 
     // 帧2：show_b=false（State 驱动 → root Enter → content 重跑 → B 分支不建）
     holder.borrow().as_ref().unwrap().set(false);
     build(&mut composer, &holder);
     let r = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧2 应只剩 A（B 移除）");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        1,
+        "帧2 应只剩 A（B 移除）"
+    );
     // A 正常保留；不应复用 B 的缓存（B 的 size 100x50）
     let a = composer.arena_nodes()[r].children[0];
-    assert!(composer.arena_nodes()[a].measured_size.width < 100.0,
-        "A 不应复用 B 的缓存（B 的 width=100 不应出现在 A）——width={}", composer.arena_nodes()[a].measured_size.width);
+    assert!(
+        composer.arena_nodes()[a].measured_size.width < 100.0,
+        "A 不应复用 B 的缓存（B 的 width=100 不应出现在 A）——width={}",
+        composer.arena_nodes()[a].measured_size.width
+    );
 
     // 帧3：B 恢复
     holder.borrow().as_ref().unwrap().set(true);
     build(&mut composer, &holder);
     let r = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧3 应恢复 A+B");
+    assert_eq!(
+        composer.arena_nodes()[r].children.len(),
+        2,
+        "帧3 应恢复 A+B"
+    );
 }
 
 /// `SlotTable::slot_count_bound` must be an UPPER bound on what materialize builds.
@@ -3795,7 +4750,11 @@ fn a_keyed_sibling_that_moves_keeps_its_slots() {
     assert_eq!(created.get(), 2, "two keyed subtrees, one slot each");
     reversed.set(true);
     recompose(&mut composer, &created);
-    assert_eq!(created.get(), 2, "the order flipped and both kept their slots");
+    assert_eq!(
+        created.get(),
+        2,
+        "the order flipped and both kept their slots"
+    );
     reversed.set(false);
     recompose(&mut composer, &created);
     assert_eq!(created.get(), 2, "…and back");
@@ -3835,7 +4794,11 @@ fn keyed_range_keeps_each_indexed_child_s_slots() {
     frame(&mut composer);
     assert_eq!(created.get(), 3, "one slot for each index");
     frame(&mut composer);
-    assert_eq!(created.get(), 3, "the same prefix/index pairs keep their slots");
+    assert_eq!(
+        created.get(),
+        3,
+        "the same prefix/index pairs keep their slots"
+    );
 }
 
 /// The generic iterator form keys by item identity; reversing the iterator must not recreate
@@ -3916,7 +4879,8 @@ fn test_live_keys_exclude_unvisited_slots() {
         let (groups, leaves) = *holder.borrow();
         composer.compose(|ctx| {
             let key = ctx.next_key();
-            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new())
+            {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = tick.get();
@@ -3941,7 +4905,10 @@ fn test_live_keys_exclude_unvisited_slots() {
     *holder.borrow_mut() = (3, 3);
     tick.set(tick.get() + 1);
     build(&mut composer, &holder);
-    assert_eq!(composer.live_residue, 0, "a frame with no leftovers has no residue");
+    assert_eq!(
+        composer.live_residue, 0,
+        "a frame with no leftovers has no residue"
+    );
 
     *holder.borrow_mut() = (3, 1);
     tick.set(tick.get() + 1);
@@ -3962,16 +4929,30 @@ fn test_skip_recovery_sig_mismatch_direct() {
     // 帧1：root + 2 leaf
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
-                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+                {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
             }
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    composer.layout(crate::layout::constraints::Constraints::new(
+        0.0, 500.0, 0.0, 500.0,
+    ));
     let old_root = composer.layout_root_idx().unwrap();
     let old_root_key = composer.arena_nodes()[old_root].slot_key;
     let leaf0_key = composer.arena_nodes()[composer.arena_nodes()[old_root].children[0]].slot_key;
@@ -3987,22 +4968,22 @@ fn test_skip_recovery_sig_mismatch_direct() {
         on_remove: None,
         dirty: false,
         registrar: None,
-            clear_registrar: false,
+        clear_registrar: false,
         focus_color: None,
-            selection_color: None,
+        selection_color: None,
         composing_color: None,
-            cursor_index: None,
-            cursor_visible: None,
-            cursor_callback: None,
-            display_focused: None,
-            ime_callback: None,
-            ime_edit_callback: None,
+        cursor_index: None,
+        cursor_visible: None,
+        cursor_callback: None,
+        display_focused: None,
+        ime_callback: None,
+        ime_edit_callback: None,
         composing_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::runtime::materialize::DescNode {
             key: leaf0_key,
             skip: true,
-        claimed: None,
+            claimed: None,
             modifier: Modifier::new(),
             preserve_modifier: true,
             policy: None,
@@ -4025,14 +5006,20 @@ fn test_skip_recovery_sig_mismatch_direct() {
         }],
     };
     composer.arena.root = None; // 模拟新帧物化开始
-    let new_root = crate::runtime::materialize::materialize_node(&mut composer, desc, None).unwrap();
+    let new_root =
+        crate::runtime::materialize::materialize_node(&mut composer, desc, None).unwrap();
 
     // 断言：签名不等 → 重建（new_root != old_root）而非恢复缓存
     assert_ne!(new_root, old_root, "签名不等应重建而非恢复缓存");
     // 旧 root 未被复用（不在 reused_nodes）；key 保留在 prev_node_by_key（待 compose 末尾回收 free）
-    assert!(!composer.reused_nodes.contains(old_root), "旧节点不应标记复用（待回收）");
-    assert!(composer.prev_node_by_key.contains_key(&old_root_key),
-        "key 应保留待回收（否则旧节点 arena 泄漏）");
+    assert!(
+        !composer.reused_nodes.contains(old_root),
+        "旧节点不应标记复用（待回收）"
+    );
+    assert!(
+        composer.prev_node_by_key.contains_key(&old_root_key),
+        "key 应保留待回收（否则旧节点 arena 泄漏）"
+    );
 }
 
 /// A skipped subtree whose slots are all inert is claimed in place, and the shape is verified.
@@ -4048,7 +5035,8 @@ fn test_skipped_subtree_is_claimed_in_place() {
     let build = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let key = ctx.next_key();
-            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new())
+            {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     for _ in 0..3 {
@@ -4066,15 +5054,25 @@ fn test_skipped_subtree_is_claimed_in_place() {
     build(&mut composer);
     let root = composer.layout_root_idx().unwrap();
     let kids: Vec<usize> = composer.arena_nodes()[root].children.clone();
-    assert_eq!(kids.len(), 3, "precondition: three leaves under the container");
+    assert_eq!(
+        kids.len(),
+        3,
+        "precondition: three leaves under the container"
+    );
     assert_eq!(composer.skip_claims, 0, "frame 1 entered: nothing to claim");
 
     // Frame 2: the container's slot is clean and nothing reads state → it Skips with every slot inert.
     build(&mut composer);
-    assert_eq!(composer.skip_claims, 1, "the skipped subtree must be claimed in place");
+    assert_eq!(
+        composer.skip_claims, 1,
+        "the skipped subtree must be claimed in place"
+    );
     let root2 = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root2].children, kids,
-        "the claimed subtree is the SAME nodes in the SAME order (nothing was rebuilt)");
+    assert_eq!(
+        composer.arena_nodes()[root2].children,
+        kids,
+        "the claimed subtree is the SAME nodes in the SAME order (nothing was rebuilt)"
+    );
 
     // Frame 3: still idle → claimed again (the claim leaves the slots in the state it found them).
     build(&mut composer);
@@ -4093,7 +5091,8 @@ fn test_stale_arena_shape_makes_the_claim_bail() {
     let build = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let key = ctx.next_key();
-            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new())
+            {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     for i in 0..2 {
@@ -4111,7 +5110,10 @@ fn test_stale_arena_shape_makes_the_claim_bail() {
 
     build(&mut composer);
     build(&mut composer);
-    assert_eq!(composer.skip_claims, 1, "precondition: the idle frame claims");
+    assert_eq!(
+        composer.skip_claims, 1,
+        "precondition: the idle frame claims"
+    );
 
     // Corrupt the arena: swap the container's two children. The slots still say [a, b].
     let root = composer.layout_root_idx().unwrap();
@@ -4124,13 +5126,22 @@ fn test_stale_arena_shape_makes_the_claim_bail() {
 
     // The next idle frame must notice and rebuild from the slots instead of trusting the arena.
     build(&mut composer);
-    assert!(composer.skip_claim_bails >= 1, "a shape mismatch must reject the container's claim");
+    assert!(
+        composer.skip_claim_bails >= 1,
+        "a shape mismatch must reject the container's claim"
+    );
     let root = composer.layout_root_idx().unwrap();
-    assert_eq!(composer.arena_nodes()[root].children, before,
-        "the fallback rebuilds the children in SLOT order (the corruption is repaired)");
+    assert_eq!(
+        composer.arena_nodes()[root].children,
+        before,
+        "the fallback rebuilds the children in SLOT order (the corruption is repaired)"
+    );
     // The two leaves are inert subtrees in their own right and are still claimed — the rejection is
     // per subtree, which is what keeps a single stale subtree from costing the whole frame.
-    assert_eq!(composer.skip_claims, 2, "the leaves are claimed even though their parent bailed");
+    assert_eq!(
+        composer.skip_claims, 2,
+        "the leaves are claimed even though their parent bailed"
+    );
 }
 
 /// T4：数量相同内容不同（A→B 同位置）——保持恢复（Compose 位置复用语义，不强制 Enter）
@@ -4142,7 +5153,11 @@ fn test_skip_recovery_same_count_different_content() {
     let build = |composer: &mut Composer, content: &std::cell::Cell<u32>| {
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            match ctx.start_restartable_group(
+                root_key,
+                Modifier::new(),
+                crate::layout::BoxLayout::new(),
+            ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // 同位置单个 leaf（数量恒 1）——内容由 cell 控制（无 state 驱动）
@@ -4154,7 +5169,9 @@ fn test_skip_recovery_same_count_different_content() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
     };
 
     build(&mut composer, &content);
@@ -4162,7 +5179,11 @@ fn test_skip_recovery_same_count_different_content() {
     content.set(1);
     build(&mut composer, &content);
     // 关键断言：帧2 全 Skip（clean 计数 > 0）——同数量同位置保持恢复（Compose 语义）
-    assert!(composer.compose_clean_count > 0, "数量相同内容不同应保持 Skip（clean_count={}）", composer.compose_clean_count);
+    assert!(
+        composer.compose_clean_count > 0,
+        "数量相同内容不同应保持 Skip（clean_count={}）",
+        composer.compose_clean_count
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4183,7 +5204,11 @@ fn test_app_root_stable_keys_across_structure_change() {
         let show = ctx.remember(|| true);
         *show_holder.borrow_mut() = Some(show.clone());
         let root_key = ctx.next_key();
-        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            root_key,
+            Modifier::new(),
+            crate::layout::BoxLayout::new(),
+        ) {
             crate::runtime::composer::GroupStatus::Skip => {}
             crate::runtime::composer::GroupStatus::Enter => {
                 // A 组件（if 分支包裹——结构变化场景）
@@ -4202,8 +5227,12 @@ fn test_app_root_stable_keys_across_structure_change() {
     });
 
     let build = |composer: &mut Composer| {
-        composer.compose(|ctx| { root(ctx); });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        composer.compose(|ctx| {
+            root(ctx);
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 500.0, 0.0, 500.0,
+        ));
         // 记录 B 组件（最后一个 leaf）的 slot_key
         let r = composer.layout_root_idx().unwrap();
         let children = composer.arena_nodes()[r].children.clone();
@@ -4232,11 +5261,17 @@ fn test_app_root_stable_keys_across_structure_change() {
     show_holder.borrow().as_ref().unwrap().set(true);
     build(&mut composer);
     let k3 = b_key.get().unwrap();
-    assert_eq!(k1, k3, "A 恢复后 B 的 key 应回到帧1 值（index 回到 1）——key 由兄弟位置决定");
+    assert_eq!(
+        k1, k3,
+        "A 恢复后 B 的 key 应回到帧1 值（index 回到 1）——key 由兄弟位置决定"
+    );
 
     // remember 状态（show）跨结构变化保留（同一 State id——根闭包首语句 index 稳定）
-    assert_eq!(show_holder.borrow().as_ref().unwrap().id(), show_id,
-        "remember 状态应跨结构变化保留（语句级 key 稳定）");
+    assert_eq!(
+        show_holder.borrow().as_ref().unwrap().id(),
+        show_id,
+        "remember 状态应跨结构变化保留（语句级 key 稳定）"
+    );
 }
 
 /// 回归（文档 1.3 原始 bug 的直接验证）：**条件分支内的 remember 增删不影响
@@ -4261,7 +5296,7 @@ fn test_conditional_branch_remember_does_not_drift_siblings() {
             let c = ctx.remember(|| 2i32); // 语句 2——独立 base
             *c_holder.borrow_mut() = Some(c.clone());
         }));
-        };
+    };
 
     // 帧1：show=true——a/c + if 内 b 全部创建
     build(&mut composer);
@@ -4273,8 +5308,14 @@ fn test_conditional_branch_remember_does_not_drift_siblings() {
     build(&mut composer);
     let a2 = a_holder.borrow().clone().unwrap().id();
     let c2 = c_holder.borrow().clone().unwrap().id();
-    assert_eq!(a1, a2, "a（语句 0）的 State 应跨 if 分支增删保留——跨语句不漂移");
-    assert_eq!(c1, c2, "c（语句 2）的 State 应跨 if 分支增删保留——跨语句不漂移");
+    assert_eq!(
+        a1, a2,
+        "a（语句 0）的 State 应跨 if 分支增删保留——跨语句不漂移"
+    );
+    assert_eq!(
+        c1, c2,
+        "c（语句 2）的 State 应跨 if 分支增删保留——跨语句不漂移"
+    );
 
     // 帧3：show=true——b 恢复（新 State——结构变化 = 重置，符合语义）
     show.set(true);
@@ -4298,14 +5339,14 @@ fn test_same_stmt_remember_count_change_resets() {
             if show_extra.get() {
                 // 同语句内两个 remember——数量随 show_extra 变化
                 let _x = ctx.remember(|| 1i32); // seq 0
-                let y = ctx.remember(|| 2i32);  // seq 1
+                let y = ctx.remember(|| 2i32); // seq 1
                 *first_holder.borrow_mut() = Some(y.clone());
             } else {
-                let y = ctx.remember(|| 2i32);  // 只剩一个——seq 0（原 x 的槽）
+                let y = ctx.remember(|| 2i32); // 只剩一个——seq 0（原 x 的槽）
                 *first_holder.borrow_mut() = Some(y.clone());
             }
         }));
-        };
+    };
 
     build(&mut composer);
     let id1 = first_holder.borrow().clone().unwrap().id();
@@ -4313,9 +5354,10 @@ fn test_same_stmt_remember_count_change_resets() {
     show_extra.set(false);
     build(&mut composer);
     let id2 = first_holder.borrow().clone().unwrap().id();
-    assert_ne!(id1, id2,
-        "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）");
-
+    assert_ne!(
+        id1, id2,
+        "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）"
+    );
 }
 
 mod derived_expression_tests {
@@ -4352,7 +5394,11 @@ mod derived_expression_tests {
                         // The reader: its only declared param is the DERIVED value.
                         let reader_key = ctx.next_key();
                         ctx.changed(&past);
-                        match ctx.start_restartable_group(reader_key, Modifier::new(), BoxLayout::new()) {
+                        match ctx.start_restartable_group(
+                            reader_key,
+                            Modifier::new(),
+                            BoxLayout::new(),
+                        ) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 reader.set(reader.get() + 1);
@@ -4368,11 +5414,19 @@ mod derived_expression_tests {
         };
 
         frame(&mut composer);
-        assert_eq!((owner_enters.get(), reader_enters.get()), (1, 1), "the first frame enters both");
+        assert_eq!(
+            (owner_enters.get(), reader_enters.get()),
+            (1, 1),
+            "the first frame enters both"
+        );
 
         // CONTROL: an idle frame Skips both, so the counts below mean something.
         frame(&mut composer);
-        assert_eq!((owner_enters.get(), reader_enters.get()), (1, 1), "CONTROL: an idle frame Skips");
+        assert_eq!(
+            (owner_enters.get(), reader_enters.get()),
+            (1, 1),
+            "CONTROL: an idle frame Skips"
+        );
 
         // The source moves three times and the derived value stays false.
         for value in [10.0f32, 120.0, 299.0] {
@@ -4394,7 +5448,11 @@ mod derived_expression_tests {
         // The derived value flips.
         source.set(301.0);
         frame(&mut composer);
-        assert_eq!(reader_enters.get(), 2, "and it re-runs when the value it declared changes");
+        assert_eq!(
+            reader_enters.get(),
+            2,
+            "and it re-runs when the value it declared changes"
+        );
         assert_eq!(owner_enters.get(), 5);
     }
 

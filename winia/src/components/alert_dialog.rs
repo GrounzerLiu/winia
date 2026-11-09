@@ -32,11 +32,11 @@
 //! (scale 0.8 + fade, 200ms) come from there.
 
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::layout::{Alignment, LayoutDirection};
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
+use crate::layout::{Alignment, LayoutDirection};
+use crate::modifier::Modifier;
+use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition, next_overlay_id};
+use crate::runtime::composer::ComposeCtx;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
@@ -289,7 +289,9 @@ impl BasicAlertDialog {
                 // which is the switch that lets a dialog size itself.
                 let mut surface = Modifier::new();
                 if platform_default_width {
-                    surface = surface.min_width(DIALOG_MIN_WIDTH).max_width(DIALOG_MAX_WIDTH);
+                    surface = surface
+                        .min_width(DIALOG_MIN_WIDTH)
+                        .max_width(DIALOG_MAX_WIDTH);
                 }
                 let surface = surface
                     .background(container, shape)
@@ -479,14 +481,25 @@ impl AlertDialog {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         let has_icon = self.icon.is_some();
         let shape = self.shape;
         let container_color = self.container_color;
-        let icon_color = self.icon_content_color.unwrap_or_else(|| AlertDialogDefaults::icon_color(&theme));
-        let title_color = self.title_content_color.unwrap_or_else(|| AlertDialogDefaults::title_color(&theme));
-        let text_color = self.text_content_color.unwrap_or_else(|| AlertDialogDefaults::text_color(&theme));
-        let button_color = self.button_content_color.unwrap_or_else(|| AlertDialogDefaults::button_color(&theme));
+        let icon_color = self
+            .icon_content_color
+            .unwrap_or_else(|| AlertDialogDefaults::icon_color(&theme));
+        let title_color = self
+            .title_content_color
+            .unwrap_or_else(|| AlertDialogDefaults::title_color(&theme));
+        let text_color = self
+            .text_content_color
+            .unwrap_or_else(|| AlertDialogDefaults::text_color(&theme));
+        let button_color = self
+            .button_content_color
+            .unwrap_or_else(|| AlertDialogDefaults::button_color(&theme));
         let title_style = WiniaTheme::typography().headline_small;
         let text_style = WiniaTheme::typography().body_medium;
         let button_style = WiniaTheme::typography().label_large;
@@ -583,8 +596,8 @@ fn alert_dialog_content(
     colors: DialogColors,
     styles: &DialogStyles,
 ) {
-    use crate::layout::components::{FlowRow, Stack};
     use crate::components::text::ProvideTextStyle;
+    use crate::layout::components::{FlowRow, Stack};
 
     // A slot: an inner box carrying the padding and the alignment within the Column, and — for the
     // text slot only — the weight that lets it take the slack when a height is imposed.
@@ -608,13 +621,23 @@ fn alert_dialog_content(
 
     if let Some(icon) = &slots.icon {
         WiniaTheme::with_content_color(colors.icon, ctx, |ctx| {
-            slot(ctx, DIALOG_ICON_PADDING_BOTTOM, Alignment::Center, None, icon);
+            slot(
+                ctx,
+                DIALOG_ICON_PADDING_BOTTOM,
+                Alignment::Center,
+                None,
+                icon,
+            );
         });
     }
     if let Some(title) = &slots.title {
         WiniaTheme::with_content_color(colors.title, ctx, |ctx| {
             // Compose centres the title when an icon sits above it, and starts it otherwise.
-            let align = if has_icon { Alignment::Center } else { Alignment::Start };
+            let align = if has_icon {
+                Alignment::Center
+            } else {
+                Alignment::Start
+            };
             slot(ctx, DIALOG_TITLE_PADDING_BOTTOM, align, None, |ctx| {
                 ProvideTextStyle(styles.title.clone(), ctx, |ctx| title(ctx));
             });
@@ -622,9 +645,15 @@ fn alert_dialog_content(
     }
     if let Some(text) = &slots.text {
         WiniaTheme::with_content_color(colors.text, ctx, |ctx| {
-            slot(ctx, DIALOG_TEXT_PADDING_BOTTOM, Alignment::Start, Some(1.0), |ctx| {
-                ProvideTextStyle(styles.text.clone(), ctx, |ctx| text(ctx));
-            });
+            slot(
+                ctx,
+                DIALOG_TEXT_PADDING_BOTTOM,
+                Alignment::Start,
+                Some(1.0),
+                |ctx| {
+                    ProvideTextStyle(styles.text.clone(), ctx, |ctx| text(ctx));
+                },
+            );
         });
     }
     let (confirm, dismiss) = (&slots.confirm_button, &slots.dismiss_button);
@@ -669,9 +698,9 @@ fn alert_dialog_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::layout::components::Stack;
+    use crate::runtime::composer::Composer;
 
     /// Compose an AlertDialog (invisible unless `visible`) and hand back the composer.
     fn compose_dialog(dialog: AlertDialog) -> Composer {
@@ -729,7 +758,8 @@ mod tests {
 
     #[test]
     fn invisible_registers_no_overlay_and_visible_registers_one_modal() {
-        let mut hidden = compose_dialog(AlertDialog::new(false).title(fixed_slot("t", 100.0, 20.0)));
+        let mut hidden =
+            compose_dialog(AlertDialog::new(false).title(fixed_slot("t", 100.0, 20.0)));
         assert!(hidden.take_overlays().is_empty(), "hidden: no overlay");
 
         let mut shown = compose_dialog(
@@ -739,7 +769,10 @@ mod tests {
         );
         let overlays = shown.take_overlays();
         assert_eq!(overlays.len(), 1, "visible: one overlay");
-        assert!(overlays[0].modal, "an alert dialog is modal (scrim + dismissal)");
+        assert!(
+            overlays[0].modal,
+            "an alert dialog is modal (scrim + dismissal)"
+        );
         assert!(!overlays[0].dismiss_on_outside, "the flag is forwarded");
         assert!(
             matches!(overlays[0].position, PopupPosition::Center),
@@ -753,7 +786,10 @@ mod tests {
     fn the_dialog_properties_reach_the_overlay() {
         let mut plain = compose_dialog(AlertDialog::new(true).title(fixed_slot("t", 100.0, 20.0)));
         let overlays = plain.take_overlays();
-        assert!(overlays[0].dismiss_on_back_press, "dismissOnBackPress defaults true");
+        assert!(
+            overlays[0].dismiss_on_back_press,
+            "dismissOnBackPress defaults true"
+        );
         assert!(overlays[0].focus_scope, "isFocusable defaults true");
 
         let mut off = compose_dialog(
@@ -795,7 +831,8 @@ mod tests {
         let inner = lay_out_overlay(&mut c);
         let root = inner.layout_root_idx().expect("laid out");
         assert_eq!(
-            inner.arena_nodes()[root].measured_size.width, DIALOG_MIN_WIDTH,
+            inner.arena_nodes()[root].measured_size.width,
+            DIALOG_MIN_WIDTH,
             "narrow content still gets {DIALOG_MIN_WIDTH}"
         );
     }
@@ -808,7 +845,8 @@ mod tests {
         let inner = lay_out_overlay(&mut c);
         let root = inner.layout_root_idx().expect("laid out");
         assert_eq!(
-            inner.arena_nodes()[root].measured_size.width, DIALOG_MAX_WIDTH,
+            inner.arena_nodes()[root].measured_size.width,
+            DIALOG_MAX_WIDTH,
             "content wider than {DIALOG_MAX_WIDTH} is constrained to it"
         );
     }
@@ -830,7 +868,10 @@ mod tests {
             width > DIALOG_MAX_WIDTH,
             "with the platform default width off the cap must not apply, got {width}"
         );
-        assert!(width <= 800.0, "and the window still constrains it, got {width}");
+        assert!(
+            width <= 800.0,
+            "and the window still constrains it, got {width}"
+        );
     }
 
     #[test]
@@ -870,7 +911,10 @@ mod tests {
         let (_, title_y, _, _) = abs_rect(&inner, "title");
         let (_, text_y, _, _) = abs_rect(&inner, "text");
         let (_, confirm_y, _, _) = abs_rect(&inner, "confirm");
-        assert_eq!(icon_y, DIALOG_CONTAINER_PADDING, "the icon starts at the 24dp padding");
+        assert_eq!(
+            icon_y, DIALOG_CONTAINER_PADDING,
+            "the icon starts at the 24dp padding"
+        );
         assert_eq!(
             title_y,
             icon_y + 24.0 + DIALOG_ICON_PADDING_BOTTOM,
@@ -967,7 +1011,10 @@ mod tests {
             confirm_y + 40.0 <= dismiss_y,
             "wrapped: confirm on top (confirm y={confirm_y}, dismiss y={dismiss_y})"
         );
-        for (x, w, which) in [(confirm_x, confirm_w, "confirm"), (dismiss_x, dismiss_w, "dismiss")] {
+        for (x, w, which) in [
+            (confirm_x, confirm_w, "confirm"),
+            (dismiss_x, dismiss_w, "dismiss"),
+        ] {
             assert_eq!(
                 x + w,
                 dialog_w - DIALOG_CONTAINER_PADDING,

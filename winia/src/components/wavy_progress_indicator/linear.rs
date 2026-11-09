@@ -196,9 +196,19 @@ impl LinearWavyProgressIndicator {
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
                 .draw_node(LinearWavyIndeterminateNode {
-                    color, track_color, stroke_width, track_stroke_width,
-                    cap, gap_size, amplitude, wavelength, enable_motion,
-                    fh: fh.clone(), ft: ft.clone(), sh: sh.clone(), st: st.clone(),
+                    color,
+                    track_color,
+                    stroke_width,
+                    track_stroke_width,
+                    cap,
+                    gap_size,
+                    amplitude,
+                    wavelength,
+                    enable_motion,
+                    fh: fh.clone(),
+                    ft: ft.clone(),
+                    sh: sh.clone(),
+                    st: st.clone(),
                     wave_offset: wave_offset.clone(),
                     cache,
                 })
@@ -249,15 +259,22 @@ impl LinearWavyProgressIndicator {
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
                 .draw_node(LinearWavyDeterminateNode {
-                    color, track_color, stroke_width, track_stroke_width,
-                    cap, gap_size, stop_size, progress, wavelength, enable_motion,
+                    color,
+                    track_color,
+                    stroke_width,
+                    track_stroke_width,
+                    cap,
+                    gap_size,
+                    stop_size,
+                    progress,
+                    wavelength,
+                    enable_motion,
                     amplitude_token,
                     amplitude_state: amplitude_state.clone(),
                     wave_offset: wave_for_draw.clone(),
                     cache,
                 })
         };
-
 
         // Same rule as the plain indicators: the value is what a progress bar IS to a screen reader,
         // and an indeterminate one has none to report.
@@ -324,12 +341,21 @@ impl std::fmt::Debug for LinearWavyIndeterminateNode {
 impl crate::modifier::DrawNode for LinearWavyIndeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_linear_wavy_indeterminate(
-            canvas, rect,
-            self.color, self.track_color,
-            self.stroke_width, self.track_stroke_width,
-            self.cap, self.gap_size,
-            self.amplitude, self.wavelength, self.enable_motion,
-            self.fh.peek(), self.ft.peek(), self.sh.peek(), self.st.peek(),
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.stroke_width,
+            self.track_stroke_width,
+            self.cap,
+            self.gap_size,
+            self.amplitude,
+            self.wavelength,
+            self.enable_motion,
+            self.fh.peek(),
+            self.ft.peek(),
+            self.sh.peek(),
+            self.st.peek(),
             self.wave_offset.peek(),
             &self.cache,
         );
@@ -389,10 +415,15 @@ impl std::fmt::Debug for LinearWavyDeterminateNode {
 impl crate::modifier::DrawNode for LinearWavyDeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_linear_wavy_determinate(
-            canvas, rect,
-            self.color, self.track_color,
-            self.stroke_width, self.track_stroke_width,
-            self.cap, self.gap_size, self.stop_size,
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.stroke_width,
+            self.track_stroke_width,
+            self.cap,
+            self.gap_size,
+            self.stop_size,
             self.progress,
             self.amplitude_state.peek(),
             self.wavelength,
@@ -809,4 +840,3 @@ pub(crate) fn stroke_cap_width(
         stroke_width.max(track_stroke_width) / 2.0
     }
 }
-

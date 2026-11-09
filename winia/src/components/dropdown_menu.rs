@@ -2,7 +2,7 @@
 //! `overlay.rs` because it is a COMPONENT that uses the overlay runtime, not part of it.
 
 use crate::composable;
-use crate::overlay::{next_overlay_id, OverlayAnimSpec, PopupPosition};
+use crate::overlay::{OverlayAnimSpec, PopupPosition, next_overlay_id};
 use std::sync::Arc;
 
 /// material3's `MenuVerticalMargin` (`material/Menu.kt`): the clearance a dropdown menu keeps from the top
@@ -99,15 +99,27 @@ impl MenuItemColors {
     }
 
     pub fn text_color(&self, enabled: bool) -> crate::graphics::Color {
-        if enabled { self.text } else { self.disabled_text }
+        if enabled {
+            self.text
+        } else {
+            self.disabled_text
+        }
     }
 
     pub fn leading_icon_color(&self, enabled: bool) -> crate::graphics::Color {
-        if enabled { self.leading_icon } else { self.disabled_leading_icon }
+        if enabled {
+            self.leading_icon
+        } else {
+            self.disabled_leading_icon
+        }
     }
 
     pub fn trailing_icon_color(&self, enabled: bool) -> crate::graphics::Color {
-        if enabled { self.trailing_icon } else { self.disabled_trailing_icon }
+        if enabled {
+            self.trailing_icon
+        } else {
+            self.disabled_trailing_icon
+        }
     }
 }
 
@@ -339,7 +351,11 @@ impl DropdownMenu {
         let anchor_key = ctx.next_key();
         let modifier = crate::modifier::Modifier::new();
         let id = ctx.remember(|| next_overlay_id());
-        match ctx.start_restartable_group(anchor_key, modifier, crate::layout::box_layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            anchor_key,
+            modifier,
+            crate::layout::box_layout::BoxLayout::new(),
+        ) {
             crate::runtime::composer::GroupStatus::Skip => {}
             crate::runtime::composer::GroupStatus::Enter => {
                 anchor(ctx);
@@ -370,7 +386,9 @@ impl DropdownMenu {
             let container_color = self
                 .container_color
                 .unwrap_or_else(MenuDefaults::container_color);
-            let shadow_elevation = self.shadow_elevation.unwrap_or_else(MenuDefaults::shadow_elevation);
+            let shadow_elevation = self
+                .shadow_elevation
+                .unwrap_or_else(MenuDefaults::shadow_elevation);
             let tonal_elevation = self.tonal_elevation;
             let border = self.border;
             let menu_modifier = self.modifier;
@@ -468,11 +486,17 @@ impl DropdownMenu {
                                 crate::modifier::Modifier::new()
                             })
                             .then(crate::modifier::Modifier::new().padding_vertical(8.0))
-                            .then(crate::modifier::Modifier::new().width(
-                                crate::layout::IntrinsicSize::Max,
-                            ))
-                            .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
-                        crate::layout::Column::new().modifier(m).build(ctx, |ctx| menu(ctx));
+                            .then(
+                                crate::modifier::Modifier::new()
+                                    .width(crate::layout::IntrinsicSize::Max),
+                            )
+                            .then(
+                                crate::modifier::Modifier::new()
+                                    .vertical_scroll(scroll_state.clone()),
+                            );
+                        crate::layout::Column::new()
+                            .modifier(m)
+                            .build(ctx, |ctx| menu(ctx));
                     });
                 }),
                 local_snapshot: Vec::new(),
@@ -672,7 +696,8 @@ impl ExposedDropdownMenuBox {
     pub fn build_with_anchor_modifier(
         self,
         ctx: &mut crate::runtime::composer::ComposeCtx,
-        anchor: impl FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier) + 'static,
+        anchor: impl FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier)
+        + 'static,
         menu: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
     ) {
         self.build_inner(ctx, true, Box::new(anchor), Box::new(menu));
@@ -685,7 +710,9 @@ impl ExposedDropdownMenuBox {
         self,
         ctx: &mut crate::runtime::composer::ComposeCtx,
         element_anchor: bool,
-        anchor: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier)>,
+        anchor: Box<
+            dyn FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier),
+        >,
         menu: Box<dyn Fn(&mut crate::runtime::composer::ComposeCtx) + 'static>,
     ) {
         let expanded = self.expanded.clone();
@@ -845,9 +872,8 @@ impl ExposedDropdownMenuBox {
                             // winia's wrapper is the clickable node, which is why it claims its subtree —
                             // the same outcome Compose's `clickable` gets from `mergeDescendants = true`.
                             .semantics(
-                                crate::semantics::SemanticsConfig::new().role(
-                                    crate::semantics::SemanticsRole::DropdownList,
-                                ),
+                                crate::semantics::SemanticsConfig::new()
+                                    .role(crate::semantics::SemanticsRole::DropdownList),
                             )
                     } else {
                         crate::modifier::Modifier::new()
@@ -981,7 +1007,10 @@ impl DropdownMenuItem {
             .padding_horizontal(pad_h)
             .padding_vertical(pad_v);
         let on_click = self.on_click;
-        let colors = self.colors.clone().unwrap_or_else(MenuDefaults::item_colors);
+        let colors = self
+            .colors
+            .clone()
+            .unwrap_or_else(MenuDefaults::item_colors);
         let text_color = colors.text_color(self.enabled);
         // M3's item is `clickable(enabled, onClick, interactionSource, indication = ripple(true))`: a
         // ripple bounded to the item, in the content colour, on an interaction source the item owns unless
@@ -989,9 +1018,10 @@ impl DropdownMenuItem {
         // `ripple_with_shape`). The shape is a plain rectangle because M3 gives the item no `shape`: the
         // menu's own Surface clips the corners (`surface.rs` applies `clip(shape)`), and the 8dp vertical
         // padding already keeps the top and bottom items clear of them.
-        let interaction = self
-            .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get());
+        let interaction = self.interaction_source.unwrap_or_else(|| {
+            ctx.remember(|| crate::input::interaction::MutableInteractionSource::new())
+                .get()
+        });
         let modifier = if self.enabled {
             let modifier = modifier.clickable_with_source(&interaction, move || {
                 if let Some(cb) = &on_click {
@@ -1042,7 +1072,9 @@ impl DropdownMenuItem {
         let trailing_color = colors.trailing_icon_color(self.enabled);
         let icon_box = |ctx: &mut crate::runtime::composer::ComposeCtx,
                         color: crate::graphics::Color,
-                        content: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>| {
+                        content: Box<
+            dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync,
+        >| {
             crate::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
                 crate::layout::Column::new()
                     .modifier(crate::modifier::Modifier::new().min_width(24.0))
@@ -1079,7 +1111,6 @@ impl DropdownMenuItem {
             });
     }
 }
-
 
 #[cfg(test)]
 mod tests;

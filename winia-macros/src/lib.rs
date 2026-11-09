@@ -27,7 +27,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, Stmt};
+use syn::{ItemFn, Stmt, parse_macro_input};
 
 /// FNV-1a 字符串哈希（函数名 → scope 源码哈希；语句 id 的 key 基）
 fn fnv64(s: &str) -> u64 {
@@ -45,7 +45,11 @@ fn fnv64(s: &str) -> u64 {
 /// （参数名 == ctx_ident）。纯计算语句（不含）不注入——零 guard 零展开。
 fn stmt_uses_ctx(stmt: &Stmt, ctx: &syn::Ident) -> bool {
     match stmt {
-        Stmt::Local(l) => l.init.as_ref().map(|i| expr_uses_ctx(&i.expr, ctx)).unwrap_or(false),
+        Stmt::Local(l) => l
+            .init
+            .as_ref()
+            .map(|i| expr_uses_ctx(&i.expr, ctx))
+            .unwrap_or(false),
         Stmt::Expr(e, _) => expr_uses_ctx(e, ctx),
         _ => false,
     }
@@ -55,24 +59,35 @@ fn expr_uses_ctx(expr: &syn::Expr, ctx: &syn::Ident) -> bool {
     match expr {
         syn::Expr::MethodCall(m) => {
             let recv_is_ctx = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident(ctx));
-            if recv_is_ctx { return true; }
-            if expr_uses_ctx(&m.receiver, ctx) { return true; }
+            if recv_is_ctx {
+                return true;
+            }
+            if expr_uses_ctx(&m.receiver, ctx) {
+                return true;
+            }
             m.args.iter().any(|a| expr_uses_ctx(a, ctx))
         }
         syn::Expr::Call(c) => {
-            if expr_uses_ctx(&c.func, ctx) { return true; }
+            if expr_uses_ctx(&c.func, ctx) {
+                return true;
+            }
             c.args.iter().any(|a| expr_uses_ctx(a, ctx))
         }
         syn::Expr::Closure(cl) => {
             // content 闭包（参数名 == ctx_ident）→ 其体在语句级注入时单独处理——
             // 此处只标记"含 ctx"（其体随后由注入递归覆盖）
-            if cl.inputs.iter().any(|p| closure_pat_is_ctx(p, ctx)) { return true; }
+            if cl.inputs.iter().any(|p| closure_pat_is_ctx(p, ctx)) {
+                return true;
+            }
             expr_uses_ctx(&cl.body, ctx)
         }
         syn::Expr::If(e) => {
             expr_uses_ctx(&e.cond, ctx)
                 || e.then_branch.stmts.iter().any(|s| stmt_uses_ctx(s, ctx))
-                || e.else_branch.as_ref().map(|(_, b)| expr_uses_ctx(b, ctx)).unwrap_or(false)
+                || e.else_branch
+                    .as_ref()
+                    .map(|(_, b)| expr_uses_ctx(b, ctx))
+                    .unwrap_or(false)
         }
         syn::Expr::Block(b) => b.block.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
         syn::Expr::Match(m) => {
@@ -82,8 +97,12 @@ fn expr_uses_ctx(expr: &syn::Expr, ctx: &syn::Ident) -> bool {
                     body => expr_uses_ctx(body, ctx),
                 })
         }
-        syn::Expr::ForLoop(f) => expr_uses_ctx(&f.expr, ctx) || f.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
-        syn::Expr::While(w) => expr_uses_ctx(&w.cond, ctx) || w.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
+        syn::Expr::ForLoop(f) => {
+            expr_uses_ctx(&f.expr, ctx) || f.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx))
+        }
+        syn::Expr::While(w) => {
+            expr_uses_ctx(&w.cond, ctx) || w.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx))
+        }
         syn::Expr::Paren(p) => expr_uses_ctx(&p.expr, ctx),
         syn::Expr::Reference(r) => expr_uses_ctx(&r.expr, ctx),
         syn::Expr::Unary(u) => expr_uses_ctx(&u.expr, ctx),
@@ -152,12 +171,23 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
                     let pat = l.pat;
                     let init_expr = *init.expr;
                     let diverge = init.diverge.map(|(else_tok, else_expr)| {
-                        (else_tok, Box::new(inject_expr_blocks(*else_expr, ctx, counter)))
+                        (
+                            else_tok,
+                            Box::new(inject_expr_blocks(*else_expr, ctx, counter)),
+                        )
                     });
-                    let mut new_l = syn::Local { attrs: l.attrs, let_token: l.let_token, pat, init: None, semi_token: l.semi_token };
+                    let mut new_l = syn::Local {
+                        attrs: l.attrs,
+                        let_token: l.let_token,
+                        pat,
+                        init: None,
+                        semi_token: l.semi_token,
+                    };
                     new_l.init = Some(syn::LocalInit {
                         eq_token: init.eq_token,
-                        expr: Box::new(syn::parse_quote!({ let __stmt_guard = #ctx.enter_stmt(#id); #init_expr })),
+                        expr: Box::new(
+                            syn::parse_quote!({ let __stmt_guard = #ctx.enter_stmt(#id); #init_expr }),
+                        ),
                         diverge,
                     });
                     out.push(Stmt::Local(new_l));
@@ -406,7 +436,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .find_map(|arg| match arg {
             syn::FnArg::Typed(pat_type) => match &*pat_type.pat {
-                syn::Pat::Ident(pat_ident) if pat_ident.ident == attr_ident => Some(pat_ident.ident.clone()),
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == attr_ident => {
+                    Some(pat_ident.ident.clone())
+                }
                 _ => None,
             },
             _ => None,
@@ -572,7 +604,12 @@ impl syn::parse::Parse for KeyedStmtInput {
 #[proc_macro_attribute]
 pub fn composable_keyed(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
-    let ItemFn { attrs, vis, sig, block } = input;
+    let ItemFn {
+        attrs,
+        vis,
+        sig,
+        block,
+    } = input;
 
     let attr_ident = parse_ctx_ident(attr.into());
     let ctx_ident = sig
@@ -580,7 +617,9 @@ pub fn composable_keyed(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .find_map(|arg| match arg {
             syn::FnArg::Typed(pat_type) => match &*pat_type.pat {
-                syn::Pat::Ident(pat_ident) if pat_ident.ident == attr_ident => Some(pat_ident.ident.clone()),
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == attr_ident => {
+                    Some(pat_ident.ident.clone())
+                }
                 _ => None,
             },
             _ => None,
@@ -605,7 +644,10 @@ pub fn composable_keyed(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
     new_stmts.extend(block.stmts.clone());
 
-    let new_block = syn::Block { brace_token: block.brace_token, stmts: new_stmts };
+    let new_block = syn::Block {
+        brace_token: block.brace_token,
+        stmts: new_stmts,
+    };
     let output = quote! {
         #(#attrs)*
         #vis #sig #new_block
@@ -634,7 +676,9 @@ fn transform_root_closure_with_hash(
             syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
             // 带类型注解的参数（Pat::Type）——解包内层 ident
             syn::Pat::Type(pt) => match &*pt.pat {
-                syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => {
+                    Some(pat_ident.ident.clone())
+                }
                 _ => None,
             },
             _ => None,
@@ -688,13 +732,18 @@ mod inject_tests {
     #[test]
     fn test_content_closure_body_injected() {
         let body: syn::Block = syn::parse_quote!({
-            Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
+            Column::new().build(ctx, |ctx| {
+                Text::new("a").build(ctx);
+            });
         });
         let mut counter = 0;
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
         let out = quote!(#(#stmts)*).to_string();
         let n = out.matches("enter_stmt").count();
-        assert!(n >= 2, "顶层 + content 闭包体都应注入 enter_stmt（实际 {n}）——嵌套注入丢失");
+        assert!(
+            n >= 2,
+            "顶层 + content 闭包体都应注入 enter_stmt（实际 {n}）——嵌套注入丢失"
+        );
     }
 
     /// 防回归：if 分支内的 build（带分号语句）也应注入（控制流体递归）
@@ -718,7 +767,9 @@ mod inject_tests {
     #[test]
     fn test_let_init_closure_injected() {
         let body: syn::Block = syn::parse_quote!({
-            let x = Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
+            let x = Column::new().build(ctx, |ctx| {
+                Text::new("a").build(ctx);
+            });
         });
         let mut counter = 0;
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
@@ -738,7 +789,10 @@ mod inject_tests {
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
         let out = quote!(#(#stmts)*).to_string();
         // 智能注入：let v = if c {...} 为纯计算（无 ctx）——不注入（零 guard）
-        assert!(!out.contains("enter_stmt"), "纯计算语句不应注入（实际含 enter_stmt）");
+        assert!(
+            !out.contains("enter_stmt"),
+            "纯计算语句不应注入（实际含 enter_stmt）"
+        );
     }
 }
 
@@ -761,8 +815,12 @@ mod inject_tests_extra {
     fn test_match_arm_body_injected() {
         let body: syn::Block = syn::parse_quote!({
             match mode {
-                0 => { Text::new("a").build(ctx); },
-                _ => { Text::new("b").build(ctx); },
+                0 => {
+                    Text::new("a").build(ctx);
+                }
+                _ => {
+                    Text::new("b").build(ctx);
+                }
             };
         });
         let n = enter_count(body);
@@ -774,7 +832,7 @@ mod inject_tests_extra {
         let body: syn::Block = syn::parse_quote!({
             for i in 0..5 {
                 Text::new("x").build(ctx);
-            };
+            }
         });
         let n = enter_count(body);
         assert!(n >= 2, "顶层 for + 循环体都应注入（实际 {n}）");
@@ -785,7 +843,9 @@ mod inject_tests_extra {
         // content 闭包内的 content 闭包——双层注入
         let body: syn::Block = syn::parse_quote!({
             Column::new().build(ctx, |ctx| {
-                Row::new().build(ctx, |ctx| { Text::new("x").build(ctx); });
+                Row::new().build(ctx, |ctx| {
+                    Text::new("x").build(ctx);
+                });
             });
         });
         let n = enter_count(body);
@@ -795,7 +855,9 @@ mod inject_tests_extra {
     #[test]
     fn test_let_else_diverge_injected() {
         let body: syn::Block = syn::parse_quote!({
-            let Some(x) = opt else { return; };
+            let Some(x) = opt else {
+                return;
+            };
         });
         let n = enter_count(body);
         // 智能注入：let-else 纯计算（无 ctx）——不注入
@@ -814,9 +876,16 @@ mod inject_tests_extra {
         let mut counter = 0;
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
         let out = quote!(#(#stmts)*).to_string();
-        assert_eq!(out.matches("enter_stmt").count(), 2,
-            "纯计算语句不应注入——只注入含 ctx 的语句（实际 enter_stmt={}）", out.matches("enter_stmt").count());
-        assert!(!out.contains("let doubled = {"), "纯计算 let 不应被 guard 块包裹");
+        assert_eq!(
+            out.matches("enter_stmt").count(),
+            2,
+            "纯计算语句不应注入——只注入含 ctx 的语句（实际 enter_stmt={}）",
+            out.matches("enter_stmt").count()
+        );
+        assert!(
+            !out.contains("let doubled = {"),
+            "纯计算 let 不应被 guard 块包裹"
+        );
     }
 
     /// keyed_stmt! 块内语句应递归注入（attribute 宏看不到 function-like 宏
@@ -833,16 +902,24 @@ mod inject_tests_extra {
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
         let out = quote!(#(#stmts)*).to_string();
         assert_eq!(
-            out.matches("enter_stmt").count(), 2,
-            "块内两条 build 都应注入 enter_stmt（实际 {}）", out.matches("enter_stmt").count()
+            out.matches("enter_stmt").count(),
+            2,
+            "块内两条 build 都应注入 enter_stmt（实际 {}）",
+            out.matches("enter_stmt").count()
         );
         // 两条语句 id 从 offset（fnv(loc)+1）起编号且不同（并列组件实例隔离；
         // 不与 keyed_stmt 自身 enter_stmt(fnv(loc)) 重复）——
         // quote 美化输出在方法名与括号间有空格（`enter_stmt (id`），按数字段断言
         let first = (loc_hash as u32).wrapping_add(1);
         let second = (loc_hash as u32).wrapping_add(2);
-        assert!(out.contains(&format!("{first}u32")), "第一条语句 id 应为 offset+1 起（实际 {out}）");
-        assert!(out.contains(&format!("{second}u32")), "第二条语句 id 应递增（实际 {out}）");
+        assert!(
+            out.contains(&format!("{first}u32")),
+            "第一条语句 id 应为 offset+1 起（实际 {out}）"
+        );
+        assert!(
+            out.contains(&format!("{second}u32")),
+            "第二条语句 id 应递增（实际 {out}）"
+        );
         // 嵌套 content 闭包内语句也注入（不同 id——继续递增）
         let body: syn::Block = syn::parse_quote!({
             Row::new().build(ctx, |ctx| {
@@ -853,8 +930,10 @@ mod inject_tests_extra {
         let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
         let out = quote!(#(#stmts)*).to_string();
         assert_eq!(
-            out.matches("enter_stmt").count(), 2,
-            "顶层 Row + 闭包内 Icon 都应注入（实际 {}）", out.matches("enter_stmt").count()
+            out.matches("enter_stmt").count(),
+            2,
+            "顶层 Row + 闭包内 Icon 都应注入（实际 {}）",
+            out.matches("enter_stmt").count()
         );
     }
 }

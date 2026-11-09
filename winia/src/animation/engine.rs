@@ -8,10 +8,18 @@ pub(super) fn spec_kind(spec: &AnimationSpec) -> String {
         ),
         AnimationSpec::Tween(t) => format!("tween({}ms)", t.duration.as_millis()),
         AnimationSpec::Keyframes(k) => {
-            format!("keyframes({}ms, {} frames)", k.duration.as_millis(), k.frames.len())
+            format!(
+                "keyframes({}ms, {} frames)",
+                k.duration.as_millis(),
+                k.frames.len()
+            )
         }
         AnimationSpec::KeyframesWithSpline(k) => {
-            format!("keyframesWithSpline({}ms, {} frames)", k.duration.as_millis(), k.frames.len())
+            format!(
+                "keyframesWithSpline({}ms, {} frames)",
+                k.duration.as_millis(),
+                k.frames.len()
+            )
         }
         AnimationSpec::Repeatable(r) => format!(
             "repeatable({}x {}, base={})",
@@ -33,7 +41,9 @@ pub fn update_animations() -> bool {
     let anims = std::mem::take(&mut *ACTIVE_ANIMATIONS.lock().unwrap());
     let mut still = Vec::new();
     for mut a in anims {
-        if a.update() { still.push(a); }
+        if a.update() {
+            still.push(a);
+        }
     }
     let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
     // De-duplicate: an animation pushed outside the lock wins, so drop the older one for the same state.
@@ -46,11 +56,16 @@ pub fn update_animations() -> bool {
     let canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
     let mut cstill = Vec::new();
     for mut c in canims {
-        if c.update() { cstill.push(c); }
+        if c.update() {
+            cstill.push(c);
+        }
     }
     let mut clist = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
     for c in cstill {
-        if !clist.iter().any(|x| x.state.state_id() == c.state.state_id()) {
+        if !clist
+            .iter()
+            .any(|x| x.state.state_id() == c.state.state_id())
+        {
             clist.push(c);
         }
     }
@@ -59,8 +74,14 @@ pub fn update_animations() -> bool {
 
 /// Remove the animation for one state from every list (used by `InfiniteTransition::dispose`).
 pub fn remove_animation_by_state(state_id: StateId) {
-    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != state_id);
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|a| a.state_id() != state_id);
+    ACTIVE_COLOR_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|a| a.state.state_id() != state_id);
 }
 
 /// Clear every active animation (test isolation — wipes the global tables between tests).
@@ -72,8 +93,16 @@ pub(crate) fn clear_all_animations() {
 
 /// Whether the state already has an animation in either list (checked across lists to avoid advancing it twice).
 pub fn has_animation_for_state(state_id: StateId) -> bool {
-    ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == state_id)
-        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == state_id)
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a.state_id() == state_id)
+        || ACTIVE_COLOR_ANIMATIONS
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|a| a.state.state_id() == state_id)
 }
 
 /// Cancel the running animation for one state (the value stays where it is and is no longer overwritten).
@@ -88,8 +117,14 @@ pub fn cancel_animation<T: 'static>(state: &State<T>) {
 /// Cancel by raw StateId (for `Animating`/`Visual` handles that share the
 /// same signal but are not `State<T>`).
 pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
-    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|a| a.state_id() != sid);
+    ACTIVE_COLOR_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|a| a.state.state_id() != sid);
 }
 
 /// The interactions that carry an elevation — the `Interaction` kinds `ElevationDefaults` knows about
@@ -122,7 +157,7 @@ pub fn elevation_spec_for_pair(
     from: Option<ElevationInteraction>,
     to: Option<ElevationInteraction>,
 ) -> Option<AnimationSpec> {
-    use interpolator::{fast_out_slow_in, CubicBezier};
+    use interpolator::{CubicBezier, fast_out_slow_in};
     let outgoing_easing = || CubicBezier::new(0.40, 0.00, 0.60, 1.00);
     match (from, to) {
         (_, Some(_)) => Some(AnimationSpec::Tween(TweenSpec::new(
@@ -150,8 +185,16 @@ pub fn elevation_spec_for_pair(
 /// indistinguishable from a settled one. `AnimatedSize` asks this AND compares the value, which is
 /// what Compose's `animateTo` returning `Finished` amounts to.
 pub fn is_animating_state(id: crate::runtime::state::StateId) -> bool {
-    ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == id)
-        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == id)
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a.state_id() == id)
+        || ACTIVE_COLOR_ANIMATIONS
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|a| a.state.state_id() == id)
 }
 
 /// The value a state's running animation is heading for — Compose's `Animatable.targetValue`, `None`
@@ -237,8 +280,10 @@ pub fn trace_flag(name: &'static str) -> bool {
     const UNKNOWN: u8 = 0;
     const OFF: u8 = 1;
     const ON: u8 = 2;
-    static TRACES: [(&str, std::sync::atomic::AtomicU8); 1] =
-        [("WINIA_ANIM_SIZE_TRACE", std::sync::atomic::AtomicU8::new(UNKNOWN))];
+    static TRACES: [(&str, std::sync::atomic::AtomicU8); 1] = [(
+        "WINIA_ANIM_SIZE_TRACE",
+        std::sync::atomic::AtomicU8::new(UNKNOWN),
+    )];
     let Some((_, cell)) = TRACES.iter().find(|(n, _)| *n == name) else {
         return false;
     };
@@ -249,7 +294,10 @@ pub fn trace_flag(name: &'static str) -> bool {
             let on = std::env::var(name)
                 .map(|v| !v.is_empty() && v != "0")
                 .unwrap_or(false);
-            cell.store(if on { ON } else { OFF }, std::sync::atomic::Ordering::Relaxed);
+            cell.store(
+                if on { ON } else { OFF },
+                std::sync::atomic::Ordering::Relaxed,
+            );
             on
         }
     }
@@ -301,4 +349,3 @@ pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
         || !ACTIVE_COLOR_ANIMATIONS.lock().unwrap().is_empty()
 }
-

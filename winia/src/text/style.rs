@@ -29,16 +29,32 @@ impl FontWeight {
     pub const EXTRA_BOLD: FontWeight = FontWeight(800);
     pub const BLACK: FontWeight = FontWeight(900);
 
-    pub fn new(weight: i32) -> Self { FontWeight(weight.clamp(1, 1000)) }
-    pub fn value(self) -> i32 { self.0 }
+    pub fn new(weight: i32) -> Self {
+        FontWeight(weight.clamp(1, 1000))
+    }
+    pub fn value(self) -> i32 {
+        self.0
+    }
 }
 
-impl Default for FontWeight { fn default() -> Self { FontWeight::NORMAL } }
+impl Default for FontWeight {
+    fn default() -> Self {
+        FontWeight::NORMAL
+    }
+}
 
 /// How a face leans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontSlant { Upright, Italic, Oblique }
-impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
+pub enum FontSlant {
+    Upright,
+    Italic,
+    Oblique,
+}
+impl Default for FontSlant {
+    fn default() -> Self {
+        FontSlant::Upright
+    }
+}
 
 // ═══════════════════════════════════════════════════════════
 // Text style.
@@ -50,8 +66,19 @@ impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
 /// built (`Text::build`), so the payload and the paint path only ever see the physical four — which
 /// is what makes them safe under RTL without every call site having to ask for the direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextAlign { Left, Center, Right, Justify, Start, End }
-impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
+    Start,
+    End,
+}
+impl Default for TextAlign {
+    fn default() -> Self {
+        TextAlign::Left
+    }
+}
 
 /// Compose's `TextDecoration`: a set of line decorations, combinable with `|` (`+` in Kotlin).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,10 +88,22 @@ pub struct TextDecoration {
 }
 
 impl TextDecoration {
-    pub const NONE: Self = Self { underline: false, line_through: false };
-    pub const UNDERLINE: Self = Self { underline: true, line_through: false };
-    pub const LINE_THROUGH: Self = Self { underline: false, line_through: true };
-    pub const UNDERLINE_AND_LINE_THROUGH: Self = Self { underline: true, line_through: true };
+    pub const NONE: Self = Self {
+        underline: false,
+        line_through: false,
+    };
+    pub const UNDERLINE: Self = Self {
+        underline: true,
+        line_through: false,
+    };
+    pub const LINE_THROUGH: Self = Self {
+        underline: false,
+        line_through: true,
+    };
+    pub const UNDERLINE_AND_LINE_THROUGH: Self = Self {
+        underline: true,
+        line_through: true,
+    };
 }
 
 impl std::ops::BitOr for TextDecoration {
@@ -102,7 +141,11 @@ pub enum TextOverflow {
     /// (`ButtonGroup.kt:1118-1124`) so that a press narrowing an item cannot cut the word it shows.
     Visible,
 }
-impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
+impl Default for TextOverflow {
+    fn default() -> Self {
+        TextOverflow::Clip
+    }
+}
 
 impl TextOverflow {
     /// Whether this overflow truncates with an ellipsis (Compose's `isEllipsis`).
@@ -122,7 +165,11 @@ pub enum TextDrawStyle {
     /// Outlined glyphs: only the outline is painted, `width` logical pixels thick.
     Stroke { width: f32 },
 }
-impl Default for TextDrawStyle { fn default() -> Self { TextDrawStyle::Fill } }
+impl Default for TextDrawStyle {
+    fn default() -> Self {
+        TextDrawStyle::Fill
+    }
+}
 
 /// A paint for the glyphs that a plain colour cannot express — Compose's `TextStyle.brush`.
 ///
@@ -169,7 +216,9 @@ impl TextGeometricTransform {
     }
     /// The inverse: a node-space x → paragraph-space x, at `y`.
     pub fn unmap_x(&self, x: f32, y: f32) -> f32 {
-        if self.scale_x.abs() < f32::EPSILON { return x; }
+        if self.scale_x.abs() < f32::EPSILON {
+            return x;
+        }
         (x + self.skew_x * y) / self.scale_x
     }
 }
@@ -245,12 +294,20 @@ pub struct TextShadow {
 
 impl TextShadow {
     pub fn new(color: Color, offset: (f32, f32), blur: f32) -> Self {
-        Self { color, offset, blur }
+        Self {
+            color,
+            offset,
+            blur,
+        }
     }
 
     /// The sigma Skia's paragraph wants for this blur radius.
     pub fn blur_sigma(&self) -> f64 {
-        if self.blur <= 0.0 { 0.0 } else { (self.blur * 0.577_35 + 0.5) as f64 }
+        if self.blur <= 0.0 {
+            0.0
+        } else {
+            (self.blur * 0.577_35 + 0.5) as f64
+        }
     }
 }
 
@@ -300,41 +357,119 @@ pub struct TextStyle {
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, min_lines: None, font_family: None, decoration: None, background: None, shadow: None, font_feature_settings: None, draw_style: None, brush: None, text_geometric_transform: None, line_height_style: None }
+        Self {
+            color: None,
+            font_size: None,
+            font_weight: None,
+            font_style: None,
+            text_align: None,
+            overflow: None,
+            max_lines: None,
+            soft_wrap: None,
+            letter_spacing: None,
+            line_height: None,
+            min_lines: None,
+            font_family: None,
+            decoration: None,
+            background: None,
+            shadow: None,
+            font_feature_settings: None,
+            draw_style: None,
+            brush: None,
+            text_geometric_transform: None,
+            line_height_style: None,
+        }
     }
 
-    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
-    pub fn font_size(mut self, s: impl Into<TextUnit>) -> Self { self.font_size = Some(s.into()); self }
-    pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
-    pub fn font_style(mut self, s: FontSlant) -> Self { self.font_style = Some(s); self }
-    pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
-    pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
-    pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
-    pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
-    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
-    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
-    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
+    pub fn color(mut self, c: Color) -> Self {
+        self.color = Some(c);
+        self
+    }
+    pub fn font_size(mut self, s: impl Into<TextUnit>) -> Self {
+        self.font_size = Some(s.into());
+        self
+    }
+    pub fn font_weight(mut self, w: FontWeight) -> Self {
+        self.font_weight = Some(w);
+        self
+    }
+    pub fn font_style(mut self, s: FontSlant) -> Self {
+        self.font_style = Some(s);
+        self
+    }
+    pub fn italic(mut self) -> Self {
+        self.font_style = Some(FontSlant::Italic);
+        self
+    }
+    pub fn bold(mut self) -> Self {
+        self.font_weight = Some(FontWeight::BOLD);
+        self
+    }
+    pub fn oblique(mut self) -> Self {
+        self.font_style = Some(FontSlant::Oblique);
+        self
+    }
+    pub fn align(mut self, a: TextAlign) -> Self {
+        self.text_align = Some(a);
+        self
+    }
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self {
+        self.overflow = Some(overflow);
+        self
+    }
+    pub fn max_lines(mut self, lines: usize) -> Self {
+        self.max_lines = Some(lines);
+        self
+    }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self {
+        self.soft_wrap = Some(wrap);
+        self
+    }
     pub fn letter_spacing(mut self, spacing: impl Into<crate::unit::TextUnit>) -> Self {
         self.letter_spacing = Some(spacing.into());
         self
     }
     /// The minimum number of lines the box reserves — Compose's `TextStyle.minLines`. Callers must
     /// keep `1 <= min_lines <= max_lines`; `Text` enforces it the way Compose does.
-    pub fn min_lines(mut self, lines: usize) -> Self { self.min_lines = Some(lines); self }
+    pub fn min_lines(mut self, lines: usize) -> Self {
+        self.min_lines = Some(lines);
+        self
+    }
     /// A font family name, resolved against the platform's font collection.
-    pub fn font_family(mut self, family: impl Into<String>) -> Self { self.font_family = Some(family.into()); self }
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(family.into());
+        self
+    }
     /// Compose's `TextStyle.shadow`.
-    pub fn shadow(mut self, shadow: TextShadow) -> Self { self.shadow = Some(shadow); self }
+    pub fn shadow(mut self, shadow: TextShadow) -> Self {
+        self.shadow = Some(shadow);
+        self
+    }
     /// Compose's `TextStyle.fontFeatureSettings`, e.g. `"smcp"` or `"liga" off`.
-    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self { self.font_feature_settings = Some(settings.into()); self }
+    pub fn font_feature_settings(mut self, settings: impl Into<String>) -> Self {
+        self.font_feature_settings = Some(settings.into());
+        self
+    }
     /// Compose's `TextStyle.drawStyle` — `Fill` or an outline `Stroke { width }`.
-    pub fn draw_style(mut self, style: TextDrawStyle) -> Self { self.draw_style = Some(style); self }
+    pub fn draw_style(mut self, style: TextDrawStyle) -> Self {
+        self.draw_style = Some(style);
+        self
+    }
     /// Compose's `TextStyle.brush` — a linear gradient over the glyphs.
-    pub fn brush(mut self, brush: TextBrush) -> Self { self.brush = Some(brush); self }
+    pub fn brush(mut self, brush: TextBrush) -> Self {
+        self.brush = Some(brush);
+        self
+    }
     /// Compose's `TextStyle.textGeometricTransform` — horizontal scale and skew.
-    pub fn text_geometric_transform(mut self, t: TextGeometricTransform) -> Self { self.text_geometric_transform = Some(t); self }
+    pub fn text_geometric_transform(mut self, t: TextGeometricTransform) -> Self {
+        self.text_geometric_transform = Some(t);
+        self
+    }
     /// Compose's `TextStyle.lineHeightStyle` — alignment and trim of the extra leading.
-    pub fn line_height_style(mut self, s: LineHeightStyle) -> Self { self.line_height_style = Some(s); self }
+    pub fn line_height_style(mut self, s: LineHeightStyle) -> Self {
+        self.line_height_style = Some(s);
+        self
+    }
     /// Compose's `TextStyle.textDecoration`; it drives the `underline` / `strikethrough` flags.
     pub fn text_decoration(mut self, decoration: TextDecoration) -> Self {
         self.decoration = Some(decoration);
@@ -344,7 +479,10 @@ impl TextStyle {
     pub fn decoration(&self) -> TextDecoration {
         self.decoration.unwrap_or(TextDecoration::NONE)
     }
-    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
+    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self {
+        self.line_height = Some(height.into());
+        self
+    }
     /// Adds an underline to whatever decoration this style already specifies.
     pub fn underline(mut self) -> Self {
         let d = self.decoration.unwrap_or(TextDecoration::NONE);
@@ -358,11 +496,16 @@ impl TextStyle {
         self.decoration = Some(d | TextDecoration::LINE_THROUGH);
         self
     }
-    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    pub fn background(mut self, c: Color) -> Self {
+        self.background = Some(c);
+        self
+    }
 }
 
 impl Default for TextStyle {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Parse Compose's `fontFeatureSettings` string into the pairs Skia takes.
@@ -379,17 +522,23 @@ pub fn parse_font_features(settings: &str) -> Vec<(String, i32)> {
         // A token is either a tag, or a value that belongs to the tag before it.
         match token.to_ascii_lowercase().as_str() {
             "on" => {
-                if let Some(last) = out.last_mut() { last.1 = 1; }
+                if let Some(last) = out.last_mut() {
+                    last.1 = 1;
+                }
                 continue;
             }
             "off" => {
-                if let Some(last) = out.last_mut() { last.1 = 0; }
+                if let Some(last) = out.last_mut() {
+                    last.1 = 0;
+                }
                 continue;
             }
             _ => {}
         }
         if let Ok(value) = token.parse::<i32>() {
-            if let Some(last) = out.last_mut() { last.1 = value; }
+            if let Some(last) = out.last_mut() {
+                last.1 = value;
+            }
             continue;
         }
         let tag = token.trim_matches('"');
@@ -430,6 +579,9 @@ mod style_tests {
         assert_eq!(hard.blur_sigma(), 0.0);
         let soft = TextShadow::new(Color::BLACK, (1.0, 2.0), 4.0);
         let sigma = soft.blur_sigma();
-        assert!((sigma - 2.8094).abs() < 0.01, "sigma for a 4 px radius: {sigma}");
+        assert!(
+            (sigma - 2.8094).abs() < 0.01,
+            "sigma for a 4 px radius: {sigma}"
+        );
     }
 }

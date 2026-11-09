@@ -1,9 +1,12 @@
 //! 临时探针：scaffold_demo 结构下 bottom bar 区域是否被内容侵入
-use winia::runtime::composer::{ComposeCtx, Composer};
+use winia::components::{
+    Icon, NAVIGATION_BAR_ICON_SIZE, NavigationBar, NavigationBarItem, Scaffold, Text, TopAppBar,
+    TopAppBarScrollBehavior, TopAppBarState,
+};
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;
-use winia::components::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, TopAppBar, TopAppBarScrollBehavior, TopAppBarState};
+use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::theme::{ThemeColors, WiniaTheme};
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
@@ -47,9 +50,7 @@ fn probe_bar_region_bleed() {
                         .build(ctx, |ctx| {
                             for i in 0..30 {
                                 Text::new(format!("Content item {i}"))
-                                    .modifier(
-                                        Modifier::new().padding(16.0).fill_max_width(),
-                                    )
+                                    .modifier(Modifier::new().padding(16.0).fill_max_width())
                                     .build(ctx);
                             }
                         });
@@ -62,14 +63,11 @@ fn probe_bar_region_bleed() {
                 .bottom_bar(|ctx| {
                     NavigationBar::new(|ctx| {
                         for i in 0..3 {
-                            NavigationBarItem::new(
-                                i == 0,
-                                |ctx| {
-                                    Icon::svg_path(HOME_PATH)
-                                        .size(winia::components::NAVIGATION_BAR_ICON_SIZE)
-                                        .build(ctx);
-                                },
-                            )
+                            NavigationBarItem::new(i == 0, |ctx| {
+                                Icon::svg_path(HOME_PATH)
+                                    .size(winia::components::NAVIGATION_BAR_ICON_SIZE)
+                                    .build(ctx);
+                            })
                             .label(move |ctx| Text::new("Tab").build(ctx))
                             .on_click(|| {})
                             .build(ctx);

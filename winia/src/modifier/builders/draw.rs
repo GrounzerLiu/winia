@@ -14,9 +14,8 @@ pub(crate) struct TextExtras {
     /// A font family name, resolved by Skia's font collection.
     pub font_family: Option<String>,
     /// Called after every measure with the layout the text produced (Compose's `onTextLayout`).
-    pub on_text_layout: Option<
-        std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>,
-    >,
+    pub on_text_layout:
+        Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult) + Send + Sync>>,
     /// Compose's `autoSize`: `(min, max)` in logical pixels, or `None` to lay out at the stated size.
     pub auto_size: Option<(f32, f32)>,
     /// Compose's `TextStyle.shadow`.
@@ -28,7 +27,11 @@ pub(crate) struct TextExtras {
     /// Compose's `TextStyle.brush`.
     pub brush: Option<crate::text::TextBrush>,
     /// The richer `onTextLayout` sink — carried here so the leaf can hand it the paragraph.
-    pub on_text_layout_layout: Option<std::sync::Arc<dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync>>,
+    pub on_text_layout_layout: Option<
+        std::sync::Arc<
+            dyn Fn(&crate::text::TextLayoutResult, &crate::text::TextLayout<'_>) + Send + Sync,
+        >,
+    >,
     /// Compose's `TextStyle.textGeometricTransform`.
     pub transform: Option<crate::text::TextGeometricTransform>,
     /// Compose's `TextStyle.lineHeightStyle`.
@@ -55,7 +58,11 @@ impl Modifier {
     /// and inside it read the animated value with `State::peek()` — `get()` would register a
     /// dependency and trigger a recomposition. The animation engine writes through `Visual::set`
     /// (no notification) and requests a redraw per frame, so the whole path recomposes nothing.
-    pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
+    pub fn background(
+        self,
+        color: impl Into<BackgroundColor>,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
+    ) -> Self {
         self.push(ModifierElement::Background {
             color: color.into(),
             shape: shape.into(),
@@ -102,9 +109,17 @@ impl Modifier {
         soft_wrap: bool,
     ) -> Self {
         self.text_content_full(
-            content, font_size, color, font_weight, font_style,
-            max_lines, align, overflow, soft_wrap,
-            0.0, None,
+            content,
+            font_size,
+            color,
+            font_weight,
+            font_style,
+            max_lines,
+            align,
+            overflow,
+            soft_wrap,
+            0.0,
+            None,
             TextExtras::default(),
         )
     }
@@ -204,13 +219,17 @@ impl Modifier {
 
     /// Blur the content (a GPU `saveLayer`; nothing is read back).
     pub fn blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
-        self.push(ModifierElement::Blur { radius: radius.into() })
+        self.push(ModifierElement::Blur {
+            radius: radius.into(),
+        })
     }
 
     /// Blur what is behind the node (frosted glass): a snapshot and blur taken at render time,
     /// before the node's own content is drawn.
     pub fn backdrop_blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
-        self.push(ModifierElement::BackdropBlur { radius: radius.into() })
+        self.push(ModifierElement::BackdropBlur {
+            radius: radius.into(),
+        })
     }
 
     /// The text-field container's visuals (internal to `TextField`: the M3 container paint

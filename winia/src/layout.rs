@@ -9,65 +9,66 @@
 //! - FlowRow / FlowColumn: 流式换行/换列（对标 Compose foundation）
 
 pub mod axis;
-pub(crate) mod selection_handles;
 pub mod constraints;
 pub mod direction;
+pub(crate) mod selection_handles;
 pub mod sizing;
 pub use sizing::{Dimension, IntrinsicSize, SizeValue};
-pub(crate) mod container;
+pub mod box_with_constraints;
 pub mod components;
-pub mod spacer;
+pub(crate) mod container;
 pub mod flexbox;
 pub mod grid;
-pub mod staggered;
-pub mod box_with_constraints;
 /// The lazy lists — `LazyColumn` AND `LazyRow`, which share one axis-generic core.
 pub mod lazy;
+pub mod spacer;
+pub mod staggered;
 /// The module used to be named `lazy_column`, before `LazyRow` moved in beside it. Kept as an alias
 /// so the old `winia::layout::lazy_column::…` paths keep resolving.
 pub use lazy as lazy_column;
 pub mod adaptive;
 pub mod custom;
-pub mod subcompose;
 pub mod node;
 pub mod relocation;
+pub mod subcompose;
 
-pub(crate) mod item_animation;
-pub(crate) mod flex;
-pub(crate) mod column;
-mod row;
 pub(crate) mod box_layout;
+pub(crate) mod column;
+pub(crate) mod flex;
 pub mod flow;
+pub(crate) mod item_animation;
+mod row;
 
 pub use axis::{Axis, HorizontalAxis, VerticalAxis};
 pub use constraints::Constraints;
 // The layout primitives re-exported at the layer root: `Row`/`Column`/`Stack` are how a caller names
 // the layout, not which file they live in.
-pub use column::Column;
-pub use row::Row;
 pub use box_layout::Stack;
+pub use column::Column;
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
+pub use row::Row;
 pub use spacer::Spacer;
 // Compose's `Layout`: a container with a caller-supplied measure policy.
+pub use adaptive::{HeightSizeClass, WidthSizeClass, set_window_size, window_size};
+pub use box_layout::BoxLayout;
+pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
+pub use column::ColumnLayout;
 pub use custom::Layout;
 pub use flexbox::{
     FlexAlignContent, FlexAlignItems, FlexAlignSelf, FlexBasis, FlexBox, FlexBoxConfig,
     FlexBoxConfigInput, FlexBoxLayout, FlexDirection, FlexItemConfig, FlexJustifyContent, FlexWrap,
 };
+pub use flow::{FlowColumnLayout, FlowRowLayout};
 pub use grid::{Grid, GridArea, GridFlow, GridLayout, GridTrackSpec};
-pub use staggered::{assign_lanes, lane_anchors, LaneSlot};
-pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy::{
-    GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyHorizontalStaggeredGrid, LazyList,
-    LazyListState, LazyRow, LazyStaggeredGrid, LazyVerticalGrid, LazyVerticalStaggeredGrid,
+    GridCells, ItemHeightCache, LazyColumn, LazyHorizontalGrid, LazyHorizontalStaggeredGrid,
+    LazyList, LazyListState, LazyRow, LazyStaggeredGrid, LazyVerticalGrid,
+    LazyVerticalStaggeredGrid,
 };
-pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
 pub use node::*;
 pub use relocation::BringIntoViewRequester;
-pub use column::ColumnLayout;
 pub use row::RowLayout;
-pub use box_layout::BoxLayout;
-pub use flow::{FlowRowLayout, FlowColumnLayout};
+pub use staggered::{LaneSlot, assign_lanes, lane_anchors};
 
 // re-export measure_node 供外部使用
 pub(crate) use node::measure_node;

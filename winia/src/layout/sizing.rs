@@ -81,15 +81,21 @@ impl Dimension {
 }
 
 impl From<f32> for Dimension {
-    fn from(v: f32) -> Self { Dimension::Fixed(v) }
+    fn from(v: f32) -> Self {
+        Dimension::Fixed(v)
+    }
 }
 
 impl From<crate::unit::Dp> for Dimension {
-    fn from(d: crate::unit::Dp) -> Self { Dimension::Dp(d) }
+    fn from(d: crate::unit::Dp) -> Self {
+        Dimension::Dp(d)
+    }
 }
 
 impl From<crate::unit::Px> for Dimension {
-    fn from(p: crate::unit::Px) -> Self { Dimension::Px(p) }
+    fn from(p: crate::unit::Px) -> Self {
+        Dimension::Px(p)
+    }
 }
 
 impl From<crate::runtime::state::State<f32>> for Dimension {
@@ -146,7 +152,9 @@ impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for Dimension {
 }
 
 impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for Dimension {
-    fn from(f: F) -> Self { Dimension::Dynamic(Arc::new(f)) }
+    fn from(f: F) -> Self {
+        Dimension::Dynamic(Arc::new(f))
+    }
 }
 
 /// Which of the content's intrinsic measurements a size modifier asks for — Compose's
@@ -212,19 +220,27 @@ impl SizeValue {
 }
 
 impl From<Dimension> for SizeValue {
-    fn from(d: Dimension) -> Self { SizeValue::Length(d) }
+    fn from(d: Dimension) -> Self {
+        SizeValue::Length(d)
+    }
 }
 
 impl From<f32> for SizeValue {
-    fn from(v: f32) -> Self { SizeValue::Length(Dimension::Fixed(v)) }
+    fn from(v: f32) -> Self {
+        SizeValue::Length(Dimension::Fixed(v))
+    }
 }
 
 impl From<crate::unit::Dp> for SizeValue {
-    fn from(v: crate::unit::Dp) -> Self { SizeValue::Length(Dimension::Dp(v)) }
+    fn from(v: crate::unit::Dp) -> Self {
+        SizeValue::Length(Dimension::Dp(v))
+    }
 }
 
 impl From<crate::unit::Px> for SizeValue {
-    fn from(v: crate::unit::Px) -> Self { SizeValue::Length(Dimension::Px(v)) }
+    fn from(v: crate::unit::Px) -> Self {
+        SizeValue::Length(Dimension::Px(v))
+    }
 }
 
 impl From<crate::runtime::state::State<f32>> for SizeValue {
@@ -276,11 +292,15 @@ impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
 }
 
 impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
-    fn from(f: F) -> Self { SizeValue::Length(Dimension::Dynamic(Arc::new(f))) }
+    fn from(f: F) -> Self {
+        SizeValue::Length(Dimension::Dynamic(Arc::new(f)))
+    }
 }
 
 impl From<IntrinsicSize> for SizeValue {
-    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
+    fn from(s: IntrinsicSize) -> Self {
+        SizeValue::Intrinsic(s)
+    }
 }
 
 impl Clone for SizeValue {

@@ -106,8 +106,12 @@ impl LazyListState {
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             item_animations: crate::layout::item_animation::ItemAnimationHost::default(),
-            known_keys: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-            pending_new: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            known_keys: std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
+            pending_new: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             has_layout: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             anchor_key: std::sync::Arc::new(std::sync::Mutex::new(None)),
             anchor_shift: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
@@ -121,14 +125,20 @@ impl LazyListState {
     }
 
     /// The first visible item's index.
-    pub fn first_visible(&self) -> usize { self.first_visible_index.get() }
+    pub fn first_visible(&self) -> usize {
+        self.first_visible_index.get()
+    }
 
     /// The first visible item's offset (positive = scrolled out).
-    pub fn offset(&self) -> f32 { self.offset.get() }
+    pub fn offset(&self) -> f32 {
+        self.offset.get()
+    }
 
     /// How far the first visible item has been scrolled past, in pixels (`0.0` = its leading edge is
     /// at the viewport edge).
-    pub fn first_visible_offset(&self) -> f32 { self.first_visible_offset.get() }
+    pub fn first_visible_offset(&self) -> f32 {
+        self.first_visible_offset.get()
+    }
 
     /// The layout information of the last measure pass — Compose's `LazyListState.layoutInfo`: the
     /// visible items (index, key, main-axis offset and size), the viewport bounds and the list's
@@ -143,11 +153,15 @@ impl LazyListState {
     ///
     /// A tracked read: a caller deriving from it (a pager's page size) is woken when the first measure
     /// resolves it, which a `peek` would miss - the pager's build does not re-run by itself.
-    pub fn viewport_main_size(&self) -> f32 { self.viewport_main.get() }
+    pub fn viewport_main_size(&self) -> f32 {
+        self.viewport_main.get()
+    }
 
     /// The viewport's CROSS extent from the last measure (0 before the first one), minus the cross
     /// content padding. A lazy grid derives its cell count from it.
-    pub fn viewport_cross_size(&self) -> f32 { self.viewport_cross.get() }
+    pub fn viewport_cross_size(&self) -> f32 {
+        self.viewport_cross.get()
+    }
 
     /// Whether there is content past the last visible item (Compose
     /// `LazyListState.canScrollForward`). Asked from the pixel offset against the measured limit, so
@@ -164,7 +178,9 @@ impl LazyListState {
 
     /// Whether there is content before the first visible item (Compose
     /// `LazyListState.canScrollBackward`).
-    pub fn can_scroll_backward(&self) -> bool { self.offset.get() > 0.5 }
+    pub fn can_scroll_backward(&self) -> bool {
+        self.offset.get() > 0.5
+    }
 
     /// [`can_scroll_forward`](Self::can_scroll_forward) as a `State` that notifies only when the
     /// ANSWER changes.
@@ -193,7 +209,9 @@ impl LazyListState {
     }
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`, which
     /// callers use to stay off a list that is already moving.
-    pub fn is_scrolling(&self) -> bool { self.is_scrolling.get() }
+    pub fn is_scrolling(&self) -> bool {
+        self.is_scrolling.get()
+    }
 
     /// Jump to an index immediately (the item's top aligns with the viewport top, plus an offset).
     ///
@@ -252,6 +270,7 @@ impl LazyListState {
 }
 
 impl Default for LazyListState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
-

@@ -3,7 +3,7 @@ use crate::feature::{Feature, FeatureTrait};
 use crate::feature_mapping::ProgressableFeature;
 use crate::point::Point;
 use crate::rounded_polygon::RoundedPolygon;
-use crate::utils::{positive_modulus, require, DISTANCE_EPSILON};
+use crate::utils::{DISTANCE_EPSILON, positive_modulus, require};
 use std::ops::Deref;
 use std::rc::Rc;
 
@@ -318,7 +318,6 @@ impl Deref for MeasuredPolygon {
     }
 }
 
-
 /// Trait for measuring a cubic. Implementations can use whatever algorithm desired to produce
 /// these measurement values.
 
@@ -332,7 +331,6 @@ pub trait Measurer {
     /// reached.
     fn find_cubic_cut_point(&self, c: &Cubic, m: f32) -> f32;
 }
-
 
 /// Approximates the arc lengths of cubics by splitting the arc into segments and calculating their
 /// sizes. The more segments, the more accurate the result will be to the true arc length. The
@@ -386,13 +384,13 @@ impl Measurer for LengthMeasurer {
 mod polygon_measure_tests {
     use crate::assert_equalish;
     use crate::corner_rounding::CornerRounding;
+    use crate::cubic::Cubic;
+    use crate::feature::FeatureFactory;
     use crate::polygon_measure::{LengthMeasurer, MeasuredPolygon, Measurer};
     use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
     use crate::tests::assert_floats_equalish;
     use std::f32::consts::PI;
     use std::rc::Rc;
-    use crate::cubic::Cubic;
-    use crate::feature::FeatureFactory;
 
     macro_rules! irregular_polygon_measure {
         ($polygon:expr) => {
@@ -493,20 +491,8 @@ mod polygon_measure_tests {
         let unit = 1.0_f32;
         let coordinates = vec![
             // lower glass
-            0.0,
-            0.0,
-            unit,
-            unit,
-            -unit,
-            unit,
-
-            // upper glass
-            0.0,
-            0.0,
-            -unit,
-            -unit,
-            unit,
-            -unit,
+            0.0, 0.0, unit, unit, -unit, unit, // upper glass
+            0.0, 0.0, -unit, -unit, unit, -unit,
         ];
 
         let diagonal = (unit * unit + unit * unit).sqrt();
@@ -535,7 +521,8 @@ mod polygon_measure_tests {
             FeatureFactory::build_convex_corner(vec![Cubic::straight_line(1.0, 0.0, 0.0, 0.0)]),
             // Empty feature at the end.
             FeatureFactory::build_convex_corner(vec![Cubic::straight_line(0.0, 0.0, 0.0, 0.0)]),
-        ]).build();
+        ])
+        .build();
         irregular_polygon_measure!(&triangle);
     }
 
@@ -560,19 +547,19 @@ mod polygon_measure_tests {
         )
     }
 
-    fn custom_polygon_measure(
-        polygon: &RoundedPolygon,
-        progresses: &[f32],
-    ) {
+    fn custom_polygon_measure(polygon: &RoundedPolygon, progresses: &[f32]) {
         irregular_polygon_measure(polygon, |measured_polygon| {
             assert_eq!(measured_polygon.len(), progresses.len());
 
-            measured_polygon.iter().enumerate().for_each(|(index, measured_cubic)| {
-                assert_equalish!(
-                    progresses[index],
-                    measured_cubic.end_outline_progress - measured_cubic.start_outline_progress
-                );
-            });
+            measured_polygon
+                .iter()
+                .enumerate()
+                .for_each(|(index, measured_cubic)| {
+                    assert_equalish!(
+                        progresses[index],
+                        measured_cubic.end_outline_progress - measured_cubic.start_outline_progress
+                    );
+                });
         });
     }
 

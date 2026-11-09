@@ -4,8 +4,8 @@
 //! so the demo and the UI test exercise one source: wrapping, max items/lines, Clip vs Visible,
 //! cross arrangement, weight, baseline alignment and fillMaxRowHeight / fillMaxColumnWidth.
 
-use winia::layout::IntrinsicSize;
 use letclone::clone;
+use winia::layout::IntrinsicSize;
 use winia::prelude::*;
 
 #[path = "common/settings.rs"]
@@ -42,9 +42,12 @@ fn flow_features(ctx: &mut ComposeCtx) {
             Text::new("FlowRow — animated reflow (3 x 2 <-> 2 x 3)")
                 .font_size(16.0)
                 .build(ctx);
-            Text::new(format!("{} columns — the cards spring to their new slots", columns.get()))
-                .font_size(12.0)
-                .build(ctx);
+            Text::new(format!(
+                "{} columns — the cards spring to their new slots",
+                columns.get()
+            ))
+            .font_size(12.0)
+            .build(ctx);
             Button::new()
                 .modifier(Modifier::new().test_tag("toggle-columns"))
                 .on_click({
@@ -60,10 +63,7 @@ fn flow_features(ctx: &mut ComposeCtx) {
                     Modifier::new()
                         .fill_max_width()
                         .test_tag("animated-box")
-                        .background(
-                            Color::from_argb(20, 50, 100, 200),
-                            Shape::rounded(8.0),
-                        )
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
                         .padding(8.0),
                 )
                 .build(ctx, |ctx| {
@@ -258,7 +258,10 @@ fn flow_features(ctx: &mut ComposeCtx) {
                                 .layout_weight(1.0)
                                 .fill_max_row_height()
                                 .test_tag("weight-fill")
-                                .background(Color::from_argb(255, 220, 160, 100), Shape::rounded(6.0)),
+                                .background(
+                                    Color::from_argb(255, 220, 160, 100),
+                                    Shape::rounded(6.0),
+                                ),
                         )
                         .build(ctx, |ctx| {
                             Text::new("weight").font_size(12.0).build(ctx);
@@ -281,7 +284,11 @@ fn flow_features(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new("small")
                         .font_size(12.0)
-                        .modifier(Modifier::new().test_tag("baseline-small").align_by_baseline())
+                        .modifier(
+                            Modifier::new()
+                                .test_tag("baseline-small")
+                                .align_by_baseline(),
+                        )
                         .build(ctx);
                     Text::new("BIG")
                         .font_size(28.0)
@@ -302,10 +309,7 @@ fn flow_features(ctx: &mut ComposeCtx) {
                             Modifier::new()
                                 .width(IntrinsicSize::Max)
                                 .test_tag("flow-intrinsic")
-                                .background(
-                                    Color::from_argb(20, 100, 50, 100),
-                                    Shape::rounded(8.0),
-                                )
+                                .background(Color::from_argb(20, 100, 50, 100), Shape::rounded(8.0))
                                 .padding(8.0),
                         )
                         .build(ctx, |ctx| {
@@ -355,7 +359,10 @@ fn flow_features(ctx: &mut ComposeCtx) {
                                 .size(20.0, 30.0)
                                 .fill_max_column_width()
                                 .test_tag("column-fill")
-                                .background(Color::from_argb(255, 100, 200, 160), Shape::rounded(6.0)),
+                                .background(
+                                    Color::from_argb(255, 100, 200, 160),
+                                    Shape::rounded(6.0),
+                                ),
                         )
                         .build(ctx, |ctx| {
                             Text::new("fill").font_size(12.0).build(ctx);

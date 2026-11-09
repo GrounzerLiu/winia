@@ -1,5 +1,5 @@
 use crate::cubic::{Cubic, PointTransformer};
-use crate::utils::{require, DISTANCE_EPSILON};
+use crate::utils::{DISTANCE_EPSILON, require};
 
 pub struct FeatureFactory;
 impl FeatureFactory {
@@ -27,7 +27,6 @@ impl FeatureFactory {
     pub fn build_ignorable_feature(cubics: Vec<Cubic>) -> Feature {
         Self::validate(Feature::edge(cubics))
     }
-
 
     /// Groups a [`Cubic`] object to an edge (neither inward nor outward identification in a shape).
     ///
@@ -64,11 +63,11 @@ impl FeatureFactory {
     fn validate(feature: Feature) -> Feature {
         require(
             !feature.cubics().is_empty(),
-            "Features need at least one cubic."
+            "Features need at least one cubic.",
         );
         require(
             Self::is_continuous(&feature),
-            "Feature must be continuous, with the anchor points of all cubics matching the anchor points of the preceding and succeeding cubics"
+            "Feature must be continuous, with the anchor points of all cubics matching the anchor points of the preceding and succeeding cubics",
         );
         feature
     }
@@ -76,8 +75,9 @@ impl FeatureFactory {
         let mut prev_cubic = &feature.cubics()[0];
         for index in 1..feature.cubics().len() {
             let cubic = &feature.cubics()[index];
-            if (cubic.anchor_0_x() - prev_cubic.anchor_1_x()).abs() > DISTANCE_EPSILON ||
-                (cubic.anchor_0_y() - prev_cubic.anchor_1_y()).abs() > DISTANCE_EPSILON {
+            if (cubic.anchor_0_x() - prev_cubic.anchor_1_x()).abs() > DISTANCE_EPSILON
+                || (cubic.anchor_0_y() - prev_cubic.anchor_1_y()).abs() > DISTANCE_EPSILON
+            {
                 return false;
             }
             prev_cubic = cubic;
@@ -186,21 +186,21 @@ impl FeatureTrait for Feature {
 pub trait FeatureTrait {
     fn cubics(&self) -> &Vec<Cubic>;
     /**
-    * Transforms the points in this [Feature] with the given [PointTransformer] and returns a new
-    * [Feature]
-    *
-    * @param f The [PointTransformer] used to transform this [Feature]
-    */
+     * Transforms the points in this [Feature] with the given [PointTransformer] and returns a new
+     * [Feature]
+     *
+     * @param f The [PointTransformer] used to transform this [Feature]
+     */
     fn transformed(&self, f: &PointTransformer) -> Feature;
     /**
-    * Returns a new [Feature] with the points that define the shape of this [Feature] in reversed
-    * order.
-    */
+     * Returns a new [Feature] with the points that define the shape of this [Feature] in reversed
+     * order.
+     */
     fn reversed(&self) -> Feature;
     /**
-    * Whether this Feature gets ignored in the Morph mapping. See [build_ignorableFeature](FeatureFactory::build_ignorable_feature) for more
-    * details.
-    */
+     * Whether this Feature gets ignored in the Morph mapping. See [build_ignorableFeature](FeatureFactory::build_ignorable_feature) for more
+     * details.
+     */
     fn is_ignorable_feature(&self) -> bool;
     /** Whether this Feature is an Edge with no inward or outward indentation. */
     fn is_edge(&self) -> bool;
@@ -217,7 +217,7 @@ pub trait FeatureTrait {
  */
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Edge {
-    pub cubics: Vec<Cubic>
+    pub cubics: Vec<Cubic>,
 }
 
 impl Edge {
@@ -231,19 +231,19 @@ impl FeatureTrait for Edge {
     }
 
     fn transformed(&self, f: &PointTransformer) -> Feature {
-        let new_cubics: Vec<Cubic> = self.cubics.iter().map(|c| {
-            let c = c.transformed(f);
-            c
-        }).collect();
-        Feature::edge(
-            new_cubics
-        )
+        let new_cubics: Vec<Cubic> = self
+            .cubics
+            .iter()
+            .map(|c| {
+                let c = c.transformed(f);
+                c
+            })
+            .collect();
+        Feature::edge(new_cubics)
     }
 
     fn reversed(&self) -> Feature {
-        Feature::edge(
-            self.cubics.iter().rev().map(|c| c.reverse()).collect()
-        )
+        Feature::edge(self.cubics.iter().rev().map(|c| c.reverse()).collect())
     }
 
     fn is_ignorable_feature(&self) -> bool {
@@ -291,7 +291,7 @@ impl FeatureTrait for Corner {
     fn transformed(&self, f: &PointTransformer) -> Feature {
         Feature::corner(
             self.cubics.iter().map(|c| c.transformed(f)).collect(),
-            self.convex
+            self.convex,
         )
     }
 
@@ -300,7 +300,7 @@ impl FeatureTrait for Corner {
             self.cubics.iter().rev().map(|c| c.reverse()).collect(),
             // TODO: b/369320447 - Revert flag negation when [RoundedPolygon] ignores orientation
             // for setting the flag
-            !self.convex
+            !self.convex,
         )
     }
 
@@ -323,25 +323,31 @@ impl FeatureTrait for Corner {
 
 #[cfg(test)]
 mod feature_tests {
-    use std::panic::catch_unwind;
     use crate::assert_panic;
     use crate::cubic::Cubic;
     use crate::feature::{Feature, FeatureFactory};
+    use std::panic::catch_unwind;
 
     #[test]
     fn cannot_build_empty_features() {
-        assert_panic!({FeatureFactory::build_convex_corner(vec![])});
-        assert_panic!({FeatureFactory::build_concave_corner(vec![])});
-        assert_panic!({FeatureFactory::build_ignorable_feature(vec![])});
+        assert_panic!({ FeatureFactory::build_convex_corner(vec![]) });
+        assert_panic!({ FeatureFactory::build_concave_corner(vec![]) });
+        assert_panic!({ FeatureFactory::build_ignorable_feature(vec![]) });
     }
 
     #[test]
     fn cannot_build_non_continuous_features() {
         let cubic1 = Cubic::straight_line(0.0, 0.0, 1.0, 1.0);
         let cubic2 = Cubic::straight_line(10.0, 10.0, 11.0, 11.0);
-        assert_panic!({FeatureFactory::build_convex_corner(vec![cubic1.clone(), cubic2.clone()])});
-        assert_panic!({FeatureFactory::build_concave_corner(vec![cubic1.clone(), cubic2.clone()])});
-        assert_panic!({FeatureFactory::build_ignorable_feature(vec![cubic1.clone(), cubic2.clone()])});
+        assert_panic!({
+            FeatureFactory::build_convex_corner(vec![cubic1.clone(), cubic2.clone()])
+        });
+        assert_panic!({
+            FeatureFactory::build_concave_corner(vec![cubic1.clone(), cubic2.clone()])
+        });
+        assert_panic!({
+            FeatureFactory::build_ignorable_feature(vec![cubic1.clone(), cubic2.clone()])
+        });
     }
     #[test]
     fn builds_concave_corner() {

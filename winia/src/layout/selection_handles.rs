@@ -4,9 +4,9 @@
 //! another, so the points are computed by walking the arena once per end (the run's slot key names
 //! the node) and asking that run's paragraph where the caret for the offset is.
 
-use crate::layout::node::{find_node_by_id, find_node_id_by_slot_key, LayoutNode};
-use crate::text::selection::SelectionRegistrar;
+use crate::layout::node::{LayoutNode, find_node_by_id, find_node_id_by_slot_key};
 use crate::text::TextLayout;
+use crate::text::selection::SelectionRegistrar;
 
 /// A handle's scene position: the point sits just BELOW the line, which is where the Compose handles
 /// hang (the circle is drawn centred there).

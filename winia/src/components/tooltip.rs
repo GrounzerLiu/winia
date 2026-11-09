@@ -14,8 +14,8 @@
 //! - `.visible(State<bool>)` 外部控制合并（hover 或外部 true 都显示）
 
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 
 /// 提示框（对齐 Compose `TooltipBox`）。
 pub struct Tooltip {
@@ -89,21 +89,23 @@ impl Tooltip {
 
     /// 锚点 + 浮层组合（锚点 content 挂 hover 交互；浮层经 overlay 定位）
     #[composable]
-    pub fn build(
-        self,
-        ctx: &mut ComposeCtx,
-        anchor: impl FnOnce(&mut ComposeCtx),
-    ) {
+    pub fn build(self, ctx: &mut ComposeCtx, anchor: impl FnOnce(&mut ComposeCtx)) {
         // 锚点容器（普通组合——挂主树；tooltip 锚定其位置，对齐 DropdownMenu）
         let anchor_key = ctx.next_key();
         let id = ctx.remember(|| crate::overlay::next_overlay_id());
         // hover 交互源：锚点挂 hoverable，进入/离开自动发射 hover 事件
-        let interaction = ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get();
+        let interaction = ctx
+            .remember(|| crate::input::interaction::MutableInteractionSource::new())
+            .get();
         let mut anchor_modifier = Modifier::new();
         if self.hover_trigger {
             anchor_modifier = anchor_modifier.hoverable(&interaction);
         }
-        match ctx.start_restartable_group(anchor_key, anchor_modifier, crate::layout::BoxLayout::new()) {
+        match ctx.start_restartable_group(
+            anchor_key,
+            anchor_modifier,
+            crate::layout::BoxLayout::new(),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 anchor(ctx);
@@ -114,7 +116,11 @@ impl Tooltip {
 
         // 可见性：hover 状态（注册依赖——hover 进出触发重组）+ 外部控制合并
         let hovered = interaction.is_hovered();
-        let external = self.external_visible.as_ref().map(|s| s.get()).unwrap_or(false);
+        let external = self
+            .external_visible
+            .as_ref()
+            .map(|s| s.get())
+            .unwrap_or(false);
         let show = self.hover_trigger && hovered || external;
         // ⚠ 外部 dismiss 仅对**外部 visible 控制**的 tooltip（rich）生效——
         // 纯 hover 触发的（无 external_visible）不参与：点击应完全穿透到
@@ -159,10 +165,11 @@ impl Tooltip {
                 match_anchor_width: false,
                 on_dismiss: self.external_visible.as_ref().map(|s| {
                     let s = s.clone();
-                    std::sync::Arc::new(move || s.set(false)) as std::sync::Arc<dyn Fn() + Send + Sync>
+                    std::sync::Arc::new(move || s.set(false))
+                        as std::sync::Arc<dyn Fn() + Send + Sync>
                 }),
                 enter_anim: None, // Tooltip 默认无进入动画
-                exit_anim: None, // Tooltip 默认无退出动画
+                exit_anim: None,  // Tooltip 默认无退出动画
                 content: Box::new(content),
                 local_snapshot: Vec::new(),
             });
@@ -188,15 +195,23 @@ fn plain_tooltip_content(ctx: &mut ComposeCtx, text: &str) {
             .width(180.0)
             .padding(8.0);
         let sk = ctx.next_key();
-        match ctx.start_restartable_group(sk, m, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+        match ctx.start_restartable_group(
+            sk,
+            m,
+            crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+        ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                crate::theme::WiniaTheme::with_content_color(theme.inverse_on_surface, ctx, |ctx| {
-                    crate::components::Text::new(text)
-                        .font_size(14.0)
-                        .max_lines(4)
-                        .build(ctx);
-                });
+                crate::theme::WiniaTheme::with_content_color(
+                    theme.inverse_on_surface,
+                    ctx,
+                    |ctx| {
+                        crate::components::Text::new(text)
+                            .font_size(14.0)
+                            .max_lines(4)
+                            .build(ctx);
+                    },
+                );
             }
         }
         ctx.end_restartable_group();

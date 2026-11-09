@@ -180,11 +180,20 @@ mod tests {
     fn same_parameter_separates_parameters_from_values() {
         let a = Dyn::from(State::new(1.0f32));
         let b = Dyn::from(State::new(2.0f32));
-        assert!(a.same_parameter(&b), "two dynamic values are the same request");
+        assert!(
+            a.same_parameter(&b),
+            "two dynamic values are the same request"
+        );
 
         let literal = Dyn::from(1.0f32);
-        assert!(!a.same_parameter(&literal), "a literal and a state are different requests");
-        assert!(!literal.same_parameter(&a), "and the comparison is symmetric");
+        assert!(
+            !a.same_parameter(&literal),
+            "a literal and a state are different requests"
+        );
+        assert!(
+            !literal.same_parameter(&a),
+            "and the comparison is symmetric"
+        );
         assert!(literal.same_parameter(&Dyn::from(1.0f32)));
         assert!(!literal.same_parameter(&Dyn::from(2.0f32)));
     }
@@ -202,7 +211,10 @@ mod tests {
 
         let literal: Dyn<Shape> = Shape::Rectangle.into();
         assert!(matches!(literal, Dyn::Static(_)));
-        assert!(!literal.same_parameter(&d), "a literal and a state are different requests");
+        assert!(
+            !literal.same_parameter(&d),
+            "a literal and a state are different requests"
+        );
         assert!(d.same_parameter(&Dyn::from(&State::new(Shape::rounded(1.0)))));
     }
 }

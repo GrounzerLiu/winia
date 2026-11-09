@@ -1,5 +1,5 @@
-use super::*;
 use super::calendar::format_string;
+use super::*;
 
 /// What a [`DatePickerState`] starts from — material3's `DatePickerState(…)` parameters
 /// (`DatePicker.kt:423-438`), in a struct because Rust has no default arguments.
@@ -89,7 +89,10 @@ impl DatePickerState {
         let selected = init
             .initial_selected_date_millis
             .map(|millis| model.canonical_millis(millis))
-            .filter(|millis| init.year_range.contains(&model.canonical_date(*millis).year));
+            .filter(|millis| {
+                init.year_range
+                    .contains(&model.canonical_date(*millis).year)
+            });
         // material3's default displayed month is the selection's month; a month whose year is out of range
         // falls back to today, like `BaseDatePickerStateImpl` (`DatePicker.kt:1135-1149`).
         let displayed = init
@@ -154,7 +157,10 @@ impl DatePickerState {
     pub fn set_selected_date_millis(&self, millis: Option<i64>) {
         let canonical = millis
             .map(|millis| self.model.canonical_millis(millis))
-            .filter(|millis| self.year_range.contains(&self.model.canonical_date(*millis).year));
+            .filter(|millis| {
+                self.year_range
+                    .contains(&self.model.canonical_date(*millis).year)
+            });
         self.selected_date_millis.set(canonical);
     }
 
@@ -239,7 +245,10 @@ impl DatePickerState {
         if !self.year_range.contains(&date.year) {
             return format_string(
                 DATE_INPUT_INVALID_YEAR_RANGE,
-                &[&self.year_range.start().to_string(), &self.year_range.end().to_string()],
+                &[
+                    &self.year_range.start().to_string(),
+                    &self.year_range.end().to_string(),
+                ],
             );
         }
         let policy = self.selectable_dates.get().0;
@@ -269,8 +278,9 @@ pub fn remember_date_picker_state(
     // The `.apply` at the end of Compose's version is not decoration: the initial values are taken
     // once, but the SELECTABLE DATES are written back on every composition, so a caller whose policy
     // changed has it taken up without recreating the state. Hence the write after the `remember`.
-    let state = ctx.remember(|| DatePickerState::with(locale, init.clone())).get();
+    let state = ctx
+        .remember(|| DatePickerState::with(locale, init.clone()))
+        .get();
     state.set_selectable_dates(init.selectable_dates);
     state
 }
-

@@ -101,7 +101,7 @@ impl Backend {
 
 pub type SoftBufferSurface = softbuffer::Surface<Arc<Box<dyn Window>>, Arc<Box<dyn Window>>>;
 
-pub trait SkiaWindowTrait: Deref<Target=dyn Window> + AsRef<dyn Window> {
+pub trait SkiaWindowTrait: Deref<Target = dyn Window> + AsRef<dyn Window> {
     fn destroy_surface(&mut self);
     fn recreate_surface(&mut self, event_loop: &dyn winit::event_loop::ActiveEventLoop);
     fn resize(&mut self);
@@ -185,7 +185,11 @@ impl SkiaWindow {
 /// Announce the backends that failed on the way to the one that worked — once per backend per
 /// process, so a multi-window app says it once instead of once per window.
 fn report_failures(failures: &[(&'static str, SkiwinError)]) {
-    static REPORTED: [AtomicBool; 3] = [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)];
+    static REPORTED: [AtomicBool; 3] = [
+        AtomicBool::new(false),
+        AtomicBool::new(false),
+        AtomicBool::new(false),
+    ];
     for (name, error) in failures {
         let Some(index) = Backend::ALL.iter().position(|b| b.name() == *name) else {
             continue;
@@ -310,7 +314,10 @@ mod tests {
     fn the_fallback_chain_keeps_its_order_and_always_ends_in_software() {
         let compiled = Backend::compiled();
         // A filter of ALL keeps the capability order that `SkiaWindow::new` walks.
-        let expected: Vec<Backend> = Backend::ALL.into_iter().filter(|b| b.is_compiled()).collect();
+        let expected: Vec<Backend> = Backend::ALL
+            .into_iter()
+            .filter(|b| b.is_compiled())
+            .collect();
         assert_eq!(compiled, expected);
         // The CPU path is what makes "this machine has no GPU for us" survivable, so it is not
         // feature-gated and it is the last resort, never the first choice.
@@ -319,4 +326,3 @@ mod tests {
         assert_ne!(Backend::ALL[0], Backend::Cpu);
     }
 }
-

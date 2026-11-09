@@ -3,7 +3,7 @@ mod renderer;
 
 use crate::vulkan::context::VulkanRenderContext;
 use crate::vulkan::renderer::VulkanRenderer;
-use crate::{SkiwinError, SkiwinResult, SkiaWindowTrait};
+use crate::{SkiaWindowTrait, SkiwinError, SkiwinResult};
 use parking_lot::Mutex;
 use skia_safe::{gpu, Surface};
 use std::ops::Deref;
@@ -60,7 +60,11 @@ impl SkiaWindowTrait for VulkanSkiaWindow {
         if self.renderer.is_some() {
             return;
         }
-        match VulkanRenderer::new(self.window.clone(), self.queue.clone(), self.skia_ctx.clone()) {
+        match VulkanRenderer::new(
+            self.window.clone(),
+            self.queue.clone(),
+            self.skia_ctx.clone(),
+        ) {
             Ok(renderer) => self.renderer = Some(renderer),
             Err(error) => log::error!("[skiwin] could not recreate the Vulkan surface: {error}"),
         }

@@ -1,6 +1,6 @@
-use std::hash::Hash;
 use crate::point::Point;
-use crate::utils::{convex, direction_vector, distance, DISTANCE_EPSILON};
+use crate::utils::{DISTANCE_EPSILON, convex, direction_vector, distance};
+use std::hash::Hash;
 
 /**
  * This class holds the anchor and control point data for a single cubic Bézier curve, with anchor
@@ -53,7 +53,12 @@ impl Cubic {
         arr.copy_from_slice(&points[0..8]);
         Self { points: arr }
     }
-    pub fn from_points(anchor_0: Point, control_0: Point, control_1: Point, anchor_1: Point) -> Self {
+    pub fn from_points(
+        anchor_0: Point,
+        control_0: Point,
+        control_1: Point,
+        anchor_1: Point,
+    ) -> Self {
         Self::new(
             anchor_0.0,
             anchor_0.1,
@@ -164,7 +169,8 @@ impl Cubic {
 
         // Find the derivative, which is a quadratic Bezier. Then we can solve for t using
         // the quadratic formula
-        let xa = -self.anchor_0_x() + 3.0 * self.control_0_x() - 3.0 * self.control_1_x() + self.anchor_1_x();
+        let xa = -self.anchor_0_x() + 3.0 * self.control_0_x() - 3.0 * self.control_1_x()
+            + self.anchor_1_x();
         let xb = 2.0 * self.anchor_0_x() - 4.0 * self.control_0_x() + 2.0 * self.control_1_x();
         let xc = -self.anchor_0_x() + self.control_0_x();
 
@@ -210,7 +216,8 @@ impl Cubic {
         }
 
         // Repeat the above for y coordinate
-        let ya = -self.anchor_0_y() + 3.0 * self.control_0_y() - 3.0 * self.control_1_y() + self.anchor_1_y();
+        let ya = -self.anchor_0_y() + 3.0 * self.control_0_y() - 3.0 * self.control_1_y()
+            + self.anchor_1_y();
         let yb = 2.0 * self.anchor_0_y() - 4.0 * self.control_0_y() + 2.0 * self.control_1_y();
         let yc = -self.anchor_0_y() + self.control_0_y();
 
@@ -268,17 +275,14 @@ impl Cubic {
         let first = Cubic::new(
             self.anchor_0_x(),
             self.anchor_0_y(),
-
             self.anchor_0_x() * u + self.control_0_x() * t,
             self.anchor_0_y() * u + self.control_0_y() * t,
-
             self.anchor_0_x() * (u * u)
                 + self.control_0_x() * (2.0 * u * t)
                 + self.control_1_x() * (t * t),
             self.anchor_0_y() * (u * u)
                 + self.control_0_y() * (2.0 * u * t)
                 + self.control_1_y() * (t * t),
-
             point_on_curve.x(),
             point_on_curve.y(),
         );
@@ -286,17 +290,14 @@ impl Cubic {
         let second = Cubic::new(
             point_on_curve.x(),
             point_on_curve.y(),
-
             self.control_0_x() * (u * u)
                 + self.control_1_x() * (2.0 * u * t)
                 + self.anchor_1_x() * (t * t),
             self.control_0_y() * (u * u)
                 + self.control_1_y() * (2.0 * u * t)
                 + self.anchor_1_y() * (t * t),
-
             self.control_1_x() * u + self.anchor_1_x() * t,
             self.control_1_y() * u + self.anchor_1_y() * t,
-
             self.anchor_1_x(),
             self.anchor_1_y(),
         );
@@ -330,12 +331,7 @@ impl Cubic {
 
     /// Generates a Bézier curve that is a straight line between the given anchor points. The
     /// control points lie 1/3 of the distance from their respective anchor points.
-    pub fn straight_line(
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-    ) -> Cubic {
+    pub fn straight_line(x0: f32, y0: f32, x1: f32, y1: f32) -> Cubic {
         Cubic::new(
             x0,
             y0,
@@ -351,14 +347,7 @@ impl Cubic {
     /// and ending anchor points. The curve generated is the smallest of the two possible arcs
     /// around the entire 360-degree circle. Arcs of greater than 180 degrees should use more
     /// than one arc together. Note that p0 and p1 should be equidistant from the center.
-    pub fn circular_arc(
-        center_x: f32,
-        center_y: f32,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-    ) -> Cubic {
+    pub fn circular_arc(center_x: f32, center_y: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> Cubic {
         let p0d = direction_vector(x0 - center_x, y0 - center_y);
         let p1d = direction_vector(x1 - center_x, y1 - center_y);
         let rotated_p0 = p0d.rotate_90();
@@ -368,9 +357,10 @@ impl Cubic {
         if cosa > 0.999 {
             return Self::straight_line(x0, y0, x1, y1);
         }
-        let k = distance(x0 - center_x, y0 - center_y) * 4.0 / 3.0 *
-            ((2.0 * (1.0 - cosa)).sqrt() - (1.0 - cosa * cosa).sqrt()) / (1.0 - cosa) *
-            if clockwise { 1.0 } else { -1.0 };
+        let k = distance(x0 - center_x, y0 - center_y) * 4.0 / 3.0
+            * ((2.0 * (1.0 - cosa)).sqrt() - (1.0 - cosa * cosa).sqrt())
+            / (1.0 - cosa)
+            * if clockwise { 1.0 } else { -1.0 };
         Cubic::new(
             x0,
             y0,
@@ -388,11 +378,7 @@ impl Cubic {
         Cubic::new(x0, y0, x0, y0, x0, y0, x0, y0)
     }
 
-    fn transform_one_point(
-        &mut self,
-        f: &PointTransformer,
-        ix: usize
-    ) {
+    fn transform_one_point(&mut self, f: &PointTransformer, ix: usize) {
         let result = f(self.points[ix], self.points[ix + 1]);
         self.points[ix] = result.0;
         self.points[ix + 1] = result.1;
@@ -416,7 +402,6 @@ impl Cubic {
 //     fn transform(&self, x: f32, y: f32) -> Point;
 // }
 pub type PointTransformer = dyn Fn(f32, f32) -> Point;
-
 
 impl std::ops::Add for Cubic {
     type Output = Cubic;
@@ -507,11 +492,11 @@ impl std::ops::Div<i32> for Cubic {
 
 #[cfg(test)]
 mod cubic_tests {
-    use std::ops::Deref;
-    use lazy_static::lazy_static;
     use crate::cubic::Cubic;
     use crate::point::Point;
     use crate::tests::{identity_transform, scale_transform, translate_transform};
+    use lazy_static::lazy_static;
+    use std::ops::Deref;
 
     const ZERO: Point = Point(0.0, 0.0);
     const P0: Point = Point(1.0, 0.0);
@@ -521,6 +506,8 @@ mod cubic_tests {
     // fn cubic() -> Cubic {
     //     Cubic::from_points(P0, P1, P2, P3)
     // }
+    // Parenthesised on purpose: rustfmt would rewrite it into a braced form the macro rejects.
+    #[rustfmt::skip]
     lazy_static!(
         static ref CUBIC: Cubic = Cubic::from_points(P0, P1, P2, P3);
     );
@@ -547,15 +534,39 @@ mod cubic_tests {
         div_cubic = *CUBIC / 1;
         assert_eq!(div_cubic, *CUBIC);
         div_cubic = *CUBIC / 2.0;
-        assert_eq!(Point(div_cubic.anchor_0_x(), div_cubic.anchor_0_y()), P0 / 2.0);
-        assert_eq!(Point(div_cubic.control_0_x(), div_cubic.control_0_y()), P1 / 2.0);
-        assert_eq!(Point(div_cubic.control_1_x(), div_cubic.control_1_y()), P2 / 2.0);
-        assert_eq!(Point(div_cubic.anchor_1_x(), div_cubic.anchor_1_y()), P3 / 2.0);
+        assert_eq!(
+            Point(div_cubic.anchor_0_x(), div_cubic.anchor_0_y()),
+            P0 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.control_0_x(), div_cubic.control_0_y()),
+            P1 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.control_1_x(), div_cubic.control_1_y()),
+            P2 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.anchor_1_x(), div_cubic.anchor_1_y()),
+            P3 / 2.0
+        );
         div_cubic = *CUBIC / 2;
-        assert_eq!(Point(div_cubic.anchor_0_x(), div_cubic.anchor_0_y()), P0 / 2.0);
-        assert_eq!(Point(div_cubic.control_0_x(), div_cubic.control_0_y()), P1 / 2.0);
-        assert_eq!(Point(div_cubic.control_1_x(), div_cubic.control_1_y()), P2 / 2.0);
-        assert_eq!(Point(div_cubic.anchor_1_x(), div_cubic.anchor_1_y()), P3 / 2.0);
+        assert_eq!(
+            Point(div_cubic.anchor_0_x(), div_cubic.anchor_0_y()),
+            P0 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.control_0_x(), div_cubic.control_0_y()),
+            P1 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.control_1_x(), div_cubic.control_1_y()),
+            P2 / 2.0
+        );
+        assert_eq!(
+            Point(div_cubic.anchor_1_x(), div_cubic.anchor_1_y()),
+            P3 / 2.0
+        );
     }
 
     #[test]
@@ -571,15 +582,39 @@ mod cubic_tests {
         assert_eq!(Point(mul_cubic.control_1_x(), mul_cubic.control_1_y()), P2);
         assert_eq!(Point(mul_cubic.anchor_1_x(), mul_cubic.anchor_1_y()), P3);
         mul_cubic = *CUBIC * 2.0;
-        assert_eq!(Point(mul_cubic.anchor_0_x(), mul_cubic.anchor_0_y()), P0 * 2.0);
-        assert_eq!(Point(mul_cubic.control_0_x(), mul_cubic.control_0_y()), P1 * 2.0);
-        assert_eq!(Point(mul_cubic.control_1_x(), mul_cubic.control_1_y()), P2 * 2.0);
-        assert_eq!(Point(mul_cubic.anchor_1_x(), mul_cubic.anchor_1_y()), P3 * 2.0);
+        assert_eq!(
+            Point(mul_cubic.anchor_0_x(), mul_cubic.anchor_0_y()),
+            P0 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.control_0_x(), mul_cubic.control_0_y()),
+            P1 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.control_1_x(), mul_cubic.control_1_y()),
+            P2 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.anchor_1_x(), mul_cubic.anchor_1_y()),
+            P3 * 2.0
+        );
         mul_cubic = *CUBIC * 2;
-        assert_eq!(Point(mul_cubic.anchor_0_x(), mul_cubic.anchor_0_y()), P0 * 2.0);
-        assert_eq!(Point(mul_cubic.control_0_x(), mul_cubic.control_0_y()), P1 * 2.0);
-        assert_eq!(Point(mul_cubic.control_1_x(), mul_cubic.control_1_y()), P2 * 2.0);
-        assert_eq!(Point(mul_cubic.anchor_1_x(), mul_cubic.anchor_1_y()), P3 * 2.0);
+        assert_eq!(
+            Point(mul_cubic.anchor_0_x(), mul_cubic.anchor_0_y()),
+            P0 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.control_0_x(), mul_cubic.control_0_y()),
+            P1 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.control_1_x(), mul_cubic.control_1_y()),
+            P2 * 2.0
+        );
+        assert_eq!(
+            Point(mul_cubic.anchor_1_x(), mul_cubic.anchor_1_y()),
+            P3 * 2.0
+        );
     }
 
     #[test]
@@ -644,12 +679,12 @@ mod cubic_tests {
         assert_between(
             P0,
             P3,
-            Point(line_cubic.control_0_x(), line_cubic.control_0_y())
+            Point(line_cubic.control_0_x(), line_cubic.control_0_y()),
         );
         assert_between(
             P0,
             P3,
-            Point(line_cubic.control_1_x(), line_cubic.control_1_y())
+            Point(line_cubic.control_1_x(), line_cubic.control_1_y()),
         );
     }
 
@@ -667,12 +702,12 @@ mod cubic_tests {
         assert_between(
             Point(CUBIC.anchor_0_x(), CUBIC.anchor_0_y()),
             Point(CUBIC.anchor_1_x(), CUBIC.anchor_1_y()),
-            Point(split0.anchor_1_x(), split0.anchor_1_y())
+            Point(split0.anchor_1_x(), split0.anchor_1_y()),
         );
         assert_between(
             Point(CUBIC.anchor_0_x(), CUBIC.anchor_0_y()),
             Point(CUBIC.anchor_1_x(), CUBIC.anchor_1_y()),
-            Point(split1.anchor_0_x(), split1.anchor_0_y())
+            Point(split1.anchor_0_x(), split1.anchor_0_y()),
         );
     }
     #[test]
@@ -683,8 +718,7 @@ mod cubic_tests {
             Point(CUBIC.anchor_1_x(), CUBIC.anchor_1_y()),
             halfway,
         );
-        let straight_line_cubic =
-            Cubic::straight_line(P0.x(), P0.y(), P3.x(), P3.y());
+        let straight_line_cubic = Cubic::straight_line(P0.x(), P0.y(), P3.x(), P3.y());
         halfway = straight_line_cubic.point_on_curve(0.5);
         let computed_halfway = Point(
             P0.x() + 0.5 * (P3.x() - P0.x()),
@@ -709,19 +743,31 @@ mod cubic_tests {
         transformed_cubic = CUBIC.transformed(transform.deref());
         assert_eq!(
             Point(CUBIC.anchor_0_x(), CUBIC.anchor_0_y()) + translation_vector,
-            Point(transformed_cubic.anchor_0_x(), transformed_cubic.anchor_0_y())
+            Point(
+                transformed_cubic.anchor_0_x(),
+                transformed_cubic.anchor_0_y()
+            )
         );
         assert_eq!(
             Point(CUBIC.control_0_x(), CUBIC.control_0_y()) + translation_vector,
-            Point(transformed_cubic.control_0_x(), transformed_cubic.control_0_y())
+            Point(
+                transformed_cubic.control_0_x(),
+                transformed_cubic.control_0_y()
+            )
         );
         assert_eq!(
             Point(CUBIC.control_1_x(), CUBIC.control_1_y()) + translation_vector,
-            Point(transformed_cubic.control_1_x(), transformed_cubic.control_1_y())
+            Point(
+                transformed_cubic.control_1_x(),
+                transformed_cubic.control_1_y()
+            )
         );
         assert_eq!(
             Point(CUBIC.anchor_1_x(), CUBIC.anchor_1_y()) + translation_vector,
-            Point(transformed_cubic.anchor_1_x(), transformed_cubic.anchor_1_y())
+            Point(
+                transformed_cubic.anchor_1_x(),
+                transformed_cubic.anchor_1_y()
+            )
         );
     }
     #[test]

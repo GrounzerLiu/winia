@@ -28,7 +28,8 @@ impl Dialog {
             // Default enter/exit (scale 0.8 -> 1 + fade — classic material2 Dialog;
             // exit plays in reverse).
             enter_anim: Some(OverlayAnimSpec::default_enter()),
-            exit_anim: Some(OverlayAnimSpec::default_exit()),            position: PopupPosition::Center,
+            exit_anim: Some(OverlayAnimSpec::default_exit()),
+            position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slot: None,
             anchor_slide: None,
@@ -102,7 +103,11 @@ impl Dialog {
     /// `build` always executes (even when `visible=false`) — records
     /// `active=false` for `sync` to delete.
     #[composable]
-    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static) {
+    pub fn build(
+        self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
+    ) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
@@ -134,5 +139,8 @@ impl Dialog {
     }
 }
 
-impl Default for Dialog { fn default() -> Self { Self::new(false) } }
-
+impl Default for Dialog {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}

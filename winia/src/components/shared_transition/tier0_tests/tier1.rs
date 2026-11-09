@@ -41,7 +41,10 @@ fn tier1_elevated_target_hittable_outside_its_ancestors() {
     }
     let (p, l, (_, vp_y, _, _), vis) = probed.expect("flight passes mid-way");
     let (cx, cy) = (l.x + l.width / 2.0, l.y + l.height / 2.0);
-    assert!(cy < vp_y, "probe is above the peer viewport ({cy} < {vp_y})");
+    assert!(
+        cy < vp_y,
+        "probe is above the peer viewport ({cy} < {vp_y})"
+    );
 
     let bn = b.arena_nodes();
     let root = b.layout_root_idx().expect("peer root");
@@ -84,14 +87,28 @@ fn tier1_peer_drops_the_layout_override_at_teardown() {
             |ctx| {
                 shell(ctx, |ctx| {
                     if s1.get() {
-                        hero_leaf_ph(ctx, 120.0, 80.0, Color::RED, &sc1, PlaceHolderSize::AnimatedSize);
+                        hero_leaf_ph(
+                            ctx,
+                            120.0,
+                            80.0,
+                            Color::RED,
+                            &sc1,
+                            PlaceHolderSize::AnimatedSize,
+                        );
                     }
                 })
             },
             |ctx| {
                 shell(ctx, |ctx| {
                     if s2.get() {
-                        hero_leaf_ph(ctx, 300.0, 160.0, Color::BLUE, &sc2, PlaceHolderSize::AnimatedSize);
+                        hero_leaf_ph(
+                            ctx,
+                            300.0,
+                            160.0,
+                            Color::BLUE,
+                            &sc2,
+                            PlaceHolderSize::AnimatedSize,
+                        );
                     }
                 })
             },
@@ -147,10 +164,7 @@ fn tier1_peer_drops_the_layout_override_at_teardown() {
         "no phantom morph is opened per frame"
     );
     assert_eq!(
-        b.arena_nodes()[tidx]
-            .transition
-            .as_ref()
-            .map(|t| t.role),
+        b.arena_nodes()[tidx].transition.as_ref().map(|t| t.role),
         Some(TransitionRole::Target),
         "the peer's visual is the Tier-1 target, not a morph"
     );
@@ -257,7 +271,11 @@ fn tier1_main_to_overlay_opens_and_completes() {
         assert_eq!((f.source_cid, f.target_cid), (a.composer_id, b.composer_id));
         assert_eq!(f.flight.phase, FlightPhase::Flying, "resolved same frame");
     }
-    assert_eq!(a.transition_layer.len(), 1, "source retained in owner arena");
+    assert_eq!(
+        a.transition_layer.len(),
+        1,
+        "source retained in owner arena"
+    );
     assert!(a.has_cross_flights(), "z-order helper sees it");
     // Target visuals live in B in B's frame.
     let bt = marked_in(&b);
@@ -282,10 +300,16 @@ fn tier1_main_to_overlay_opens_and_completes() {
         xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
     }
     assert!(a.shared_flights.is_empty(), "Tier1 completes");
-    assert!(a.transition_layer.is_empty(), "retained source freed in owner arena");
+    assert!(
+        a.transition_layer.is_empty(),
+        "retained source freed in owner arena"
+    );
     assert!(b.transition_layer.is_empty());
     for idx in marked_in(&b) {
-        assert!(b.arena_nodes()[idx].transition.is_none(), "target visuals cleared");
+        assert!(
+            b.arena_nodes()[idx].transition.is_none(),
+            "target visuals cleared"
+        );
     }
     // End paint: BLUE detail hero in B.
     let bt = marked_in(&b);
@@ -319,7 +343,10 @@ fn tier1_scope_flag_tracks_cross_flight() {
     // Same global entry the union sync writes (keyed by scope_id).
     let active = scope.is_transition_active();
     xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
-    assert!(active.get(), "flag true while the cross flight is non-terminal");
+    assert!(
+        active.get(),
+        "flag true while the cross flight is non-terminal"
+    );
 
     for _ in 0..200 {
         if a.shared_flights.is_empty() {
@@ -348,7 +375,11 @@ fn tier1_reverse_overlay_to_main() {
     show_b.set(false);
     show_a.set(true);
     xframe(&mut a, &mut b, &show_a, &show_b, &scope);
-    assert_eq!(a.shared_flights.len(), 1, "Tier1 lives in the main map either way");
+    assert_eq!(
+        a.shared_flights.len(),
+        1,
+        "Tier1 lives in the main map either way"
+    );
     let fid = *a.shared_flights.keys().next().unwrap();
     {
         let f = &a.shared_flights[&fid];
@@ -365,7 +396,10 @@ fn tier1_reverse_overlay_to_main() {
         xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
     }
     assert!(a.shared_flights.is_empty());
-    assert!(b.transition_layer.is_empty(), "overlay-retained freed via owner ref");
+    assert!(
+        b.transition_layer.is_empty(),
+        "overlay-retained freed via owner ref"
+    );
     // Ends RED in main.
     let at = marked_in(&a);
     assert_eq!(at.len(), 1);
@@ -428,7 +462,10 @@ fn tier1_unmatched_stash_freed_same_frame() {
     xframe(&mut a, &mut b, &show_a, &show_b, &scope);
     assert!(a.shared_flights.is_empty(), "no flight without counterpart");
     assert!(a.pending_cross.is_empty(), "stash drained");
-    assert!(a.transition_layer.is_empty(), "retained freed same frame (invisible)");
+    assert!(
+        a.transition_layer.is_empty(),
+        "retained freed same frame (invisible)"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -463,7 +500,10 @@ fn tier1_origin_offsets_end() {
     // (0,0) renders at (-50,-60) in B's translated pass.
     let bt = marked_in(&b);
     assert_eq!(bt.len(), 1);
-    let vis = b.arena_nodes()[bt[0]].transition.clone().expect("target visuals");
+    let vis = b.arena_nodes()[bt[0]]
+        .transition
+        .clone()
+        .expect("target visuals");
     assert!(
         (vis.start.x + 50.0).abs() < 0.01 && (vis.start.y + 60.0).abs() < 0.01,
         "writer-frame visuals subtract the origin, got ({}, {})",
@@ -489,18 +529,22 @@ fn two_keys_fly_together() {
         cross_frame(
             a,
             b,
-            |ctx| shell(ctx, |ctx| {
-                if sa.get() {
-                    hero_keyed_leaf(ctx, 100.0, 60.0, Color::RED, &sca, "k1");
-                    hero_keyed_leaf(ctx, 100.0, 60.0, Color::GREEN, &sca, "k2");
-                }
-            }),
-            |ctx| shell(ctx, |ctx| {
-                if sb.get() {
-                    hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k1");
-                    hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k2");
-                }
-            }),
+            |ctx| {
+                shell(ctx, |ctx| {
+                    if sa.get() {
+                        hero_keyed_leaf(ctx, 100.0, 60.0, Color::RED, &sca, "k1");
+                        hero_keyed_leaf(ctx, 100.0, 60.0, Color::GREEN, &sca, "k2");
+                    }
+                })
+            },
+            |ctx| {
+                shell(ctx, |ctx| {
+                    if sb.get() {
+                        hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k1");
+                        hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k2");
+                    }
+                })
+            },
         );
     };
     let pair_advance = |a: &mut Composer, b: &mut Composer| {
@@ -548,22 +592,26 @@ fn tier1_superseded_by_overlay_tier0() {
         cross_frame(
             a,
             b,
-            |ctx| shell(ctx, |ctx| {
-                if sa.get() {
-                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
-                }
-            }),
-            |ctx| shell(ctx, |ctx| {
-                // Macro'd screens (like list/detail): plain closures would
-                // collide gap-over-hero at one position in test-fallback keys.
-                if sb.get() {
-                    if sh.get() {
-                        b_shifted(ctx, &scb);
-                    } else {
-                        b_plain(ctx, &scb);
+            |ctx| {
+                shell(ctx, |ctx| {
+                    if sa.get() {
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
                     }
-                }
-            }),
+                })
+            },
+            |ctx| {
+                shell(ctx, |ctx| {
+                    // Macro'd screens (like list/detail): plain closures would
+                    // collide gap-over-hero at one position in test-fallback keys.
+                    if sb.get() {
+                        if sh.get() {
+                            b_shifted(ctx, &scb);
+                        } else {
+                            b_plain(ctx, &scb);
+                        }
+                    }
+                })
+            },
         );
     };
     let badvance = |a: &mut Composer, b: &mut Composer| {
@@ -583,9 +631,15 @@ fn tier1_superseded_by_overlay_tier0() {
     // Tier1 yields (staleness-cancel, no leak, no double ghost).
     shift_b.set(true);
     bframe(&mut a, &mut b);
-    assert!(a.shared_flights.is_empty(), "Tier1 yields to the newer Tier0");
+    assert!(
+        a.shared_flights.is_empty(),
+        "Tier1 yields to the newer Tier0"
+    );
     assert_eq!(b.shared_flights.len(), 1, "overlay Tier0 owns the key now");
-    assert!(a.transition_layer.is_empty(), "Tier1 retained freed on yield");
+    assert!(
+        a.transition_layer.is_empty(),
+        "Tier1 retained freed on yield"
+    );
 
     for _ in 0..200 {
         if b.shared_flights.is_empty() {
@@ -628,7 +682,11 @@ fn tier1_reverse_flies_back() {
     show_b.set(false);
     show_a.set(true);
     xframe(&mut a, &mut b, &show_a, &show_b, &scope);
-    assert_eq!(a.shared_flights.len(), 1, "reverse Tier1 replaces the cancelled one");
+    assert_eq!(
+        a.shared_flights.len(),
+        1,
+        "reverse Tier1 replaces the cancelled one"
+    );
     let fid = *a.shared_flights.keys().next().unwrap();
     {
         let f = &a.shared_flights[&fid];
@@ -676,12 +734,20 @@ fn tier1_midflight_progress_visible() {
         if a.shared_flights.is_empty() {
             break;
         }
-        let p = a.shared_flights.values().next().map(|f| f.progress_value()).unwrap_or(1.0);
+        let p = a
+            .shared_flights
+            .values()
+            .next()
+            .map(|f| f.progress_value())
+            .unwrap_or(1.0);
         if p > 0.2 && p < 0.95 {
             mid_seen = true;
             // Both ends carry same-progress visuals across composers.
             for idx in marked_in(&b) {
-                let v = b.arena_nodes()[idx].transition.clone().expect("target visuals");
+                let v = b.arena_nodes()[idx]
+                    .transition
+                    .clone()
+                    .expect("target visuals");
                 assert!((v.progress - p).abs() < 0.001);
             }
             break;

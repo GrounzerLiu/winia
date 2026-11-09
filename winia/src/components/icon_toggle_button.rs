@@ -2,16 +2,16 @@
 //! `FilledIconToggleButton` / `FilledTonalIconToggleButton` /
 //! `OutlinedIconToggleButton`
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
 use crate::components::button::ButtonBorder;
 use crate::components::icon_button::{
     IconButtonDefaults, IconButtonShape, IconButtonSize, IconButtonStyle,
 };
+use crate::composable;
+use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -348,8 +348,10 @@ impl IconToggleButton {
                 } else {
                     round
                 };
-                let radius =
-                    ctx.animate_float_as_state(target, crate::components::icon_button::shape_morph_spec());
+                let radius = ctx.animate_float_as_state(
+                    target,
+                    crate::components::icon_button::shape_morph_spec(),
+                );
                 crate::graphics::Dyn::Dynamic(Arc::new(move || Shape::rounded(radius.peek())))
             }
         };
@@ -436,7 +438,6 @@ impl IconToggleButton {
         self.size_variant
     }
 }
-
 
 #[cfg(test)]
 mod tests;

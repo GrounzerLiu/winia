@@ -282,12 +282,12 @@ impl<'p> Morph<'p> {
 
 #[cfg(test)]
 mod morph_tests {
-    use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
-    use lazy_static::lazy_static;
-    use crate::cubic::Cubic;
     use crate::MaterialShapes;
+    use crate::cubic::Cubic;
     use crate::morph::Morph;
+    use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
     use crate::tests::cubics_equalish;
+    use lazy_static::lazy_static;
 
     const RADIUS: f32 = 50.0;
     lazy_static! {
@@ -304,9 +304,9 @@ mod morph_tests {
     }
 
     /**
-    * Simple test to verify that a Morph with the same start and end shape has curves equivalent to
-    * those in that shape.
-    */
+     * Simple test to verify that a Morph with the same start and end shape has curves equivalent to
+     * those in that shape.
+     */
     #[test]
     fn cubics_test() {
         let p1_cubics = &POLY1.cubics;
@@ -344,7 +344,12 @@ mod morph_tests {
         for cubic in cubics.iter() {
             println!(
                 "[{}]",
-                cubic.points.iter().map(|v| format!("{:.4}", v)).collect::<Vec<String>>().join(",\t")
+                cubic
+                    .points
+                    .iter()
+                    .map(|v| format!("{:.4}", v))
+                    .collect::<Vec<String>>()
+                    .join(",\t")
             )
         }
     }

@@ -1,27 +1,28 @@
 //! Layout nodes — LayoutNode and the size/position/arrangement/alignment types around it.
 
+use super::constraints::Constraints;
+use crate::layout::IntrinsicSize;
 use crate::modifier::{Modifier, ModifierElement};
-use crate::layout::{IntrinsicSize};
-use crate::text::{RichSpanStyle};
-use crate::transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::text::FontSlant;
+use crate::text::RichSpanStyle;
+use crate::transition::{FlightMeasure, FlightMeasureFrame};
+use crate::transition::{TransitionRole, abs_rect_upward, find_idx_by_slot};
+use crate::unit::{Offset, Size};
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
-use super::constraints::Constraints;
-use crate::unit::{Offset, Size};
-use crate::transition::{FlightMeasure, FlightMeasureFrame};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The global node id generator.
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
-
-
 pub(crate) use measure::{line_geometry, line_geometry_from, line_height_style_of, text_transform};
 
 /// Whether the modifier carries a TextContent.
 pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
-    modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
+    modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
 /// What a modifier says about its text, in the form the frame cache stores and compares.
@@ -49,10 +50,45 @@ pub(crate) type TextSnapshot = (
 /// conservatively treated as "changed".
 pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
     modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
-            Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
-        }
-        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::text::TextAlign::Left, crate::graphics::Color::TRANSPARENT, 0.0, crate::text::FontWeight::NORMAL, crate::text::FontSlant::Upright, 0, true, 0.0, None, crate::text::TextOverflow::Clip)),
+        ModifierElement::TextContent {
+            content,
+            align,
+            color,
+            font_size,
+            font_weight,
+            font_style,
+            max_lines,
+            soft_wrap,
+            letter_spacing,
+            line_height,
+            overflow,
+            ..
+        } => Some((
+            content.clone(),
+            *align,
+            *color,
+            *font_size,
+            *font_weight,
+            *font_style,
+            *max_lines,
+            *soft_wrap,
+            *letter_spacing,
+            *line_height,
+            *overflow,
+        )),
+        ModifierElement::RichTextContent { .. } => Some((
+            "<richtext>".to_string(),
+            crate::text::TextAlign::Left,
+            crate::graphics::Color::TRANSPARENT,
+            0.0,
+            crate::text::FontWeight::NORMAL,
+            crate::text::FontSlant::Upright,
+            0,
+            true,
+            0.0,
+            None,
+            crate::text::TextOverflow::Clip,
+        )),
         _ => None,
     })
 }
@@ -67,7 +103,20 @@ pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
 /// text element — reports `false`, which forces the re-measure).
 pub(crate) fn text_content_matches(modifier: &Modifier, snap: &TextSnapshot) -> bool {
     modifier.elements().iter().any(|el| match el {
-        ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
+        ModifierElement::TextContent {
+            content,
+            align,
+            color,
+            font_size,
+            font_weight,
+            font_style,
+            max_lines,
+            soft_wrap,
+            letter_spacing,
+            line_height,
+            overflow,
+            ..
+        } => {
             content == &snap.0
                 && *align == snap.1
                 && *color == snap.2
@@ -89,14 +138,19 @@ pub(crate) fn text_content_matches(modifier: &Modifier, snap: &TextSnapshot) -> 
 
 /// Whether the modifier carries a RichTextContent.
 pub(crate) fn modifier_has_richtext(modifier: &Modifier) -> bool {
-    modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
+    modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
 }
 
 /// Whether the modifier carries an ImageContent (the Image component).
 pub(crate) fn modifier_has_image(modifier: &Modifier) -> bool {
-    modifier.elements().iter().any(|el| matches!(el, ModifierElement::ImageContent { .. }))
+    modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(el, ModifierElement::ImageContent { .. }))
 }
-
 
 mod arena;
 mod focus;
@@ -119,6 +173,6 @@ pub use intrinsic::*;
 pub use measure::*;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod intrinsic_tests;
+#[cfg(test)]
+mod tests;

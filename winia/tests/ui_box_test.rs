@@ -91,7 +91,10 @@ fn box_layout_demo_places_children_per_child() {
     app.set_layout_direction(LayoutDirection::Rtl);
     app.expect_eventually_timeout("the box mirrors in RTL", Duration::from_secs(2), |app| {
         app.refresh();
-        match (app.find_tag("box-align-frame"), app.find_tag("box-child-end")) {
+        match (
+            app.find_tag("box-align-frame"),
+            app.find_tag("box-child-end"),
+        ) {
             (Some(frame), Some(end)) => (end.0 - frame.0).abs() < 2.0,
             _ => false,
         }

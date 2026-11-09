@@ -84,7 +84,9 @@ impl OverscrollEffect {
     /// `max_pull * (1 - e^(-|raw| / reach))`, with the sign of `raw`: one-to-one at the origin
     /// (slope `max_pull / reach`), flattening towards the asymptote.
     fn curve(&self, raw: f32) -> f32 {
-        if raw == 0.0 { return 0.0; }
+        if raw == 0.0 {
+            return 0.0;
+        }
         let magnitude = raw.abs();
         let damped = self.max_pull * (1.0 - (-magnitude / self.reach).exp());
         if raw < 0.0 { -damped } else { damped }
@@ -171,7 +173,8 @@ pub fn remember_overscroll_effect(
     // Keyed by the factory INSTANCE: replacing the factory has to build a new effect, exactly as
     // Compose re-remembers when `LocalOverscrollFactory` changes (`Overscroll.kt:342-350`).
     let key = factory_identity(&factory) ^ 0x4F56_4552_5343_524F;
-    let effect: crate::runtime::state::State<OverscrollEffect> = ctx.remember_at_key(key, move || factory());
+    let effect: crate::runtime::state::State<OverscrollEffect> =
+        ctx.remember_at_key(key, move || factory());
     Some(effect.get())
 }
 
@@ -271,23 +274,42 @@ mod tests {
         let effect = OverscrollEffect::new();
         // pull() returns what it TOOK (the whole gesture), stretch() what it SHOWED.
         assert_eq!(effect.pull(10.0), 10.0, "the gesture is fully consumed");
-        assert!((effect.stretch() - 9.6).abs() < 0.3, "and moves the content almost 1:1, got {}", effect.stretch());
+        assert!(
+            (effect.stretch() - 9.6).abs() < 0.3,
+            "and moves the content almost 1:1, got {}",
+            effect.stretch()
+        );
 
         effect.pull(10.0);
         let second = effect.stretch() - 9.6;
-        assert!(second < 9.0, "the second 10 px buys less than the first: {second}");
+        assert!(
+            second < 9.0,
+            "the second 10 px buys less than the first: {second}"
+        );
 
         // A huge pull approaches the asymptote: at raw 240 it is still visibly short of the cap,
         // and only f32 rounding makes a 5 000 px pull read as exactly 120.
         effect.pull(220.0);
-        assert!((effect.stretch() - 103.7).abs() < 1.5, "raw 240 -> ~104, got {}", effect.stretch());
+        assert!(
+            (effect.stretch() - 103.7).abs() < 1.5,
+            "raw 240 -> ~104, got {}",
+            effect.stretch()
+        );
         effect.pull(5_000.0);
-        assert!(effect.stretch() <= 120.0, "the cap is an asymptote, got {}", effect.stretch());
+        assert!(
+            effect.stretch() <= 120.0,
+            "the cap is an asymptote, got {}",
+            effect.stretch()
+        );
 
         // The other direction is symmetric.
         let back = OverscrollEffect::new();
         back.pull(-10.0);
-        assert!((back.stretch() + 9.6).abs() < 0.3, "mirrored, got {}", back.stretch());
+        assert!(
+            (back.stretch() + 9.6).abs() < 0.3,
+            "mirrored, got {}",
+            back.stretch()
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -296,15 +318,25 @@ mod tests {
     fn reach_and_cap_shape_the_band() {
         let stiff = OverscrollEffect::new().reach(20.0);
         stiff.pull(20.0);
-        assert!((stiff.stretch() - 120.0 * (1.0 - (-1.0f32).exp())).abs() < 0.5,
-            "reach 20 at raw 20 is 63% of the cap, got {}", stiff.stretch());
+        assert!(
+            (stiff.stretch() - 120.0 * (1.0 - (-1.0f32).exp())).abs() < 0.5,
+            "reach 20 at raw 20 is 63% of the cap, got {}",
+            stiff.stretch()
+        );
         let soft = OverscrollEffect::new();
         soft.pull(20.0);
-        assert!(stiff.stretch() > soft.stretch(), "the stiffer band moves further for the same drag");
+        assert!(
+            stiff.stretch() > soft.stretch(),
+            "the stiffer band moves further for the same drag"
+        );
 
         let small = OverscrollEffect::new().max_pull(40.0);
         small.pull(5_000.0);
-        assert!(small.stretch() <= 40.0, "the cap bounds it, got {}", small.stretch());
+        assert!(
+            small.stretch() <= 40.0,
+            "the cap bounds it, got {}",
+            small.stretch()
+        );
         crate::animation::clear_all_animations();
     }
     #[test]
@@ -323,7 +355,11 @@ mod tests {
             Density::from_density(1.0),
         );
         assert_eq!(state.offset.peek(), 200.0, "the offset stays clamped");
-        assert!((effect.stretch() - 9.6).abs() < 0.3, "the leftover is the (damped) pull, got {}", effect.stretch());
+        assert!(
+            (effect.stretch() - 9.6).abs() < 0.3,
+            "the leftover is the (damped) pull, got {}",
+            effect.stretch()
+        );
         assert_eq!(
             consumed.y, -10.0,
             "the gesture is consumed in the DELTA's direction, so no ancestor sees it"
@@ -347,8 +383,15 @@ mod tests {
             Density::from_density(1.0),
         );
         assert_eq!(state.offset.peek(), 0.0);
-        assert!((effect.stretch() + 9.6).abs() < 0.3, "got {}", effect.stretch());
-        assert_eq!(consumed.y, 10.0, "the pull is consumed in the gesture's direction");
+        assert!(
+            (effect.stretch() + 9.6).abs() < 0.3,
+            "got {}",
+            effect.stretch()
+        );
+        assert_eq!(
+            consumed.y, 10.0,
+            "the pull is consumed in the gesture's direction"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -363,16 +406,27 @@ mod tests {
         let held = effect.stretch();
         clock.advance(std::time::Duration::from_millis(50));
         crate::animation::update_animations();
-        assert!((effect.stretch() - held).abs() < 0.01, "the 60 ms delay has not elapsed yet");
+        assert!(
+            (effect.stretch() - held).abs() < 0.01,
+            "the 60 ms delay has not elapsed yet"
+        );
 
         effect.pull(5.0);
         clock.advance(std::time::Duration::from_millis(50));
         crate::animation::update_animations();
-        assert!(effect.stretch() > held, "the re-armed delay keeps the pull alive ({})", effect.stretch());
+        assert!(
+            effect.stretch() > held,
+            "the re-armed delay keeps the pull alive ({})",
+            effect.stretch()
+        );
 
         clock.advance(std::time::Duration::from_millis(400));
         crate::animation::update_animations();
-        assert!(effect.stretch() < 1.0, "after the gesture stops the return runs, got {}", effect.stretch());
+        assert!(
+            effect.stretch() < 1.0,
+            "after the gesture stops the return runs, got {}",
+            effect.stretch()
+        );
         crate::animation::clear_all_animations();
     }
     /// The whole chain, in pixels: the render has to READ the pull. This is the test that would
@@ -390,11 +444,19 @@ mod tests {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(crate::compose!(|ctx| {
                 crate::layout::Column::new()
-                    .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()).overscroll(&effect))
+                    .modifier(
+                        Modifier::new()
+                            .size(100.0, 100.0)
+                            .vertical_scroll(s.clone())
+                            .overscroll(&effect),
+                    )
                     .build(ctx, |ctx| {
                         for _ in 0..3 {
                             crate::layout::Column::new()
-                                .modifier(Modifier::new().size(100.0, 40.0).background(crate::graphics::Color::RED, crate::graphics::Shape::Rectangle))
+                                .modifier(Modifier::new().size(100.0, 40.0).background(
+                                    crate::graphics::Color::RED,
+                                    crate::graphics::Shape::Rectangle,
+                                ))
                                 .build(ctx, |_| {});
                         }
                     });
@@ -405,15 +467,28 @@ mod tests {
             let idx = composer.layout_root_idx().unwrap();
             crate::render::render(composer.arena_nodes(), idx, surface.canvas());
             let mut px = [0u8; 4];
-            let info = skia_safe::ImageInfo::new((1, 1), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
+            let info = skia_safe::ImageInfo::new(
+                (1, 1),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
             surface.read_pixels(&info, &mut px, 4, (50, 95));
             crate::animation::clear_all_animations();
             (px[0], px[1], px[2])
         }
         let still = frame(0.0);
         let pulled = frame(40.0);
-        assert_eq!(still, (255, 0, 0), "the content fills the bottom of the viewport at rest");
-        assert_eq!(pulled, (255, 255, 255), "and a pull lifts it away, leaving the background");
+        assert_eq!(
+            still,
+            (255, 0, 0),
+            "the content fills the bottom of the viewport at rest"
+        );
+        assert_eq!(
+            pulled,
+            (255, 255, 255),
+            "and a pull lifts it away, leaving the background"
+        );
     }
 
     /// A fling that dies at the end bends the content past the END (a positive pull), damped by the
@@ -423,16 +498,25 @@ mod tests {
         let effect = OverscrollEffect::new();
         effect.pull_for_velocity(2_000.0);
         let slow = effect.stretch();
-        assert!((slow - 120.0 * (1.0 - (-(2000.0 / 40.0) / 120.0f32).exp())).abs() < 0.5,
-            "2000 px/s -> raw 50 damped, got {slow}");
+        assert!(
+            (slow - 120.0 * (1.0 - (-(2000.0 / 40.0) / 120.0f32).exp())).abs() < 0.5,
+            "2000 px/s -> raw 50 damped, got {slow}"
+        );
 
         let hard = OverscrollEffect::new();
         hard.pull_for_velocity(100_000.0);
-        assert!(hard.stretch() <= 120.0, "even a huge fling stops at the cap, got {}", hard.stretch());
+        assert!(
+            hard.stretch() <= 120.0,
+            "even a huge fling stops at the cap, got {}",
+            hard.stretch()
+        );
 
         let back = OverscrollEffect::new();
         back.pull_for_velocity(-2_000.0);
-        assert!((back.stretch() + slow).abs() < 0.5, "the sign follows the velocity");
+        assert!(
+            (back.stretch() + slow).abs() < 0.5,
+            "the sign follows the velocity"
+        );
     }
     /// The fling path really reaches the effect: a decay that hits the end leaves a bend.
     /// A hand-built `Column + vertical_scroll` gets the effect from the ambient factory, exactly as a
@@ -446,7 +530,11 @@ mod tests {
             composer.compose(crate::compose!(|ctx| {
                 let body = |ctx: &mut crate::runtime::composer::ComposeCtx| {
                     crate::layout::Column::new()
-                        .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                        .modifier(
+                            Modifier::new()
+                                .size(100.0, 100.0)
+                                .vertical_scroll(s.clone()),
+                        )
                         .build(ctx, |ctx| {
                             crate::components::Text::new("row").build(ctx);
                         });
@@ -458,7 +546,9 @@ mod tests {
                 }
             }));
             let found = composer.arena_nodes().iter().find_map(|n| {
-                n.modifier.overscroll_effect().map(|e| e.stretch().to_bits() as u64)
+                n.modifier
+                    .overscroll_effect()
+                    .map(|e| e.stretch().to_bits() as u64)
             });
             (found.is_some(), found)
         }
@@ -482,13 +572,23 @@ mod tests {
                 ids.push(std::sync::Arc::as_ptr(&factory) as *const () as u64);
                 with_overscroll_factory(ctx, Some(factory), |ctx| {
                     crate::layout::Column::new()
-                        .modifier(crate::modifier::Modifier::new().size(100.0, 100.0).vertical_scroll(sc.clone()))
-                        .build(ctx, |ctx| { crate::components::Text::new("x").build(ctx); });
+                        .modifier(
+                            crate::modifier::Modifier::new()
+                                .size(100.0, 100.0)
+                                .vertical_scroll(sc.clone()),
+                        )
+                        .build(ctx, |ctx| {
+                            crate::components::Text::new("x").build(ctx);
+                        });
                 });
             }));
         }
         assert_eq!(ids[0], ids[1], "the same factory identity both times");
-        assert_eq!(scroll.overscroll_cache.lock().unwrap().len(), 1, "and one cached effect");
+        assert_eq!(
+            scroll.overscroll_cache.lock().unwrap().len(),
+            1,
+            "and one cached effect"
+        );
     }
 
     /// The default factory is ONE value. `CompositionLocal::current()` calls its default closure on
@@ -496,11 +596,21 @@ mod tests {
     /// on every build - and a fling's pull landed on an instance the next build had thrown away.
     #[test]
     fn the_default_factory_keeps_one_identity() {
-        let first = LOCAL_OVERSCROLL_FACTORY.current().expect("a default factory");
+        let first = LOCAL_OVERSCROLL_FACTORY
+            .current()
+            .expect("a default factory");
         // Churn the allocator between the reads: a per-read Arc would land somewhere else.
-        let junk: Vec<_> = (0..16).map(|i| std::sync::Arc::new(vec![i as u8; 64])).collect();
-        let second = LOCAL_OVERSCROLL_FACTORY.current().expect("a default factory");
-        assert_eq!(factory_identity(&first), factory_identity(&second), "one static value");
+        let junk: Vec<_> = (0..16)
+            .map(|i| std::sync::Arc::new(vec![i as u8; 64]))
+            .collect();
+        let second = LOCAL_OVERSCROLL_FACTORY
+            .current()
+            .expect("a default factory");
+        assert_eq!(
+            factory_identity(&first),
+            factory_identity(&second),
+            "one static value"
+        );
         drop(junk);
     }
 
@@ -515,7 +625,11 @@ mod tests {
         for build in 0..2 {
             composer.compose(crate::compose!(|ctx| {
                 crate::layout::Column::new()
-                    .modifier(Modifier::new().size(100.0, 100.0).vertical_scroll(s.clone()))
+                    .modifier(
+                        Modifier::new()
+                            .size(100.0, 100.0)
+                            .vertical_scroll(s.clone()),
+                    )
                     .build(ctx, |ctx| {
                         crate::components::Text::new("row").build(ctx);
                     });
@@ -531,11 +645,21 @@ mod tests {
             stretches.push(effect.stretch());
             // Same interference a real build has: an unstable factory would mint a different
             // effect here and lose the pull.
-            let junk: Vec<_> = (0..16).map(|i| std::sync::Arc::new(vec![i as u8; 64])).collect();
+            let junk: Vec<_> = (0..16)
+                .map(|i| std::sync::Arc::new(vec![i as u8; 64]))
+                .collect();
             drop(junk);
         }
-        assert!((stretches[0] - 9.6).abs() < 0.3, "the first build pulled, got {}", stretches[0]);
-        assert_eq!(stretches[0].to_bits(), stretches[1].to_bits(), "the second build reused the effect, pull included");
+        assert!(
+            (stretches[0] - 9.6).abs() < 0.3,
+            "the first build pulled, got {}",
+            stretches[0]
+        );
+        assert_eq!(
+            stretches[0].to_bits(),
+            stretches[1].to_bits(),
+            "the second build reused the effect, pull included"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -560,9 +684,19 @@ mod tests {
         nodes[1].scroll_content_height = 200.0;
         nodes[0].children.push(1);
 
-        crate::app::scroll::dispatch_nested_scroll_fling(&mut nodes, 0, 1, crate::nested_scroll::ScrollVelocity { x: 0.0, y: 1500.0 });
+        crate::app::scroll::dispatch_nested_scroll_fling(
+            &mut nodes,
+            0,
+            1,
+            crate::nested_scroll::ScrollVelocity { x: 0.0, y: 1500.0 },
+        );
         // The decay clamps on its first tick; give the animation one.
         crate::animation::update_animations();
-        assert!(effect.stretch() > 0.0, "the fling bent the content: got {}", effect.stretch());
+        assert!(
+            effect.stretch() > 0.0,
+            "the fling bent the content: got {}",
+            effect.stretch()
+        );
         crate::animation::clear_all_animations();
-    }}
+    }
+}

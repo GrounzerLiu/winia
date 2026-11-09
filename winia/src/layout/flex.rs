@@ -5,8 +5,8 @@
 //! into a compile-time type parameter, which removes ~140 duplicated lines.
 
 use super::constraints::Constraints;
-use crate::unit::Size;
 use super::node::*;
+use crate::unit::Size;
 
 // ── FlexAxis trait ──
 
@@ -51,18 +51,19 @@ pub(crate) trait FlexAxis: super::axis::Axis {
     ///   `remaining * weight / total_weight` as an `f32` and never rounds, so its children fill the
     ///   axis exactly in logical pixels where Compose fills it exactly in device pixels. Matching the
     ///   rounding would mean moving the whole lay-out to integers, against winia's float model.
-    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints;
+    fn build_phase2(
+        c: &Constraints,
+        allocated: f32,
+        fill_main: bool,
+        stretch_cross: bool,
+    ) -> Constraints;
 
     /// A child measured to fill a flow line's cross extent: fix the cross axis to `cross`, leave
     /// the main axis loose within the parent's budget.
     fn with_fixed_cross(c: &Constraints, cross: f32) -> Constraints;
 
     /// A weighted child's share with the cross axis fixed to the fill fraction.
-    fn build_phase2_with_cross(
-        allocated: f32,
-        fill_main: bool,
-        cross: f32,
-    ) -> Constraints;
+    fn build_phase2_with_cross(allocated: f32, fill_main: bool, cross: f32) -> Constraints;
 
     // ── Building sizes ──
     // `size` / `point` are on `Axis`.
@@ -77,8 +78,14 @@ pub(crate) trait FlexAxis: super::axis::Axis {
 
 impl FlexAxis for super::axis::VerticalAxis {
     const HORIZONTAL: bool = false;
-    #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
-    #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
+    #[inline]
+    fn constrain_main(c: &Constraints, v: f32) -> f32 {
+        c.constrain_height(v)
+    }
+    #[inline]
+    fn constrain_cross(c: &Constraints, v: f32) -> f32 {
+        c.constrain_width(v)
+    }
 
     #[inline]
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints {
@@ -93,7 +100,12 @@ impl FlexAxis for super::axis::VerticalAxis {
     }
 
     #[inline]
-    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints {
+    fn build_phase2(
+        c: &Constraints,
+        allocated: f32,
+        fill_main: bool,
+        stretch_cross: bool,
+    ) -> Constraints {
         Constraints {
             min_width: if stretch_cross { c.min_width } else { 0.0 },
             max_width: c.max_width,
@@ -113,11 +125,7 @@ impl FlexAxis for super::axis::VerticalAxis {
     }
 
     #[inline]
-    fn build_phase2_with_cross(
-        allocated: f32,
-        fill_main: bool,
-        cross: f32,
-    ) -> Constraints {
+    fn build_phase2_with_cross(allocated: f32, fill_main: bool, cross: f32) -> Constraints {
         Constraints {
             min_width: cross,
             max_width: cross,
@@ -136,8 +144,14 @@ impl FlexAxis for super::axis::VerticalAxis {
 
 impl FlexAxis for super::axis::HorizontalAxis {
     const HORIZONTAL: bool = true;
-    #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
-    #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
+    #[inline]
+    fn constrain_main(c: &Constraints, v: f32) -> f32 {
+        c.constrain_width(v)
+    }
+    #[inline]
+    fn constrain_cross(c: &Constraints, v: f32) -> f32 {
+        c.constrain_height(v)
+    }
 
     #[inline]
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints {
@@ -152,7 +166,12 @@ impl FlexAxis for super::axis::HorizontalAxis {
     }
 
     #[inline]
-    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints {
+    fn build_phase2(
+        c: &Constraints,
+        allocated: f32,
+        fill_main: bool,
+        stretch_cross: bool,
+    ) -> Constraints {
         Constraints {
             min_width: if fill_main { allocated } else { 0.0 },
             max_width: allocated,
@@ -172,11 +191,7 @@ impl FlexAxis for super::axis::HorizontalAxis {
     }
 
     #[inline]
-    fn build_phase2_with_cross(
-        allocated: f32,
-        fill_main: bool,
-        cross: f32,
-    ) -> Constraints {
+    fn build_phase2_with_cross(allocated: f32, fill_main: bool, cross: f32) -> Constraints {
         Constraints {
             min_width: if fill_main { allocated } else { 0.0 },
             max_width: allocated,
@@ -236,10 +251,12 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         .collect();
     // Compose's `LayoutWeightParentData.fill`. A node with a weight but no explicit flag fills,
     // which is what `Modifier::layout_weight` has always meant here.
-    let fills: Vec<bool> = children.iter()
+    let fills: Vec<bool> = children
+        .iter()
         .map(|&c| nodes[c].modifier.get_layout_weight_fill().unwrap_or(true))
         .collect();
-    let aligns: Vec<Alignment> = children.iter()
+    let aligns: Vec<Alignment> = children
+        .iter()
         .map(|&c| nodes[c].modifier.get_align_self().unwrap_or(alignment))
         .collect();
 
@@ -327,7 +344,11 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         if let Some(w) = weights[i] {
             // `remaining * (w / total_weight)`, not `remaining * w / total_weight`: two finite
             // weights near `f32::MAX` can overflow the product to infinity.
-            let allocated = if total_weight > 0.0 { remaining * (w / total_weight) } else { 0.0 };
+            let allocated = if total_weight > 0.0 {
+                remaining * (w / total_weight)
+            } else {
+                0.0
+            };
             // The allocation only wins when the parent actually HAD space to allocate, i.e. a
             // positive share. A zero share means the axis gave the weighted children nothing — an
             // unbounded axis with `min == 0`, or a minimum already consumed by fixed children — and
@@ -418,7 +439,9 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let mut line_before = 0.0f32;
     let mut line_after = 0.0f32;
     for (i, &c) in children.iter().enumerate() {
-        let Some(line) = nodes[c].modifier.get_align_by() else { continue };
+        let Some(line) = nodes[c].modifier.get_align_by() else {
+            continue;
+        };
         let child_cross = A::cross_size(child_sizes[i]);
         let position = nodes[c].alignment_line(line);
         line_before = line_before.max(position.unwrap_or(0.0));
@@ -464,9 +487,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         let cross_offset = match line {
             // `beforeCrossAxisAlignmentLine - alignmentLinePosition`: every line-aligned child's
             // line lands on the same cross-axis position.
-            Some(line) => {
-                line_before - nodes[children[i]].alignment_line(line).unwrap_or(0.0)
-            }
+            Some(line) => line_before - nodes[children[i]].alignment_line(line).unwrap_or(0.0),
             None => match align {
                 Alignment::Start => 0.0,
                 Alignment::End => cross_size - child_cross,
@@ -487,8 +508,8 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     // on the MAIN axis: `Absolute::Start` stays left even in a right-to-left Row. A Column's main
     // axis is y and this mirror never touched it — what it mirrors there is the CROSS axis, which
     // still has to follow the layout direction whatever the main-axis arrangement is.
-    let absolute_main = A::HORIZONTAL
-        && matches!(arrangement, crate::layout::Arrangement::Absolute(_));
+    let absolute_main =
+        A::HORIZONTAL && matches!(arrangement, crate::layout::Arrangement::Absolute(_));
     if direction == LayoutDirection::Rtl && !absolute_main {
         let container_x = A::rtl_container_width(measured_main, cross_size);
         for p in &mut placements {
@@ -538,7 +559,9 @@ pub(crate) fn flex_intrinsic_main(
             fixed_space += size;
         }
     }
-    weight_unit_space * total_weight + fixed_space + spacing * (children.len() as f32 - 1.0).max(0.0)
+    weight_unit_space * total_weight
+        + fixed_space
+        + spacing * (children.len() as f32 - 1.0).max(0.0)
 }
 
 /// Compose's `intrinsicCrossAxisSize` (RowColumnImpl.kt:396-452).

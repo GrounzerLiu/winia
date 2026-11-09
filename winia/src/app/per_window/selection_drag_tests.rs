@@ -15,7 +15,9 @@ fn press(pw: &mut PerWindow, at: (f32, f32)) -> bool {
     super::pointer::handle_pointer_down(
         pw,
         at,
-        crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary },
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
         &winit::keyboard::ModifiersState::empty(),
         true,
     )
@@ -24,7 +26,9 @@ fn drag(pw: &mut PerWindow, to: (f32, f32)) -> bool {
     super::pointer::handle_pointer_move(
         pw,
         to,
-        crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary },
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
         &winit::keyboard::ModifiersState::empty(),
     )
 }
@@ -49,7 +53,8 @@ fn container_with_padding_below(text: &'static str) -> (PerWindow, RegSlot) {
         SelectionContainer::new()
             .modifier(Modifier::new().size(300.0, 200.0))
             .build(ctx, move |ctx| {
-                *r.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                *r.lock().unwrap() =
+                    Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                 crate::components::Text::new(text)
                     .modifier(Modifier::new().width(300.0))
                     .build(ctx);
@@ -74,11 +79,21 @@ fn dragging_below_the_text_selects_through_its_end() {
     assert!(press(&mut pw, (8.0, 10.0)), "the press lands in the text");
     assert!(drag(&mut pw, (8.0, 10.0)), "a move inside the text selects");
     let inside = r.build_selection().map(|s| (s.start(), s.end()));
-    assert!(drag(&mut pw, (200.0, 120.0)), "a move into the padding still selects");
+    assert!(
+        drag(&mut pw, (200.0, 120.0)),
+        "a move into the padding still selects"
+    );
     let past = r.build_selection().map(|s| (s.start(), s.end()));
 
-    assert!(past.is_some(), "dragging past the text keeps a selection ({inside:?} -> {past:?})");
-    assert_eq!(past.map(|(_, e)| e), Some(total), "it reaches the end of the text");
+    assert!(
+        past.is_some(),
+        "dragging past the text keeps a selection ({inside:?} -> {past:?})"
+    );
+    assert_eq!(
+        past.map(|(_, e)| e),
+        Some(total),
+        "it reaches the end of the text"
+    );
 }
 
 /// Two containers side by side (a Row), each 200x60 with one text.
@@ -94,15 +109,21 @@ fn two_containers_in_a_row() -> (PerWindow, RegSlot, RegSlot) {
             SelectionContainer::new()
                 .modifier(Modifier::new().size(200.0, 60.0))
                 .build(ctx, move |ctx| {
-                    *an.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
-                    crate::components::Text::new("aaaa bbbb").modifier(Modifier::new().width(200.0)).build(ctx);
+                    *an.lock().unwrap() =
+                        Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                    crate::components::Text::new("aaaa bbbb")
+                        .modifier(Modifier::new().width(200.0))
+                        .build(ctx);
                 });
             let bn = b_body.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new().size(200.0, 60.0))
                 .build(ctx, move |ctx| {
-                    *bn.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
-                    crate::components::Text::new("cccc dddd").modifier(Modifier::new().width(200.0)).build(ctx);
+                    *bn.lock().unwrap() =
+                        Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                    crate::components::Text::new("cccc dddd")
+                        .modifier(Modifier::new().width(200.0))
+                        .build(ctx);
                 });
         });
     });
@@ -122,9 +143,16 @@ fn dragging_left_into_another_container_reaches_the_anchor_start() {
 
     // B occupies x 200..400; its text runs along the top.
     assert!(press(&mut pw, (208.0, 10.0)), "the press lands in B's text");
-    assert!(drag(&mut pw, (100.0, 10.0)), "dragging left into A updates the selection");
+    assert!(
+        drag(&mut pw, (100.0, 10.0)),
+        "dragging left into A updates the selection"
+    );
     let sel = reg.build_selection().map(|s| (s.start(), s.end()));
-    assert_eq!(sel, Some((0, 1)), "leftward drag reaches B's start, not its end");
+    assert_eq!(
+        sel,
+        Some((0, 1)),
+        "leftward drag reaches B's start, not its end"
+    );
 }
 
 /// The same press dragged RIGHT (into the empty area beside or past B) reaches B's END.
@@ -163,7 +191,10 @@ fn a_drag_publishes_into_a_bound_selection_state() {
     pw.content = content;
     pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
 
-    assert!(state.selection().is_none(), "nothing selected before the drag");
+    assert!(
+        state.selection().is_none(),
+        "nothing selected before the drag"
+    );
     assert!(press(&mut pw, (8.0, 10.0)), "the press lands in the text");
     assert!(drag(&mut pw, (60.0, 10.0)), "the move selects");
 
@@ -173,14 +204,19 @@ fn a_drag_publishes_into_a_bound_selection_state() {
         let nodes = pw.composer.arena_nodes();
         let mut found = None;
         for n in nodes.iter() {
-            if let Some(r) = n.registrar.borrow().as_ref() { found = Some(r.clone()); }
+            if let Some(r) = n.registrar.borrow().as_ref() {
+                found = Some(r.clone());
+            }
         }
         found.expect("the text registered")
     };
     reg.fire_on_change(); // what a pointer release does
     let published = state.selected_text();
     assert!(published.is_some(), "the state saw the drag: {published:?}");
-    assert!(published.unwrap_or_default().starts_with('a'), "and it is the dragged text");
+    assert!(
+        published.unwrap_or_default().starts_with('a'),
+        "and it is the dragged text"
+    );
 }
 // ── M-5: double click selects the word, triple click the line ──
 
@@ -190,9 +226,15 @@ fn a_double_click_selects_the_word_under_the_pointer() {
     let (mut pw, reg) = container_with_padding_below("aaaa bbbb");
     let r = reg.lock().unwrap().clone().expect("registered");
 
-    assert!(press(&mut pw, (60.0, 10.0)), "the press lands in the second word");
+    assert!(
+        press(&mut pw, (60.0, 10.0)),
+        "the press lands in the second word"
+    );
     refresh_click_clock(&mut pw, (60.0, 10.0), 1);
-    assert!(press(&mut pw, (60.0, 10.0)), "the second press of the double click");
+    assert!(
+        press(&mut pw, (60.0, 10.0)),
+        "the second press of the double click"
+    );
 
     assert_eq!(
         r.build_selection().map(|s| s.text().to_string()),
@@ -227,7 +269,10 @@ fn a_second_press_elsewhere_is_not_a_double_click() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     assert!(press(&mut pw, (10.0, 10.0)));
-    assert!(press(&mut pw, (90.0, 10.0)), "80 px away is outside the multi-click slop");
+    assert!(
+        press(&mut pw, (90.0, 10.0)),
+        "80 px away is outside the multi-click slop"
+    );
 
     assert!(
         r.build_selection().is_none(),
@@ -247,11 +292,14 @@ fn a_second_window_laying_out_keeps_the_first_windows_table() {
     r.set_selection(0, 11);
 
     let mut pw_b = PerWindow::new(Box::new(|_| {}), 300.0, 200.0, ThemeColors::default_light());
-    pw_b.content = Box::new(|ctx| { crate::components::Text::new("plain").build(ctx); });
+    pw_b.content = Box::new(|ctx| {
+        crate::components::Text::new("plain").build(ctx);
+    });
     let content = std::mem::replace(&mut pw_b.content, Box::new(|_| {}));
     pw_b.composer.recompose(|ctx| content(ctx));
     pw_b.content = content;
-    pw_b.composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+    pw_b.composer
+        .layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
 
     assert_eq!(r.total_text_len(), 11, "window A keeps its runs");
     assert_eq!(
@@ -272,7 +320,10 @@ fn a_press_in_another_window_keeps_this_windows_selection() {
     let r = reg_a.lock().unwrap().clone().expect("registered");
     r.set_selection(0, 5);
 
-    assert!(press(&mut pw_b, (200.0, 200.0)), "the press lands on window B's padding");
+    assert!(
+        press(&mut pw_b, (200.0, 200.0)),
+        "the press lands on window B's padding"
+    );
 
     assert_eq!(
         r.build_selection().map(|s| s.text().to_string()),
@@ -288,7 +339,10 @@ fn a_press_in_the_same_window_still_ends_its_selection() {
     let r = reg.lock().unwrap().clone().expect("registered");
     r.set_selection(0, 4);
     assert!(r.build_selection().is_some());
-    assert!(press(&mut pw, (200.0, 120.0)), "the press lands on the container's padding");
+    assert!(
+        press(&mut pw, (200.0, 120.0)),
+        "the press lands on the container's padding"
+    );
     assert!(
         r.build_selection().is_none(),
         "a press inside the container still ends the selection"
@@ -305,16 +359,22 @@ fn nested_containers_keep_their_own_tables() {
     pw.content = Box::new(move |ctx| {
         let o = o.clone();
         let i = i.clone();
-        SelectionContainer::new().modifier(Modifier::new().size(300.0, 200.0)).build(ctx, move |ctx| {
-            *o.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
-            crate::components::Text::new("aa").build(ctx);
-            let i2 = i.clone();
-            SelectionContainer::new().modifier(Modifier::new().size(200.0, 100.0)).build(ctx, move |ctx| {
-                *i2.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
-                crate::components::Text::new("bb").build(ctx);
+        SelectionContainer::new()
+            .modifier(Modifier::new().size(300.0, 200.0))
+            .build(ctx, move |ctx| {
+                *o.lock().unwrap() =
+                    Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                crate::components::Text::new("aa").build(ctx);
+                let i2 = i.clone();
+                SelectionContainer::new()
+                    .modifier(Modifier::new().size(200.0, 100.0))
+                    .build(ctx, move |ctx| {
+                        *i2.lock().unwrap() =
+                            Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                        crate::components::Text::new("bb").build(ctx);
+                    });
+                crate::components::Text::new("cc").build(ctx);
             });
-            crate::components::Text::new("cc").build(ctx);
-        });
     });
     let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
     pw.composer.recompose(|ctx| content(ctx));
@@ -324,8 +384,16 @@ fn nested_containers_keep_their_own_tables() {
     let i = inner.lock().unwrap().clone();
     let (o, i) = (o.expect("outer registrar"), i.expect("inner registrar"));
     assert!(!o.is_same(&i), "two containers, two registrars");
-    assert_eq!(o.selectable_texts(), vec!["aa".to_string(), "cc".to_string()], "the outer keeps its own runs");
-    assert_eq!(i.selectable_texts(), vec!["bb".to_string()], "the inner holds only its own");
+    assert_eq!(
+        o.selectable_texts(),
+        vec!["aa".to_string(), "cc".to_string()],
+        "the outer keeps its own runs"
+    );
+    assert_eq!(
+        i.selectable_texts(),
+        vec!["bb".to_string()],
+        "the inner holds only its own"
+    );
     assert_eq!(o.total_text_len(), 4);
     assert_eq!(i.total_text_len(), 2);
 }
@@ -351,7 +419,11 @@ fn a_container_body_skips_a_frame_with_no_changes() {
         pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
     }
     pw.content = content;
-    assert_eq!(body.load(Ordering::SeqCst), 1, "the body ran once, not once per frame");
+    assert_eq!(
+        body.load(Ordering::SeqCst),
+        1,
+        "the body ran once, not once per frame"
+    );
 }
 /// S-10: a `SelectionState` has to be released when its container leaves composition.
 ///
@@ -378,7 +450,9 @@ fn a_state_binds_again_after_its_container_leaves() {
                 SelectionContainer::new()
                     .state(st)
                     .modifier(Modifier::new().size(200.0, 100.0))
-                    .build(ctx, |ctx| { crate::components::Text::new("aa").build(ctx); });
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("aa").build(ctx);
+                    });
             }
         });
     });
@@ -398,7 +472,6 @@ fn a_state_binds_again_after_its_container_leaves() {
     );
 }
 
-
 /// S-12: a drag that leaves every node's box still extends the selection.
 ///
 /// The move used to be dropped when the hit test found nothing (the pointer past the content, or out
@@ -413,11 +486,20 @@ fn dragging_out_of_every_node_still_extends_the_selection() {
     let total = r.total_text_len();
 
     assert!(press(&mut pw, (20.0, 10.0)), "the press lands in A's text");
-    assert!(drag(&mut pw, (40.0, 10.0)), "a move inside the text selects");
-    assert_eq!(r.build_selection().map(|s| (s.start(), s.end())), Some((3, 6)));
+    assert!(
+        drag(&mut pw, (40.0, 10.0)),
+        "a move inside the text selects"
+    );
+    assert_eq!(
+        r.build_selection().map(|s| (s.start(), s.end())),
+        Some((3, 6))
+    );
 
     // (380, 280) is below both containers and past the window content: no node contains it.
-    assert!(drag(&mut pw, (380.0, 280.0)), "the move still belongs to the anchored text");
+    assert!(
+        drag(&mut pw, (380.0, 280.0)),
+        "the move still belongs to the anchored text"
+    );
     assert_eq!(
         r.build_selection().map(|s| (s.start(), s.end())),
         Some((3, total)),
@@ -432,7 +514,10 @@ fn dragging_out_of_every_node_still_extends_the_selection() {
 /// never moves, so a selection can never reach past the first screenful.
 #[test]
 fn dragging_at_the_edge_scrolls_and_the_selection_follows() {
-    let text: String = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let text: String = (0..40)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, ThemeColors::default_light());
     let scroll = crate::modifier::ScrollState::new();
     let reg: RegSlot = Default::default();
@@ -447,7 +532,8 @@ fn dragging_at_the_edge_scrolls_and_the_selection_follows() {
         SelectionContainer::new()
             .modifier(Modifier::new().size(300.0, 100.0))
             .build(ctx, move |ctx| {
-                *r.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                *r.lock().unwrap() =
+                    Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                 Column::new()
                     .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll_run))
                     .build(ctx, move |ctx| {
@@ -476,11 +562,16 @@ fn dragging_at_the_edge_scrolls_and_the_selection_follows() {
         pw.selection_autoscroll_tick();
         ticks += 1;
         std::thread::sleep(std::time::Duration::from_millis(16));
-        if scroll.offset.get() > 200.0 { break; }
+        if scroll.offset.get() > 200.0 {
+            break;
+        }
     }
     let offset = scroll.offset.get();
     let after = reg.build_selection().map(|s| s.end()).unwrap_or(0);
-    assert!(offset > 1.0, "the container has to scroll ({ticks} ticks, offset {offset})");
+    assert!(
+        offset > 1.0,
+        "the container has to scroll ({ticks} ticks, offset {offset})"
+    );
     assert!(
         after > before,
         "the selection follows the content: {before} -> {after} (offset {offset})"
@@ -530,7 +621,11 @@ fn ctrl_a_through_the_window_key_path_selects_the_whole_container() {
         Some((0, r.total_text_len())),
         "everything is selected"
     );
-    assert_eq!(seen.lock().unwrap().last().map(|s| s.as_str()), Some("aaaa bbbb"), "the change was announced");
+    assert_eq!(
+        seen.lock().unwrap().last().map(|s| s.as_str()),
+        Some("aaaa bbbb"),
+        "the change was announced"
+    );
 }
 /// M-3: the two ends of a selection have grab points, and a press on one drags THAT end.
 #[test]
@@ -548,7 +643,10 @@ fn a_handle_drag_adjusts_that_end() {
         let root = pw.composer.layout_root_idx().expect("root");
         crate::layout::selection_handles::selection_handle_points(nodes, root, &r).expect("handles")
     };
-    assert!(points[1].x > points[0].x, "the end handle sits to the right: {points:?}");
+    assert!(
+        points[1].x > points[0].x,
+        "the end handle sits to the right: {points:?}"
+    );
 
     // Press exactly on the end handle and drag past the first word.
     let grab = (points[1].x, points[1].y + 5.0);
@@ -556,7 +654,11 @@ fn a_handle_drag_adjusts_that_end() {
     assert!(drag(&mut pw, (200.0, 10.0)), "the move drags the end");
 
     let sel = r.build_selection().map(|s| (s.start(), s.end()));
-    assert_eq!(sel.map(|(start, _)| start), Some(0), "the OTHER end stays put: {sel:?}");
+    assert_eq!(
+        sel.map(|(start, _)| start),
+        Some(0),
+        "the OTHER end stays put: {sel:?}"
+    );
     assert!(
         sel.map(|(_, end)| end).unwrap_or(0) > 4,
         "the grabbed end follows the pointer: {sel:?}"
@@ -587,9 +689,17 @@ fn a_secondary_press_opens_the_context_menu() {
     let before = r.build_selection().map(|s| s.text().to_string());
     assert!(before.is_some(), "the drag made a selection");
 
-    let secondary = crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary };
+    let secondary = crate::input::PointerKind::Mouse {
+        button: crate::input::PointerButton::Secondary,
+    };
     assert!(
-        super::pointer::handle_pointer_down(&mut pw, (20.0, 10.0), secondary, &winit::keyboard::ModifiersState::empty(), true),
+        super::pointer::handle_pointer_down(
+            &mut pw,
+            (20.0, 10.0),
+            secondary,
+            &winit::keyboard::ModifiersState::empty(),
+            true
+        ),
         "the secondary press is answered by the menu"
     );
     assert_eq!(
@@ -605,14 +715,20 @@ fn a_secondary_press_opens_the_context_menu() {
 fn menu_row_point(pw: &PerWindow, row: usize) -> (f32, f32) {
     let menu = pw.input.selection_menu.clone().expect("a menu is open");
     let (x, y, w, _h) = crate::render::selection_menu_rect(&menu, (pw.width, pw.height));
-    (x + w / 2.0, y + crate::render::SELECTION_MENU_PADDING + crate::render::SELECTION_MENU_ROW_HEIGHT * (row as f32 + 0.5))
+    (
+        x + w / 2.0,
+        y + crate::render::SELECTION_MENU_PADDING
+            + crate::render::SELECTION_MENU_ROW_HEIGHT * (row as f32 + 0.5),
+    )
 }
 
 fn secondary_press(pw: &mut PerWindow, at: (f32, f32)) -> bool {
     super::pointer::handle_pointer_down(
         pw,
         at,
-        crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary },
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Secondary,
+        },
         &winit::keyboard::ModifiersState::empty(),
         true,
     )
@@ -630,18 +746,34 @@ fn a_menu_cycle_leaves_selection_working() {
     assert!(drag(&mut pw, (30.0, 10.0)), "the first drag selects");
     assert!(r.build_selection().is_some());
 
-    assert!(secondary_press(&mut pw, (20.0, 10.0)), "the secondary press opens the menu");
-    assert!(pw.input.selection_menu.is_some(), "the menu is window state");
+    assert!(
+        secondary_press(&mut pw, (20.0, 10.0)),
+        "the secondary press opens the menu"
+    );
+    assert!(
+        pw.input.selection_menu.is_some(),
+        "the menu is window state"
+    );
 
     // A press elsewhere dismisses it — and this press is an ordinary press again.
-    assert!(press(&mut pw, (200.0, 150.0)), "the dismissing press is handled");
     assert!(
-        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        press(&mut pw, (200.0, 150.0)),
+        "the dismissing press is handled"
+    );
+    assert!(
+        !pw.input
+            .selection_menu
+            .as_ref()
+            .map(|m| m.is_open())
+            .unwrap_or(false),
         "the menu is no longer interactive (it fades out from here)"
     );
 
     // ... and selection still works in the same container.
-    assert!(press(&mut pw, (8.0, 10.0)), "a new press still finds the text");
+    assert!(
+        press(&mut pw, (8.0, 10.0)),
+        "a new press still finds the text"
+    );
     assert!(drag(&mut pw, (40.0, 10.0)), "and dragging still selects");
     assert!(
         r.build_selection().is_some(),
@@ -657,14 +789,25 @@ fn the_menu_copy_row_copies_the_selection() {
     let r = reg.lock().unwrap().clone().expect("registered");
     assert!(press(&mut pw, (8.0, 10.0)));
     assert!(drag(&mut pw, (30.0, 10.0)));
-    let selected = r.build_selection().map(|s| s.text().to_string()).expect("a selection");
+    let selected = r
+        .build_selection()
+        .map(|s| s.text().to_string())
+        .expect("a selection");
 
     assert!(secondary_press(&mut pw, (20.0, 10.0)));
     let at = menu_row_point(&pw, 0);
     assert!(press(&mut pw, at), "the press lands on the Copy row");
-    assert_eq!(crate::clipboard::take_pending(), vec![selected.clone()], "the selection is on the clipboard");
+    assert_eq!(
+        crate::clipboard::take_pending(),
+        vec![selected.clone()],
+        "the selection is on the clipboard"
+    );
     assert!(
-        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        !pw.input
+            .selection_menu
+            .as_ref()
+            .map(|m| m.is_open())
+            .unwrap_or(false),
         "a chosen row stops taking input at once…"
     );
     assert!(
@@ -705,7 +848,9 @@ fn the_menu_animates_in_and_out() {
     assert!(menu.progress(opened) < 1.0, "and still growing");
 
     // After the open duration the animation is settled.
-    std::thread::sleep(std::time::Duration::from_millis(SelectionMenu::OPEN_MS as u64 + 30));
+    std::thread::sleep(std::time::Duration::from_millis(
+        SelectionMenu::OPEN_MS as u64 + 30,
+    ));
     let settled = std::time::Instant::now();
     let menu = pw.input.selection_menu.as_ref().expect("open");
     assert!(menu.progress(settled) > 0.99, "settled after OPEN_MS");
@@ -713,11 +858,23 @@ fn the_menu_animates_in_and_out() {
 
     // Dismissing starts the fade-out: not interactive, but still animating for a moment.
     assert!(press(&mut pw, (200.0, 150.0)));
-    let closing = pw.input.selection_menu.as_ref().expect("still drawn while it fades");
+    let closing = pw
+        .input
+        .selection_menu
+        .as_ref()
+        .expect("still drawn while it fades");
     assert!(!closing.is_open(), "a closing menu takes no input");
-    assert!(closing.is_animating(std::time::Instant::now()), "and asks for frames");
-    std::thread::sleep(std::time::Duration::from_millis(SelectionMenu::CLOSE_MS as u64 + 30));
-    assert!(!closing.is_animating(std::time::Instant::now()), "the fade finished");
+    assert!(
+        closing.is_animating(std::time::Instant::now()),
+        "and asks for frames"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(
+        SelectionMenu::CLOSE_MS as u64 + 30,
+    ));
+    assert!(
+        !closing.is_animating(std::time::Instant::now()),
+        "the fade finished"
+    );
 }
 /// Escape closes an open menu and leaves the selection alone (Compose closes the menu first).
 #[test]
@@ -728,14 +885,31 @@ fn escape_closes_the_menu_and_keeps_the_selection() {
     assert!(drag(&mut pw, (30.0, 10.0)));
     let before = r.build_selection().map(|s| s.text().to_string());
     assert!(secondary_press(&mut pw, (20.0, 10.0)));
-    assert!(pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false));
-
-    assert!(super::pointer::begin_closing_selection_menu(&mut pw), "Escape takes the menu");
     assert!(
-        !pw.input.selection_menu.as_ref().map(|m| m.is_open()).unwrap_or(false),
+        pw.input
+            .selection_menu
+            .as_ref()
+            .map(|m| m.is_open())
+            .unwrap_or(false)
+    );
+
+    assert!(
+        super::pointer::begin_closing_selection_menu(&mut pw),
+        "Escape takes the menu"
+    );
+    assert!(
+        !pw.input
+            .selection_menu
+            .as_ref()
+            .map(|m| m.is_open())
+            .unwrap_or(false),
         "the menu is closing"
     );
-    assert_eq!(r.build_selection().map(|s| s.text().to_string()), before, "the selection survives");
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        before,
+        "the selection survives"
+    );
     // Nothing left to close.
     assert!(!super::pointer::begin_closing_selection_menu(&mut pw));
 }
@@ -751,12 +925,45 @@ fn a_move_over_the_menu_marks_the_row() {
     let row1 = menu_row_point(&pw, 1);
 
     let modifiers = winit::keyboard::ModifiersState::empty();
-    super::pointer::handle_pointer_move(&mut pw, row0, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
-    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), Some(0), "row 0 is hovered");
-    super::pointer::handle_pointer_move(&mut pw, row1, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
-    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), Some(1), "row 1 is hovered");
-    super::pointer::handle_pointer_move(&mut pw, (5.0, 250.0), crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, &modifiers);
-    assert_eq!(pw.input.selection_menu.as_ref().and_then(|m| m.hovered), None, "and nothing outside");
+    super::pointer::handle_pointer_move(
+        &mut pw,
+        row0,
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
+        &modifiers,
+    );
+    assert_eq!(
+        pw.input.selection_menu.as_ref().and_then(|m| m.hovered),
+        Some(0),
+        "row 0 is hovered"
+    );
+    super::pointer::handle_pointer_move(
+        &mut pw,
+        row1,
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
+        &modifiers,
+    );
+    assert_eq!(
+        pw.input.selection_menu.as_ref().and_then(|m| m.hovered),
+        Some(1),
+        "row 1 is hovered"
+    );
+    super::pointer::handle_pointer_move(
+        &mut pw,
+        (5.0, 250.0),
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Primary,
+        },
+        &modifiers,
+    );
+    assert_eq!(
+        pw.input.selection_menu.as_ref().and_then(|m| m.hovered),
+        None,
+        "and nothing outside"
+    );
 }
 /// The menu opens with the row under the press point already highlighted.
 #[test]

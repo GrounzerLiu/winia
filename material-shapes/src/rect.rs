@@ -151,7 +151,10 @@ impl Rect {
 
     #[inline]
     pub fn center(&self) -> Offset {
-        Point(self.left + self.width() * 0.5, self.top + self.height() * 0.5)
+        Point(
+            self.left + self.width() * 0.5,
+            self.top + self.height() * 0.5,
+        )
     }
 
     #[inline]
@@ -175,9 +178,9 @@ impl Rect {
     }
 
     pub fn contains(&self, point: Offset) -> bool {
-        point.x() >= self.left &&
-        point.x() <= self.right &&
-        point.y() >= self.top &&
-        point.y() <= self.bottom
+        point.x() >= self.left
+            && point.x() <= self.right
+            && point.y() >= self.top
+            && point.y() <= self.bottom
     }
 }

@@ -19,14 +19,15 @@ pub use visibility::{
     ChannelValues, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
 
-use crate::runtime::state::{State, StateId};
 use crate::runtime::composer::ComposeCtx;
-use timed::{compute_spring_displacement, spring_at_rest};
+use crate::runtime::state::{State, StateId};
 use std::time::{Duration, Instant};
+use timed::{compute_spring_displacement, spring_at_rest};
 
-#[allow(unused_imports)] // the file-scope `#[test]` functions below build interpolators in an Arc
+#[allow(unused_imports)]
+// the file-scope `#[test]` functions below build interpolators in an Arc
 use std::sync::Arc;
-use std::sync::{Mutex, LazyLock};
+use std::sync::{LazyLock, Mutex};
 
 /// The time every motion in this module reads.
 ///
@@ -100,7 +101,10 @@ pub struct RetargetVelocity {
 
 impl RetargetVelocity {
     /// Nothing to inherit.
-    pub const ZERO: Self = Self { components: [0.0; MAX_ANIMATION_COMPONENTS], len: 0 };
+    pub const ZERO: Self = Self {
+        components: [0.0; MAX_ANIMATION_COMPONENTS],
+        len: 0,
+    };
 
     /// One scalar component: `animate_*_as_state`, a fling hand-off, any one-dimensional motion.
     pub fn scalar(velocity: f32) -> Self {
@@ -173,16 +177,22 @@ pub fn clear_animations_for_states(state_ids: &[StateId]) {
     if state_ids.is_empty() {
         return;
     }
-    ACTIVE_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state_id()));
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state.state_id()));
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|anim| !state_ids.contains(&anim.state_id()));
+    ACTIVE_COLOR_ANIMATIONS
+        .lock()
+        .unwrap()
+        .retain(|anim| !state_ids.contains(&anim.state.state_id()));
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod lifecycle_tests;
 #[cfg(test)]
 mod repeated_tests;
 #[cfg(test)]
-mod lifecycle_tests;
+pub(crate) mod tests;
 
 mod spec;
 

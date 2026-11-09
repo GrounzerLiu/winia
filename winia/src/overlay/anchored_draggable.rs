@@ -19,9 +19,9 @@
 //!   （`last_velocity` hold-still expiry，对标 VelocityTracker 样本 horizon）
 //! - `confirm_value_change` 同步回调（无挂起确认）
 
+use crate::runtime::state::{Backchannel, State};
 use std::collections::BTreeMap;
 use std::time::Instant;
-use crate::runtime::state::{Backchannel, State};
 
 /// Velocity sample horizon (ms): drag deltas older than this are treated as
 /// hold-still (velocity 0) — cf. Compose VelocityTracker horizon (~100ms).
@@ -91,7 +91,11 @@ impl<T: Clone + PartialEq + Eq + Ord> DraggableAnchors<T> {
     pub fn closest_anchor_directional(&self, position: f32, search_upwards: bool) -> Option<T> {
         let mut best: Option<(f32, T)> = None;
         for (k, &pos) in &self.by_value {
-            let in_dir = if search_upwards { pos >= position } else { pos <= position };
+            let in_dir = if search_upwards {
+                pos >= position
+            } else {
+                pos <= position
+            };
             if !in_dir {
                 continue;
             }
@@ -144,7 +148,13 @@ fn progress_impl<T: Clone + PartialEq + Eq + Ord>(
     let hi = from_pos.max(to_pos);
     let c = off.clamp(lo, hi);
     let frac = (c - from_pos) / (to_pos - from_pos);
-    if frac < 1e-6 { 0.0 } else if frac > 1.0 - 1e-6 { 1.0 } else { frac.abs() }
+    if frac < 1e-6 {
+        0.0
+    } else if frac > 1.0 - 1e-6 {
+        1.0
+    } else {
+        frac.abs()
+    }
 }
 
 // ═══════════════ AnchoredDraggableState ═══════════════
@@ -252,7 +262,10 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         }
         let off = self.offset.get();
         if !off.is_nan() {
-            self.anchors.get().closest_anchor(off).unwrap_or_else(|| self.current_value.get())
+            self.anchors
+                .get()
+                .closest_anchor(off)
+                .unwrap_or_else(|| self.current_value.get())
         } else {
             self.current_value.get()
         }
@@ -322,7 +335,11 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         };
         self.offset.set(new_offset);
         // 修正：直接按 new_offset 查 closest，不要经 drag_target 自锁的 target_value()
-        let new_target = self.anchors.get().closest_anchor(new_offset).unwrap_or_else(|| self.current_value.get());
+        let new_target = self
+            .anchors
+            .get()
+            .closest_anchor(new_offset)
+            .unwrap_or_else(|| self.current_value.get());
         self.drag_target.set(Some(new_target));
         // velocity 追踪：用当前 delta/dt，非上一帧 d0（首帧亦有速度）
         let now = Instant::now();
@@ -343,11 +360,15 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
             let anchors = self.anchors.get();
             // 紧邻锚点（Compose AnchoredDraggable 的 findNeighbor），非距 new_offset 最近
             let neighbor = if new_offset >= cur_pos {
-                anchors.pairs().filter(|(_, p)| **p > cur_pos)
+                anchors
+                    .pairs()
+                    .filter(|(_, p)| **p > cur_pos)
                     .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(k, _)| k.clone())
             } else {
-                anchors.pairs().filter(|(_, p)| **p < cur_pos)
+                anchors
+                    .pairs()
+                    .filter(|(_, p)| **p < cur_pos)
                     .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(k, _)| k.clone())
             };
@@ -355,7 +376,11 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
                 let n_pos = anchors.position_of(&n);
                 if !n_pos.is_nan() {
                     let mid = (cur_pos + n_pos) / 2.0;
-                    let should_switch = if new_offset >= cur_pos { new_offset >= mid } else { new_offset <= mid };
+                    let should_switch = if new_offset >= cur_pos {
+                        new_offset >= mid
+                    } else {
+                        new_offset <= mid
+                    };
                     if should_switch && n != cur && (self.confirm_value_change)(&n) {
                         self.current_value.set(n);
                     }
@@ -390,13 +415,20 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
     }
 
     /// 计算吸附目标（对标 Compose `computeTarget`）
-    fn compute_target(&self, current_offset: f32, velocity: f32, positional_threshold: Option<f32>) -> T {
+    fn compute_target(
+        &self,
+        current_offset: f32,
+        velocity: f32,
+        positional_threshold: Option<f32>,
+    ) -> T {
         if self.anchors.get().is_empty() {
             return self.current_value.get();
         }
         let anchors = self.anchors.get();
         if anchors.len() <= 1 {
-            return anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get());
+            return anchors
+                .closest_anchor(current_offset)
+                .unwrap_or_else(|| self.current_value.get());
         }
         let is_moving = velocity.abs() > 0.0;
         // The token is used as-is: velocities here are LOGICAL px/s — the drag deltas come
@@ -407,26 +439,46 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         // minimum-fling gate uses its 50 dp/s constant the same way.
         let velocity_threshold = self.velocity_threshold_dp;
         if !is_moving {
-            return anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get());
+            return anchors
+                .closest_anchor(current_offset)
+                .unwrap_or_else(|| self.current_value.get());
         }
         let is_moving_forward = velocity > 0.0;
         if velocity.abs() >= velocity_threshold {
             // 高速度：沿方向下一个锚点
             return anchors
                 .closest_anchor_directional(current_offset, is_moving_forward)
-                .unwrap_or_else(|| anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get()));
+                .unwrap_or_else(|| {
+                    anchors
+                        .closest_anchor(current_offset)
+                        .unwrap_or_else(|| self.current_value.get())
+                });
         }
         // 低速度：按位置阈值判断（默认距离/2）
-        let left = anchors.closest_anchor_directional(current_offset, false)
-            .unwrap_or_else(|| anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get()));
-        let right = anchors.closest_anchor_directional(current_offset, true)
-            .unwrap_or_else(|| anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get()));
+        let left = anchors
+            .closest_anchor_directional(current_offset, false)
+            .unwrap_or_else(|| {
+                anchors
+                    .closest_anchor(current_offset)
+                    .unwrap_or_else(|| self.current_value.get())
+            });
+        let right = anchors
+            .closest_anchor_directional(current_offset, true)
+            .unwrap_or_else(|| {
+                anchors
+                    .closest_anchor(current_offset)
+                    .unwrap_or_else(|| self.current_value.get())
+            });
         let left_pos = anchors.position_of(&left);
         let right_pos = anchors.position_of(&right);
         let distance = (left_pos - right_pos).abs();
         let threshold = positional_threshold.unwrap_or(distance / 2.0);
         // 移动方向的起始锚点位置
-        let start_pos = if is_moving_forward { left_pos } else { right_pos };
+        let start_pos = if is_moving_forward {
+            left_pos
+        } else {
+            right_pos
+        };
         let rel_pos = (start_pos - current_offset).abs();
         if rel_pos >= threshold {
             if is_moving_forward { right } else { left }
@@ -577,7 +629,11 @@ mod tests {
     use super::*;
 
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-    enum V { A, B, C }
+    enum V {
+        A,
+        B,
+        C,
+    }
 
     fn anchors() -> DraggableAnchors<V> {
         DraggableAnchors::new(vec![(V::A, 0.0), (V::B, 100.0), (V::C, 200.0)])
@@ -591,7 +647,10 @@ mod tests {
         let s: AnchoredDraggableState<V> = AnchoredDraggableState::new(V::A);
         assert!(s.position_of(&V::A).is_nan(), "no anchors yet");
         s.drag_delta(40.0);
-        assert!(!s.is_dragging(), "nothing was dragged, so nothing is being dragged");
+        assert!(
+            !s.is_dragging(),
+            "nothing was dragged, so nothing is being dragged"
+        );
         // With anchors the flag does go up, and a settle clears it again.
         s.update_anchors(anchors());
         s.drag_delta(40.0);
@@ -724,6 +783,10 @@ mod tests {
         s.drag_delta(40.0); // 40: closest A (dist 40 vs B dist 60)
         std::thread::sleep(std::time::Duration::from_millis(150));
         let t = s.settle_with_velocity(s.last_velocity(), None);
-        assert_eq!(t, V::A, "expired velocity → positional settle to closest anchor");
+        assert_eq!(
+            t,
+            V::A,
+            "expired velocity → positional settle to closest anchor"
+        );
     }
 }

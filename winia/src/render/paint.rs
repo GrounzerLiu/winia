@@ -1,6 +1,6 @@
-use super::*;
 use super::helpers::*;
 use super::text_field::*;
+use super::*;
 
 // ── 视觉 Modifier 渲染（Background / Border / TextContent）──
 
@@ -45,7 +45,9 @@ pub(super) fn apply_gl_transform(
     // 3D 旋转（rotationX/Y + cameraDistance 透视）：整体拼成 4x4 矩阵
     // （scale → rotationZ → rotationY → rotationX → 相机透视）
     match build_gl_3d_matrix(gl, w, h) {
-        Some(m) => { canvas.concat_44(&m); }
+        Some(m) => {
+            canvas.concat_44(&m);
+        }
         None => {
             canvas.scale((gl.scale_x, gl.scale_y));
             canvas.rotate(gl.rotation_z, None);
@@ -75,29 +77,36 @@ pub(super) fn build_gl_3d_matrix(
     // 仍可能越界（z' ≤ h/2 + w/2），用 max(w,h) 保证任意角度 w>0。
     // ⚠ 钳制按中心枢轴估算——自定义 transformOrigin 时边缘距离不同。
     // 低于下限的相机值统一表现为最大合理透视。
-    let effective_cam = gl.camera_distance
-        .max(w.max(h))
-        .max(1.0);
+    let effective_cam = gl.camera_distance.max(w.max(h)).max(1.0);
     let mut persp = skia_safe::M44::new_identity();
     persp.set_rc(3, 2, -1.0 / effective_cam);
     let mut m = persp;
     if gl.rotation_z != 0.0 {
-        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
-            skia_safe::V3::new(0.0, 0.0, 1.0),
-            gl.rotation_z.to_radians(),
-        ));
+        m = skia_safe::M44::concat(
+            &m,
+            &skia_safe::M44::rotate(
+                skia_safe::V3::new(0.0, 0.0, 1.0),
+                gl.rotation_z.to_radians(),
+            ),
+        );
     }
     if gl.rotation_y != 0.0 {
-        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
-            skia_safe::V3::new(0.0, 1.0, 0.0),
-            gl.rotation_y.to_radians(),
-        ));
+        m = skia_safe::M44::concat(
+            &m,
+            &skia_safe::M44::rotate(
+                skia_safe::V3::new(0.0, 1.0, 0.0),
+                gl.rotation_y.to_radians(),
+            ),
+        );
     }
     if gl.rotation_x != 0.0 {
-        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
-            skia_safe::V3::new(1.0, 0.0, 0.0),
-            gl.rotation_x.to_radians(),
-        ));
+        m = skia_safe::M44::concat(
+            &m,
+            &skia_safe::M44::rotate(
+                skia_safe::V3::new(1.0, 0.0, 0.0),
+                gl.rotation_x.to_radians(),
+            ),
+        );
     }
     // 缩放最内层（先缩放后旋转——Compose 变换序）
     let mut s = skia_safe::M44::new_identity();
@@ -182,53 +191,72 @@ pub(super) fn draw_elevation_shadow(
 /// `RRect` rounded on the two RIGHT corners only (upper-right + lower-right).
 /// Skia's `new_rect_radii` corner order is UL, UR, LR, LL.
 pub(super) fn rrect_right_rounded(rect: Rect, r: f32) -> RRect {
-    RRect::new_rect_radii(rect, &[
-        skia_safe::Vector::new(0.0, 0.0),
-        skia_safe::Vector::new(r, r),
-        skia_safe::Vector::new(r, r),
-        skia_safe::Vector::new(0.0, 0.0),
-    ])
+    RRect::new_rect_radii(
+        rect,
+        &[
+            skia_safe::Vector::new(0.0, 0.0),
+            skia_safe::Vector::new(r, r),
+            skia_safe::Vector::new(r, r),
+            skia_safe::Vector::new(0.0, 0.0),
+        ],
+    )
 }
 
 /// `RRect` rounded on the two LEFT corners only (upper-left + lower-left).
 pub(super) fn rrect_left_rounded(rect: Rect, r: f32) -> RRect {
-    RRect::new_rect_radii(rect, &[
-        skia_safe::Vector::new(r, r),
-        skia_safe::Vector::new(0.0, 0.0),
-        skia_safe::Vector::new(0.0, 0.0),
-        skia_safe::Vector::new(r, r),
-    ])
+    RRect::new_rect_radii(
+        rect,
+        &[
+            skia_safe::Vector::new(r, r),
+            skia_safe::Vector::new(0.0, 0.0),
+            skia_safe::Vector::new(0.0, 0.0),
+            skia_safe::Vector::new(r, r),
+        ],
+    )
 }
 
 /// `RRect` with an independent radius per corner, in Skia's order (upper-left, upper-right,
 /// lower-right, lower-left) — the render half of [`crate::graphics::Shape::Corners`].
-pub(super) fn rrect_corners(rect: Rect, top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> RRect {
-    RRect::new_rect_radii(rect, &[
-        skia_safe::Vector::new(top_left, top_left),
-        skia_safe::Vector::new(top_right, top_right),
-        skia_safe::Vector::new(bottom_right, bottom_right),
-        skia_safe::Vector::new(bottom_left, bottom_left),
-    ])
+pub(super) fn rrect_corners(
+    rect: Rect,
+    top_left: f32,
+    top_right: f32,
+    bottom_right: f32,
+    bottom_left: f32,
+) -> RRect {
+    RRect::new_rect_radii(
+        rect,
+        &[
+            skia_safe::Vector::new(top_left, top_left),
+            skia_safe::Vector::new(top_right, top_right),
+            skia_safe::Vector::new(bottom_right, bottom_right),
+            skia_safe::Vector::new(bottom_left, bottom_left),
+        ],
+    )
 }
 
 pub(super) fn shadow_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_safe::Path {
     match shape {
         crate::graphics::Shape::Rectangle => skia_safe::Path::rect(rect, None),
-        crate::graphics::Shape::RoundedRect { corner_radius } => {
-            skia_safe::Path::rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None)
-        }
+        crate::graphics::Shape::RoundedRect { corner_radius } => skia_safe::Path::rrect(
+            RRect::new_rect_xy(rect, *corner_radius, *corner_radius),
+            None,
+        ),
         crate::graphics::Shape::PillToRounded { corner_radius, t } => {
             let percent = rect.width().min(rect.height()) / 2.0;
             let r = percent + (*corner_radius - percent) * *t;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, r, r), None)
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {
-            let rr = RRect::new_rect_radii(rect, &[
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = RRect::new_rect_radii(
+                rect,
+                &[
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             skia_safe::Path::rrect(rr, None)
         }
         crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -237,12 +265,15 @@ pub(super) fn shadow_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_sa
         crate::graphics::Shape::LeftRoundedRect { radius } => {
             skia_safe::Path::rrect(rrect_left_rounded(rect, *radius), None)
         }
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
-            skia_safe::Path::rrect(
-                rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
-                None,
-            )
-        }
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => skia_safe::Path::rrect(
+            rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
+            None,
+        ),
         crate::graphics::Shape::Pill => {
             let radius = rect.width().min(rect.height()) / 2.0;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
@@ -257,7 +288,6 @@ pub(super) fn shadow_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_sa
         }
     }
 }
-
 
 /// 单层阴影绘制——严格按参考实现（D:\winia 阴影绘制）：
 /// 1. 离屏 surface = **内容尺寸**（不扩边）
@@ -285,10 +315,9 @@ pub(super) fn draw_shadow_layer(
     let pad = params.radius * 2.0 + params.spread * 2.0;
 
     // 1. 离屏（内容尺寸）
-    let Some(mut surface) = surfaces::raster_n32_premul((
-        w.ceil().max(1.0) as i32,
-        h.ceil().max(1.0) as i32,
-    )) else {
+    let Some(mut surface) =
+        surfaces::raster_n32_premul((w.ceil().max(1.0) as i32, h.ceil().max(1.0) as i32))
+    else {
         return;
     };
     let sc = surface.canvas();
@@ -299,9 +328,14 @@ pub(super) fn draw_shadow_layer(
     mask.set_color(skia_safe::Color::WHITE);
     mask.set_anti_alias(true);
     match shape {
-        crate::graphics::Shape::Rectangle => { sc.draw_rect(local, &mask); }
+        crate::graphics::Shape::Rectangle => {
+            sc.draw_rect(local, &mask);
+        }
         crate::graphics::Shape::RoundedRect { corner_radius } => {
-            sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
+            sc.draw_rrect(
+                RRect::new_rect_xy(local, *corner_radius, *corner_radius),
+                &mask,
+            );
         }
         crate::graphics::Shape::PillToRounded { corner_radius, t } => {
             let percent = local.width().min(local.height()) / 2.0;
@@ -309,12 +343,15 @@ pub(super) fn draw_shadow_layer(
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {
-            let rr = RRect::new_rect_radii(local, &[
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(*radius, *radius),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = RRect::new_rect_radii(
+                local,
+                &[
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             sc.draw_rrect(rr, &mask);
         }
         crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -323,7 +360,12 @@ pub(super) fn draw_shadow_layer(
         crate::graphics::Shape::LeftRoundedRect { radius } => {
             sc.draw_rrect(rrect_left_rounded(local, *radius), &mask);
         }
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => {
             sc.draw_rrect(
                 rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
                 &mask,
@@ -346,9 +388,14 @@ pub(super) fn draw_shadow_layer(
         stroke.set_style(PaintStyle::Stroke);
         stroke.set_stroke_width(params.spread * 2.0);
         match shape {
-            crate::graphics::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
+            crate::graphics::Shape::Rectangle => {
+                sc.draw_rect(local, &stroke);
+            }
             crate::graphics::Shape::RoundedRect { corner_radius } => {
-                sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+                sc.draw_rrect(
+                    RRect::new_rect_xy(local, *corner_radius, *corner_radius),
+                    &stroke,
+                );
             }
             crate::graphics::Shape::PillToRounded { corner_radius, t } => {
                 let percent = local.width().min(local.height()) / 2.0;
@@ -356,12 +403,15 @@ pub(super) fn draw_shadow_layer(
                 sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
             crate::graphics::Shape::TopRoundedRect { radius } => {
-                let rr = RRect::new_rect_radii(local, &[
-                    skia_safe::Vector::new(*radius, *radius),
-                    skia_safe::Vector::new(*radius, *radius),
-                    skia_safe::Vector::new(0.0, 0.0),
-                    skia_safe::Vector::new(0.0, 0.0),
-                ]);
+                let rr = RRect::new_rect_radii(
+                    local,
+                    &[
+                        skia_safe::Vector::new(*radius, *radius),
+                        skia_safe::Vector::new(*radius, *radius),
+                        skia_safe::Vector::new(0.0, 0.0),
+                        skia_safe::Vector::new(0.0, 0.0),
+                    ],
+                );
                 sc.draw_rrect(rr, &stroke);
             }
             crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -370,7 +420,12 @@ pub(super) fn draw_shadow_layer(
             crate::graphics::Shape::LeftRoundedRect { radius } => {
                 sc.draw_rrect(rrect_left_rounded(local, *radius), &stroke);
             }
-            crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            crate::graphics::Shape::Corners {
+                top_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            } => {
                 sc.draw_rrect(
                     rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
                     &stroke,
@@ -389,12 +444,15 @@ pub(super) fn draw_shadow_layer(
     // 3. SrcIn 染色（阴影色 × 形状 alpha——透明区保持透明）
     let a = params.color.a as f32 / 255.0 * params.alpha.clamp(0.0, 1.0);
     let mut tint = Paint::default();
-    tint.set_color4f(Color4f::new(
-        params.color.r as f32 / 255.0,
-        params.color.g as f32 / 255.0,
-        params.color.b as f32 / 255.0,
-        a,
-    ), None);
+    tint.set_color4f(
+        Color4f::new(
+            params.color.r as f32 / 255.0,
+            params.color.g as f32 / 255.0,
+            params.color.b as f32 / 255.0,
+            a,
+        ),
+        None,
+    );
     tint.set_blend_mode(BlendMode::SrcIn);
     sc.draw_paint(&tint);
     let image = surface.image_snapshot();
@@ -455,7 +513,10 @@ pub(super) fn render_modifier_element<'a>(
             }
             None
         }
-        ModifierElement::BackgroundBrush { brush: brush_spec, shape } => {
+        ModifierElement::BackgroundBrush {
+            brush: brush_spec,
+            shape,
+        } => {
             let shape = shape.eval();
             // The brush is resolved here, at paint time, which is what lets a dynamic value read
             // animated state per frame. `last_background` is deliberately NOT set: the border-merge
@@ -463,7 +524,9 @@ pub(super) fn render_modifier_element<'a>(
             let brush = brush_spec.eval();
             match morph_radii {
                 Some(r) => {
-                    let Some(paint) = brush_paint(&brush, rect) else { return None };
+                    let Some(paint) = brush_paint(&brush, rect) else {
+                        return None;
+                    };
                     canvas.draw_rrect(
                         skia_safe::RRect::new_rect_radii(
                             rect,
@@ -476,7 +539,11 @@ pub(super) fn render_modifier_element<'a>(
             }
             None
         }
-        ModifierElement::Border { width, color, shape } => {
+        ModifierElement::Border {
+            width,
+            color,
+            shape,
+        } => {
             let shape = shape.eval();
             let color = color.eval();
             // When the border's colour and shape both equal the container's, collapse it into the fill
@@ -494,15 +561,32 @@ pub(super) fn render_modifier_element<'a>(
             }
             None
         }
-        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, .. } => {
-            Some(TextParams {
-                content, font_size: *font_size, color,
-                font_weight: *font_weight, font_style: *font_style,
-                max_lines: *max_lines, align: *align, overflow: *overflow,
-                soft_wrap: *soft_wrap,
-                letter_spacing: *letter_spacing, line_height: *line_height,
-            })
-        }
+        ModifierElement::TextContent {
+            content,
+            font_size,
+            color,
+            font_weight,
+            font_style,
+            max_lines,
+            align,
+            overflow,
+            soft_wrap,
+            letter_spacing,
+            line_height,
+            ..
+        } => Some(TextParams {
+            content,
+            font_size: *font_size,
+            color,
+            font_weight: *font_weight,
+            font_style: *font_style,
+            max_lines: *max_lines,
+            align: *align,
+            overflow: *overflow,
+            soft_wrap: *soft_wrap,
+            letter_spacing: *letter_spacing,
+            line_height: *line_height,
+        }),
         // DrawIcon 由 render_pass1 主循环显式分支绘制（内容区域 rect——含 padding 偏移）
         _ => None,
     }
@@ -522,10 +606,17 @@ pub(super) fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection,
     // same value, and a dynamic tint costs no recomposition.
     let tint = spec.tint.as_ref().map(|t| t.eval());
     match &spec.source {
-        IconSource::SvgPath { .. } | IconSource::Svg(_) | IconSource::File(_) | IconSource::Asset(_) => {
+        IconSource::SvgPath { .. }
+        | IconSource::Svg(_)
+        | IconSource::File(_)
+        | IconSource::Asset(_) => {
             if let Some(decoded) = decoded_icon(&spec.source) {
                 match decoded.as_ref() {
-                    DecodedIcon::Bitmap { image, width, height } => {
+                    DecodedIcon::Bitmap {
+                        image,
+                        width,
+                        height,
+                    } => {
                         let dst = fit_rect(rect, *width, *height);
                         let src = Rect::new(0.0, 0.0, *width, *height);
                         let mut paint = Paint::default();
@@ -552,7 +643,13 @@ pub(super) fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection,
                             color: c,
                             blend_mode: crate::graphics::BlendMode::SrcIn,
                         });
-                        draw_svg_dom(canvas, dom, fit_rect(rect, *width, *height), cf.as_ref(), 1.0);
+                        draw_svg_dom(
+                            canvas,
+                            dom,
+                            fit_rect(rect, *width, *height),
+                            cf.as_ref(),
+                            1.0,
+                        );
                     }
                 }
             }
@@ -621,7 +718,9 @@ pub(super) fn to_skia_blend_mode(bm: crate::graphics::BlendMode) -> BlendMode {
 }
 
 /// 映射 winia ColorFilter → skia ColorFilter（Tint/Matrix/Lighting）
-pub(super) fn to_skia_color_filter(cf: &crate::graphics::ColorFilter) -> Option<skia_safe::ColorFilter> {
+pub(super) fn to_skia_color_filter(
+    cf: &crate::graphics::ColorFilter,
+) -> Option<skia_safe::ColorFilter> {
     use crate::graphics::ColorFilter as CF;
     match cf {
         CF::Tint { color, blend_mode } => {
@@ -659,20 +758,33 @@ pub(super) fn draw_image_content(
     filter_quality: crate::graphics::FilterQuality,
     direction: crate::layout::LayoutDirection,
 ) {
-    let Some(decoded) = crate::graphics::decoded_icon(source) else { return };
+    let Some(decoded) = crate::graphics::decoded_icon(source) else {
+        return;
+    };
     let rtl = direction == crate::layout::LayoutDirection::Rtl;
     match decoded.as_ref() {
-        crate::graphics::DecodedIcon::Bitmap { image, width, height } => {
+        crate::graphics::DecodedIcon::Bitmap {
+            image,
+            width,
+            height,
+        } => {
             let dst = crate::graphics::content_scale_rect(
-                content_scale, rect, *width, *height, alignment, rtl,
+                content_scale,
+                rect,
+                *width,
+                *height,
+                alignment,
+                rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
                 return;
             }
             // 对齐 Compose Image 的 clipToBounds：内容超出 bounds（Crop/FillWidth/
             // FillHeight 等比放大）时裁剪到 bounds；Fit/Inside 不超出则零开销
-            let clipped = dst.left < rect.left || dst.top < rect.top
-                || dst.right > rect.right || dst.bottom > rect.bottom;
+            let clipped = dst.left < rect.left
+                || dst.top < rect.top
+                || dst.right > rect.right
+                || dst.bottom > rect.bottom;
             if clipped {
                 canvas.save();
                 canvas.clip_rect(rect, None, Some(false));
@@ -700,13 +812,20 @@ pub(super) fn draw_image_content(
         crate::graphics::DecodedIcon::Svg { dom, width, height } => {
             // 与位图同一事实来源：content_scale_rect 完整缩放/对齐 + clipToBounds
             let dst = crate::graphics::content_scale_rect(
-                content_scale, rect, *width, *height, alignment, rtl,
+                content_scale,
+                rect,
+                *width,
+                *height,
+                alignment,
+                rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
                 return;
             }
-            let clipped = dst.left < rect.left || dst.top < rect.top
-                || dst.right > rect.right || dst.bottom > rect.bottom;
+            let clipped = dst.left < rect.left
+                || dst.top < rect.top
+                || dst.right > rect.right
+                || dst.bottom > rect.bottom;
             if clipped {
                 canvas.save();
                 canvas.clip_rect(rect, None, Some(false));
@@ -765,11 +884,11 @@ pub(super) fn draw_svg_dom(
         None
     };
     // 缓存线程本地，绘制期 set_container_size 不跨线程
-    dom.borrow_mut().set_container_size((dst.width(), dst.height()));
+    dom.borrow_mut()
+        .set_container_size((dst.width(), dst.height()));
     dom.borrow().render(canvas);
     if layer.is_some() {
         canvas.restore();
     }
     canvas.restore();
 }
-

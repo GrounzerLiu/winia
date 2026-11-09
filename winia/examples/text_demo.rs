@@ -10,8 +10,8 @@
 use letclone::clone;
 use winia::prelude::*;
 use winia::text::{
-    measure_text, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextBrush, TextDrawStyle,
-    TextGeometricTransform, TextMeasureSpec, TextShadow,
+    LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextBrush, TextDrawStyle,
+    TextGeometricTransform, TextMeasureSpec, TextShadow, measure_text,
 };
 
 #[path = "common/settings.rs"]
@@ -57,9 +57,24 @@ const FAMILIES: [(&str, Option<&str>); 3] = [
     ("Consolas", Some("Consolas")),
 ];
 
-const CARD_BG: Color = Color { r: 0x2A, g: 0x27, b: 0x2E, a: 255 };
-const MUTED: Color = Color { r: 0x9E, g: 0x9A, b: 0xA6, a: 255 };
-const ACCENT: Color = Color { r: 0xD0, g: 0xBC, b: 0xFF, a: 255 };
+const CARD_BG: Color = Color {
+    r: 0x2A,
+    g: 0x27,
+    b: 0x2E,
+    a: 255,
+};
+const MUTED: Color = Color {
+    r: 0x9E,
+    g: 0x9A,
+    b: 0xA6,
+    a: 255,
+};
+const ACCENT: Color = Color {
+    r: 0xD0,
+    g: 0xBC,
+    b: 0xFF,
+    a: 255,
+};
 
 /// Every live knob the playground drives. One State each, so a change only re-enters the card that
 /// reads it — a single struct state would re-run the whole page on every slider tick.
@@ -103,7 +118,11 @@ impl Knobs {
     fn text(&self, content: &str) -> Text {
         let min = self.min_lines.get().round().max(1.0) as usize;
         let raw_max = self.max_lines.get().round().max(0.0) as usize;
-        let max = if raw_max == 0 { usize::MAX } else { raw_max.max(min) };
+        let max = if raw_max == 0 {
+            usize::MAX
+        } else {
+            raw_max.max(min)
+        };
         let mut text = Text::new(content)
             .font_size(self.size.get())
             .font_weight(WEIGHTS[self.weight.get().min(WEIGHTS.len() - 1)].1)
@@ -168,7 +187,9 @@ fn labelled(ctx: &mut ComposeCtx, title: &str, control: impl FnOnce(&mut Compose
         .build(ctx, |ctx| {
             Stack::new()
                 .modifier(Modifier::new().width(120.0))
-                .build(ctx, |ctx| Text::new(title).font_size(12.0).color(MUTED).build(ctx));
+                .build(ctx, |ctx| {
+                    Text::new(title).font_size(12.0).color(MUTED).build(ctx)
+                });
             Stack::new()
                 .modifier(Modifier::new().layout_weight(1.0))
                 .build(ctx, control);

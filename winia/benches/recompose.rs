@@ -39,8 +39,8 @@ use std::hint::black_box;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use winia::composable;
 use winia::components::Text;
+use winia::composable;
 use winia::graphics::{Color, Shape};
 use winia::layout::BoxLayout;
 use winia::layout::box_with_constraints::BoxWithConstraints;
@@ -140,10 +140,12 @@ fn row_scoped(ctx: &mut ComposeCtx, state: State<i64>, kind: Kind) {
                 match kind {
                     Kind::Boxes => {
                         Column::new()
-                            .modifier(Modifier::new().size(60.0, 18.0).background(
-                                Color::from_argb(255, 200, 200, 200),
-                                Shape::Rectangle,
-                            ))
+                            .modifier(
+                                Modifier::new().size(60.0, 18.0).background(
+                                    Color::from_argb(255, 200, 200, 200),
+                                    Shape::Rectangle,
+                                ),
+                            )
                             .build(ctx, |_| {});
                         // The same content as `row`, so the two shapes compare read PLACEMENT rather
                         // than layouts: building less here would make the comparison meaningless.
@@ -210,10 +212,12 @@ fn row(ctx: &mut ComposeCtx, value: i64, kind: Kind) {
                 match kind {
                     Kind::Boxes => {
                         Column::new()
-                            .modifier(Modifier::new().size(60.0, 18.0).background(
-                                Color::from_argb(255, 200, 200, 200),
-                                Shape::Rectangle,
-                            ))
+                            .modifier(
+                                Modifier::new().size(60.0, 18.0).background(
+                                    Color::from_argb(255, 200, 200, 200),
+                                    Shape::Rectangle,
+                                ),
+                            )
                             .build(ctx, |_| {});
                         Column::new()
                             .modifier(Modifier::new().size(40.0, 18.0))
@@ -290,28 +294,34 @@ impl Tree {
         let states = self.states.clone();
         let kind = self.kind;
         let scoped = self.scoped_reads;
-        let tick = if self.tick_reads { Some(self.tick.clone()) } else { None };
-        self.composer.compose(winia::app_root!(move |ctx: &mut ComposeCtx| {
-            Column::new().build(ctx, |ctx| {
-                // Read in the CONTAINER's own scope: this is what makes the container the dependent,
-                // so writing the tick re-enters it and the row loop below runs.
-                if let Some(tick) = &tick {
-                    black_box(tick.get());
-                }
-                for state in &states {
-                    if scoped {
-                        row_scoped(ctx, state.clone(), kind);
-                    } else {
-                        row(ctx, state.get(), kind);
+        let tick = if self.tick_reads {
+            Some(self.tick.clone())
+        } else {
+            None
+        };
+        self.composer
+            .compose(winia::app_root!(move |ctx: &mut ComposeCtx| {
+                Column::new().build(ctx, |ctx| {
+                    // Read in the CONTAINER's own scope: this is what makes the container the dependent,
+                    // so writing the tick re-enters it and the row loop below runs.
+                    if let Some(tick) = &tick {
+                        black_box(tick.get());
                     }
-                }
-            });
-        }));
+                    for state in &states {
+                        if scoped {
+                            row_scoped(ctx, state.clone(), kind);
+                        } else {
+                            row(ctx, state.get(), kind);
+                        }
+                    }
+                });
+            }));
     }
 
     /// Just the layout half of a frame.
     fn layout_only(&mut self) {
-        self.composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        self.composer
+            .layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     }
 
     /// Lay out with a DIFFERENT constraint, which invalidates every node's fold and forces a real
@@ -319,7 +329,8 @@ impl Tree {
     /// read against: if they are equal, one row's update re-measures everything; if the update is far
     /// below it, the fold is doing its job and what remains is the traversal.
     fn layout_forced(&mut self, width: f32) {
-        self.composer.layout(Constraints::new(0.0, width, 0.0, 400.0));
+        self.composer
+            .layout(Constraints::new(0.0, width, 0.0, 400.0));
     }
 }
 
@@ -347,11 +358,17 @@ fn layout_reality(kind: Kind, label: &str) {
     let mut tree = Tree::new(rows, kind, false);
     tree.frame();
     let entries = Rc::new(std::cell::Cell::new(0));
-    let idle_composed = measure("compose(unclean)+layout, nothing changed", 200, 9, &entries, || {
-        tree.compose_only();
-        take_rows_run();
-        tree.layout_only();
-    });
+    let idle_composed = measure(
+        "compose(unclean)+layout, nothing changed",
+        200,
+        9,
+        &entries,
+        || {
+            tree.compose_only();
+            take_rows_run();
+            tree.layout_only();
+        },
+    );
     idle_composed.report();
 
     // Compose ALONE with one row changed. This is the arm that matters: an earlier version of this
@@ -376,14 +393,20 @@ fn layout_reality(kind: Kind, label: &str) {
     tree.frame();
     let mut moved = 0i64;
     let entries = Rc::new(std::cell::Cell::new(0));
-    let frame_one = measure("frame (compose+layout), one row updated", 200, 9, &entries, || {
-        moved += 1;
-        tree.states[rows / 2].set(moved);
-        tree.compose_only();
-        take_rows_run();
-        tree.layout_only();
-        black_box(moved);
-    });
+    let frame_one = measure(
+        "frame (compose+layout), one row updated",
+        200,
+        9,
+        &entries,
+        || {
+            moved += 1;
+            tree.states[rows / 2].set(moved);
+            tree.compose_only();
+            take_rows_run();
+            tree.layout_only();
+            black_box(moved);
+        },
+    );
     frame_one.report();
 
     // A different constraint: every cached constraint differs, so the whole tree re-measures. Nothing is
@@ -392,12 +415,18 @@ fn layout_reality(kind: Kind, label: &str) {
     tree.frame();
     let mut width = 400.0f32;
     let entries = Rc::new(std::cell::Cell::new(0));
-    let forced = measure("layout only, EVERY size re-measured", 200, 9, &entries, || {
-        // Alternating by a pixel invalidates the fold every frame without changing the structure.
-        width = if width == 400.0 { 401.0 } else { 400.0 };
-        tree.layout_forced(width);
-        black_box(width);
-    });
+    let forced = measure(
+        "layout only, EVERY size re-measured",
+        200,
+        9,
+        &entries,
+        || {
+            // Alternating by a pixel invalidates the fold every frame without changing the structure.
+            width = if width == 400.0 { 401.0 } else { 400.0 };
+            tree.layout_forced(width);
+            black_box(width);
+        },
+    );
     forced.report();
 }
 
@@ -421,10 +450,16 @@ fn scaling(kind: Kind, scoped: bool, label: &str) -> Vec<Result> {
         // while being written).
         let mut tree = Tree::new(rows, kind, scoped);
         let entries = Rc::new(std::cell::Cell::new(0));
-        let idle = measure(&format!("idle frame, {rows} rows"), 100, 9, &entries, || {
-            let ran = tree.frame_counted();
-            entries.set(entries.get() + ran);
-        });
+        let idle = measure(
+            &format!("idle frame, {rows} rows"),
+            100,
+            9,
+            &entries,
+            || {
+                let ran = tree.frame_counted();
+                entries.set(entries.get() + ran);
+            },
+        );
         idle.report();
 
         // One row moves. This is the claim: the work should follow the updated row, not the tree.
@@ -432,13 +467,19 @@ fn scaling(kind: Kind, scoped: bool, label: &str) -> Vec<Result> {
         tree.frame_counted();
         let entries = Rc::new(std::cell::Cell::new(0));
         let mut moved = 0i64;
-        let one = measure(&format!("one row updated, {rows} rows"), 100, 9, &entries, || {
-            moved += 1;
-            tree.states[rows / 2].set(moved);
-            let ran = tree.frame_counted();
-            entries.set(entries.get() + ran);
-            black_box(moved);
-        });
+        let one = measure(
+            &format!("one row updated, {rows} rows"),
+            100,
+            9,
+            &entries,
+            || {
+                moved += 1;
+                tree.states[rows / 2].set(moved);
+                let ran = tree.frame_counted();
+                entries.set(entries.get() + ran);
+                black_box(moved);
+            },
+        );
         one.report();
     }
     out
@@ -510,20 +551,28 @@ fn breakdown(kind: Kind, scoped: bool, rows: usize) {
 /// slots after the dirty one, say — rather than a per-change cost. If it is flat, the cost is the
 /// change itself and the position is irrelevant.
 fn dirty_position(rows: usize) {
-    println!("
---- where is the dirty row? (boxes, {rows} rows) ---");
+    println!(
+        "
+--- where is the dirty row? (boxes, {rows} rows) ---"
+    );
     for index in [0usize, rows / 4, rows / 2, rows - 1] {
         let mut tree = Tree::new(rows, Kind::Boxes, false);
         tree.frame();
         let entries = Rc::new(std::cell::Cell::new(0));
         let mut moved = 0i64;
-        let r = measure(&format!("compose, row {index} dirty"), 100, 9, &entries, || {
-            moved += 1;
-            tree.states[index].set(moved);
-            tree.compose_only();
-            entries.set(entries.get() + take_rows_run());
-            black_box(moved);
-        });
+        let r = measure(
+            &format!("compose, row {index} dirty"),
+            100,
+            9,
+            &entries,
+            || {
+                moved += 1;
+                tree.states[index].set(moved);
+                tree.compose_only();
+                entries.set(entries.get() + take_rows_run());
+                black_box(moved);
+            },
+        );
         r.report();
     }
     // And two rows at once, to see whether the cost adds up per dirty row or per neighbor span.
@@ -532,15 +581,21 @@ fn dirty_position(rows: usize) {
         tree.frame();
         let entries = Rc::new(std::cell::Cell::new(0));
         let mut moved = 0i64;
-        let r = measure(&format!("compose, {count} rows dirty (adjacent)"), 100, 9, &entries, || {
-            moved += 1;
-            for i in 0..count {
-                tree.states[rows / 2 + i].set(moved);
-            }
-            tree.compose_only();
-            entries.set(entries.get() + take_rows_run());
-            black_box(moved);
-        });
+        let r = measure(
+            &format!("compose, {count} rows dirty (adjacent)"),
+            100,
+            9,
+            &entries,
+            || {
+                moved += 1;
+                for i in 0..count {
+                    tree.states[rows / 2 + i].set(moved);
+                }
+                tree.compose_only();
+                entries.set(entries.get() + take_rows_run());
+                black_box(moved);
+            },
+        );
         r.report();
     }
 }
@@ -669,7 +724,9 @@ fn main() {
     // GROUP; if this profile enables debug assertions, every figure below is instrumented, not
     // production. Printed so the numbers can never be read without knowing which build produced them.
     println!("(debug_assertions = {})", cfg!(debug_assertions));
-    println!("(the fastest of 9 samples, with the median beside it; entered = what actually ran)\n");
+    println!(
+        "(the fastest of 9 samples, with the median beside it; entered = what actually ran)\n"
+    );
 
     // A fast path to run one scene while iterating on it: `cargo bench -p winia -- container`.
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -687,9 +744,17 @@ fn main() {
         layout_reality(Kind::SubBox, "subcompose");
         return;
     }
-    scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
+    scaling(
+        Kind::Boxes,
+        false,
+        "boxes: the framework's own machinery (no text shaping)",
+    );
     println!();
-    scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
+    scaling(
+        Kind::Text,
+        false,
+        "text: a realistic row (text shaping dominates)",
+    );
     println!();
     // The same row shape as `boxes` with ONE measure-time subcomposition per row, so the difference
     // between the two tables is what the subcomposition costs a frame.
@@ -708,7 +773,11 @@ fn main() {
 
     breakdown(Kind::Boxes, false, 800);
     println!();
-    scaling(Kind::Boxes, true, "boxes, state read INSIDE the row (read placement)");
+    scaling(
+        Kind::Boxes,
+        true,
+        "boxes, state read INSIDE the row (read placement)",
+    );
     breakdown(Kind::Boxes, true, 800);
     breakdown(Kind::Text, false, 800);
 

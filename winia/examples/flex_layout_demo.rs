@@ -19,7 +19,12 @@ use winia::prelude::*;
 mod settings;
 
 /// A labelled card whose content is the case under test.
-fn card(ctx: &mut ComposeCtx, tag: &'static str, title: &str, content: impl FnOnce(&mut ComposeCtx)) {
+fn card(
+    ctx: &mut ComposeCtx,
+    tag: &'static str,
+    title: &str,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
     Column::new()
         .modifier(
             Modifier::new()
@@ -67,73 +72,112 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
         )
         .spacing(14.0)
         .build(ctx, |ctx| {
-            Text::new("Flex layout — the four cases from the review").font_size(18.0).build(ctx);
+            Text::new("Flex layout — the four cases from the review")
+                .font_size(18.0)
+                .build(ctx);
 
             // 1. Weighted child inside the scrolling content. In Compose an unbounded main axis gives
             //    a weighted child nothing; the point of the card is that the page stays finite.
-            card(ctx, "scroll-weight", "1. weight inside the scroller", |ctx| {
-                // Remembered, not constructed inline: a new handle on every recomposition is the
-                // one shape the state-handle rule forbids (docs/state-handles.md).
-                let inner_scroll = ctx.remember(|| ScrollState::new()).get();
-                Column::new()
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_width()
-                            .height(80.0)
-                            .vertical_scroll(inner_scroll),
-                    )
-                    .build(ctx, |ctx| {
-                        Column::new()
-                            .modifier(Modifier::new().test_tag("scroll-content"))
-                            .build(ctx, |ctx| {
-                            bar(ctx, "scroll-fixed", "fixed 40", 40.0, Color::from_argb(255, 90, 160, 220));
-                            Text::new("weight(1) below — height 0 here, as in Compose")
-                                .modifier(Modifier::new().layout_weight(1.0))
-                                .build(ctx);
+            card(
+                ctx,
+                "scroll-weight",
+                "1. weight inside the scroller",
+                |ctx| {
+                    // Remembered, not constructed inline: a new handle on every recomposition is the
+                    // one shape the state-handle rule forbids (docs/state-handles.md).
+                    let inner_scroll = ctx.remember(|| ScrollState::new()).get();
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .fill_max_width()
+                                .height(80.0)
+                                .vertical_scroll(inner_scroll),
+                        )
+                        .build(ctx, |ctx| {
+                            Column::new()
+                                .modifier(Modifier::new().test_tag("scroll-content"))
+                                .build(ctx, |ctx| {
+                                    bar(
+                                        ctx,
+                                        "scroll-fixed",
+                                        "fixed 40",
+                                        40.0,
+                                        Color::from_argb(255, 90, 160, 220),
+                                    );
+                                    Text::new("weight(1) below — height 0 here, as in Compose")
+                                        .modifier(Modifier::new().layout_weight(1.0))
+                                        .build(ctx);
+                                });
                         });
-                    });
-            });
+                },
+            );
 
             // 2. SpaceBetween with one child: at the start edge, not centred.
-            card(ctx, "space-between-one", "2. SpaceBetween, one child", |ctx| {
-                Column::new()
-                    .modifier(Modifier::new().fill_max_width().height(60.0))
-                    .arrangement(Arrangement::SpaceBetween)
-                    .build(ctx, |ctx| {
-                        // A fixed-width block, so the RTL mirror is observable: a `fill_max_width`
-                        // child sits at the same x in both directions.
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .width(120.0)
-                                    .height(28.0)
-                                    .test_tag("space-between-bar")
-                                    .background(Color::from_argb(255, 220, 150, 90), Shape::rounded(4.0)),
-                            )
-                            .build(ctx, |ctx| {
-                                Text::new("start-aligned").font_size(11.0).build(ctx);
-                            });
-                    });
-            });
+            card(
+                ctx,
+                "space-between-one",
+                "2. SpaceBetween, one child",
+                |ctx| {
+                    Column::new()
+                        .modifier(Modifier::new().fill_max_width().height(60.0))
+                        .arrangement(Arrangement::SpaceBetween)
+                        .build(ctx, |ctx| {
+                            // A fixed-width block, so the RTL mirror is observable: a `fill_max_width`
+                            // child sits at the same x in both directions.
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .width(120.0)
+                                        .height(28.0)
+                                        .test_tag("space-between-bar")
+                                        .background(
+                                            Color::from_argb(255, 220, 150, 90),
+                                            Shape::rounded(4.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new("start-aligned").font_size(11.0).build(ctx);
+                                });
+                        });
+                },
+            );
 
             // 3. weight(0) measures like any other child instead of collapsing to zero.
-            card(ctx, "zero-weight", "3. weight(0) is not a collapse", |ctx| {
-                Column::new()
-                    .modifier(Modifier::new().fill_max_width().height(90.0))
-                    .build(ctx, |ctx| {
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .fill_max_width()
-                                    .height(30.0)
-                                    .layout_weight(0.0)
-                                    .test_tag("zero-weight-child")
-                                    .background(Color::from_argb(255, 120, 200, 140), Shape::rounded(4.0)),
-                            )
-                            .build(ctx, |ctx| Text::new("weight(0) keeps its 30").font_size(11.0).build(ctx));
-                        bar(ctx, "zero-sibling", "the sibling", 30.0, Color::from_argb(255, 90, 160, 220));
-                    });
-            });
+            card(
+                ctx,
+                "zero-weight",
+                "3. weight(0) is not a collapse",
+                |ctx| {
+                    Column::new()
+                        .modifier(Modifier::new().fill_max_width().height(90.0))
+                        .build(ctx, |ctx| {
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .fill_max_width()
+                                        .height(30.0)
+                                        .layout_weight(0.0)
+                                        .test_tag("zero-weight-child")
+                                        .background(
+                                            Color::from_argb(255, 120, 200, 140),
+                                            Shape::rounded(4.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new("weight(0) keeps its 30")
+                                        .font_size(11.0)
+                                        .build(ctx)
+                                });
+                            bar(
+                                ctx,
+                                "zero-sibling",
+                                "the sibling",
+                                30.0,
+                                Color::from_argb(255, 90, 160, 220),
+                            );
+                        });
+                },
+            );
 
             // 4. Overflow: the inner Column reports its 4 x 45 content height; the 100 dp scroll box
             //    around it clamps to the viewport (a plain Box would grow to its child instead — Compose
@@ -152,24 +196,24 @@ fn flex_layout_demo(ctx: &mut ComposeCtx) {
                         Column::new()
                             .modifier(Modifier::new().test_tag("overflow-content"))
                             .build(ctx, |ctx| {
-                            for i in 0..4 {
-                                Stack::new()
-                                    .modifier(
-                                        Modifier::new()
-                                            .required_size(120.0, 45.0)
-                                            .test_tag("overflow-row")
-                                            .background(
-                                                Color::from_argb(200, 200, 120 + i * 30, 120),
-                                                Shape::Rectangle,
-                                            ),
-                                    )
-                                    .build(ctx, |ctx| {
-                                        Text::new(format!("row {i} — 45 tall, clipped at 100"))
-                                            .font_size(11.0)
-                                            .build(ctx);
-                                    });
-                            }
-                        });
+                                for i in 0..4 {
+                                    Stack::new()
+                                        .modifier(
+                                            Modifier::new()
+                                                .required_size(120.0, 45.0)
+                                                .test_tag("overflow-row")
+                                                .background(
+                                                    Color::from_argb(200, 200, 120 + i * 30, 120),
+                                                    Shape::Rectangle,
+                                                ),
+                                        )
+                                        .build(ctx, |ctx| {
+                                            Text::new(format!("row {i} — 45 tall, clipped at 100"))
+                                                .font_size(11.0)
+                                                .build(ctx);
+                                        });
+                                }
+                            });
                     });
             });
         });

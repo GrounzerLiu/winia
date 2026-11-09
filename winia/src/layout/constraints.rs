@@ -13,7 +13,7 @@ pub struct Constraints {
 }
 
 impl Constraints {
-/// An unbounded constraint (the child decides its own size).
+    /// An unbounded constraint (the child decides its own size).
     pub const UNBOUNDED: Constraints = Constraints {
         min_width: 0.0,
         max_width: f32::INFINITY,
@@ -21,7 +21,7 @@ impl Constraints {
         max_height: f32::INFINITY,
     };
 
-/// A constraint of a fixed size.
+    /// A constraint of a fixed size.
     pub fn fixed(width: f32, height: f32) -> Self {
         Constraints {
             min_width: width,
@@ -31,7 +31,7 @@ impl Constraints {
         }
     }
 
-/// A constraint over a range.
+    /// A constraint over a range.
     pub fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
         Constraints {
             min_width,
@@ -41,7 +41,7 @@ impl Constraints {
         }
     }
 
-/// Clamps a size value into the legal range.
+    /// Clamps a size value into the legal range.
     pub fn constrain_width(&self, width: f32) -> f32 {
         width.clamp(self.min_width, self.max_width)
     }
@@ -50,17 +50,17 @@ impl Constraints {
         height.clamp(self.min_height, self.max_height)
     }
 
-/// Whether the width is exact (min == max).
+    /// Whether the width is exact (min == max).
     pub fn has_fixed_width(&self) -> bool {
         self.min_width == self.max_width
     }
 
-/// Whether the height is exact (min == max).
+    /// Whether the height is exact (min == max).
     pub fn has_fixed_height(&self) -> bool {
         self.min_height == self.max_height
     }
 
-/// Loosens the constraint: min becomes 0, max is kept.
+    /// Loosens the constraint: min becomes 0, max is kept.
     /// Loosen only the height — Compose's `constraints.copy(minHeight = 0)`, which is what a container
     /// measuring a small overlay does when it wants the overlay's own height but still respects the width
     /// its parent demanded (`material3/Badge.kt:86-88`).
@@ -82,7 +82,7 @@ impl Constraints {
         }
     }
 
-/// Tightens the width.
+    /// Tightens the width.
     pub fn tighten_width(&self, width: f32) -> Constraints {
         Constraints {
             min_width: width,
@@ -92,7 +92,7 @@ impl Constraints {
         }
     }
 
-/// Tightens the height.
+    /// Tightens the height.
     pub fn tighten_height(&self, height: f32) -> Constraints {
         Constraints {
             min_width: self.min_width,
@@ -102,7 +102,7 @@ impl Constraints {
         }
     }
 
-/// Deflates by the space already used (for measuring the remaining children).
+    /// Deflates by the space already used (for measuring the remaining children).
     pub fn offset(&self, dx: f32, dy: f32) -> Constraints {
         Constraints {
             min_width: (self.min_width - dx).max(0.0),

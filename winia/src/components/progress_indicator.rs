@@ -25,13 +25,13 @@
 //! 架构：同 Slider —— `Modifier::draw()` 自定义 Canvas 绘制；indeterminate 动画
 //! 用 `remember_infinite_transition`（帧驱动在 app.rs）。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color};
-use crate::theme::{ThemeColors, WiniaTheme};
 use crate::animation::{InfiniteRepeatableSpec, interpolator};
+use crate::composable;
+use crate::graphics::Color;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -129,7 +129,10 @@ fn linear_line_spec(delay_ms: u64, duration_ms: u64) -> InfiniteRepeatableSpec {
         (delay_ms as f32 / total, 0.0, e.clone()),
         ((delay_ms + duration_ms) as f32 / total, 1.0, e.clone()),
     ];
-    InfiniteRepeatableSpec::restart_keyframes(Duration::from_millis(LINEAR_ANIMATION_DURATION_MS), frames)
+    InfiniteRepeatableSpec::restart_keyframes(
+        Duration::from_millis(LINEAR_ANIMATION_DURATION_MS),
+        frames,
+    )
 }
 
 /// Linear first line head：0ms 起 1000ms 到 1
@@ -156,10 +159,7 @@ pub(crate) fn linear_second_line_tail_spec() -> InfiniteRepeatableSpec {
 pub(crate) fn circular_global_rotation_spec() -> InfiniteRepeatableSpec {
     InfiniteRepeatableSpec::restart_tween(
         Duration::from_millis(6000),
-        crate::animation::TweenSpec::new(
-            Duration::from_millis(6000),
-            interpolator::Linear::new(),
-        ),
+        crate::animation::TweenSpec::new(Duration::from_millis(6000), interpolator::Linear::new()),
     )
 }
 
@@ -176,13 +176,13 @@ pub(crate) fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
     let total = 6000.0f32;
     let frames = vec![
         (0.0, 0.0, linear.clone()),
-        (300.0 / total, 0.25, linear.clone()),       // [0, 300ms] 0°→90°：Linear（Compose 隐式 0ms 帧）
-        (1500.0 / total, 0.25, linear.clone()),  // hold 至 1500ms
-        (1800.0 / total, 0.5, linear.clone()),   // [1500, 1800ms] 90→180°：Linear
-        (3000.0 / total, 0.5, linear.clone()),   // hold 至 3000ms
-        (3300.0 / total, 0.75, linear.clone()),  // [3000, 3300ms] 180→270°：Linear
-        (4500.0 / total, 0.75, linear.clone()),  // hold 至 4500ms
-        (4800.0 / total, 1.0, linear.clone()),   // [4500, 4800ms] 270→360°：Linear
+        (300.0 / total, 0.25, linear.clone()), // [0, 300ms] 0°→90°：Linear（Compose 隐式 0ms 帧）
+        (1500.0 / total, 0.25, linear.clone()), // hold 至 1500ms
+        (1800.0 / total, 0.5, linear.clone()), // [1500, 1800ms] 90→180°：Linear
+        (3000.0 / total, 0.5, linear.clone()), // hold 至 3000ms
+        (3300.0 / total, 0.75, linear.clone()), // [3000, 3300ms] 180→270°：Linear
+        (4500.0 / total, 0.75, linear.clone()), // hold 至 4500ms
+        (4800.0 / total, 1.0, linear.clone()), // [4500, 4800ms] 270→360°：Linear
     ];
     InfiniteRepeatableSpec::restart_keyframes(Duration::from_millis(6000), frames)
 }
@@ -295,8 +295,12 @@ impl LinearProgressIndicator {
         ctx.changed(&self.draw_stop_indicator);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let color = self.color.unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
-        let track_color = self.track_color.unwrap_or_else(|| ProgressIndicatorDefaults::track_color(&theme));
+        let color = self
+            .color
+            .unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
+        let track_color = self
+            .track_color
+            .unwrap_or_else(|| ProgressIndicatorDefaults::track_color(&theme));
         let cap = self.stroke_cap;
         let gap = self.gap_size;
 
@@ -311,8 +315,14 @@ impl LinearProgressIndicator {
             Modifier::new()
                 .size(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
                 .draw_node(LinearIndeterminateNode {
-                    color, track_color, cap, gap,
-                    fh: fh.clone(), ft: ft.clone(), sh: sh.clone(), st: st.clone(),
+                    color,
+                    track_color,
+                    cap,
+                    gap,
+                    fh: fh.clone(),
+                    ft: ft.clone(),
+                    sh: sh.clone(),
+                    st: st.clone(),
                 })
         } else {
             let progress = self.progress;
@@ -320,7 +330,12 @@ impl LinearProgressIndicator {
             Modifier::new()
                 .size(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
                 .draw_node(LinearDeterminateNode {
-                    color, track_color, cap, gap, progress, draw_stop,
+                    color,
+                    track_color,
+                    cap,
+                    gap,
+                    progress,
+                    draw_stop,
                 })
         };
 
@@ -361,7 +376,9 @@ fn draw_linear_indicator(
 ) {
     let w = rect.width();
     let h = rect.height();
-    if w <= 0.0 || h <= 0.0 { return; }
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
     // 从 stroke 的垂直中心开始画
     let y_offset = rect.top + h / 2.0;
     let bar_start = rect.left + start_fraction * w;
@@ -412,7 +429,9 @@ fn draw_stop_indicator(
     cap: ProgressIndicatorStrokeCap,
 ) {
     let h = rect.height();
-    if h <= 0.0 { return; }
+    if h <= 0.0 {
+        return;
+    }
     // stop 不能超过 track 高度
     let adjusted_stop_size = stop_size.min(h);
     // 大高度时限制 stop 偏移（StopIndicatorTrailingSpace = 6dp）
@@ -423,7 +442,11 @@ fn draw_stop_indicator(
     paint.set_anti_alias(true);
     paint.set_color(skia_color(color));
     if cap == ProgressIndicatorStrokeCap::Round {
-        canvas.draw_circle(skia_safe::Point::new(cx, cy), adjusted_stop_size / 2.0, &paint);
+        canvas.draw_circle(
+            skia_safe::Point::new(cx, cy),
+            adjusted_stop_size / 2.0,
+            &paint,
+        );
     } else {
         let r = skia_safe::Rect::from_xywh(
             cx - adjusted_stop_size / 2.0,
@@ -448,7 +471,9 @@ pub(crate) fn draw_linear_determinate(
 ) {
     let w = rect.width();
     let h = rect.height();
-    if w <= 0.0 || h <= 0.0 { return; }
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
     let stroke_width = h;
     // Round cap 时视觉间隙 = gap + 两端 cap 延伸（Compose 同）
     let adjusted_gap_size = if cap == ProgressIndicatorStrokeCap::Butt || h > w {
@@ -462,7 +487,15 @@ pub(crate) fn draw_linear_determinate(
     // track：从 progress + min(progress, gapFraction) 到 1（进度小时 gap 收缩防重叠）
     let track_start = p + p.min(gap_fraction);
     if track_start <= 1.0 {
-        draw_linear_indicator(canvas, rect, track_start, 1.0, track_color, stroke_width, cap);
+        draw_linear_indicator(
+            canvas,
+            rect,
+            track_start,
+            1.0,
+            track_color,
+            stroke_width,
+            cap,
+        );
     }
     // indicator：0 到 progress
     draw_linear_indicator(canvas, rect, 0.0, p, color, stroke_width, cap);
@@ -494,9 +527,16 @@ pub(crate) struct LinearIndeterminateNode {
 impl crate::modifier::DrawNode for LinearIndeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_linear_indeterminate(
-            canvas, rect,
-            self.color, self.track_color, self.cap, self.gap,
-            self.fh.peek(), self.ft.peek(), self.sh.peek(), self.st.peek(),
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.cap,
+            self.gap,
+            self.fh.peek(),
+            self.ft.peek(),
+            self.sh.peek(),
+            self.st.peek(),
         );
     }
     fn node_key(&self) -> String {
@@ -524,9 +564,14 @@ pub(crate) struct LinearDeterminateNode {
 impl crate::modifier::DrawNode for LinearDeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_linear_determinate(
-            canvas, rect,
-            self.color, self.track_color, self.cap, self.gap,
-            self.progress, self.draw_stop,
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.cap,
+            self.gap,
+            self.progress,
+            self.draw_stop,
         );
     }
     fn node_key(&self) -> String {
@@ -557,7 +602,9 @@ pub(crate) fn draw_linear_indeterminate(
 ) {
     let w = rect.width();
     let h = rect.height();
-    if w <= 0.0 || h <= 0.0 { return; }
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
     let stroke_width = h;
     let adjusted_gap_size = if cap == ProgressIndicatorStrokeCap::Butt || h > w {
         gap_size
@@ -578,7 +625,15 @@ pub(crate) fn draw_linear_indeterminate(
 
     // Line 1（head - tail > 0 时存在）
     if first_line_head - first_line_tail > 0.0 {
-        draw_linear_indicator(canvas, rect, first_line_head, first_line_tail, color, stroke_width, cap);
+        draw_linear_indicator(
+            canvas,
+            rect,
+            first_line_head,
+            first_line_tail,
+            color,
+            stroke_width,
+            cap,
+        );
     }
 
     // Line 1 与 Line 2 之间的 track
@@ -598,7 +653,15 @@ pub(crate) fn draw_linear_indeterminate(
 
     // Line 2
     if second_line_head - second_line_tail > 0.0 {
-        draw_linear_indicator(canvas, rect, second_line_head, second_line_tail, color, stroke_width, cap);
+        draw_linear_indicator(
+            canvas,
+            rect,
+            second_line_head,
+            second_line_tail,
+            color,
+            stroke_width,
+            cap,
+        );
     }
 
     // Line 2 之后的 track
@@ -708,8 +771,12 @@ impl CircularProgressIndicator {
         ctx.changed(&self.gap_size);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let color = self.color.unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
-        let track_color = self.track_color.unwrap_or_else(|| ProgressIndicatorDefaults::track_color(&theme));
+        let color = self
+            .color
+            .unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
+        let track_color = self
+            .track_color
+            .unwrap_or_else(|| ProgressIndicatorDefaults::track_color(&theme));
         let cap = self.stroke_cap;
         let gap = self.gap_size;
         let stroke_width = self.stroke_width;
@@ -719,12 +786,15 @@ impl CircularProgressIndicator {
             // + 进度呼吸（0.1↔0.87）
             let mut inf = ctx.remember_infinite_transition();
             let global = inf.animate_float(ctx, 0.0, 1080.0, circular_global_rotation_spec());
-            let additional = inf.animate_float(ctx, 0.0, 360.0, circular_additional_rotation_spec());
+            let additional =
+                inf.animate_float(ctx, 0.0, 360.0, circular_additional_rotation_spec());
             let progress_anim = inf.animate_float(ctx, 0.1, 0.87, circular_progress_spec());
             Modifier::new()
                 .size(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
                 .draw_node(CircularIndeterminateNode {
-                    color, cap, stroke_width,
+                    color,
+                    cap,
+                    stroke_width,
                     global: global.clone(),
                     additional: additional.clone(),
                     progress_anim: progress_anim.clone(),
@@ -734,7 +804,12 @@ impl CircularProgressIndicator {
             Modifier::new()
                 .size(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
                 .draw_node(CircularDeterminateNode {
-                    color, track_color, cap, gap, stroke_width, progress,
+                    color,
+                    track_color,
+                    cap,
+                    gap,
+                    stroke_width,
+                    progress,
                 })
         };
 
@@ -771,7 +846,9 @@ fn draw_circular_indicator(
     cap: ProgressIndicatorStrokeCap,
 ) {
     let d = rect.width();
-    if d <= 0.0 || stroke_width <= 0.0 { return; }
+    if d <= 0.0 || stroke_width <= 0.0 {
+        return;
+    }
     // 弧线包围盒内缩 strokeWidth/2——stroke 中心线恰好落在直径圆上
     let diameter_offset = stroke_width / 2.0;
     let arc_dimen = d - 2.0 * diameter_offset;
@@ -792,7 +869,9 @@ fn draw_circular_indicator(
 
 /// gap 占圆周的比例换算为扫过角度（gap 长度 / 周长 × 360°）
 fn gap_size_sweep(gap_size: f32, diameter: f32) -> f32 {
-    if diameter <= 0.0 { return 0.0; }
+    if diameter <= 0.0 {
+        return 0.0;
+    }
     (gap_size / (std::f32::consts::PI * diameter)) * 360.0
 }
 
@@ -809,7 +888,9 @@ pub(crate) fn draw_circular_determinate(
 ) {
     let d = rect.width();
     let h = rect.height();
-    if d <= 0.0 || stroke_width <= 0.0 { return; }
+    if d <= 0.0 || stroke_width <= 0.0 {
+        return;
+    }
     let p = progress.clamp(0.0, 1.0);
     // 12 点方向起画（Compose startAngle = 270°）
     let start_angle = 270.0;
@@ -824,7 +905,8 @@ pub(crate) fn draw_circular_determinate(
     // track：从 indicator 终点 + gap 扫到完整圆（360 - sweep - 2×min(sweep, gapSweep)）
     let min_sweep_gap = sweep.min(gap_sweep);
     draw_circular_indicator(
-        canvas, rect,
+        canvas,
+        rect,
         start_angle + sweep + min_sweep_gap,
         360.0 - sweep - min_sweep_gap * 2.0,
         track_color,
@@ -832,14 +914,7 @@ pub(crate) fn draw_circular_determinate(
         cap,
     );
     // indicator：12 点起顺时针 sweep
-    draw_circular_indicator(
-        canvas, rect,
-        start_angle,
-        sweep,
-        color,
-        stroke_width,
-        cap,
-    );
+    draw_circular_indicator(canvas, rect, start_angle, sweep, color, stroke_width, cap);
 }
 
 /// indeterminate 圆形进度（对标 Compose indeterminate 分支——整体旋转 + 进度呼吸）
@@ -855,23 +930,21 @@ pub(crate) fn draw_circular_indeterminate(
     progress: f32,
 ) {
     let d = rect.width();
-    if d <= 0.0 || stroke_width <= 0.0 { return; }
+    if d <= 0.0 || stroke_width <= 0.0 {
+        return;
+    }
     let sweep = progress.clamp(0.0, 1.0) * 360.0;
 
     let cx = rect.left + d / 2.0;
     let cy = rect.top + d / 2.0;
     canvas.save();
     // 整体旋转：全局（线性 1080°）+ 额外（90°步进）
-    canvas.rotate(global_rotation + additional_rotation, Some(skia_safe::Point::new(cx, cy)));
-    // 无 track（indeterminate track = Transparent）；只有进度弧
-    draw_circular_indicator(
-        canvas, rect,
-        0.0,
-        sweep,
-        color,
-        stroke_width,
-        cap,
+    canvas.rotate(
+        global_rotation + additional_rotation,
+        Some(skia_safe::Point::new(cx, cy)),
     );
+    // 无 track（indeterminate track = Transparent）；只有进度弧
+    draw_circular_indicator(canvas, rect, 0.0, sweep, color, stroke_width, cap);
     canvas.restore();
 }
 
@@ -889,9 +962,14 @@ pub(crate) struct CircularDeterminateNode {
 impl crate::modifier::DrawNode for CircularDeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_circular_determinate(
-            canvas, rect,
-            self.color, self.track_color, self.cap, self.gap,
-            self.stroke_width, self.progress,
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.cap,
+            self.gap,
+            self.stroke_width,
+            self.progress,
         );
     }
     fn node_key(&self) -> String {
@@ -922,10 +1000,15 @@ pub(crate) struct CircularIndeterminateNode {
 impl crate::modifier::DrawNode for CircularIndeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_circular_indeterminate(
-            canvas, rect,
-            self.color, self.cap, 0.0,
+            canvas,
+            rect,
+            self.color,
+            self.cap,
+            0.0,
             self.stroke_width,
-            self.global.peek(), self.additional.peek(), self.progress_anim.peek(),
+            self.global.peek(),
+            self.additional.peek(),
+            self.progress_anim.peek(),
         );
     }
     fn node_key(&self) -> String {
@@ -937,7 +1020,6 @@ impl crate::modifier::DrawNode for CircularIndeterminateNode {
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests;

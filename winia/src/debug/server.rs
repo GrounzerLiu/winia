@@ -66,7 +66,9 @@ pub fn force_shutdown() {
     wake();
 }
 
-pub fn is_shutdown() -> bool { DEBUG_RUNTIME.lock().unwrap().shutdown }
+pub fn is_shutdown() -> bool {
+    DEBUG_RUNTIME.lock().unwrap().shutdown
+}
 
 /// Bind legacy stdin/WebSocket requests to the parent window once it exists.
 pub fn set_legacy_target(window_id: u64) {
@@ -90,7 +92,11 @@ fn target_matches(target: u64, window_id: u64, legacy: Option<u64>) -> bool {
 }
 
 pub fn request_screenshot(window_id: u64) {
-    let target = if window_id == 0 { legacy_target().unwrap_or(0) } else { window_id };
+    let target = if window_id == 0 {
+        legacy_target().unwrap_or(0)
+    } else {
+        window_id
+    };
     *SCREENSHOT_TARGET.lock().unwrap() = Some(target);
 }
 pub fn screenshot_requested(window_id: u64) -> bool {
@@ -121,7 +127,10 @@ pub fn set_event_loop_proxy(proxy: winit::event_loop::EventLoopProxy) {
 pub fn wake() {
     let (proxy, callback) = {
         let runtime = DEBUG_RUNTIME.lock().unwrap();
-        (runtime.event_loop_proxy.clone(), runtime.wake_callback.clone())
+        (
+            runtime.event_loop_proxy.clone(),
+            runtime.wake_callback.clone(),
+        )
     };
     if let Some(proxy) = proxy {
         let _ = proxy.wake_up();
@@ -182,7 +191,9 @@ pub fn clear_frame_passes() {
 /// first entry is the first frame rendered after the clear.
 fn frame_passes_line() -> String {
     let data = DEBUG_STATE.lock().unwrap();
-    let Some(state) = data.as_ref() else { return "frames=0 multi=0 passes=".to_string() };
+    let Some(state) = data.as_ref() else {
+        return "frames=0 multi=0 passes=".to_string();
+    };
     let id = legacy_target().unwrap_or(0);
     let empty = Vec::new();
     let ring = state.frame_passes.get(&id).unwrap_or(&empty);
@@ -207,11 +218,14 @@ impl Default for DebugData {
 pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
     let mut data = DEBUG_STATE.lock().unwrap();
     let state = data.get_or_insert_with(DebugData::default);
-    state.pixel_frames.insert(window_id, PixelFrame {
-        pixels: pixels.to_vec(),
-        width,
-        height,
-    });
+    state.pixel_frames.insert(
+        window_id,
+        PixelFrame {
+            pixels: pixels.to_vec(),
+            width,
+            height,
+        },
+    );
 }
 
 fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
@@ -224,7 +238,8 @@ fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
 /// other way to report a failure here.
 fn save_frame_png(path: &str) -> Result<(u32, u32), String> {
     let id = legacy_target().unwrap_or(0);
-    let (w, h, pixels) = pixel_frame(id).ok_or_else(|| String::from("no captured frame (send `r` first)"))?;
+    let (w, h, pixels) =
+        pixel_frame(id).ok_or_else(|| String::from("no captured frame (send `r` first)"))?;
     let info = skia_safe::ImageInfo::new(
         (w as i32, h as i32),
         skia_safe::ColorType::RGBA8888,
@@ -296,7 +311,9 @@ mod request_tests {
     /// Lock the module's serial section; a poisoned lock (an earlier test panicked) is still usable, the
     /// state is reset by every test anyway.
     fn serial() -> std::sync::MutexGuard<'static, ()> {
-        REQUEST_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+        REQUEST_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// What `update_frame_passes` costs on the frame path, since it runs once per rendered frame in every
@@ -353,8 +370,14 @@ mod request_tests {
         reset_debug_requests();
         queue_event_for_window(22, DebugEvent::FocusNext);
         queue_event_for_window(11, DebugEvent::Click { x: 1.0, y: 2.0 });
-        assert!(matches!(take_queued_events(11).as_slice(), [DebugEvent::Click { .. }]));
-        assert!(matches!(take_queued_events(22).as_slice(), [DebugEvent::FocusNext]));
+        assert!(matches!(
+            take_queued_events(11).as_slice(),
+            [DebugEvent::Click { .. }]
+        ));
+        assert!(matches!(
+            take_queued_events(22).as_slice(),
+            [DebugEvent::FocusNext]
+        ));
     }
 
     #[test]
@@ -364,7 +387,10 @@ mod request_tests {
         set_legacy_target(22);
         queue_event(DebugEvent::FocusNext);
         assert!(take_queued_events(11).is_empty());
-        assert!(matches!(take_queued_events(22).as_slice(), [DebugEvent::FocusNext]));
+        assert!(matches!(
+            take_queued_events(22).as_slice(),
+            [DebugEvent::FocusNext]
+        ));
         request_screenshot(0);
         assert!(!screenshot_requested(11));
         assert!(screenshot_requested(22));
@@ -377,9 +403,15 @@ mod request_tests {
         assert!(queued_event_targets().is_empty());
         set_legacy_target(22);
         queue_event(DebugEvent::FocusNext);
-        assert_eq!(queued_event_targets(), std::collections::HashSet::from([22]));
+        assert_eq!(
+            queued_event_targets(),
+            std::collections::HashSet::from([22])
+        );
         queue_event_for_window(33, DebugEvent::Click { x: 0.0, y: 0.0 });
-        assert_eq!(queued_event_targets(), std::collections::HashSet::from([22, 33]));
+        assert_eq!(
+            queued_event_targets(),
+            std::collections::HashSet::from([22, 33])
+        );
     }
 
     #[test]
@@ -456,7 +488,9 @@ pub fn update_tree(window_id: u64, json: &str) {
 pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, (f32, f32), String)>) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        if trees.is_empty() { return; }
+        if trees.is_empty() {
+            return;
+        }
         *data = Some(DebugData::default());
     }
     if let Some(ref mut d) = *data {
@@ -493,13 +527,17 @@ pub fn remove_tree(window_id: u64) {
 /// - Entries are sorted by window id; an overlay follows the window that hosts it.
 fn all_trees_json() -> String {
     let data = DEBUG_STATE.lock().unwrap();
-    let Some(d) = data.as_ref() else { return "[]".to_string() };
+    let Some(d) = data.as_ref() else {
+        return "[]".to_string();
+    };
     let mut entries: Vec<(u64, &String)> = d.trees.iter().map(|(id, j)| (*id, j)).collect();
     entries.sort_by_key(|(id, _)| *id);
     let mut out = String::from("[");
     let mut first = true;
     for (id, json) in entries {
-        if !first { out.push(','); }
+        if !first {
+            out.push(',');
+        }
         first = false;
         out.push_str(&format!(r#"{{"window":{id},"root":{json}}}"#));
         if let Some(ovs) = d.overlay_trees.get(&id) {
@@ -521,7 +559,9 @@ static QUEUED_EVENTS: Mutex<Vec<(u64, DebugEvent)>> = Mutex::new(Vec::new());
 
 use super::DebugEvent;
 
-pub fn queue_event(event: DebugEvent) { queue_event_for_window(0, event); }
+pub fn queue_event(event: DebugEvent) {
+    queue_event_for_window(0, event);
+}
 pub fn queue_event_for_window(window_id: u64, event: DebugEvent) {
     QUEUED_EVENTS.lock().unwrap().push((window_id, event));
     wake();
@@ -585,10 +625,26 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let mod_desc = describe_modifier(&node.modifier);
     // Non-finite numbers (NaN/Inf — an uninitialised measurement) are formatted as 0 so the JSON
     // stays valid: serde_json rejects NaN, and a UI test parsing the tree would then fail.
-    let pos_x = if node.position.x.is_finite() { node.position.x } else { 0.0 };
-    let pos_y = if node.position.y.is_finite() { node.position.y } else { 0.0 };
-    let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
-    let size_h = if node.measured_size.height.is_finite() { node.measured_size.height } else { 0.0 };
+    let pos_x = if node.position.x.is_finite() {
+        node.position.x
+    } else {
+        0.0
+    };
+    let pos_y = if node.position.y.is_finite() {
+        node.position.y
+    } else {
+        0.0
+    };
+    let size_w = if node.measured_size.width.is_finite() {
+        node.measured_size.width
+    } else {
+        0.0
+    };
+    let size_h = if node.measured_size.height.is_finite() {
+        node.measured_size.height
+    } else {
+        0.0
+    };
     let layout_id = match node.modifier.layout_id_value() {
         Some(id) => format!("\"{}\"", id.replace('\\', "\\\\").replace('"', "\\\"")),
         None => "null".into(),
@@ -602,48 +658,77 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
         node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {
-        if i > 0 { out.push_str(","); } // compact single line (no newline: the println stdout pipe must not split it)
+        if i > 0 {
+            out.push_str(",");
+        } // compact single line (no newline: the println stdout pipe must not split it)
         build_node_json(nodes, child, out, depth + 1);
     }
-    out.push(']'); out.push('}');
+    out.push(']');
+    out.push('}');
 }
 
 fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
-    let mut parts: Vec<String> = modifier.elements().iter().filter_map(|el| match el {
-        ModifierElement::Size { width, height } => Some(format!("size({:?},{:?})", width, height)),
-        ModifierElement::Background { .. } => Some("bg(<dynamic>)".into()),
-        ModifierElement::Clickable { .. } => Some("click".into()),
-        ModifierElement::Focusable { .. } => Some("focus".into()),
-        ModifierElement::Hoverable { .. } => Some("hover".into()),
-        ModifierElement::PointerHoverIcon { icon, .. } => Some(format!("cursor({:?})", icon)),
-        ModifierElement::Ripple { .. } => Some("ripple".into()),
-        ModifierElement::TextContent { content, .. } => Some(format!("text({})",
-            // Full escaping (JSON string): control characters such as \t/\r/\b/\f would make
-            // invalid JSON, and serde_json would fail — which shows up as a hard-to-diagnose test timeout.
-            content.replace('\\', "\\\\").replace('"', "\\\"")
-                .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
-                .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
-        ModifierElement::PaddingSides { start, top, end, bottom } => {
-            use crate::layout::Dimension;
-            // Evaluate all four sides (debug view: show accumulated and dynamic markers).
-            let sv = |v: &Dimension| match v {
-                Dimension::Fixed(x) | Dimension::Dp(crate::unit::Dp(x)) => format!("{x}"),
-                Dimension::Px(p) => format!("{:.0}", p.to_logical(crate::runtime::density::current_density())),
-                Dimension::Dynamic(_) => "<dyn>".to_string(),
-            };
-            Some(format!(
-                "pad({},{},{},{})",
-                sv(start), sv(top), sv(end), sv(bottom)
-            ))
-        }
-        // The offset is what a test can assert on a scroll container: scrolling moves the RENDER
-        // translation, not the children's layout positions, so a node's reported rect never changes.
-        ModifierElement::VerticalScroll { state, .. } => Some(format!("vscroll({:.0})", state.offset.get())),
-        ModifierElement::HorizontalScroll { state, .. } => {
-            Some(format!("hscroll({:.0})", state.offset.get()))
-        }
-        _ => None,
-    }).collect();
+    let mut parts: Vec<String> = modifier
+        .elements()
+        .iter()
+        .filter_map(|el| match el {
+            ModifierElement::Size { width, height } => {
+                Some(format!("size({:?},{:?})", width, height))
+            }
+            ModifierElement::Background { .. } => Some("bg(<dynamic>)".into()),
+            ModifierElement::Clickable { .. } => Some("click".into()),
+            ModifierElement::Focusable { .. } => Some("focus".into()),
+            ModifierElement::Hoverable { .. } => Some("hover".into()),
+            ModifierElement::PointerHoverIcon { icon, .. } => Some(format!("cursor({:?})", icon)),
+            ModifierElement::Ripple { .. } => Some("ripple".into()),
+            ModifierElement::TextContent { content, .. } => Some(format!(
+                "text({})",
+                // Full escaping (JSON string): control characters such as \t/\r/\b/\f would make
+                // invalid JSON, and serde_json would fail — which shows up as a hard-to-diagnose test timeout.
+                content
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t")
+                    .replace('\u{8}', "\\b")
+                    .replace('\u{c}', "\\f")
+            )),
+            ModifierElement::PaddingSides {
+                start,
+                top,
+                end,
+                bottom,
+            } => {
+                use crate::layout::Dimension;
+                // Evaluate all four sides (debug view: show accumulated and dynamic markers).
+                let sv = |v: &Dimension| match v {
+                    Dimension::Fixed(x) | Dimension::Dp(crate::unit::Dp(x)) => format!("{x}"),
+                    Dimension::Px(p) => format!(
+                        "{:.0}",
+                        p.to_logical(crate::runtime::density::current_density())
+                    ),
+                    Dimension::Dynamic(_) => "<dyn>".to_string(),
+                };
+                Some(format!(
+                    "pad({},{},{},{})",
+                    sv(start),
+                    sv(top),
+                    sv(end),
+                    sv(bottom)
+                ))
+            }
+            // The offset is what a test can assert on a scroll container: scrolling moves the RENDER
+            // translation, not the children's layout positions, so a node's reported rect never changes.
+            ModifierElement::VerticalScroll { state, .. } => {
+                Some(format!("vscroll({:.0})", state.offset.get()))
+            }
+            ModifierElement::HorizontalScroll { state, .. } => {
+                Some(format!("hscroll({:.0})", state.offset.get()))
+            }
+            _ => None,
+        })
+        .collect();
     // Open nodes (exp/modifier-node): the node_key goes into the tree so third-party behaviour
     // is visible while debugging. P1-5: escape the key like text (a third-party key containing a
     // quote, backslash or newline would make invalid JSON).
@@ -663,11 +748,7 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
 }
 
 fn debug_info_json() -> String {
-    let env = |name: &str| {
-        std::env::var(name)
-            .ok()
-            .filter(|value| !value.is_empty())
-    };
+    let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let mut app = env("WINIA_DEBUG_APP_NAME");
     let mut version = env("WINIA_DEBUG_APP_VERSION");
     let mut id = env("WINIA_DEBUG_APP_ID");
@@ -745,10 +826,17 @@ pub fn start_stdin_channel() {
         eprintln!("[DevTools] stdin ready — try: echo 'c 190 130'");
         let mut target_window: u64 = 0;
         for line in stdin.lock().lines() {
-            if is_shutdown() { break; }
-            let line = match line { Ok(l) => l, Err(_) => break };
+            if is_shutdown() {
+                break;
+            }
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.is_empty() { continue; }
+            if parts.is_empty() {
+                continue;
+            }
             match parts[0] {
                 "c" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
@@ -759,7 +847,7 @@ pub fn start_stdin_channel() {
                     let secondary = parts[1] == "right";
                     queue_event_for_window(target_window, DebugEvent::PointerKind { secondary });
                 }
-            "d" if parts.len() >= 3 => {
+                "d" if parts.len() >= 3 => {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event_for_window(target_window, DebugEvent::PointerDown { x, y });
@@ -775,10 +863,20 @@ pub fn start_stdin_channel() {
                     queue_event_for_window(target_window, DebugEvent::PointerUp { x, y });
                 }
                 "k" if parts.len() >= 2 => {
-                    queue_event_for_window(target_window, DebugEvent::Key { key: parts[1..].join(" ") });
+                    queue_event_for_window(
+                        target_window,
+                        DebugEvent::Key {
+                            key: parts[1..].join(" "),
+                        },
+                    );
                 }
                 "text" if parts.len() >= 2 => {
-                    queue_event_for_window(target_window, DebugEvent::Text { value: parts[1..].join(" ") });
+                    queue_event_for_window(
+                        target_window,
+                        DebugEvent::Text {
+                            value: parts[1..].join(" "),
+                        },
+                    );
                 }
                 "focus_next" => {
                     queue_event_for_window(target_window, DebugEvent::FocusNext);
@@ -796,12 +894,18 @@ pub fn start_stdin_channel() {
                         "rtl" => Some(crate::layout::LayoutDirection::Rtl),
                         _ => None,
                     };
-                    queue_event_for_window(target_window, DebugEvent::SetLayoutDirection(direction));
+                    queue_event_for_window(
+                        target_window,
+                        DebugEvent::SetLayoutDirection(direction),
+                    );
                 }
                 "s" if parts.len() >= 2 => {
                     // s dy (one argument) or s dx dy (two arguments — horizontal wheel / tests).
                     let (dx, dy) = if parts.len() >= 3 {
-                        (parts[1].parse().unwrap_or(0.0), parts[2].parse().unwrap_or(0.0))
+                        (
+                            parts[1].parse().unwrap_or(0.0),
+                            parts[2].parse().unwrap_or(0.0),
+                        )
                     } else {
                         (0.0, parts[1].parse().unwrap_or(0.0))
                     };
@@ -814,7 +918,10 @@ pub fn start_stdin_channel() {
                     queue_event_for_window(target_window, DebugEvent::Resize { w, h });
                 }
                 // Screenshot target is selected by the app's parent window.
-                "r" => { request_screenshot(target_window); wake(); }
+                "r" => {
+                    request_screenshot(target_window);
+                    wake();
+                }
                 "t" => {
                     // Tree responses go to stdout with the TREE: prefix (UI tests read the pipe;
                     // other demo output can pollute stdout, so tests filter by prefix). Always
@@ -859,7 +966,10 @@ pub fn start_stdin_channel() {
                 // `anim-trace` feature.
                 "tr" => {
                     let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
-                    println!("TRACE:{}", crate::debug::animation::recent_lines(n).join("\n"));
+                    println!(
+                        "TRACE:{}",
+                        crate::debug::animation::recent_lines(n).join("\n")
+                    );
                 }
                 // trj <n>: the same records as ONE JSON array, so a line-oriented test client can
                 // read them without guessing where the NDJSON block ends.
@@ -869,7 +979,10 @@ pub fn start_stdin_channel() {
                         .iter()
                         .filter_map(|line| serde_json::from_str(line).ok())
                         .collect();
-                    println!("TRACE_JSON:{}", serde_json::to_string(&records).unwrap_or_else(|_| "[]".into()));
+                    println!(
+                        "TRACE_JSON:{}",
+                        serde_json::to_string(&records).unwrap_or_else(|_| "[]".into())
+                    );
                 }
                 // save <path>: write the last CAPTURED frame (see `r`) to a PNG. The other pixel routes
                 // hand colour values to a client (`px` one at a time, `p` over the WebSocket); this is the
@@ -914,7 +1027,10 @@ pub fn start_stdin_channel() {
                     queue_event_for_window(target_window, DebugEvent::PointerUp { x: x2, y: y2 });
                     wake();
                 }
-                "q" => { force_shutdown(); break; }
+                "q" => {
+                    force_shutdown();
+                    break;
+                }
                 _ => {}
             }
         }
@@ -966,9 +1082,10 @@ pub fn start_ws_server() {
             return;
         };
         DEBUG_PORT.store(selected, Ordering::Relaxed);
-        if let Some(path) = std::env::var_os("WINIA_DEBUG_PORT_FILE").filter(|value| !value.is_empty()) {
-            if let Err(error) =
-                std::fs::write(std::path::Path::new(&path), format!("{selected}\n"))
+        if let Some(path) =
+            std::env::var_os("WINIA_DEBUG_PORT_FILE").filter(|value| !value.is_empty())
+        {
+            if let Err(error) = std::fs::write(std::path::Path::new(&path), format!("{selected}\n"))
             {
                 eprintln!(
                     "[DevTools] cannot write port file {}: {error}",
@@ -978,22 +1095,34 @@ pub fn start_ws_server() {
         }
         eprintln!("[DevTools] WebSocket → ws://localhost:{selected}");
         while let Ok((stream, _)) = listener.accept().await {
-            if is_shutdown() { break; }
+            if is_shutdown() {
+                break;
+            }
             tokio::spawn(handle_ws(stream));
         }
     });
 }
 
 async fn handle_ws(stream: tokio::net::TcpStream) {
-    use tokio_tungstenite::tungstenite::protocol::Message;
     use futures_util::{SinkExt, StreamExt};
-    let ws = match tokio_tungstenite::accept_async(stream).await { Ok(w) => w, Err(_) => return };
+    use tokio_tungstenite::tungstenite::protocol::Message;
+    let ws = match tokio_tungstenite::accept_async(stream).await {
+        Ok(w) => w,
+        Err(_) => return,
+    };
     let (mut write, mut read) = ws.split();
     while let Some(msg) = read.next().await {
-        if is_shutdown() { break; }
-        let text = match msg { Ok(Message::Text(t)) => t.to_string(), _ => continue };
+        if is_shutdown() {
+            break;
+        }
+        let text = match msg {
+            Ok(Message::Text(t)) => t.to_string(),
+            _ => continue,
+        };
         let parts: Vec<&str> = text.split_whitespace().collect();
-        if parts.is_empty() { continue; }
+        if parts.is_empty() {
+            continue;
+        }
         match parts[0] {
             "c" if parts.len() >= 3 => {
                 let x: f32 = parts[1].parse().unwrap_or(0.0);
@@ -1025,12 +1154,17 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::Text("ok up".into())).await;
             }
             "k" if parts.len() >= 2 => {
-                queue_event(DebugEvent::Key { key: parts[1..].join(" ") });
+                queue_event(DebugEvent::Key {
+                    key: parts[1..].join(" "),
+                });
                 let _ = write.send(Message::Text("ok key".into())).await;
             }
             "s" if parts.len() >= 2 => {
                 let (dx, dy) = if parts.len() >= 3 {
-                    (parts[1].parse().unwrap_or(0.0), parts[2].parse().unwrap_or(0.0))
+                    (
+                        parts[1].parse().unwrap_or(0.0),
+                        parts[2].parse().unwrap_or(0.0),
+                    )
                 } else {
                     (0.0, parts[1].parse().unwrap_or(0.0))
                 };
@@ -1045,7 +1179,8 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::Text("ok resize".into())).await;
             }
             "r" => {
-                request_screenshot(0); wake();
+                request_screenshot(0);
+                wake();
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 let s = legacy_target()
                     .and_then(pixel_frame)
@@ -1069,10 +1204,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
                 let lines = crate::debug::animation::recent_lines(n);
                 let _ = write
-                    .send(Message::text(format!(
-                        "{}",
-                        lines.join("\n")
-                    )))
+                    .send(Message::text(format!("{}", lines.join("\n"))))
                     .await;
             }
             "p" => {
@@ -1086,7 +1218,9 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                         raw.extend_from_slice(&pixels);
                         let _ = write.send(Message::Binary(raw.into())).await;
                     }
-                    None => { let _ = write.send(Message::text("no frame".to_string())).await; }
+                    None => {
+                        let _ = write.send(Message::text("no frame".to_string())).await;
+                    }
                 }
             }
             // px <x> <y>: the text form of one pixel (`pixel_line`) — same response as the stdin channel.
@@ -1126,7 +1260,12 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             // `q` is deliberately still absent here - closing the process is the stdin side's own
             // teardown, and a stray message over a socket should not be able to kill a running app.
             "fp" => {
-                let _ = write.send(Message::text(format!("FRAME_PASSES:{}", frame_passes_line()))).await;
+                let _ = write
+                    .send(Message::text(format!(
+                        "FRAME_PASSES:{}",
+                        frame_passes_line()
+                    )))
+                    .await;
             }
             "fpc" => {
                 clear_frame_passes();
@@ -1149,7 +1288,9 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 };
                 let _ = write.send(Message::text(reply)).await;
             }
-            _ => { let _ = write.send(Message::Text("?".into())).await; }
+            _ => {
+                let _ = write.send(Message::Text("?".into())).await;
+            }
         }
     }
 }

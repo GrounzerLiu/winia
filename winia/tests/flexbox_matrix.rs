@@ -17,7 +17,10 @@ fn item(index: usize, pattern: usize) -> (LayoutNode, FlexItemConfig) {
     let (width, height) = match pattern {
         0 => (40.0, 20.0),
         1 => (96.0, 24.0 + (index % 3) as f32 * 16.0),
-        _ => (60.0 + (index % 4) as f32 * 30.0, 20.0 + (index % 2) as f32 * 40.0),
+        _ => (
+            60.0 + (index % 4) as f32 * 30.0,
+            20.0 + (index % 2) as f32 * 40.0,
+        ),
     };
     let mut config = FlexItemConfig::new();
     config = match index % 3 {
@@ -35,11 +38,11 @@ fn item(index: usize, pattern: usize) -> (LayoutNode, FlexItemConfig) {
 
 fn item_node(index: usize, pattern: usize) -> LayoutNode {
     let (node, config) = item(index, pattern);
-    LayoutNode::leaf(Modifier::new().size(
-        node.measured_size.width,
-        node.measured_size.height,
+    LayoutNode::leaf(
+        Modifier::new()
+            .size(node.measured_size.width, node.measured_size.height)
+            .flex(config),
     )
-    .flex(config))
 }
 
 #[derive(Clone, Copy)]
@@ -97,7 +100,8 @@ fn run(case: &Case) -> (Size, Vec<(f32, f32, f32, f32)>) {
         let measured = nodes[*child].measured_size;
         let placed = placements[index].size;
         assert!(
-            (measured.width - placed.width).abs() < 0.01 && (measured.height - placed.height).abs() < 0.01,
+            (measured.width - placed.width).abs() < 0.01
+                && (measured.height - placed.height).abs() < 0.01,
             "placement disagrees with the measured child for {case}: child {index} measured {measured:?} placed {placed:?}"
         );
     }
@@ -315,7 +319,10 @@ fn the_matrix_respects_the_behavioural_invariants() {
                             let last = *rects.last().unwrap();
                             match justify {
                                 FlexJustifyContent::Start => {
-                                    assert!(first.0.abs() < 0.01, "Start starts at 0 for {base}: {rects:?}")
+                                    assert!(
+                                        first.0.abs() < 0.01,
+                                        "Start starts at 0 for {base}: {rects:?}"
+                                    )
                                 }
                                 FlexJustifyContent::End => {
                                     assert!(
@@ -454,22 +461,35 @@ fn the_matrix_holds_on_the_column_axis_and_unbounded_axes() {
                     };
                     let (size, rects) = run(&case);
                     checked += 1;
-                    assert!(size.width.is_finite() && size.height.is_finite(), "finite for {case}: {size:?}");
                     assert!(
-                        size.width >= constraints.min_width - 0.01 && size.height >= constraints.min_height - 0.01,
+                        size.width.is_finite() && size.height.is_finite(),
+                        "finite for {case}: {size:?}"
+                    );
+                    assert!(
+                        size.width >= constraints.min_width - 0.01
+                            && size.height >= constraints.min_height - 0.01,
                         "floored by the minimums for {case}: {size:?}"
                     );
                     if constraints.max_width < f32::MAX {
-                        assert!(size.width <= constraints.max_width + 0.01, "capped on width for {case}: {size:?}");
+                        assert!(
+                            size.width <= constraints.max_width + 0.01,
+                            "capped on width for {case}: {size:?}"
+                        );
                     }
                     if constraints.max_height < f32::MAX {
-                        assert!(size.height <= constraints.max_height + 0.01, "capped on height for {case}: {size:?}");
+                        assert!(
+                            size.height <= constraints.max_height + 0.01,
+                            "capped on height for {case}: {size:?}"
+                        );
                     }
                     // Order down the column.
                     if justify == FlexJustifyContent::Start {
                         for pair in rects.windows(2) {
                             if (pair[0].0 - pair[1].0).abs() < 0.5 {
-                                assert!(pair[1].1 >= pair[0].1 - 0.01, "column order for {case}: {rects:?}");
+                                assert!(
+                                    pair[1].1 >= pair[0].1 - 0.01,
+                                    "column order for {case}: {rects:?}"
+                                );
                             }
                         }
                     }
@@ -494,7 +514,10 @@ fn the_matrix_holds_on_the_column_axis_and_unbounded_axes() {
                         let main_size = size.height;
                         match justify {
                             FlexJustifyContent::Start => {
-                                assert!(first.1.abs() < 0.01, "column Start at 0 for {case}: {rects:?}")
+                                assert!(
+                                    first.1.abs() < 0.01,
+                                    "column Start at 0 for {case}: {rects:?}"
+                                )
                             }
                             FlexJustifyContent::End => {
                                 assert!(
@@ -512,7 +535,8 @@ fn the_matrix_holds_on_the_column_axis_and_unbounded_axes() {
                             }
                             FlexJustifyContent::SpaceBetween => {
                                 assert!(
-                                    first.1.abs() < 0.01 && (last.1 + last.3 - main_size).abs() < 0.01,
+                                    first.1.abs() < 0.01
+                                        && (last.1 + last.3 - main_size).abs() < 0.01,
                                     "column SpaceBetween pins both ends for {case}: {rects:?} size {size:?}"
                                 )
                             }
@@ -565,11 +589,19 @@ fn the_matrix_distributes_the_wrapped_lines() {
                 // Start packs the lines at the cross-start; WrapReverse starts at the cross-END, so
                 // the block sits at the far side.
                 FlexAlignContent::Start => {
-                    let top = if wrap == FlexWrap::WrapReverse { free } else { 0.0 };
+                    let top = if wrap == FlexWrap::WrapReverse {
+                        free
+                    } else {
+                        0.0
+                    };
                     (top, 28.0)
                 }
                 FlexAlignContent::End => {
-                    let top = if wrap == FlexWrap::WrapReverse { 0.0 } else { free };
+                    let top = if wrap == FlexWrap::WrapReverse {
+                        0.0
+                    } else {
+                        free
+                    };
                     (top, 28.0)
                 }
                 FlexAlignContent::Center => (free / 2.0, 28.0),
@@ -631,14 +663,19 @@ fn the_matrix_covers_rtl_the_line_cap_order_and_nesting() {
         };
         let (size, ltr) = run(&forward);
         let rtl = run_rtl(&forward);
-        let mut expected: Vec<f32> = ltr.iter().map(|rect| size.width - rect.0 - rect.2).collect();
+        let mut expected: Vec<f32> = ltr
+            .iter()
+            .map(|rect| size.width - rect.0 - rect.2)
+            .collect();
         let mut actual: Vec<f32> = rtl.iter().map(|rect| rect.0).collect();
         expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
         actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert_eq!(expected, actual, "RTL mirrors the row for {forward}");
         // The cross axis must not move.
         assert!(
-            ltr.iter().zip(rtl.iter()).all(|(a, b)| (a.1 - b.1).abs() < 0.01 && (a.3 - b.3).abs() < 0.01),
+            ltr.iter()
+                .zip(rtl.iter())
+                .all(|(a, b)| (a.1 - b.1).abs() < 0.01 && (a.3 - b.3).abs() < 0.01),
             "RTL must leave the cross axis alone for {forward}: {ltr:?} {rtl:?}"
         );
     }
@@ -647,7 +684,9 @@ fn the_matrix_covers_rtl_the_line_cap_order_and_nesting() {
     let mut nodes: Vec<LayoutNode> = (0..5).map(|index| item_node(index, 0)).collect();
     let children: Vec<usize> = (0..nodes.len()).collect();
     let policy = FlexBoxLayout::new(
-        FlexBoxConfig::new().wrap(FlexWrap::Wrap).max_items_in_each_line(2),
+        FlexBoxConfig::new()
+            .wrap(FlexWrap::Wrap)
+            .max_items_in_each_line(2),
     );
     let (_, placements) = policy.measure(
         &mut nodes,
@@ -655,15 +694,34 @@ fn the_matrix_covers_rtl_the_line_cap_order_and_nesting() {
         &children,
         Constraints::new(0.0, 600.0, 0.0, 400.0),
     );
-    let mut per_line: Vec<f32> = placements.iter().map(|placement| placement.position.y).collect();
+    let mut per_line: Vec<f32> = placements
+        .iter()
+        .map(|placement| placement.position.y)
+        .collect();
     per_line.dedup();
-    assert_eq!(per_line.len(), 3, "five items with a cap of two make three lines: {per_line:?}");
+    assert_eq!(
+        per_line.len(),
+        3,
+        "five items with a cap of two make three lines: {per_line:?}"
+    );
 
     // order re-sorts the items before placement.
     let mut ordered: Vec<LayoutNode> = vec![
-        LayoutNode::leaf(Modifier::new().size(20.0, 20.0).flex(FlexItemConfig::new().order(2))),
-        LayoutNode::leaf(Modifier::new().size(20.0, 20.0).flex(FlexItemConfig::new().order(0))),
-        LayoutNode::leaf(Modifier::new().size(20.0, 20.0).flex(FlexItemConfig::new().order(1))),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(20.0, 20.0)
+                .flex(FlexItemConfig::new().order(2)),
+        ),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(20.0, 20.0)
+                .flex(FlexItemConfig::new().order(0)),
+        ),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(20.0, 20.0)
+                .flex(FlexItemConfig::new().order(1)),
+        ),
     ];
     let children: Vec<usize> = (0..ordered.len()).collect();
     let policy = FlexBoxLayout::new(FlexBoxConfig::new());
@@ -673,7 +731,10 @@ fn the_matrix_covers_rtl_the_line_cap_order_and_nesting() {
         &children,
         Constraints::new(0.0, 300.0, 0.0, 100.0),
     );
-    let xs: Vec<f32> = placements.iter().map(|placement| placement.position.x).collect();
+    let xs: Vec<f32> = placements
+        .iter()
+        .map(|placement| placement.position.x)
+        .collect();
     assert!(
         xs[1] < xs[2] && xs[2] < xs[0],
         "the items are placed in order 0, 1, 2: {xs:?}"
@@ -690,7 +751,11 @@ fn the_matrix_covers_rtl_the_line_cap_order_and_nesting() {
         &outer_children,
         Constraints::new(0.0, 300.0, 0.0, 100.0),
     );
-    assert_eq!(size, Size::new(130.0, 30.0), "the outer line is the two items plus the gap");
+    assert_eq!(
+        size,
+        Size::new(130.0, 30.0),
+        "the outer line is the two items plus the gap"
+    );
     assert_eq!(placements[1].position.x, 90.0);
 }
 
@@ -732,15 +797,23 @@ fn the_matrix_splits_a_line_evenly_between_equal_items() {
                     // No fixed WIDTH: a fixed main size sets the min-content floor, and an item
                     // cannot grow below it (the earlier case measured 40, not 36, for exactly that
                     // reason).
-                    .map(|_| LayoutNode::leaf(Modifier::new().height(20.0).flex(FlexItemConfig::new().basis_dp(20.0).grow(1.0))))
+                    .map(|_| {
+                        LayoutNode::leaf(
+                            Modifier::new()
+                                .height(20.0)
+                                .flex(FlexItemConfig::new().basis_dp(20.0).grow(1.0)),
+                        )
+                    })
                     .collect();
                 let children: Vec<usize> = (0..nodes.len()).collect();
-                let policy = FlexBoxLayout::new(
-                    FlexBoxConfig::new().justify_content(justify).gap(8.0),
-                );
+                let policy =
+                    FlexBoxLayout::new(FlexBoxConfig::new().justify_content(justify).gap(8.0));
                 let constraints = Constraints::new(min_width, width.max(min_width), 0.0, 200.0);
                 let (size, placements) = policy.measure(&mut nodes, &[], &children, constraints);
-                let widths: Vec<f32> = placements.iter().map(|placement| placement.size.width).collect();
+                let widths: Vec<f32> = placements
+                    .iter()
+                    .map(|placement| placement.size.width)
+                    .collect();
                 let gaps = 8.0 * (count as f32 - 1.0);
                 let container_main = size.width.max(min_width);
                 let expected = (container_main - gaps) / count as f32;
@@ -785,7 +858,10 @@ fn the_matrix_stretches_each_line_to_its_own_extent() {
         &children,
         Constraints::new(0.0, 200.0, 0.0, 300.0),
     );
-    let heights: Vec<f32> = placements.iter().map(|placement| placement.size.height).collect();
+    let heights: Vec<f32> = placements
+        .iter()
+        .map(|placement| placement.size.height)
+        .collect();
     assert!(
         (heights[0] - 50.0).abs() < 0.5 && (heights[1] - 50.0).abs() < 0.5,
         "the first line stretches to its tallest item: {heights:?}"
@@ -798,7 +874,10 @@ fn the_matrix_stretches_each_line_to_its_own_extent() {
         (size.height - (50.0 + 4.0 + 20.0)).abs() < 0.5,
         "the container is the two lines plus the gap: {size:?}"
     );
-    let ys: Vec<f32> = placements.iter().map(|placement| placement.position.y).collect();
+    let ys: Vec<f32> = placements
+        .iter()
+        .map(|placement| placement.position.y)
+        .collect();
     assert!(
         (ys[2] - 54.0).abs() < 0.5 && (ys[3] - 54.0).abs() < 0.5,
         "the second line starts below the first: {ys:?}"
@@ -818,8 +897,7 @@ fn the_matrix_distributes_the_wrapped_lines_on_the_column_axis() {
             let mut nodes: Vec<LayoutNode> = (0..3)
                 .map(|index| {
                     let (_, config) = item(index, 0);
-                    let mut node =
-                        LayoutNode::leaf(Modifier::new().size(40.0, 20.0).flex(config));
+                    let mut node = LayoutNode::leaf(Modifier::new().size(40.0, 20.0).flex(config));
                     node.measured_size = Size::new(40.0, 20.0);
                     node
                 })
@@ -839,7 +917,10 @@ fn the_matrix_distributes_the_wrapped_lines_on_the_column_axis() {
                 &children,
                 Constraints::new(240.0, 240.0, 0.0, 200.0),
             );
-            let xs: Vec<f32> = placements.iter().map(|placement| placement.position.x).collect();
+            let xs: Vec<f32> = placements
+                .iter()
+                .map(|placement| placement.position.x)
+                .collect();
             let free = 240.0 - (3.0 * 40.0 + 2.0 * 8.0);
             let mut sorted = xs.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());

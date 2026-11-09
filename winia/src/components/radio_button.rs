@@ -11,12 +11,12 @@
 //!   变体——交互反馈由 ripple/state layer 承担）；
 //! - `onClick = null` → 不可交互（不挂 clickable），与 Compose 语义一致。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -98,8 +98,10 @@ impl RadioButtonColors {
         Self {
             selected_color: selected_color.unwrap_or(self.selected_color),
             unselected_color: unselected_color.unwrap_or(self.unselected_color),
-            disabled_selected_color: disabled_selected_color.unwrap_or(self.disabled_selected_color),
-            disabled_unselected_color: disabled_unselected_color.unwrap_or(self.disabled_unselected_color),
+            disabled_selected_color: disabled_selected_color
+                .unwrap_or(self.disabled_selected_color),
+            disabled_unselected_color: disabled_unselected_color
+                .unwrap_or(self.disabled_unselected_color),
         }
     }
 
@@ -201,8 +203,16 @@ fn radio_button_impl(
         // plus Compose's 2 dp padding. winia used `StateLayerSize` (40 dp) for both — the same 8 dp-short
         // target the checkbox had.
         .size(
-            if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
-            if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
+            if on_click.is_some() {
+                RADIO_TOUCH_TARGET
+            } else {
+                RADIO_IDLE_SIZE
+            },
+            if on_click.is_some() {
+                RADIO_TOUCH_TARGET
+            } else {
+                RADIO_IDLE_SIZE
+            },
         )
         // The ring's SHAPE, carried without clipping: the renderer infers it from the nearest
         // Background/Border/Clip and strokes the ring OUTSIDE the node's box, so a `clip` here cut the ring away
@@ -233,7 +243,11 @@ fn radio_button_impl(
         crate::semantics::SemanticsConfig::new()
             .role(crate::semantics::SemanticsRole::RadioButton)
             .merge_descendants(true)
-            .state(crate::semantics::SemanticsState::new().selected(selected).enabled(enabled)),
+            .state(
+                crate::semantics::SemanticsState::new()
+                    .selected(selected)
+                    .enabled(enabled),
+            ),
     );
     m = m.then(modifier);
 
@@ -250,11 +264,7 @@ fn radio_button_impl(
             let ring_color = color_anim.clone();
             let visual = Modifier::new()
                 .size(RADIO_BUTTON_SIZE, RADIO_BUTTON_SIZE)
-                .border(
-                    RADIO_STROKE_WIDTH,
-                    move || ring_color.peek(),
-                    Shape::Circle,
-                );
+                .border(RADIO_STROKE_WIDTH, move || ring_color.peek(), Shape::Circle);
             let vkey = ctx.next_key();
             match ctx.start_restartable_group(
                 vkey,
@@ -272,7 +282,10 @@ fn radio_button_impl(
                     ctx.start_leaf(
                         k,
                         Modifier::new()
-                            .size(RADIO_DOT_SIZE - RADIO_STROKE_WIDTH, RADIO_DOT_SIZE - RADIO_STROKE_WIDTH)
+                            .size(
+                                RADIO_DOT_SIZE - RADIO_STROKE_WIDTH,
+                                RADIO_DOT_SIZE - RADIO_STROKE_WIDTH,
+                            )
                             .background(move || c.peek(), Shape::Circle)
                             .graphics_layer(move || GraphicsLayerParams {
                                 scale_x: scale.peek(),
@@ -368,7 +381,6 @@ impl RadioButton {
         self.colors
     }
 }
-
 
 #[cfg(test)]
 mod tests;

@@ -5,7 +5,6 @@
 //! component. The component keeps `TextField`, `TextFieldDefaults` and the constructors that turn a
 //! `WiniaTheme` into a `TextFieldColors` — the design-system half.
 
-
 /// Container shape — material3's `TextField` (filled) or `OutlinedTextField`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextFieldVariant {
@@ -95,7 +94,9 @@ pub(crate) fn offset_mapping_for_node(
     while let Some(i) = cur {
         for el in nodes[i].modifier.elements() {
             match el {
-                ModifierElement::TextFieldVisual { offset_mapping, .. } if offset_mapping.is_some() => {
+                ModifierElement::TextFieldVisual { offset_mapping, .. }
+                    if offset_mapping.is_some() =>
+                {
                     return offset_mapping.clone();
                 }
                 ModifierElement::TextFieldOffsetMapping { offset_mapping } => {
@@ -104,7 +105,8 @@ pub(crate) fn offset_mapping_for_node(
                 _ => {}
             }
         }
-        cur = nodes[i].parent_id
+        cur = nodes[i]
+            .parent_id
             .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
     }
     None
@@ -128,7 +130,8 @@ pub(crate) fn text_field_visual_color(
                 return Some(*cursor_color);
             }
         }
-        cur = nodes[i].parent_id
+        cur = nodes[i]
+            .parent_id
             .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
     }
     None
@@ -150,11 +153,15 @@ pub(crate) fn text_field_show_cursor(
     let mut cur = Some(idx);
     while let Some(i) = cur {
         for el in nodes[i].modifier.elements() {
-            if let ModifierElement::TextFieldVisual { enabled, read_only, .. } = el {
+            if let ModifierElement::TextFieldVisual {
+                enabled, read_only, ..
+            } = el
+            {
                 return *enabled && !*read_only;
             }
         }
-        cur = nodes[i].parent_id
+        cur = nodes[i]
+            .parent_id
             .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
     }
     true

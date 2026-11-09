@@ -19,12 +19,42 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-const CARD_BG: Color = Color { r: 0x2A, g: 0x27, b: 0x2E, a: 255 };
-const ROW_BG: Color = Color { r: 0x35, g: 0x31, b: 0x3B, a: 255 };
-const ROW_ALT: Color = Color { r: 0x3E, g: 0x39, b: 0x45, a: 255 };
-const MUTED: Color = Color { r: 0x9E, g: 0x9A, b: 0xA6, a: 255 };
-const ACCENT: Color = Color { r: 0xD0, g: 0xBC, b: 0xFF, a: 255 };
-const WARM: Color = Color { r: 0xFF, g: 0xB4, b: 0xAB, a: 255 };
+const CARD_BG: Color = Color {
+    r: 0x2A,
+    g: 0x27,
+    b: 0x2E,
+    a: 255,
+};
+const ROW_BG: Color = Color {
+    r: 0x35,
+    g: 0x31,
+    b: 0x3B,
+    a: 255,
+};
+const ROW_ALT: Color = Color {
+    r: 0x3E,
+    g: 0x39,
+    b: 0x45,
+    a: 255,
+};
+const MUTED: Color = Color {
+    r: 0x9E,
+    g: 0x9A,
+    b: 0xA6,
+    a: 255,
+};
+const ACCENT: Color = Color {
+    r: 0xD0,
+    g: 0xBC,
+    b: 0xFF,
+    a: 255,
+};
+const WARM: Color = Color {
+    r: 0xFF,
+    g: 0xB4,
+    b: 0xAB,
+    a: 255,
+};
 
 /// One titled card.
 #[composable]

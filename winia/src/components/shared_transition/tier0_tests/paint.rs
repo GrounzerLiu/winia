@@ -65,7 +65,11 @@ fn a_ghost_keeps_painting_its_child_on_the_switch_frame() {
             .transition
             .clone()
             .expect("the detached source carries a visual");
-        assert_eq!(vis.role, TransitionRole::Source, "the ghost is the leaving end");
+        assert_eq!(
+            vis.role,
+            TransitionRole::Source,
+            "the ghost is the leaving end"
+        );
         assert!(
             vis.progress < 0.5,
             "this is the frame the flight starts, so p is still ~0, got {}",
@@ -147,7 +151,10 @@ fn tier0_overlay_opt_out_paints_in_tree_and_stays_clipped() {
         .as_ref()
         .expect("target visual")
         .clone();
-    assert!(!tvis.elevated, "renderInOverlay=false keeps the target in-tree");
+    assert!(
+        !tvis.elevated,
+        "renderInOverlay=false keeps the target in-tree"
+    );
     // Both ends paint the SAME lerped rect — opting out changes only the
     // clip, never the position. A mismatched-looking pair on screen is the
     // ancestor clip edge over the flying shape, not a transform divergence:
@@ -191,8 +198,7 @@ fn tier0_overlay_opt_out_paints_in_tree_and_stays_clipped() {
     // the target's resting place shows background. This is what separates
     // "clipped while flying" from "stopped flying".
     let nodes = composer.arena_nodes();
-    let id_to_idx: HashMap<u64, usize> =
-        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let id_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let rest = abs_rect_upward(nodes, &id_to_idx, tidx);
     assert!(rest.y > l.y, "the target rests below the mid-flight rect");
     let mut surf2 = render_heads(&composer);
@@ -317,7 +323,11 @@ fn tier0_arc_flight_paints_off_the_straight_line() {
     assert_eq!(composer.shared_flights.len(), 1, "arc flight opened");
     {
         let a = composer.shared_flights.values().next().expect("flight");
-        assert_eq!(a.path, PathMotion::ArcBelow, "path resolves from the target marker");
+        assert_eq!(
+            a.path,
+            PathMotion::ArcBelow,
+            "path resolves from the target marker"
+        );
     }
 
     // Diagonal travel (260px + 100px centers) bends substantially at
@@ -347,10 +357,7 @@ fn tier0_arc_flight_paints_off_the_straight_line() {
                     straight.x + straight.width / 2.0,
                     straight.y + straight.height / 2.0,
                 );
-                let (acx, acy) = (
-                    arced.x + arced.width / 2.0,
-                    arced.y + arced.height / 2.0,
-                );
+                let (acx, acy) = (arced.x + arced.width / 2.0, arced.y + arced.height / 2.0);
                 let (dx, dy) = (acx - scx, acy - scy);
                 let dev = (dx * dx + dy * dy).sqrt();
                 assert!(
@@ -362,21 +369,13 @@ fn tier0_arc_flight_paints_off_the_straight_line() {
                 let (ux, uy) = (dx / dev, dy / dev);
                 let m = arced.height / 2.0 - 8.0;
                 let mut surf = render_heads(&composer);
-                let outer = pixel_rgb(
-                    &mut surf,
-                    (acx + ux * m) as i32,
-                    (acy + uy * m) as i32,
-                );
+                let outer = pixel_rgb(&mut surf, (acx + ux * m) as i32, (acy + uy * m) as i32);
                 assert!(
                     outer.0 > 140 && outer.1 < 150 && outer.2 > 50,
                     "arc outer edge paints hero blend, got {outer:?} at p={p}"
                 );
                 let mut surf2 = render_heads(&composer);
-                let inner = pixel_rgb(
-                    &mut surf2,
-                    (scx - ux * m) as i32,
-                    (scy - uy * m) as i32,
-                );
+                let inner = pixel_rgb(&mut surf2, (scx - ux * m) as i32, (scy - uy * m) as i32);
                 assert!(
                     close_enough(inner, (255, 255, 255), 40),
                     "straight-side mirror is background, got {inner:?} at p={p}"

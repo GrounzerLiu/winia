@@ -27,40 +27,65 @@ fn flow_features_demo_covers_the_flow_surface() {
     // Clip with max_lines(1) drops the second row; Visible keeps it.
     app.expect_tag_size("clip-3", (0.0, 0.0), 0.1);
     let visible = app.expect_tag("visible-3");
-    assert!(visible.2 > 1.0 && visible.3 > 1.0, "Visible should place the fourth item: {visible:?}");
+    assert!(
+        visible.2 > 1.0 && visible.3 > 1.0,
+        "Visible should place the fourth item: {visible:?}"
+    );
 
     // Cross arrangement Center: two lines of 20px in a 120px card, leading (120 - 16 - 48) / 2.
     let card = app.expect_tag("flow-cross");
     let first = app.expect_tag("cross-0");
     let second = app.expect_tag("cross-2");
-    assert!((first.1 - card.1 - 36.0).abs() < 1.0, "first centered line: {first:?} in {card:?}");
-    assert!((second.1 - card.1 - 64.0).abs() < 1.0, "second centered line: {second:?} in {card:?}");
+    assert!(
+        (first.1 - card.1 - 36.0).abs() < 1.0,
+        "first centered line: {first:?} in {card:?}"
+    );
+    assert!(
+        (second.1 - card.1 - 64.0).abs() < 1.0,
+        "second centered line: {second:?} in {card:?}"
+    );
 
     // Weight keeps its main share and fillMaxRowHeight makes it as tall as the 40px fixed item.
     let weighted = app.expect_tag("weight-fill");
-    assert!((weighted.2 - 216.0).abs() < 1.0, "weighted width: {weighted:?}");
-    assert!((weighted.3 - 40.0).abs() < 1.0, "weighted height: {weighted:?}");
+    assert!(
+        (weighted.2 - 216.0).abs() < 1.0,
+        "weighted width: {weighted:?}"
+    );
+    assert!(
+        (weighted.3 - 40.0).abs() < 1.0,
+        "weighted height: {weighted:?}"
+    );
 
     // Baseline alignment moves the small text down to the larger text's baseline.
     let small = app.expect_tag("baseline-small");
     let big = app.expect_tag("baseline-big");
-    assert!(small.1 > big.1, "small text should sit lower for a shared baseline: {small:?} vs {big:?}");
+    assert!(
+        small.1 > big.1,
+        "small text should sit lower for a shared baseline: {small:?} vs {big:?}"
+    );
 
     // A width(IntrinsicSize.Max) flow asks the intrinsic path for its natural width.
     let intrinsic = app.expect_tag("flow-intrinsic");
-    assert!(intrinsic.2 > 0.0, "intrinsic flow should have a width: {intrinsic:?}");
+    assert!(
+        intrinsic.2 > 0.0,
+        "intrinsic flow should have a width: {intrinsic:?}"
+    );
     app.expect_tag("intrinsic-2");
 
     // FlowColumn fill takes the widest item's width.
     let column = app.expect_tag("column-fill");
-    assert!((column.2 - 40.0).abs() < 1.0, "column fill width: {column:?}");
+    assert!(
+        (column.2 - 40.0).abs() < 1.0,
+        "column fill width: {column:?}"
+    );
 
     // The debug direction override mirrors the layout without relying on the settings sheet.
     let before = app.expect_tag("wrap-0").0;
     app.set_layout_direction(LayoutDirection::Rtl);
     app.expect_eventually_timeout("the flow mirrors in RTL", Duration::from_secs(2), |app| {
         app.refresh();
-        app.find_tag("wrap-0").is_some_and(|r| (r.0 - before).abs() > 1.0)
+        app.find_tag("wrap-0")
+            .is_some_and(|r| (r.0 - before).abs() > 1.0)
     });
     app.clear_layout_direction();
 }
@@ -78,11 +103,15 @@ fn flow_features_demo_animates_a_reflow() {
     app.click_tag("toggle-columns");
     app.expect_text("2 columns");
 
-    app.expect_eventually_timeout("the reflow moved the keyed card", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("animated-2")
-            .is_some_and(|r| (r.0 - before.0).abs() > 1.0 || (r.1 - before.1).abs() > 1.0)
-    });
+    app.expect_eventually_timeout(
+        "the reflow moved the keyed card",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.find_tag("animated-2")
+                .is_some_and(|r| (r.0 - before.0).abs() > 1.0 || (r.1 - before.1).abs() > 1.0)
+        },
+    );
 
     // The placement spring is registered in the animation table; this is the observable proof
     // that the card did not simply snap to its new slot.
@@ -95,13 +124,20 @@ fn flow_features_demo_animates_a_reflow() {
         "the reflow should leave a two-component placement spring: {running:?}"
     );
 
-    app.expect_eventually_timeout("the box settles on the two-column height", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("animated-box")
-            .is_some_and(|r| (r.3 - 164.0).abs() < 1.0)
-    });
+    app.expect_eventually_timeout(
+        "the box settles on the two-column height",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.find_tag("animated-box")
+                .is_some_and(|r| (r.3 - 164.0).abs() < 1.0)
+        },
+    );
     let grown = app.expect_tag("animated-box");
-    assert!((grown.3 - 164.0).abs() < 1.0, "the two-column box grows: {grown:?}");
+    assert!(
+        (grown.3 - 164.0).abs() < 1.0,
+        "the two-column box grows: {grown:?}"
+    );
 
     // Shrinking must animate too: the box is still taller than the three-column size right after
     // the toggle, then settles on it. A snap would report 112 immediately.
@@ -112,11 +148,15 @@ fn flow_features_demo_animates_a_reflow() {
         shrinking.3 > 112.5,
         "the box must spring down instead of snapping: {shrinking:?}"
     );
-    app.expect_eventually_timeout("the box settles on the three-column height", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("animated-box")
-            .is_some_and(|r| (r.3 - 112.0).abs() < 1.0)
-    });
+    app.expect_eventually_timeout(
+        "the box settles on the three-column height",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.find_tag("animated-box")
+                .is_some_and(|r| (r.3 - 112.0).abs() < 1.0)
+        },
+    );
 }
 
 /// The dedicated item-animation demo exercises both directions of the shared item host: an added
@@ -143,10 +183,14 @@ fn item_animation_demo_fades_added_and_removed_items() {
 
     app.expect_tag("item-3");
     app.click_tag("item-3");
-    app.expect_eventually_timeout("the tapped card is removed", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("item-3").is_none()
-    });
+    app.expect_eventually_timeout(
+        "the tapped card is removed",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.find_tag("item-3").is_none()
+        },
+    );
 }
 
 /// The flex layout demo exercises the four shapes the layout review found broken, through the
@@ -167,7 +211,10 @@ fn flex_layout_demo_pins_the_review_cases() {
     let title = app.expect_tag("scroll-weight-title");
     let content = app.expect_tag("scroll-content");
     let fixed = app.expect_tag("scroll-fixed");
-    assert!((fixed.3 - 40.0).abs() < 1.0, "the fixed child keeps its 40: {fixed:?}");
+    assert!(
+        (fixed.3 - 40.0).abs() < 1.0,
+        "the fixed child keeps its 40: {fixed:?}"
+    );
     assert!(
         (content.3 - 40.0).abs() < 1.0,
         "the scrolling content is its 40 dp child, not a 3.4e38 one: {content:?}"
@@ -193,7 +240,10 @@ fn flex_layout_demo_pins_the_review_cases() {
     //    the column: the sibling still sits right below it.
     let zero = app.expect_tag("zero-weight-child");
     let sibling = app.expect_tag("zero-sibling");
-    assert!((zero.3 - 30.0).abs() < 1.0, "weight(0) keeps its 30: {zero:?}");
+    assert!(
+        (zero.3 - 30.0).abs() < 1.0,
+        "weight(0) keeps its 30: {zero:?}"
+    );
     assert!(
         (sibling.1 - (zero.1 + zero.3)).abs() < 2.0,
         "the sibling follows the weight(0) child: {sibling:?} after {zero:?}"
@@ -213,14 +263,18 @@ fn flex_layout_demo_pins_the_review_cases() {
         (card.3 - (20.0 + title.3 + 6.0 + 100.0)).abs() < 2.0,
         "the card is padding + title + 6 + the 100 dp clip box: {card:?}, title {title:?}"
     );
-    assert!((row.2 - 120.0).abs() < 1.0, "the row keeps its required 120 width: {row:?}");
+    assert!(
+        (row.2 - 120.0).abs() < 1.0,
+        "the row keeps its required 120 width: {row:?}"
+    );
 
     // The debug direction override still mirrors the page with the top bar in place.
     let before = app.expect_tag("space-between-bar").0;
     app.set_layout_direction(LayoutDirection::Rtl);
     app.expect_eventually_timeout("the demo mirrors in RTL", Duration::from_secs(2), |app| {
         app.refresh();
-        app.find_tag("space-between-bar").is_some_and(|r| (r.0 - before).abs() > 1.0)
+        app.find_tag("space-between-bar")
+            .is_some_and(|r| (r.0 - before).abs() > 1.0)
     });
     app.clear_layout_direction();
 }

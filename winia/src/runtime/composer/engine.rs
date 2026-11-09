@@ -1,5 +1,5 @@
-use super::*;
 use super::transactions::*;
+use super::*;
 
 // ── Composer ──
 
@@ -229,7 +229,7 @@ pub struct Composer {
 }
 
 impl Composer {
-/// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
+    /// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
 
     /// This composer's process-unique identity; see the `uid` field.
     pub(crate) fn uid(&self) -> u64 {
@@ -412,15 +412,21 @@ impl Composer {
             // 由 per-base counter（path_counters/remember_path_counters）完成。
             let chain = self.chain_hash_no_seq().unwrap_or(0);
             let mut h: u64 = 0xcbf29ce484222325;
-            h ^= k; h = h.wrapping_mul(0x100000001b3);
-            h ^= chain; h = h.wrapping_mul(0x100000001b3);
+            h ^= k;
+            h = h.wrapping_mul(0x100000001b3);
+            h ^= chain;
+            h = h.wrapping_mul(0x100000001b3);
             return Some(self.namespace_key_base(h));
         }
-        self.chain_hash().map(|base| self.namespace_key_base(base)).or_else(|| {
-            // Raw payload closures have no compiler statement on entry. The placement itself is a
-            // stable key source; repeated children are distinguished by its local counters.
-            self.slot_table.movable_composing.map(|_| self.namespace_key_base(0))
-        })
+        self.chain_hash()
+            .map(|base| self.namespace_key_base(base))
+            .or_else(|| {
+                // Raw payload closures have no compiler statement on entry. The placement itself is a
+                // stable key source; repeated children are distinguished by its local counters.
+                self.slot_table
+                    .movable_composing
+                    .map(|_| self.namespace_key_base(0))
+            })
     }
 
     /// 调用链哈希（不含迭代 seq）：fnv(scope_src, STMT栈顶语句id)——编译期
@@ -432,8 +438,10 @@ impl Composer {
             s.last().map(|&(sid, _seq)| {
                 let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
                 let mut h: u64 = 0xcbf29ce484222325;
-                h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
-                h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+                h ^= scope_src;
+                h = h.wrapping_mul(0x100000001b3);
+                h ^= sid as u64;
+                h = h.wrapping_mul(0x100000001b3);
                 h
             })
         })
@@ -447,8 +455,10 @@ impl Composer {
             s.last().map(|&(sid, seq)| {
                 let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
                 let mut h: u64 = 0xcbf29ce484222325;
-                h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
-                h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+                h ^= scope_src;
+                h = h.wrapping_mul(0x100000001b3);
+                h ^= sid as u64;
+                h = h.wrapping_mul(0x100000001b3);
                 h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
                 h
             })
@@ -518,9 +528,13 @@ impl Composer {
         // 防御性配对：非空才 pop（start_scope/end_scope 不配对时避免 panic/污染其他 scope）
         GROUP_STACK.with(|s| {
             let mut s = s.borrow_mut();
-            if !s.is_empty() { s.pop(); }
+            if !s.is_empty() {
+                s.pop();
+            }
         });
-        if !self.scope_source_stack.is_empty() { self.scope_source_stack.pop(); }
+        if !self.scope_source_stack.is_empty() {
+            self.scope_source_stack.pop();
+        }
     }
 
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
@@ -555,7 +569,13 @@ impl Composer {
     }
 
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
-    pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
+    pub fn start_node(
+        &mut self,
+        key: u64,
+        modifier: Modifier,
+        policy: Option<Box<dyn MeasurePolicy>>,
+        on_remove: Option<Box<dyn FnOnce() + Send>>,
+    ) {
         self.current_group_key = key as u32;
         self.entered_compose_keys.insert(key);
         let slot_status = self.slot_table.start_slot(key);
@@ -566,12 +586,19 @@ impl Composer {
         // replay 的 stub start_node（pending 空）不清空子 slot params，
         // 避免父 Skip 后子组件参数未变也被强制 Enter
         self.commit_pending_params();
-        #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
+        #[cfg(test)]
+        {
+            match slot_status {
+                SlotStatus::Clean => self.compose_clean_count += 1,
+                _ => self.compose_dirty_count += 1,
+            }
+        }
 
         // 组合产物写入 Slot（物化阶段消费——完整分离：arena 建节点移出组合阶段）
         // ⚠ direction 必须在此捕获（组合期 provides 作用域内）——物化期
         // 主题的 provider 已退出作用域读不到（RTL 全局切换失效根因）
-        let direction = modifier.get_layout_direction()
+        let direction = modifier
+            .get_layout_direction()
             .unwrap_or(crate::layout::direction::current());
         // A Clean slot still has to re-measure when this node's own modifier changed: the modifier is
         // where a container's or leaf's layout inputs live (`max_width`, `size`, `padding`), and a value
@@ -606,7 +633,9 @@ impl Composer {
     /// 结束当前节点：组合侧出栈（物化建树由 materialize 统一处理）
     pub fn end_node(&mut self) {
         self.slot_table.end_slot();
-        GROUP_STACK.with(|s| { s.borrow_mut().pop(); }); // 与 start_node 的 push 配对
+        GROUP_STACK.with(|s| {
+            s.borrow_mut().pop();
+        }); // 与 start_node 的 push 配对
     }
 
     /// 开始可重启分组（内部调用 start_node + 返回 skip/enter 状态）
@@ -624,7 +653,13 @@ impl Composer {
         // 容器组件 = scope（对标 Compose RestartGroup）：push 组件 scope——
         // 组件内/ content 闭包内读取注册到本组件（最内层 scope）
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
-        #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
+        #[cfg(test)]
+        {
+            match slot_status {
+                SlotStatus::Clean => self.compose_clean_count += 1,
+                _ => self.compose_dirty_count += 1,
+            }
+        }
 
         // Clean slot：从缓存恢复（阶段5：加参数相等条件——slot clean 且参数
         // 全相等才 Skip；参数变化（changed 比较）时即使 slot clean 也 Enter）
@@ -636,11 +671,17 @@ impl Composer {
                 &self.pending_params[..self.pending_next],
                 &self.slot_table.current_slot().params,
             ) && self.container_modifier_unchanged(key, &modifier);
-            #[cfg(debug_assertions)] {
+            #[cfg(debug_assertions)]
+            {
                 if std::env::var("WINIA_SKIP_TRACE").is_ok() {
-                    eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
-                        key >> 32, slot_status == SlotStatus::Clean, params_unchanged,
-                        self.prev_node_by_key.contains_key(&key), self.pending_next);
+                    eprintln!(
+                        "[skip] key={} clean={} params_u={} prev={} pending_len={}",
+                        key >> 32,
+                        slot_status == SlotStatus::Clean,
+                        params_unchanged,
+                        self.prev_node_by_key.contains_key(&key),
+                        self.pending_next
+                    );
                 }
             }
             // Nothing else to ask: `container_modifier_unchanged` already failed for a key that is not
@@ -653,7 +694,10 @@ impl Composer {
         // Enter 重新执行 content；Skip 保留上帧子树的读取集合。
         if !is_skip {
             self.entered_compose_keys.insert(key);
-            #[cfg(test)] { self.compose_entered_count += 1; }
+            #[cfg(test)]
+            {
+                self.compose_entered_count += 1;
+            }
         }
         // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
         // 仅当 pending 非空（有 changed 声明）；空则保留上帧 params（replay stub 场景）
@@ -663,7 +707,8 @@ impl Composer {
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
         if is_skip {
             // 方向先算（modifier 随后 move 进 set_skip_modifier）
-            let direction = modifier.get_layout_direction()
+            let direction = modifier
+                .get_layout_direction()
                 .unwrap_or(crate::layout::direction::current());
             self.slot_table.set_current_desc(None);
             // 保留本帧组合产物 modifier（父层重跑传入的新 offset/背景——物化应用）
@@ -675,10 +720,10 @@ impl Composer {
             self.slot_table.set_skip_direction(direction);
         } else {
             // Enter：组合期捕获方向（provides 作用域内）——先算再 move
-            let direction = modifier.get_layout_direction()
+            let direction = modifier
+                .get_layout_direction()
                 .unwrap_or(crate::layout::direction::current());
-        self.slot_table.set_current_desc(Some(NodeDesc {
-
+            self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
                 modifier,
                 policy,
@@ -689,12 +734,12 @@ impl Composer {
                 focus_color: None,
                 selection_color: None,
                 composing_color: None,
-            cursor_index: None,
-            cursor_visible: None,
-            cursor_callback: None,
-            display_focused: None,
-            ime_callback: None,
-            ime_edit_callback: None,
+                cursor_index: None,
+                cursor_visible: None,
+                cursor_callback: None,
+                display_focused: None,
+                ime_callback: None,
+                ime_edit_callback: None,
                 composing_range: None,
                 direction,
             }));
@@ -736,7 +781,9 @@ impl Composer {
                 }
             }
             slot.children = kept;
-            for f in orphaned { f(); }
+            for f in orphaned {
+                f();
+            }
         }
         // Skip：content 未执行——slot 树保留（上帧 children 结构）——物化时
         // 整棵子树按 key 从 prev_node_by_key 恢复（stub 机制已由物化替代）
@@ -807,7 +854,10 @@ impl Composer {
         self.layout_deps.clear();
         for (&slot_key, state_ids) in &self.layout_slot_reads {
             for &state_id in state_ids {
-                self.layout_deps.entry(state_id).or_default().insert(slot_key);
+                self.layout_deps
+                    .entry(state_id)
+                    .or_default()
+                    .insert(slot_key);
             }
         }
     }
@@ -817,18 +867,30 @@ impl Composer {
         let mut expected_compose = HashMap::<StateId, HashSet<u64>>::new();
         for (&slot_key, state_ids) in &self.compose_slot_reads {
             for &state_id in state_ids {
-                expected_compose.entry(state_id).or_default().insert(slot_key);
+                expected_compose
+                    .entry(state_id)
+                    .or_default()
+                    .insert(slot_key);
             }
         }
-        debug_assert_eq!(self.slot_deps, expected_compose, "compose dependency reverse graph drifted");
+        debug_assert_eq!(
+            self.slot_deps, expected_compose,
+            "compose dependency reverse graph drifted"
+        );
 
         let mut expected_layout = HashMap::<StateId, HashSet<u64>>::new();
         for (&slot_key, state_ids) in &self.layout_slot_reads {
             for &state_id in state_ids {
-                expected_layout.entry(state_id).or_default().insert(slot_key);
+                expected_layout
+                    .entry(state_id)
+                    .or_default()
+                    .insert(slot_key);
             }
         }
-        debug_assert_eq!(self.layout_deps, expected_layout, "layout dependency reverse graph drifted");
+        debug_assert_eq!(
+            self.layout_deps, expected_layout,
+            "layout dependency reverse graph drifted"
+        );
     }
 
     #[cfg(not(debug_assertions))]
@@ -840,16 +902,22 @@ impl Composer {
         recorded: Vec<(Arc<StateSignal>, u64)>,
         live_keys: &crate::layout::node::SlotKeySet,
     ) {
-        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> = crate::layout::node::SlotKeyMap::default();
+        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> =
+            crate::layout::node::SlotKeyMap::default();
         let mut current_signals: HashMap<StateId, Arc<StateSignal>> = HashMap::new();
         // Reads recorded against a slot that is not live: dropped from the graph, but the signal was
         // already subscribed to (the read happened), so the subscription is dirty even when the graph
         // is not — see `changed` below.
         let mut dropped_reads = 0usize;
         for (signal, slot_key) in recorded {
-            current_signals.entry(signal.id()).or_insert_with(|| signal.clone());
+            current_signals
+                .entry(signal.id())
+                .or_insert_with(|| signal.clone());
             if live_keys.contains(&slot_key) {
-                reads_by_slot.entry(slot_key).or_default().insert(signal.id());
+                reads_by_slot
+                    .entry(slot_key)
+                    .or_default()
+                    .insert(signal.id());
             } else {
                 dropped_reads += 1;
             }
@@ -866,7 +934,8 @@ impl Composer {
         // state moved, since the container re-records the same 800 reads).
         let mut changed = false;
         let before = self.compose_slot_reads.len();
-        self.compose_slot_reads.retain(|key, _| live_keys.contains(key));
+        self.compose_slot_reads
+            .retain(|key, _| live_keys.contains(key));
         changed |= self.compose_slot_reads.len() != before;
         // TAKEN rather than cloned: this is the last reader of the set in the frame (the next compose
         // clears it), and on a cold frame it holds every entering key — 4000 of them. A panic after
@@ -898,7 +967,10 @@ impl Composer {
         if !reads_by_slot.is_empty() {
             changed = true;
             for (key, reads) in reads_by_slot {
-                self.compose_slot_reads.entry(key).or_default().extend(reads);
+                self.compose_slot_reads
+                    .entry(key)
+                    .or_default()
+                    .extend(reads);
             }
         }
         // A read against a dead slot means the subscription may hold a signal the graph does not, so
@@ -968,7 +1040,9 @@ impl Composer {
     }
 
     pub(super) fn rollback_compose_runtime(&mut self) {
-        let Some(snapshot) = self.compose_transaction.take() else { return };
+        let Some(snapshot) = self.compose_transaction.take() else {
+            return;
+        };
         self.slot_table.restore_runtime(snapshot.slot_table);
         self.current_group_key = snapshot.current_group_key;
         self.path_counters = snapshot.path_counters;
@@ -989,9 +1063,9 @@ impl Composer {
         // The window's saveable registry is provided for EVERY pass, not just the first: a slot that
         // is re-entered has to be able to register again.
         match self.saveable.clone() {
-            Some(registry) => {
-                crate::runtime::saveable::with_registry_of(&registry, || self.compose_inner(content))
-            }
+            Some(registry) => crate::runtime::saveable::with_registry_of(&registry, || {
+                self.compose_inner(content)
+            }),
             None => self.compose_inner(content),
         }
     }
@@ -1021,7 +1095,12 @@ impl Composer {
         let mut compose_runtime_transaction = ComposeRuntimeTransaction::new(self);
         let _adaptive_context = crate::layout::adaptive::enter_context(self.adaptive.clone());
         let mut dependency_transaction = ComposeDependencyTransaction::new(self);
-        #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; self.compose_entered_count = 0; }
+        #[cfg(test)]
+        {
+            self.compose_clean_count = 0;
+            self.compose_dirty_count = 0;
+            self.compose_entered_count = 0;
+        }
         self.compose_count += 1;
         // Movable content is composed once per composition, so the table needs to know which
         // composition this is.
@@ -1065,7 +1144,8 @@ impl Composer {
         let compose_ids: HashSet<StateId> = self.slot_deps.keys().copied().collect();
         let mut pending_batch = PendingBatchGuard::new(
             self.pending_states.clone(),
-            self.pending_states.drain_matching(|id| compose_ids.contains(&id)),
+            self.pending_states
+                .drain_matching(|id| compose_ids.contains(&id)),
         );
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
@@ -1096,7 +1176,11 @@ impl Composer {
         // earlier rather than adding it.
         if self.prev_node_by_key.is_empty() {
             if let Some(root_idx) = self.arena.root {
-                crate::runtime::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
+                crate::runtime::materialize::collect_node_keys(
+                    &self.arena,
+                    root_idx,
+                    &mut self.prev_node_by_key,
+                );
             }
         }
 
@@ -1132,8 +1216,11 @@ impl Composer {
         live_compose_keys.insert(0);
         // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
         // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
-        debug_assert_eq!(GROUP_STACK.with(|s| s.borrow().len()), 0,
-            "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）");
+        debug_assert_eq!(
+            GROUP_STACK.with(|s| s.borrow().len()),
+            0,
+            "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）"
+        );
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
@@ -1171,7 +1258,8 @@ impl Composer {
                 );
             }
             if declares {
-                self.layout_dirty_keys.insert(self.arena.nodes[idx].slot_key);
+                self.layout_dirty_keys
+                    .insert(self.arena.nodes[idx].slot_key);
             }
         }
         // Shared-element flights (Phase 2): detect switches + retain/detach
@@ -1213,14 +1301,16 @@ impl Composer {
             }
             // 收集移除的 slot_key（layout_deps 死 key 清理）
             self.removed_slot_keys.insert(key);
-            self.arena.free_node_skip(idx, &self.reused_nodes, &mut visited);
+            self.arena
+                .free_node_skip(idx, &self.reused_nodes, &mut visited);
         }
         self.prev_node_by_key.clear();
         self.reused_nodes.clear();
         // A notification that arrived after the batch was drained may belong to
         // a read removed by this frame. Drop only IDs with no live channel.
-        self.pending_states
-            .drain_matching(|id| !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id));
+        self.pending_states.drain_matching(|id| {
+            !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id)
+        });
         pending_batch.commit();
         dependency_transaction.commit();
         compose_runtime_transaction.commit();
@@ -1345,7 +1435,9 @@ impl Composer {
         if let Some(root_idx) = self.arena.root {
             let nodes = &mut self.arena.nodes;
             // 清全树旧标记（每帧重新标记）
-            for n in nodes.iter_mut() { n.layout_dirty = false; }
+            for n in nodes.iter_mut() {
+                n.layout_dirty = false;
+            }
             if !self.layout_dirty_keys.is_empty() {
                 crate::layout::node::apply_layout_dirty(nodes, root_idx, &self.layout_dirty_keys);
             }
@@ -1367,7 +1459,11 @@ impl Composer {
         let _layout_host = crate::layout::subcompose::LayoutHostGuard::arm(self as *mut Composer);
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
-                &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
+                &mut self.arena.nodes,
+                &self.arena.policies,
+                root_idx,
+                root_constraints,
+            );
             self.arena.nodes[root_idx].measured_size = _size;
             let parked = std::mem::take(&mut self.subcompositions);
             // `adopt_parked` hands back the last composition it moved, which becomes the cache a
@@ -1400,9 +1496,13 @@ impl Composer {
             self.layout_slot_reads.clear();
             self.layout_deps.clear();
         }
-        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> = crate::layout::node::SlotKeyMap::default();
+        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> =
+            crate::layout::node::SlotKeyMap::default();
         for (signal, slot_key) in &recorded {
-            reads_by_slot.entry(*slot_key).or_default().insert(signal.id());
+            reads_by_slot
+                .entry(*slot_key)
+                .or_default()
+                .insert(signal.id());
             self.layout_signal_handles
                 .entry(signal.id())
                 .or_insert_with(|| signal.clone());
@@ -1456,8 +1556,9 @@ impl Composer {
 
         self.cleanup_signal_subscriptions();
         self.debug_assert_dependency_graphs();
-        self.pending_states
-            .drain_matching(|id| !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id));
+        self.pending_states.drain_matching(|id| {
+            !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id)
+        });
         // Normal layout completion restores the outer dependency frame. A panic
         // before this point drops the guard and rolls back partial subscriptions.
         dependency_frame.commit();
@@ -1488,7 +1589,12 @@ impl Composer {
         // on), and that container still holds the segments this walk is supposed to drop. Measured
         // before this: the text stopped registering, the node's registrar was cleared, and the
         // container still answered `total_text_len() == 4`.
-        if !self.arena.nodes.iter().any(|n| n.registrar.borrow().is_some()) {
+        if !self
+            .arena
+            .nodes
+            .iter()
+            .any(|n| n.registrar.borrow().is_some())
+        {
             // Only the registrars THIS composer saw: a thread-wide sweep emptied every other
             // window's table (measured: 11 runs -> 0, selection Some -> None, when a second window
             // with no selectable text laid out).
@@ -1538,14 +1644,22 @@ impl Composer {
             }
             let (scroll_x, scroll_y) = crate::layout::node::scroll_offset_for_node(node);
             let (child_x, child_y) = (left - scroll_x, top - scroll_y);
-            if let Some(sub) = node.subcomposed_child { stack.push((sub, child_x, child_y)); }
-            for &child in node.children.iter().rev() { stack.push((child, child_x, child_y)); }
+            if let Some(sub) = node.subcomposed_child {
+                stack.push((sub, child_x, child_y));
+            }
+            for &child in node.children.iter().rev() {
+                stack.push((child, child_x, child_y));
+            }
         }
         self.known_registrars = groups.iter().map(|(r, _)| r.clone()).collect();
         for (reg, mut placed) in groups {
             placed.sort_by(|a, b| {
                 // Reading order: side by side compares x, otherwise y (Compose's `sort`).
-                let (ka, kb) = if in_row(a, b) { (a.left, b.left) } else { (a.top, b.top) };
+                let (ka, kb) = if in_row(a, b) {
+                    (a.left, b.left)
+                } else {
+                    (a.top, b.top)
+                };
                 ka.total_cmp(&kb)
             });
             let slots: Vec<u64> = placed.into_iter().map(|p| p.slot_key).collect();
@@ -1562,7 +1676,9 @@ impl Composer {
     pub(crate) fn clear_open_selections(&self) {
         let mut seen: Vec<crate::text::selection::SelectionRegistrar> = Vec::new();
         for node in self.arena.nodes.iter() {
-            let Some(reg) = node.registrar.borrow().as_ref().cloned() else { continue };
+            let Some(reg) = node.registrar.borrow().as_ref().cloned() else {
+                continue;
+            };
             if !seen.iter().any(|s| s.is_same(&reg)) {
                 seen.push(reg);
             }
@@ -1713,14 +1829,21 @@ impl Composer {
         // ID that belongs only to layout_deps.
         self.consume_layout_pending();
         let has_pending = self.has_pending_compose_states();
-        let will_run = self.needs_recomposition || has_pending || !self.pending_recomposition.is_empty();
+        let will_run =
+            self.needs_recomposition || has_pending || !self.pending_recomposition.is_empty();
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
             // 重组触发诊断：何时执行/跳过 + 触发原因（pending=State 变化数）
             eprintln!(
                 "[recompose] pending={} needs={} q={} → {}",
-                has_pending, self.needs_recomposition, self.pending_recomposition.len(),
-                if will_run { "COMPOSE" } else { "SKIP（无变化）" }
+                has_pending,
+                self.needs_recomposition,
+                self.pending_recomposition.len(),
+                if will_run {
+                    "COMPOSE"
+                } else {
+                    "SKIP（无变化）"
+                }
             );
         }
 
@@ -1766,4 +1889,3 @@ impl Drop for Composer {
         self.pending_states.unsubscribe_all();
     }
 }
-

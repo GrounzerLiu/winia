@@ -4,13 +4,11 @@ use super::*;
 // CompositionLocal
 // ═══════════════════════════════════════════════════════════
 
-pub(crate) static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> = LazyLock::new(|| {
-    CompositionLocal::new(|| ThemeColors::default_light())
-});
+pub(crate) static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> =
+    LazyLock::new(|| CompositionLocal::new(|| ThemeColors::default_light()));
 
-pub(crate) static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> = LazyLock::new(|| {
-    CompositionLocal::new(Typography::default)
-});
+pub(crate) static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> =
+    LazyLock::new(|| CompositionLocal::new(Typography::default));
 
 /// 内容色（对标 Compose `LocalContentColor`）——Icon 等内容组件默认取
 /// 当前子树内容色；`with_theme*` 子树内默认 on_surface，容器组件
@@ -115,4 +113,3 @@ impl Default for MotionScheme {
         Self::standard()
     }
 }
-

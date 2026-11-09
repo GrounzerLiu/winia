@@ -35,21 +35,47 @@ pub mod animation;
 /// [`take_queued_events`] and routes each variant to the same code path a real event takes.
 #[derive(Debug, Clone)]
 pub enum DebugEvent {
-    Click { x: f32, y: f32 },
-    Key { key: String },
-    Text { value: String },
-    Scroll { dx: f32, dy: f32 },
-    Resize { w: f32, h: f32 },
+    Click {
+        x: f32,
+        y: f32,
+    },
+    Key {
+        key: String,
+    },
+    Text {
+        value: String,
+    },
+    Scroll {
+        dx: f32,
+        dy: f32,
+    },
+    Resize {
+        w: f32,
+        h: f32,
+    },
     FocusNext,
-    RequestFocus { id: u64 },
+    RequestFocus {
+        id: u64,
+    },
     /// Simulate a pointer press (the start of a drag selection).
-    PointerDown { x: f32, y: f32 },
+    PointerDown {
+        x: f32,
+        y: f32,
+    },
     /// Choose the button the following pointer events carry (`d`/`m`/`u` use the last kind).
-    PointerKind { secondary: bool },
+    PointerKind {
+        secondary: bool,
+    },
     /// Simulate a pointer move (drag selection).
-    PointerMove { x: f32, y: f32 },
+    PointerMove {
+        x: f32,
+        y: f32,
+    },
     /// Simulate a pointer release.
-    PointerUp { x: f32, y: f32 },
+    PointerUp {
+        x: f32,
+        y: f32,
+    },
     /// Test-only ambient layout direction override; `None` restores the composition local.
     SetLayoutDirection(Option<crate::layout::LayoutDirection>),
 }

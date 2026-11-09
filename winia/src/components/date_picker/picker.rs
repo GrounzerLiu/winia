@@ -1,6 +1,6 @@
-use super::*;
 use super::calendar::format_string;
 use super::input::{date_input_content, display_mode_toggle};
+use super::*;
 
 /// The `test_tag` on the menu button shared by `DatePicker` and the docked picker, so a UI test can tap
 /// the control that opens the year/month panel. Docked composes two buttons: pass a distinct tag per group.
@@ -39,7 +39,6 @@ pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 
 ///
 /// Deliberate deviations: the mode toggle arrives with the input mode. (The months ARE paged, in a
 /// `LazyRow` with a snap fling, exactly as material3 does — `month_pages`.)
-
 mod dialog;
 mod docked;
 mod picker;
@@ -48,7 +47,5 @@ pub(crate) use dialog::*;
 pub(crate) use picker::*;
 
 pub use dialog::DatePickerDialog;
-pub use docked::{
-    CALENDAR_MONTH_PATH, CHECK_PATH, DOCKED_CONTAINER_CORNER, DockedDatePicker,
-};
+pub use docked::{CALENDAR_MONTH_PATH, CHECK_PATH, DOCKED_CONTAINER_CORNER, DockedDatePicker};
 pub use picker::DatePicker;

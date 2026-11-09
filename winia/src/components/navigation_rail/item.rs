@@ -88,7 +88,9 @@ impl NavigationRailItem {
         let label_color = colors.text_color(selected, enabled);
         let ripple_color = icon_color;
 
-        let interaction = self.interaction_source.clone()
+        let interaction = self
+            .interaction_source
+            .clone()
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
 
         // 彩色胶囊背景：颜色 x alphaProgress——绘制期 peek 不注册依赖
@@ -127,7 +129,8 @@ impl NavigationRailItem {
         let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
         if enabled {
             if let Some(callback) = self.on_click.clone() {
-                item_modifier = item_modifier.clickable_with_source(&interaction, move || callback());
+                item_modifier =
+                    item_modifier.clickable_with_source(&interaction, move || callback());
             }
         }
         let item_modifier = item_modifier.then(self.modifier);
@@ -149,7 +152,8 @@ impl NavigationRailItem {
                 // 3) label（LabelMedium + 文字色）
                 if let Some(label) = self.label {
                     wrap_slot(ctx, label_slot_modifier, |ctx| {
-                        let mut style = crate::components::navigation_bar::NavigationBarDefaults::label_style();
+                        let mut style =
+                            crate::components::navigation_bar::NavigationBarDefaults::label_style();
                         style.color = Some(label_color);
                         crate::components::text::ProvideTextStyle(style, ctx, label);
                     });
@@ -166,9 +170,14 @@ impl NavigationRailItem {
 }
 
 /// 单子节点包装（每个逻辑槽恰好贡献一个 arena 子节点——索引稳定）。
-pub(crate) fn wrap_slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) {
+pub(crate) fn wrap_slot(
+    ctx: &mut ComposeCtx,
+    modifier: Modifier,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
     let key = ctx.next_key();
-    match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) {
+    match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center))
+    {
         GroupStatus::Skip => {}
         GroupStatus::Enter => content(ctx),
     }
@@ -225,14 +234,24 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
             nodes,
             policies,
             children[ripple_idx],
-            Constraints::new(total_indicator_w, total_indicator_w, indicator_h, indicator_h),
+            Constraints::new(
+                total_indicator_w,
+                total_indicator_w,
+                indicator_h,
+                indicator_h,
+            ),
         );
         // 彩色指示器 tight（animatedW x indicatorH）
         let (indicator_size, _) = measure_node(
             nodes,
             policies,
             children[0],
-            Constraints::new(animated_indicator_w, animated_indicator_w, indicator_h, indicator_h),
+            Constraints::new(
+                animated_indicator_w,
+                animated_indicator_w,
+                indicator_h,
+                indicator_h,
+            ),
         );
 
         let label_size = if self.has_label {
@@ -245,16 +264,24 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
         // 容器宽：拥抱内容、至少 rail 宽 80（androidx widthIn(min=80)，
         // item 不横向填满——M3 规范视觉胶囊居中于 rail）
         let container_w = if constraints.max_width < f32::MAX {
-            let content_w = icon_size.width
+            let content_w = icon_size
+                .width
                 .max(total_indicator_w)
                 .max(label_size.as_ref().map(|l| l.width).unwrap_or(0.0));
-            content_w.max(NAVIGATION_RAIL_WIDTH).min(constraints.max_width)
+            content_w
+                .max(NAVIGATION_RAIL_WIDTH)
+                .min(constraints.max_width)
         } else {
             icon_size.width.max(total_indicator_w)
         };
-        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX {
+            constraints.max_height
+        } else {
+            f32::MAX
+        };
 
-        let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size {
+        let (height, selected_icon_y, unselected_icon_y, label_y) = if let Some(label) = &label_size
+        {
             // placeLabelAndIcon：
             // contentHeight = iconH + VPadWithLabel + ItemVerticalPadding + labelH
             let content_h = icon_size.height
@@ -292,7 +319,10 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
         });
         placements.push(Placement {
             size: icon_size,
-            position: Offset::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
+            position: Offset::new(
+                (container_w - icon_size.width) / 2.0,
+                selected_icon_y + offset,
+            ),
         });
         if let Some(label) = label_size {
             placements.push(Placement {
@@ -316,4 +346,3 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
         }
     }
 }
-

@@ -48,7 +48,9 @@ impl IntervalList {
     /// The empty list: no intervals, no keys, no sticky headers.
     pub fn new() -> Self {
         Self {
-            intervals: Vec::new(), starts: Vec::new(), total: 0,
+            intervals: Vec::new(),
+            starts: Vec::new(),
+            total: 0,
             key_index: std::sync::Arc::new(std::collections::HashMap::new()),
             has_sticky: false,
         }
@@ -56,8 +58,19 @@ impl IntervalList {
 
     /// Append an interval — `count` items, an optional key factory, the content closure, and whether it
     /// is a sticky header. Call [`IntervalList::rebuild`] before the list is measured.
-    pub fn add(&mut self, count: usize, key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>, content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>, sticky: bool) {
-        self.intervals.push(Interval { count, key, content, is_sticky_header: sticky });
+    pub fn add(
+        &mut self,
+        count: usize,
+        key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>,
+        content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>,
+        sticky: bool,
+    ) {
+        self.intervals.push(Interval {
+            count,
+            key,
+            content,
+            is_sticky_header: sticky,
+        });
     }
 
     /// Whether a global index is a sticky header (an interval flag — O(intervals)).
@@ -68,7 +81,9 @@ impl IntervalList {
     }
 
     /// Whether the list has any sticky header (cached by `rebuild`).
-    pub fn has_sticky_headers(&self) -> bool { self.has_sticky }
+    pub fn has_sticky_headers(&self) -> bool {
+        self.has_sticky
+    }
 
     /// Rebuild the per-interval start indices and the total, and build the key → index map.
     pub fn rebuild(&mut self) {
@@ -96,11 +111,15 @@ impl IntervalList {
         self.key_index = std::sync::Arc::new(key_index);
     }
 
-    pub fn total(&self) -> usize { self.total }
+    pub fn total(&self) -> usize {
+        self.total
+    }
 
     /// Global index → `(interval index, local index inside it)`.
     pub fn locate(&self, global: usize) -> Option<(usize, usize)> {
-        if global >= self.total { return None; }
+        if global >= self.total {
+            return None;
+        }
         // Linear search: there are usually few intervals (a binary search would do).
         for i in 0..self.intervals.len() {
             let start = self.starts[i];
@@ -115,7 +134,9 @@ impl IntervalList {
     /// Global index → key (a section without a factory uses the index itself). An out-of-range index
     /// answers with itself — callers have to check `total` first.
     pub(crate) fn key_of_unchecked(&self, global: usize) -> u64 {
-        if global >= self.total { return global as u64; }
+        if global >= self.total {
+            return global as u64;
+        }
         for i in 0..self.intervals.len() {
             let start = self.starts[i];
             let count = self.intervals[i].count;
@@ -128,7 +149,9 @@ impl IntervalList {
 
     /// Global index → key.
     pub fn key_of(&self, global: usize) -> Option<u64> {
-        if global >= self.total { return None; }
+        if global >= self.total {
+            return None;
+        }
         Some(self.key_of_unchecked(global))
     }
 

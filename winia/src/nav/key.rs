@@ -1,8 +1,14 @@
 use super::*;
 
-pub trait NavKey: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static {}
+pub trait NavKey:
+    Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static
+{
+}
 
-impl<T: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static> NavKey for T {}
+impl<T: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static> NavKey
+    for T
+{
+}
 
 // ═══════════════════════════════════════════════════════════
 // NavMetadata — 导航元数据（对标 Nav3 `Map<String, Any>` + NavMetadataKey）
@@ -38,7 +44,10 @@ pub struct NavMetadata {
     /// ⚠ 值强制 Send+Sync：metadata 随 `Arc<dyn Scene>` 跨帧持有（Scene 可能被
     /// 线程池/动画 tick 访问），且与 `SceneStrategy: Send + Sync` 约束对齐。
     /// 单线程场景略保守，但避免将来多线程化时重构。
-    map: std::collections::HashMap<std::any::TypeId, std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    map: std::collections::HashMap<
+        std::any::TypeId,
+        std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    >,
 }
 
 impl NavMetadata {
@@ -49,14 +58,17 @@ impl NavMetadata {
 
     /// 插入一项（返回 self——链式 builder；同类型覆盖）
     pub fn with<T: 'static + Send + Sync>(mut self, value: T) -> Self {
-        self.map.insert(std::any::TypeId::of::<T>(), std::sync::Arc::new(value));
+        self.map
+            .insert(std::any::TypeId::of::<T>(), std::sync::Arc::new(value));
         self
     }
 
     /// 读取（类型安全——TypeId 精确匹配，无 cast 失败）
     pub fn get<T: 'static>(&self) -> Option<&T> {
-        self.map.get(&std::any::TypeId::of::<T>())
-            .map(|v| v.downcast_ref::<T>().expect("TypeId 相同但 downcast 失败——内部错误"))
+        self.map.get(&std::any::TypeId::of::<T>()).map(|v| {
+            v.downcast_ref::<T>()
+                .expect("TypeId 相同但 downcast 失败——内部错误")
+        })
     }
 
     /// 是否含某类型
@@ -94,7 +106,9 @@ pub struct NavDialogProperties {
 
 impl Default for NavDialogProperties {
     fn default() -> Self {
-        Self { dismiss_on_click_outside: true }
+        Self {
+            dismiss_on_click_outside: true,
+        }
     }
 }
 
@@ -129,7 +143,9 @@ impl Default for NavDialogProperties {
 /// 结果**不跨进程/配置变更持久**（对齐 Nav3 语义）。
 #[derive(Clone, Default)]
 pub struct ResultEventBus {
-    inner: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>>,
+    inner: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>,
+    >,
 }
 
 impl ResultEventBus {
@@ -153,16 +169,15 @@ impl ResultEventBus {
     /// （类型安全高级原语）。
     pub fn take<T: 'static>(&self, key: &str) -> Option<T> {
         let mut m = self.inner.lock().unwrap();
-        m.remove(key).and_then(|b| b.downcast::<T>().ok().map(|b| *b))
+        m.remove(key)
+            .and_then(|b| b.downcast::<T>().ok().map(|b| *b))
     }
 
     /// 只看不消费（可多次读）——返回克隆值（T: Clone）。
     /// 类型不匹配返回 None（同 [`Self::take`]——不 panic）
     pub fn peek<T: Clone + 'static>(&self, key: &str) -> Option<T> {
         let m = self.inner.lock().unwrap();
-        m.get(key)
-            .and_then(|b| b.downcast_ref::<T>())
-            .cloned()
+        m.get(key).and_then(|b| b.downcast_ref::<T>()).cloned()
     }
 
     /// 移除某 key 的结果
@@ -188,12 +203,13 @@ impl ResultEventBus {
 /// 结果总线 CompositionLocal——NavDisplay 渲染 entry 时 provides（对标 Nav3
 /// `LocalResultEventBus` + `ResultEventBusNavEntryDecorator`）；entry 内容经
 /// [`result_event_bus`] 读取。try_current 区分作用域内外。
-pub(super) static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<ResultEventBus>> =
-    std::sync::LazyLock::new(|| {
-        crate::runtime::composition_local::CompositionLocal::new(|| {
-            panic!("RESULT_EVENT_BUS_SCOPE 无默认值——必须经 NavDisplay 提供")
-        })
-    });
+pub(super) static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<
+    crate::runtime::composition_local::CompositionLocal<ResultEventBus>,
+> = std::sync::LazyLock::new(|| {
+    crate::runtime::composition_local::CompositionLocal::new(|| {
+        panic!("RESULT_EVENT_BUS_SCOPE 无默认值——必须经 NavDisplay 提供")
+    })
+});
 
 /// 读取当前 entry 的结果总线（entry 内容内调用——NavDisplay 已 provides）。
 ///
@@ -252,10 +268,9 @@ pub fn result_event_bus_consume<T: Clone + PartialEq + 'static>(
 }
 
 /// draining 渲染标记作用域（NavDisplay 的 render_entry 按 draining 参数 provides）
-pub(super) static DRAINING_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<bool>> =
-    std::sync::LazyLock::new(|| {
-        crate::runtime::composition_local::CompositionLocal::new(|| false)
-    });
+pub(super) static DRAINING_SCOPE: std::sync::LazyLock<
+    crate::runtime::composition_local::CompositionLocal<bool>,
+> = std::sync::LazyLock::new(|| crate::runtime::composition_local::CompositionLocal::new(|| false));
 
 /// Identity for one `NavDisplay` instance, used to namespace the scenes it publishes.
 static NEXT_NAV_HOST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -274,5 +289,3 @@ pub(super) fn next_nav_host_id() -> u64 {
 pub(crate) fn layer_scene_id(host_id: u64, scene_key: u64, is_prev: bool) -> u64 {
     fnv_hash(&(host_id, scene_key, is_prev))
 }
-
-

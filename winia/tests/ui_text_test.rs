@@ -98,11 +98,18 @@ fn a_centred_nowrap_ellipsis_stays_inside_its_box() {
     assert_eq!(rect.3, 20.0, "one ellipsized line: {rect:?}");
     let y = rect.1 + rect.3 / 2.0;
 
-    let spilled = (2..40).filter(|offset| lit(&mut app, rect.0 - *offset as f32, y)).count();
+    let spilled = (2..40)
+        .filter(|offset| lit(&mut app, rect.0 - *offset as f32, y))
+        .count();
     assert_eq!(spilled, 0, "nothing paints left of the box");
 
-    let inside = (4..60).filter(|offset| lit(&mut app, rect.0 + *offset as f32, y)).count();
-    assert!(inside > 0, "the line is drawn inside the box (not just blank)");
+    let inside = (4..60)
+        .filter(|offset| lit(&mut app, rect.0 + *offset as f32, y))
+        .count();
+    assert!(
+        inside > 0,
+        "the line is drawn inside the box (not just blank)"
+    );
 }
 
 /// Compose's `minLines`: the box reserves the lines even though the text is one line.
@@ -247,7 +254,10 @@ fn the_line_height_styles_move_the_ink_and_trim_the_box() {
     }
     let top_offset = first_lit_row(&mut app, top);
     let bottom_offset = first_lit_row(&mut app, bottom);
-    assert!(top_offset >= 0 && bottom_offset >= 0, "both boxes paint ink");
+    assert!(
+        top_offset >= 0 && bottom_offset >= 0,
+        "both boxes paint ink"
+    );
     assert!(
         bottom_offset > top_offset,
         "Bottom paints lower inside its box than Top: {top_offset} vs {bottom_offset}"

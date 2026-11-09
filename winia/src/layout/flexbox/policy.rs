@@ -7,29 +7,45 @@ use super::config::{
     FlexDirection, FlexJustifyContent, FlexWrap,
 };
 use super::intrinsic;
+use crate::layout::Constraints;
 use crate::layout::node::intrinsic_size_of;
 use crate::layout::node::{
-    measure_node, IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
+    IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, measure_node,
 };
-use crate::layout::Constraints;
 use crate::unit::{Offset, Size};
 use std::sync::Arc;
 // ── Axis helpers ──
 
 fn main_max(c: &Constraints, horizontal: bool) -> f32 {
-    if horizontal { c.max_width } else { c.max_height }
+    if horizontal {
+        c.max_width
+    } else {
+        c.max_height
+    }
 }
 
 fn main_min(c: &Constraints, horizontal: bool) -> f32 {
-    if horizontal { c.min_width } else { c.min_height }
+    if horizontal {
+        c.min_width
+    } else {
+        c.min_height
+    }
 }
 
 fn cross_max(c: &Constraints, horizontal: bool) -> f32 {
-    if horizontal { c.max_height } else { c.max_width }
+    if horizontal {
+        c.max_height
+    } else {
+        c.max_width
+    }
 }
 
 fn cross_min(c: &Constraints, horizontal: bool) -> f32 {
-    if horizontal { c.min_height } else { c.min_width }
+    if horizontal {
+        c.min_height
+    } else {
+        c.min_width
+    }
 }
 
 fn main_of(horizontal: bool, size: Size) -> f32 {
@@ -41,7 +57,11 @@ fn cross_of(horizontal: bool, size: Size) -> f32 {
 }
 
 fn make_size(horizontal: bool, main: f32, cross: f32) -> Size {
-    if horizontal { Size::new(main, cross) } else { Size::new(cross, main) }
+    if horizontal {
+        Size::new(main, cross)
+    } else {
+        Size::new(cross, main)
+    }
 }
 
 /// A child measured with an unbounded main axis and the container's cross bound: CSS max-content
@@ -604,19 +624,39 @@ impl MeasurePolicy for FlexBoxLayout {
     // a wrapping flex measured at the query constraints lays the items out for real and answers the
     // RESOLVED line sizes, which is not what "how narrow can this get" asks. The walk lives in
     // intrinsic.rs.
-    fn min_intrinsic_width(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize], height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
         intrinsic::width(self, ctx, children, height, true)
     }
 
-    fn max_intrinsic_width(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize], height: f32) -> f32 {
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
         intrinsic::width(self, ctx, children, height, false)
     }
 
-    fn min_intrinsic_height(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize], width: f32) -> f32 {
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
         intrinsic::height(self, ctx, children, width, true)
     }
 
-    fn max_intrinsic_height(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize], width: f32) -> f32 {
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
         intrinsic::height(self, ctx, children, width, false)
     }
 
@@ -638,7 +678,10 @@ impl MeasurePolicy for FlexBoxLayout {
                 nodes[*child].id
             };
             if !seen.insert(key) {
-                debug_assert!(false, "FlexBox item key {key} is used by more than one child");
+                debug_assert!(
+                    false,
+                    "FlexBox item key {key} is used by more than one child"
+                );
                 continue;
             }
             let Some(spec) = nodes[*child].modifier.animate_item_spec() else {

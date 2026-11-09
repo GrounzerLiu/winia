@@ -10,15 +10,25 @@ use super::*;
 /// → skia's nearest glyph was always the first line, and clicking/dragging a multi-line TextField
 /// could only land on line one.
 pub(crate) fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
-    pub(crate) fn walk(nodes: &[LayoutNode], idx: usize, target: u64, abs_x: f32, abs_y: f32) -> Option<(f32, f32)> {
+    pub(crate) fn walk(
+        nodes: &[LayoutNode],
+        idx: usize,
+        target: u64,
+        abs_x: f32,
+        abs_y: f32,
+    ) -> Option<(f32, f32)> {
         let node = &nodes[idx];
         let nx = abs_x + node.position.x;
         let ny = abs_y + node.position.y;
-        if node.id == target { return Some((nx, ny)); }
+        if node.id == target {
+            return Some((nx, ny));
+        }
         // Same path as hit testing: a child's coordinate = this node's coordinate - its scroll offset.
         let (dx, dy) = crate::layout::node::scroll_offset_for_node(node);
         for &c in &node.children {
-            if let Some(r) = walk(nodes, c, target, nx - dx, ny - dy) { return Some(r); }
+            if let Some(r) = walk(nodes, c, target, nx - dx, ny - dy) {
+                return Some(r);
+            }
         }
         None
     }
@@ -38,21 +48,27 @@ pub(crate) fn dispatch_ptr_event(
     // build its ancestor chain.
     let captured_path: Vec<usize> = if let Some(cid) = captured_id {
         let mut ancestors: Vec<usize> = Vec::new();
-        if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, root, cid).and_then(|nid| crate::layout::node::find_node_by_id(nodes, root, nid)) {
+        if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, root, cid)
+            .and_then(|nid| crate::layout::node::find_node_by_id(nodes, root, nid))
+        {
             ancestors.push(nid);
             let mut pid = nodes[nid].parent_id;
             while let Some(id) = pid {
                 if let Some(anc) = crate::layout::node::find_node_by_id(nodes, root, id) {
                     ancestors.push(anc);
                     pid = nodes[anc].parent_id;
-                } else { break; }
+                } else {
+                    break;
+                }
             }
             ancestors.reverse(); // root → ... → captured
             ancestors
         } else {
             path.to_vec()
         }
-    } else { path.to_vec() };
+    } else {
+        path.to_vec()
+    };
     let use_path = &captured_path;
     // Accumulate the path's offset (each node's `position` is relative to its parent).
     // As in `hit_test_recursive`: node i's visual coordinate = Σposition[0..=i]
@@ -62,17 +78,20 @@ pub(crate) fn dispatch_ptr_event(
     let mut abs_y = 0.0f32;
     let mut scroll_x = 0.0f32;
     let mut scroll_y = 0.0f32;
-    let abs_positions: Vec<(f32, f32)> = use_path.iter().map(|&i| {
-        abs_x += nodes[i].position.x;
-        abs_y += nodes[i].position.y;
-        // This node's coordinate = accumulated position − accumulated ancestor scroll
-        // (its own offset is added later).
-        let pos = (abs_x - scroll_x, abs_y - scroll_y);
-        let (sdx, sdy) = crate::layout::node::scroll_offset_for_node(&nodes[i]);
-        scroll_x += sdx;
-        scroll_y += sdy;
-        pos
-    }).collect();
+    let abs_positions: Vec<(f32, f32)> = use_path
+        .iter()
+        .map(|&i| {
+            abs_x += nodes[i].position.x;
+            abs_y += nodes[i].position.y;
+            // This node's coordinate = accumulated position − accumulated ancestor scroll
+            // (its own offset is added later).
+            let pos = (abs_x - scroll_x, abs_y - scroll_y);
+            let (sdx, sdy) = crate::layout::node::scroll_offset_for_node(&nodes[i]);
+            scroll_x += sdx;
+            scroll_y += sdy;
+            pos
+        })
+        .collect();
 
     // on_pre_ptr: outer → inner
     // Dual track (exp/modifier-node): the enum `on_pre_ptr` handlers run first, then the node's own
@@ -83,12 +102,20 @@ pub(crate) fn dispatch_ptr_event(
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
         for el in nodes[ni].modifier.elements() {
-            if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
-                if handler(&ev) { return true; }
+            if let crate::modifier::ModifierElement::PointerEvent {
+                on_pre_ptr: Some(handler),
+                ..
+            } = el
+            {
+                if handler(&ev) {
+                    return true;
+                }
             }
         }
         for p in nodes[ni].modifier.pointer_nodes() {
-            if p.on_pre(&ev) { return true; }
+            if p.on_pre(&ev) {
+                return true;
+            }
         }
     }
 
@@ -99,12 +126,20 @@ pub(crate) fn dispatch_ptr_event(
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
         for el in nodes[ni].modifier.elements() {
-            if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
-                if handler(&ev) { return true; }
+            if let crate::modifier::ModifierElement::PointerEvent {
+                on_ptr: Some(handler),
+                ..
+            } = el
+            {
+                if handler(&ev) {
+                    return true;
+                }
             }
         }
         for p in nodes[ni].modifier.pointer_nodes() {
-            if p.on_event(&ev) { return true; }
+            if p.on_event(&ev) {
+                return true;
+            }
         }
     }
     false
@@ -116,6 +151,10 @@ pub(crate) fn dispatch_ptr_event(
 /// (`last_render_time`): when WM_PAINT lands after the request (ε>0), `now-last_render = I-ε < I`
 /// would block every timer wake-up and halve the render rate (a 2I interval).
 #[allow(dead_code)] // the tests in this file call it
-pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
+pub(crate) fn should_request_redraw(
+    last_request: std::time::Instant,
+    now: std::time::Instant,
+    interval: std::time::Duration,
+) -> bool {
     now.duration_since(last_request) >= interval
 }

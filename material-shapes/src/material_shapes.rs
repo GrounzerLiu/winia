@@ -1,13 +1,16 @@
 #![allow(dead_code)]
-use std::f32::consts::PI;
-use std::sync::OnceLock;
-use lazy_static::lazy_static;
 use crate::corner_rounding::CornerRounding;
 use crate::matrix::Matrix;
 use crate::offset::Offset;
 use crate::rounded_polygon::{RoundedPolygon, RoundedPolygonBuilder};
 use crate::shapes::{CircleBuilder, RectangleBuilder, StarBuilder};
+use lazy_static::lazy_static;
+use std::f32::consts::PI;
+use std::sync::OnceLock;
 
+// rustfmt rewrites the parenthesised form below into a braced form with a trailing semicolon,
+// which is not a valid item and breaks the build. Keep the source spelling.
+#[rustfmt::skip]
 lazy_static!(
     static ref ROTATE_NEG_45: Matrix = {
         let mut matrix = Matrix::default();
@@ -81,29 +84,34 @@ fn circle(num_vertices: impl Into<Option<usize>>) -> RoundedPolygon {
     CircleBuilder::new().num_vertices(num_vertices).build()
 }
 fn square() -> RoundedPolygon {
-    RectangleBuilder::new().width(1.0).height(1.0).rounding(MaterialShapes::CORNER_ROUND_30).build()
+    RectangleBuilder::new()
+        .width(1.0)
+        .height(1.0)
+        .rounding(MaterialShapes::CORNER_ROUND_30)
+        .build()
 }
 fn slanted() -> RoundedPolygon {
     custom_polygon(
         &vec![
             PointNRound::new(Offset::new(0.926, 0.970), CornerRounding::new(0.189, 0.811)),
-            PointNRound::new(Offset::new(-0.021, 0.967), CornerRounding::new(0.187, 0.057))
+            PointNRound::new(
+                Offset::new(-0.021, 0.967),
+                CornerRounding::new(0.187, 0.057),
+            ),
         ],
         2,
         None,
-        None
+        None,
     )
 }
 fn arch() -> RoundedPolygon {
     RoundedPolygonBuilder::from_num_vertices(4)
-        .per_vertex_rounding(
-            vec![
-                MaterialShapes::CORNER_ROUND_100,
-                MaterialShapes::CORNER_ROUND_100,
-                MaterialShapes::CORNER_ROUND_20,
-                MaterialShapes::CORNER_ROUND_20,
-            ]
-        )
+        .per_vertex_rounding(vec![
+            MaterialShapes::CORNER_ROUND_100,
+            MaterialShapes::CORNER_ROUND_100,
+            MaterialShapes::CORNER_ROUND_20,
+            MaterialShapes::CORNER_ROUND_20,
+        ])
         .build()
         .transformed_by_matrix(*ROTATE_NEG_135)
 }
@@ -113,7 +121,7 @@ fn fan() -> RoundedPolygon {
             PointNRound::new(Offset::new(1.004, 1.000), CornerRounding::new(0.148, 0.417)),
             PointNRound::new(Offset::new(0.000, 1.000), CornerRounding::new(0.151, None)),
             PointNRound::new(Offset::new(0.000, -0.003), CornerRounding::new(0.148, None)),
-            PointNRound::new(Offset::new(0.978, 0.020), CornerRounding::new(0.803, None))
+            PointNRound::new(Offset::new(0.978, 0.020), CornerRounding::new(0.803, None)),
         ],
         1,
         None,
@@ -125,7 +133,10 @@ fn arrow() -> RoundedPolygon {
         &vec![
             PointNRound::new(Offset::new(0.500, 0.892), CornerRounding::new(0.313, None)),
             PointNRound::new(Offset::new(-0.216, 1.050), CornerRounding::new(0.207, None)),
-            PointNRound::new(Offset::new(0.499, -0.160), CornerRounding::new(0.215, 1.000)),
+            PointNRound::new(
+                Offset::new(0.499, -0.160),
+                CornerRounding::new(0.215, 1.000),
+            ),
             PointNRound::new(Offset::new(1.225, 1.060), CornerRounding::new(0.211, None)),
         ],
         1,
@@ -137,14 +148,12 @@ fn semi_circle() -> RoundedPolygon {
     RectangleBuilder::new()
         .width(1.6)
         .height(1.0)
-        .per_vertex_rounding(
-            vec![
-                MaterialShapes::CORNER_ROUND_20,
-                MaterialShapes::CORNER_ROUND_20,
-                MaterialShapes::CORNER_ROUND_100,
-                MaterialShapes::CORNER_ROUND_100,
-            ]
-        )
+        .per_vertex_rounding(vec![
+            MaterialShapes::CORNER_ROUND_20,
+            MaterialShapes::CORNER_ROUND_20,
+            MaterialShapes::CORNER_ROUND_100,
+            MaterialShapes::CORNER_ROUND_100,
+        ])
         .build()
 }
 fn oval() -> RoundedPolygon {
@@ -181,7 +190,7 @@ fn diamond() -> RoundedPolygon {
         ],
         2,
         None,
-        None
+        None,
     )
 }
 fn clam_shell() -> RoundedPolygon {
@@ -476,7 +485,7 @@ fn heart() -> RoundedPolygon {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct PointNRound{
+struct PointNRound {
     pub o: Offset,
     pub r: CornerRounding,
 }
@@ -497,8 +506,14 @@ fn do_repeat(
 ) -> Vec<PointNRound> {
     if mirroring {
         let mut result = vec![];
-        let angles = points.iter().map(|point| (point.o - center).angle_degrees() ).collect::<Vec<f32>>();
-        let distances = points.iter().map(|point| (point.o - center).get_distance() ).collect::<Vec<f32>>();
+        let angles = points
+            .iter()
+            .map(|point| (point.o - center).angle_degrees())
+            .collect::<Vec<f32>>();
+        let distances = points
+            .iter()
+            .map(|point| (point.o - center).get_distance())
+            .collect::<Vec<f32>>();
         let actual_reps = reps * 2;
         let section_angle = 360.0 / (actual_reps as f32);
         for it in 0..actual_reps {
@@ -509,17 +524,14 @@ fn do_repeat(
                     points.len() - 1 - index
                 };
                 if i > 0 || it % 2 == 0 {
-                    let a = (section_angle * it as f32 +
-                        if it % 2 == 0 {
+                    let a = (section_angle * it as f32
+                        + if it % 2 == 0 {
                             angles[i]
                         } else {
                             section_angle - angles[i] + 2.0 * angles[0]
-                        }
-                    ).to_radians();
-                    let final_point = Offset::new(
-                        a.cos(),
-                        a.sin(),
-                    ) * distances[i] + center;
+                        })
+                    .to_radians();
+                    let final_point = Offset::new(a.cos(), a.sin()) * distances[i] + center;
                     result.push(PointNRound {
                         o: final_point,
                         r: points[i].r,
@@ -530,10 +542,14 @@ fn do_repeat(
         result
     } else {
         let np = points.len();
-        (0..(np * reps)).map(|it| {
-            let point = points[it % np].o.rotate_degrees((it /np) as f32 * 360.0 / reps as f32, center);
-            PointNRound::new(point, points[it % np].r)
-        }).collect()
+        (0..(np * reps))
+            .map(|it| {
+                let point = points[it % np]
+                    .o
+                    .rotate_degrees((it / np) as f32 * 360.0 / reps as f32, center);
+                PointNRound::new(point, points[it % np].r)
+            })
+            .collect()
     }
 }
 
@@ -544,30 +560,23 @@ fn custom_polygon(
     mirroring: impl Into<Option<bool>>,
 ) -> RoundedPolygon {
     let center = center.into().unwrap_or(Offset::new(0.5, 0.5));
-    let actual_points = do_repeat(
-        pnr,
-        reps,
-        center,
-        mirroring.into().unwrap_or(false),
-    );
-    let vertices = (0..actual_points.len() * 2).map(
-        |ix| {
+    let actual_points = do_repeat(pnr, reps, center, mirroring.into().unwrap_or(false));
+    let vertices = (0..actual_points.len() * 2)
+        .map(|ix| {
             let o = actual_points[ix / 2].o;
-            if ix % 2 == 0 {
-                o.x()
-            } else {
-                o.y()
-            }
-        }
-    ).collect::<Vec<f32>>();
-    let per_vertex_rounding = actual_points.iter().map(|p| p.r).collect::<Vec<CornerRounding>>();
+            if ix % 2 == 0 { o.x() } else { o.y() }
+        })
+        .collect::<Vec<f32>>();
+    let per_vertex_rounding = actual_points
+        .iter()
+        .map(|p| p.r)
+        .collect::<Vec<CornerRounding>>();
     RoundedPolygonBuilder::from_vertices(&vertices)
         .per_vertex_rounding(per_vertex_rounding)
         .center_x(center.x())
         .center_y(center.y())
         .build()
 }
-
 
 pub struct MaterialShapes {}
 
@@ -593,7 +602,6 @@ impl MaterialShapes {
         smoothing: 0.0,
     };
 }
-
 
 trait RotateDegrees {
     fn rotate_degrees(&self, angle: f32, center: impl Into<Option<Offset>>) -> Offset;
@@ -633,9 +641,6 @@ trait Transformed {
 
 impl Transformed for RoundedPolygon {
     fn transformed_by_matrix(&self, matrix: Matrix) -> RoundedPolygon {
-        self.transformed(&move |x, y| {
-            matrix.map_offset(Offset::new(x, y))
-        })
+        self.transformed(&move |x, y| matrix.map_offset(Offset::new(x, y)))
     }
 }
-

@@ -5,25 +5,25 @@ mod feature_detector;
 mod feature_mapping;
 mod feature_serializer;
 mod float_mapping;
+mod material_shapes;
+mod matrix;
+mod morph;
+mod offset;
 mod point;
 mod polygon_measure;
+mod polygon_validation;
+mod rect;
 mod rounded_polygon;
 mod shapes;
 mod utils;
-mod polygon_validation;
-mod morph;
-mod material_shapes;
-mod matrix;
-mod offset;
-mod rect;
 
 pub use corner_rounding::*;
 pub use cubic::*;
 pub use material_shapes::*;
+pub use morph::*;
 pub use polygon_measure::*;
 pub use rounded_polygon::*;
 pub use shapes::*;
-pub use morph::*;
 
 #[cfg(feature = "shape_util")]
 mod shape_util;

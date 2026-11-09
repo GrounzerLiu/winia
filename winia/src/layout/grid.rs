@@ -29,8 +29,10 @@
 //!   cell's top-left unless its own chain says otherwise.
 
 use super::container::build_container;
-use super::node::{intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement};
-use crate::layout::{ContentAlignment, Constraints, LayoutDirection};
+use super::node::{
+    IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, intrinsic_size_of, measure_node,
+};
+use crate::layout::{Constraints, ContentAlignment, LayoutDirection};
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::unit::{Offset, Size};
@@ -226,7 +228,11 @@ fn resolve_axis(
 ) -> Vec<f32> {
     let gaps = gap * specs.len().saturating_sub(1) as f32;
     let bounded = available < f32::MAX;
-    let basis = if bounded { (available - gaps).max(0.0) } else { 0.0 };
+    let basis = if bounded {
+        (available - gaps).max(0.0)
+    } else {
+        0.0
+    };
     let mut fixed_total = 0.0f32;
     let mut percent_total = 0.0f32;
     let mut weight_total = 0.0f32;
@@ -252,7 +258,11 @@ fn resolve_axis(
                     // Compose sizes a percentage track by its items' intrinsic width when the axis is
                     // unbounded, max for a max query and min for a min one (`Grid.kt:1645-1663`).
                     let (max, min) = intrinsic(i);
-                    if prefer_min { min.max(0.0) } else { max.max(0.0) }
+                    if prefer_min {
+                        min.max(0.0)
+                    } else {
+                        max.max(0.0)
+                    }
                 };
             }
             GridTrackSpec::Weight(_) => {
@@ -263,7 +273,11 @@ fn resolve_axis(
             }
             GridTrackSpec::FitContent => {
                 let (max, min) = intrinsic(i);
-                sizes[i] = if prefer_min { min.max(0.0) } else { max.max(0.0) };
+                sizes[i] = if prefer_min {
+                    min.max(0.0)
+                } else {
+                    max.max(0.0)
+                };
                 intrinsic_total += sizes[i];
             }
         }
@@ -293,7 +307,7 @@ fn track_intrinsic(
     by_row: bool,
     other: impl Fn(&Cell) -> f32,
 ) -> (f32, f32) {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let (max_query, min_query) = if by_row {
         (IntrinsicQuery::MaxHeight, IntrinsicQuery::MinHeight)
     } else {
@@ -312,8 +326,20 @@ fn track_intrinsic(
             continue;
         }
         let other_value = other(&cell);
-        max = max.max(intrinsic_size_of(nodes, policies, child, max_query, other_value));
-        min = min.max(intrinsic_size_of(nodes, policies, child, min_query, other_value));
+        max = max.max(intrinsic_size_of(
+            nodes,
+            policies,
+            child,
+            max_query,
+            other_value,
+        ));
+        min = min.max(intrinsic_size_of(
+            nodes,
+            policies,
+            child,
+            min_query,
+            other_value,
+        ));
     }
     (max, min)
 }
@@ -349,7 +375,14 @@ impl Occupancy {
             == false
     }
 
-    fn fits(&self, row: usize, column: usize, row_span: usize, column_span: usize, columns: usize) -> bool {
+    fn fits(
+        &self,
+        row: usize,
+        column: usize,
+        row_span: usize,
+        column_span: usize,
+        columns: usize,
+    ) -> bool {
         if column + column_span > columns {
             return false;
         }
@@ -403,7 +436,12 @@ fn place_cells(
         let row = area.rows.0 as usize;
         let row_span = (area.rows.1 as usize).saturating_sub(row) + 1;
         occupancy.reserve(row, column, row_span, column_span);
-        claimed[i] = Some(Cell { column, column_span, row, row_span });
+        claimed[i] = Some(Cell {
+            column,
+            column_span,
+            row,
+            row_span,
+        });
     }
     let mut cursor = (0usize, 0usize);
     // A column flow wraps at the DECLARED row count; with no declared rows the rows are unbounded
@@ -447,7 +485,12 @@ fn place_cells(
             spans.len(),
         );
         occupancy.reserve(row, column, row_span, column_span);
-        out.push(Cell { column, column_span, row, row_span });
+        out.push(Cell {
+            column,
+            column_span,
+            row,
+            row_span,
+        });
         cursor = if flow.by_column() {
             (row + row_span, column)
         } else {
@@ -530,7 +573,6 @@ fn find_cell(
     (occupancy.rows.len(), 0)
 }
 
-
 /// Compose's pass 1.5 (`distributeSpanningSpace`, `Grid.kt:2178-2262`): an item spanning several
 /// tracks may need more room than they add up to, and the tracks that CAN grow — intrinsic and
 /// weighted ones, never fixed or percentage — absorb the deficit evenly. Implicit tracks count as
@@ -555,8 +597,8 @@ fn distribute_spanning(
         let end = (track + span).min(sizes.len());
         let spanned = end - track;
         // The gaps INSIDE the span are part of the room it already has.
-        let current = sizes[track..end].iter().sum::<f32>()
-            + gap * spanned.saturating_sub(1) as f32;
+        let current =
+            sizes[track..end].iter().sum::<f32>() + gap * spanned.saturating_sub(1) as f32;
         let growable: Vec<usize> = (track..end)
             .filter(|i| {
                 !matches!(
@@ -579,11 +621,14 @@ fn distribute_spanning(
     }
 }
 
-
 impl GridLayout {
     /// The cells an intrinsic query sees: the placement is `measure`'s, taken from the children's
     /// modifiers rather than from a measurement.
-    fn intrinsic_cells(&self, ctx: &mut crate::layout::IntrinsicCtx<'_>, children: &[usize]) -> Vec<Cell> {
+    fn intrinsic_cells(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+    ) -> Vec<Cell> {
         let columns = self.columns.len();
         if columns == 0 {
             return Vec::new();
@@ -602,7 +647,11 @@ impl GridLayout {
             .iter()
             .map(|&c| ctx.nodes[c].modifier.get_grid_item_area())
             .collect();
-        let declared = if self.rows.is_empty() { None } else { Some(self.rows.len()) };
+        let declared = if self.rows.is_empty() {
+            None
+        } else {
+            Some(self.rows.len())
+        };
         place_cells(&spans, columns, self.flow, declared, &self.areas, &area_ids)
     }
 
@@ -620,7 +669,9 @@ impl GridLayout {
         let columns = self.columns.len();
         let mut per_track = vec![(0.0f32, 0.0f32); columns];
         for (i, &child) in children.iter().enumerate() {
-            let Some(cell) = cells.get(i).copied() else { continue };
+            let Some(cell) = cells.get(i).copied() else {
+                continue;
+            };
             if cell.column_span != 1 || cell.column >= columns {
                 continue;
             }
@@ -651,21 +702,23 @@ impl GridLayout {
         let column_gap = self.column_gap.max(0.0);
         let offsets = offset_table(column_widths, column_gap);
         let cell_width = |cell: &Cell| -> f32 {
-            match (offsets.get(cell.column), offsets.get(cell.column + cell.column_span)) {
+            match (
+                offsets.get(cell.column),
+                offsets.get(cell.column + cell.column_span),
+            ) {
                 (Some(start), Some(end)) => (end - start - column_gap).max(0.0),
                 _ => available,
             }
         };
-        let tracks = self.rows.len().max(
-            cells
-                .iter()
-                .map(|c| c.row + c.row_span)
-                .max()
-                .unwrap_or(0),
-        );
+        let tracks = self
+            .rows
+            .len()
+            .max(cells.iter().map(|c| c.row + c.row_span).max().unwrap_or(0));
         let mut per_track = vec![(0.0f32, 0.0f32); tracks];
         for (i, &child) in children.iter().enumerate() {
-            let Some(cell) = cells.get(i).copied() else { continue };
+            let Some(cell) = cells.get(i).copied() else {
+                continue;
+            };
             if cell.row_span != 1 || cell.row >= tracks {
                 continue;
             }
@@ -705,14 +758,21 @@ impl MeasurePolicy for GridLayout {
         if n == 0 {
             // No child places anything, but the declared tracks still exist: a grid of three 80 dp
             // columns is 240 wide before it has a single item.
-            let widths = resolve_tracks(&self.columns, constraints.max_width, self.column_gap.max(0.0));
+            let widths = resolve_tracks(
+                &self.columns,
+                constraints.max_width,
+                self.column_gap.max(0.0),
+            );
             let heights = resolve_tracks(&self.rows, constraints.max_height, self.row_gap.max(0.0));
             let width = widths.iter().sum::<f32>()
                 + self.column_gap.max(0.0) * widths.len().saturating_sub(1) as f32;
             let height = heights.iter().sum::<f32>()
                 + self.row_gap.max(0.0) * heights.len().saturating_sub(1) as f32;
             return (
-                Size::new(width.max(constraints.min_width), height.max(constraints.min_height)),
+                Size::new(
+                    width.max(constraints.min_width),
+                    height.max(constraints.min_height),
+                ),
                 Vec::new(),
             );
         }
@@ -728,7 +788,10 @@ impl MeasurePolicy for GridLayout {
             return (
                 Size::ZERO,
                 (0..n)
-                    .map(|_| Placement { size: Size::ZERO, position: Offset::new(0.0, 0.0) })
+                    .map(|_| Placement {
+                        size: Size::ZERO,
+                        position: Offset::new(0.0, 0.0),
+                    })
                     .collect(),
             );
         }
@@ -749,8 +812,19 @@ impl MeasurePolicy for GridLayout {
             .iter()
             .map(|&c| nodes[c].modifier.get_grid_item_area())
             .collect();
-        let declared_rows = if self.rows.is_empty() { None } else { Some(self.rows.len()) };
-        let cells = place_cells(&spans, columns, self.flow, declared_rows, &self.areas, &area_ids);
+        let declared_rows = if self.rows.is_empty() {
+            None
+        } else {
+            Some(self.rows.len())
+        };
+        let cells = place_cells(
+            &spans,
+            columns,
+            self.flow,
+            declared_rows,
+            &self.areas,
+            &area_ids,
+        );
 
         // 2. The column widths: fixed and percentage tracks resolve against the axis, intrinsic tracks
         // ask their items, and on an unbounded axis the percentage/weight tracks fall back to intrinsic
@@ -762,18 +836,29 @@ impl MeasurePolicy for GridLayout {
                 })
             })
             .collect();
-        let mut widths = resolve_axis(&self.columns, constraints.max_width, column_gap, false, |i| {
-            column_intrinsic[i]
-        });
-        distribute_spanning(&self.columns, &mut widths, &cells, false, column_gap, |index| {
-            intrinsic_size_of(
-                nodes,
-                policies,
-                children[index],
-                IntrinsicQuery::MaxWidth,
-                constraints.max_height,
-            )
-        });
+        let mut widths = resolve_axis(
+            &self.columns,
+            constraints.max_width,
+            column_gap,
+            false,
+            |i| column_intrinsic[i],
+        );
+        distribute_spanning(
+            &self.columns,
+            &mut widths,
+            &cells,
+            false,
+            column_gap,
+            |index| {
+                intrinsic_size_of(
+                    nodes,
+                    policies,
+                    children[index],
+                    IntrinsicQuery::MaxWidth,
+                    constraints.max_height,
+                )
+            },
+        );
         let column_offsets = offset_table(&widths, column_gap);
 
         // 3. The row tracks: declared ones resolve from their specs, intrinsic ones ask the items at the
@@ -795,20 +880,27 @@ impl MeasurePolicy for GridLayout {
             })
         };
         let mut declared_heights = declared_heights;
-        distribute_spanning(&self.rows, &mut declared_heights, &cells, true, row_gap, |index| {
-            let cell = cells[index];
-            let width = (column_offsets[cell.column + cell.column_span]
-                - column_offsets[cell.column]
-                - column_gap)
-                .max(0.0);
-            intrinsic_size_of(
-                nodes,
-                policies,
-                children[index],
-                IntrinsicQuery::MaxHeight,
-                width,
-            )
-        });
+        distribute_spanning(
+            &self.rows,
+            &mut declared_heights,
+            &cells,
+            true,
+            row_gap,
+            |index| {
+                let cell = cells[index];
+                let width = (column_offsets[cell.column + cell.column_span]
+                    - column_offsets[cell.column]
+                    - column_gap)
+                    .max(0.0);
+                intrinsic_size_of(
+                    nodes,
+                    policies,
+                    children[index],
+                    IntrinsicQuery::MaxHeight,
+                    width,
+                )
+            },
+        );
         let declared_table = offset_table(&declared_heights, row_gap);
         let row_count = cells
             .iter()
@@ -834,8 +926,12 @@ impl MeasurePolicy for GridLayout {
             } else {
                 constraints.max_height
             };
-            let (size, _) =
-                measure_node(nodes, policies, child, Constraints::new(0.0, width, 0.0, height));
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                child,
+                Constraints::new(0.0, width, 0.0, height),
+            );
             child_sizes.push(size);
         }
 
@@ -867,9 +963,8 @@ impl MeasurePolicy for GridLayout {
             let cell_width = column_offsets[cell.column + cell.column_span]
                 - column_offsets[cell.column]
                 - column_gap;
-            let cell_height = row_offsets[cell.row + cell.row_span]
-                - row_offsets[cell.row]
-                - row_gap;
+            let cell_height =
+                row_offsets[cell.row + cell.row_span] - row_offsets[cell.row] - row_gap;
             // Compose's `gridItem` defaults to `Alignment.TopStart` (Grid.kt:158-226): a child that
             // does not fill its cell sits at the cell's top-left, and a `fill_max_size` in the chain is
             // what stretches it.
@@ -888,7 +983,10 @@ impl MeasurePolicy for GridLayout {
             if self.direction == LayoutDirection::Rtl {
                 x = total_width - x - size.width;
             }
-            placements.push(Placement { size, position: Offset::new(x, y) });
+            placements.push(Placement {
+                size,
+                position: Offset::new(x, y),
+            });
         }
 
         // Compose constrains the grid's own size (`Grid.kt:898-899`): the tracks may add up to more
@@ -1124,13 +1222,19 @@ mod tests {
 
     fn spanning_leaf(width: f32, height: f32, column_span: u32, row_span: u32) -> LayoutNode {
         let mut node = LayoutNode::leaf(
-            Modifier::new().size(width, height).grid_item(column_span, row_span),
+            Modifier::new()
+                .size(width, height)
+                .grid_item(column_span, row_span),
         );
         node.measured_size = Size::new(width, height);
         node
     }
 
-    fn run(policy: &GridLayout, nodes: &mut Vec<LayoutNode>, constraints: Constraints) -> (Size, Vec<Placement>) {
+    fn run(
+        policy: &GridLayout,
+        nodes: &mut Vec<LayoutNode>,
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = policy.measure(nodes, &[], &children, constraints);
         // The engine calls `place` with whatever measure returned, so the harness does too: a policy
@@ -1144,7 +1248,11 @@ mod tests {
     fn fixed_columns_place_each_child_in_its_track() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(70.0)]);
         let mut nodes: Vec<LayoutNode> = (0..4).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(size, Size::new(120.0, 20.0));
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
         assert_eq!(placements[1].position, Offset::new(50.0, 0.0));
@@ -1159,8 +1267,16 @@ mod tests {
             .column_gap(10.0)
             .row_gap(4.0);
         let mut nodes: Vec<LayoutNode> = (0..3).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(size, Size::new(130.0, 24.0), "50 + 10 + 70 wide, 10 + 4 + 10 tall");
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            size,
+            Size::new(130.0, 24.0),
+            "50 + 10 + 70 wide, 10 + 4 + 10 tall"
+        );
         assert_eq!(placements[1].position, Offset::new(60.0, 0.0));
         assert_eq!(placements[2].position, Offset::new(0.0, 14.0));
     }
@@ -1174,8 +1290,15 @@ mod tests {
             GridTrackSpec::weight(1.0),
         ]);
         let mut nodes: Vec<LayoutNode> = (0..3).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 100.0));
-        assert_eq!(size.width, 400.0, "100 fixed + 200 percent + 100 left over for the weight");
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            size.width, 400.0,
+            "100 fixed + 200 percent + 100 left over for the weight"
+        );
         assert_eq!(placements[0].position.x, 0.0);
         assert_eq!(placements[1].position.x, 100.0);
         assert_eq!(placements[2].position.x, 300.0);
@@ -1187,19 +1310,43 @@ mod tests {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(70.0)])
             .column_gap(10.0);
         let mut nodes = vec![spanning_leaf(40.0, 20.0, 2, 1), make_leaf(10.0, 10.0)];
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
         // The default alignment is TopStart, so the child keeps its own size inside the wide cell.
-        assert_eq!(placements[0].size, Size::new(40.0, 20.0), "the child keeps its own size in the cell");
-        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "and sits at the cell's top-left");
-        assert_eq!(placements[1].position, Offset::new(0.0, 20.0), "the next child starts a new row");
+        assert_eq!(
+            placements[0].size,
+            Size::new(40.0, 20.0),
+            "the child keeps its own size in the cell"
+        );
+        assert_eq!(
+            placements[0].position,
+            Offset::new(0.0, 0.0),
+            "and sits at the cell's top-left"
+        );
+        assert_eq!(
+            placements[1].position,
+            Offset::new(0.0, 20.0),
+            "the next child starts a new row"
+        );
     }
 
     /// An implicit row is as tall as the tallest child that spans exactly that row.
     #[test]
     fn implicit_rows_size_to_their_tallest_child() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
-        let mut nodes = vec![make_leaf(10.0, 30.0), make_leaf(10.0, 12.0), make_leaf(10.0, 8.0)];
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let mut nodes = vec![
+            make_leaf(10.0, 30.0),
+            make_leaf(10.0, 12.0),
+            make_leaf(10.0, 8.0),
+        ];
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(size.height, 38.0, "row 1 is 30 tall, row 2 is 8");
         assert_eq!(placements[2].position.y, 30.0);
     }
@@ -1221,8 +1368,11 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         let sparse = GridLayout::new(columns.clone()).flow(GridFlow::Row);
-        let (_, sparse_placements) =
-            run(&sparse, &mut sparse_nodes, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let (_, sparse_placements) = run(
+            &sparse,
+            &mut sparse_nodes,
+            Constraints::new(0.0, 300.0, 0.0, 300.0),
+        );
 
         let mut dense_nodes = vec![
             spanning_leaf(80.0, 10.0, 2, 1),
@@ -1230,8 +1380,11 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         let dense = GridLayout::new(columns).flow(GridFlow::RowDense);
-        let (_, dense_placements) =
-            run(&dense, &mut dense_nodes, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let (_, dense_placements) = run(
+            &dense,
+            &mut dense_nodes,
+            Constraints::new(0.0, 300.0, 0.0, 300.0),
+        );
 
         assert_eq!(
             sparse_placements[2].position,
@@ -1253,11 +1406,23 @@ mod tests {
             .rows(vec![GridTrackSpec::fixed(10.0), GridTrackSpec::fixed(10.0)])
             .flow(GridFlow::Column);
         let mut nodes: Vec<LayoutNode> = (0..3).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(size, Size::new(100.0, 20.0));
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
-        assert_eq!(placements[1].position, Offset::new(0.0, 10.0), "the second child goes BELOW the first");
-        assert_eq!(placements[2].position, Offset::new(50.0, 0.0), "the third starts the second column");
+        assert_eq!(
+            placements[1].position,
+            Offset::new(0.0, 10.0),
+            "the second child goes BELOW the first"
+        );
+        assert_eq!(
+            placements[2].position,
+            Offset::new(50.0, 0.0),
+            "the third starts the second column"
+        );
     }
 
     /// RTL mirrors the whole grid on the x axis.
@@ -1269,18 +1434,26 @@ mod tests {
         // children at their own 10 dp width.
         let mut nodes: Vec<LayoutNode> = (0..2)
             .map(|_| {
-                let mut node = LayoutNode::leaf(
-                    Modifier::new()
-                        .size(10.0, 10.0)
-                        .grid_item_aligned(1, 1, ContentAlignment::STRETCH),
-                );
+                let mut node =
+                    LayoutNode::leaf(Modifier::new().size(10.0, 10.0).grid_item_aligned(
+                        1,
+                        1,
+                        ContentAlignment::STRETCH,
+                    ));
                 node.measured_size = Size::new(10.0, 10.0);
                 node
             })
             .collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
         assert_eq!(size.width, 120.0);
-        assert_eq!(placements[0].position.x, 70.0, "the first column is the rightmost");
+        assert_eq!(
+            placements[0].position.x, 70.0,
+            "the first column is the rightmost"
+        );
         assert_eq!(placements[1].position.x, 0.0);
     }
 
@@ -1294,15 +1467,35 @@ mod tests {
                 .grid_item_aligned(1, 1, ContentAlignment::CENTER),
         )];
         nodes[0].measured_size = Size::new(20.0, 10.0);
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].size, Size::new(20.0, 10.0), "a centred child keeps its size");
-        assert_eq!(placements[0].position, Offset::new(40.0, 0.0), "centred in the 100-wide cell");
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].size,
+            Size::new(20.0, 10.0),
+            "a centred child keeps its size"
+        );
+        assert_eq!(
+            placements[0].position,
+            Offset::new(40.0, 0.0),
+            "centred in the 100-wide cell"
+        );
 
         // The default is Compose's TopStart: a child that does not fill its cell keeps its own size and
         // hugs the top-left corner, while an explicit STRETCH fills the cell.
         let mut top_start = vec![make_leaf(20.0, 10.0)];
-        let (_, placements) = run(&policy, &mut top_start, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].size, Size::new(20.0, 10.0), "TopStart keeps the child's size");
+        let (_, placements) = run(
+            &policy,
+            &mut top_start,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].size,
+            Size::new(20.0, 10.0),
+            "TopStart keeps the child's size"
+        );
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
 
         let mut stretched = vec![LayoutNode::leaf(
@@ -1311,20 +1504,33 @@ mod tests {
                 .grid_item_aligned(1, 1, ContentAlignment::STRETCH),
         )];
         stretched[0].measured_size = Size::new(20.0, 10.0);
-        let (_, placements) = run(&policy, &mut stretched, Constraints::new(0.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].size, Size::new(100.0, 10.0), "STRETCH fills the cell width");
+        let (_, placements) = run(
+            &policy,
+            &mut stretched,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].size,
+            Size::new(100.0, 10.0),
+            "STRETCH fills the cell width"
+        );
     }
-
-
 
     /// A span wider than the grid is clamped to it instead of being pushed outside.
     #[test]
     fn a_span_wider_than_the_grid_is_clamped() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
         let mut nodes = vec![spanning_leaf(10.0, 10.0, 5, 1)];
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(size.width, 100.0);
-        assert_eq!(placements[0].size.width, 10.0, "the child keeps its own size (TopStart)");
+        assert_eq!(
+            placements[0].size.width, 10.0,
+            "the child keeps its own size (TopStart)"
+        );
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
     }
 
@@ -1332,12 +1538,21 @@ mod tests {
     /// normalise it, or the tracks would overlap.
     #[test]
     fn a_negative_gap_is_clamped_in_measure() {
-        let mut policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
+        let mut policy =
+            GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::fixed(50.0)]);
         policy.column_gap = -20.0;
         policy.row_gap = -20.0;
         let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(size, Size::new(100.0, 10.0), "the negative gap behaves as 0");
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            size,
+            Size::new(100.0, 10.0),
+            "the negative gap behaves as 0"
+        );
         assert_eq!(placements[1].position.x, 50.0);
     }
 
@@ -1349,7 +1564,11 @@ mod tests {
             .rows(vec![GridTrackSpec::fixed(20.0), GridTrackSpec::fixed(20.0)])
             .flow(GridFlow::Column);
         let mut nodes: Vec<LayoutNode> = (0..6).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 300.0));
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 300.0),
+        );
         let mut cells: Vec<(i32, i32)> = placements
             .iter()
             .map(|p| (p.position.x as i32, p.position.y as i32))
@@ -1357,7 +1576,11 @@ mod tests {
         cells.sort_unstable();
         let unique = cells.len();
         cells.dedup();
-        assert_eq!(cells.len(), unique, "every child sits in its own cell: {cells:?}");
+        assert_eq!(
+            cells.len(),
+            unique,
+            "every child sits in its own cell: {cells:?}"
+        );
         assert!(
             placements.iter().any(|p| p.position.y >= 40.0),
             "the extra children wrap into implicit rows: {placements:?}"
@@ -1372,9 +1595,17 @@ mod tests {
     fn a_grid_without_columns_places_every_child() {
         let policy = GridLayout::new(Vec::new());
         let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(size, Size::ZERO);
-        assert_eq!(placements.len(), 2, "one placement per child, so place() cannot index out of bounds");
+        assert_eq!(
+            placements.len(),
+            2,
+            "one placement per child, so place() cannot index out of bounds"
+        );
         assert!(placements.iter().all(|p| p.size == Size::ZERO));
         assert_eq!(nodes[0].measured_size, Size::ZERO);
     }
@@ -1394,8 +1625,16 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
-        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "the tall span starts at the top");
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            placements[0].position,
+            Offset::new(0.0, 0.0),
+            "the tall span starts at the top"
+        );
         assert_eq!(
             placements[1].position,
             Offset::new(0.0, 160.0),
@@ -1407,11 +1646,19 @@ mod tests {
     /// size from what the fixed tracks and the gaps leave over.
     #[test]
     fn a_negative_gap_does_not_inflate_the_weighted_track() {
-        let mut policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::weight(1.0)]);
+        let mut policy =
+            GridLayout::new(vec![GridTrackSpec::fixed(50.0), GridTrackSpec::weight(1.0)]);
         policy.column_gap = -20.0;
         let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, _) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(size.width, 400.0, "a clamped gap leaves the weights exactly what the axis has left");
+        let (size, _) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            size.width, 400.0,
+            "a clamped gap leaves the weights exactly what the axis has left"
+        );
     }
 
     /// A grid without children still occupies its DECLARED tracks: three 80 dp columns are 240 wide
@@ -1421,7 +1668,11 @@ mod tests {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(80.0); 3])
             .rows(vec![GridTrackSpec::fixed(20.0), GridTrackSpec::fixed(20.0)]);
         let mut nodes: Vec<LayoutNode> = Vec::new();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
         assert_eq!(size, Size::new(240.0, 40.0));
         assert!(placements.is_empty());
     }
@@ -1442,18 +1693,19 @@ mod tests {
     /// needs does not fit what they already add up to (`Grid.kt:2178-2262`).
     #[test]
     fn a_spanning_item_grows_the_intrinsic_tracks_it_covers() {
-        let policy = GridLayout::new(vec![
-            GridTrackSpec::FitContent,
-            GridTrackSpec::FitContent,
-        ])
-        .column_gap(10.0);
+        let policy = GridLayout::new(vec![GridTrackSpec::FitContent, GridTrackSpec::FitContent])
+            .column_gap(10.0);
         let mut nodes = vec![
             make_leaf(40.0, 10.0),
             make_leaf(40.0, 10.0),
             LayoutNode::leaf(Modifier::new().size(200.0, 10.0).grid_item(2, 1)),
         ];
         nodes[2].measured_size = Size::new(200.0, 10.0);
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
         // The tracks start at 40 each; the span needs 200 against the 90 it has (40 + 10 + 40), so the
         // 110 deficit splits evenly and both end at 95.
         assert_eq!(size.width, 200.0, "95 + 10 + 95");
@@ -1484,7 +1736,10 @@ mod tests {
             policies: &[],
             policy_idx: 0,
         };
-        assert_eq!(policy.min_intrinsic_width(&mut ctx, &children, f32::MAX), 110.0);
+        assert_eq!(
+            policy.min_intrinsic_width(&mut ctx, &children, f32::MAX),
+            110.0
+        );
     }
 
     #[test]
@@ -1496,8 +1751,16 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
-        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "the area starts at its first row and column");
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            placements[0].position,
+            Offset::new(0.0, 0.0),
+            "the area starts at its first row and column"
+        );
         assert_eq!(
             placements[1].position,
             Offset::new(0.0, 10.0),
@@ -1513,21 +1776,36 @@ mod tests {
             Modifier::new().size(10.0, 10.0).grid_item_in_area(99),
         )];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
         assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
     }
 
     #[test]
     fn a_fit_content_column_sizes_to_its_items() {
-        let policy = GridLayout::new(vec![
-            GridTrackSpec::FitContent,
-            GridTrackSpec::fixed(40.0),
-        ]);
-        let mut nodes = vec![make_leaf(70.0, 10.0), make_leaf(10.0, 10.0), make_leaf(30.0, 10.0)];
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let policy = GridLayout::new(vec![GridTrackSpec::FitContent, GridTrackSpec::fixed(40.0)]);
+        let mut nodes = vec![
+            make_leaf(70.0, 10.0),
+            make_leaf(10.0, 10.0),
+            make_leaf(30.0, 10.0),
+        ];
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 400.0, 0.0, 400.0),
+        );
         assert_eq!(size.width, 110.0, "70 from the widest item + 40 fixed");
-        assert_eq!(placements[1].position.x, 70.0, "the fixed track starts after the intrinsic one");
-        assert_eq!(placements[2].position.x, 0.0, "the third child wraps to the next row");
+        assert_eq!(
+            placements[1].position.x, 70.0,
+            "the fixed track starts after the intrinsic one"
+        );
+        assert_eq!(
+            placements[2].position.x, 0.0,
+            "the third child wraps to the next row"
+        );
     }
 
     /// On an UNBOUNDED axis a percentage track falls back to its items' max intrinsic width and a
@@ -1541,7 +1819,10 @@ mod tests {
         ]);
         let mut nodes = vec![make_leaf(60.0, 10.0), make_leaf(80.0, 10.0)];
         let (size, placements) = run(&policy, &mut nodes, Constraints::UNBOUNDED);
-        assert_eq!(size.width, 140.0, "60 max-intrinsic for the percentage track, 80 min-content for the weight");
+        assert_eq!(
+            size.width, 140.0,
+            "60 max-intrinsic for the percentage track, 80 min-content for the weight"
+        );
         assert_eq!(placements[1].position.x, 60.0);
     }
 
@@ -1555,9 +1836,17 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 40.0);
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
         assert_eq!(size.height, 40.0, "20 + 20, not 10 + 40");
-        assert_eq!(placements[1].position, Offset::new(50.0, 0.0), "the sibling sits in the first row");
+        assert_eq!(
+            placements[1].position,
+            Offset::new(50.0, 0.0),
+            "the sibling sits in the first row"
+        );
     }
 
     #[test]
@@ -1568,7 +1857,11 @@ mod tests {
         ])
         .column_gap(10.0);
         let mut nodes: Vec<LayoutNode> = (0..2).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
         assert_eq!(size.width, 100.0, "45 + 10 + 45, not 50 + 10 + 50");
         assert_eq!(placements[1].position.x, 55.0);
     }
@@ -1584,7 +1877,11 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (_, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        let (_, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
         assert_eq!(
             placements[1].position.x, 0.0,
             "the second child stays in the same column, below the five rows the first one covers: {:?}",
@@ -1598,8 +1895,15 @@ mod tests {
     fn an_overflowing_grid_is_clamped_to_the_axis() {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(80.0); 3]).column_gap(8.0);
         let mut nodes: Vec<LayoutNode> = (0..3).map(|_| make_leaf(10.0, 10.0)).collect();
-        let (size, _) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
-        assert_eq!(size.width, 200.0, "3 x 80 + 2 x 8 = 256, reported as the 200 the parent allows");
+        let (size, _) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
+        assert_eq!(
+            size.width, 200.0,
+            "3 x 80 + 2 x 8 = 256, reported as the 200 the parent allows"
+        );
     }
 
     /// In a column flow a row span is clamped to the declared rows, so a child never spills into an
@@ -1614,8 +1918,15 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
-        assert_eq!(size.height, 40.0, "two declared rows of 20, no implicit third");
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
+        assert_eq!(
+            size.height, 40.0,
+            "two declared rows of 20, no implicit third"
+        );
         assert_eq!(
             placements[1].position,
             Offset::new(50.0, 0.0),
@@ -1633,7 +1944,11 @@ mod tests {
             make_leaf(10.0, 10.0),
         ];
         nodes[0].measured_size = Size::new(10.0, 10.0);
-        let (size, placements) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 400.0));
+        let (size, placements) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 400.0),
+        );
         assert_eq!(placements.len(), 2);
         assert!(size.height.is_finite(), "no runaway span: {size:?}");
     }
@@ -1643,7 +1958,14 @@ mod tests {
         let policy = GridLayout::new(vec![GridTrackSpec::fixed(50.0)])
             .rows(vec![GridTrackSpec::fixed(20.0), GridTrackSpec::fixed(30.0)]);
         let mut nodes = vec![make_leaf(10.0, 10.0)];
-        let (size, _) = run(&policy, &mut nodes, Constraints::new(0.0, 200.0, 0.0, 200.0));
-        assert_eq!(size.height, 50.0, "20 + 30 even though only the first row holds a child");
+        let (size, _) = run(
+            &policy,
+            &mut nodes,
+            Constraints::new(0.0, 200.0, 0.0, 200.0),
+        );
+        assert_eq!(
+            size.height, 50.0,
+            "20 + 30 even though only the first row holds a child"
+        );
     }
 }

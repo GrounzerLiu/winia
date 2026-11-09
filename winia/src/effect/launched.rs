@@ -25,7 +25,9 @@ pub struct LaunchedEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     /// The coroutine scope bound to the composition's lifetime; every unfinished task is
     /// cancelled when the effect is disposed.
-    pub fn new(key: T) -> Self { Self { key } }
+    pub fn new(key: T) -> Self {
+        Self { key }
+    }
 
     /// `#[composable]`: its internal remember/attach_cleanup takes a stable base from the
     /// `build` call site.
@@ -45,8 +47,12 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
 
         // `remember_handle`, not `remember`: nothing ever writes this slot, so the `State` wrapper
         // would be a `StateInner` + `StateSignal` per effect instance with no possible reader.
-        let state: Arc<Mutex<LaunchedEffectState<T>>> =
-            ctx.remember_handle(|| Arc::new(Mutex::new(LaunchedEffectState { prev_key: None, task: None })));
+        let state: Arc<Mutex<LaunchedEffectState<T>>> = ctx.remember_handle(|| {
+            Arc::new(Mutex::new(LaunchedEffectState {
+                prev_key: None,
+                task: None,
+            }))
+        });
 
         let state_clone = Arc::clone(&state);
         let key_changed = {
@@ -101,4 +107,3 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
         }
     }
 }
-

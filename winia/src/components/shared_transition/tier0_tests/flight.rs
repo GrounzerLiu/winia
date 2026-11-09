@@ -12,7 +12,10 @@ fn anim_trace_records_a_headless_flight() {
     show.set(false);
     // The switch frame itself opens the flight; the loop below then runs it out.
     frame(&mut composer, &show);
-    assert!(!composer.shared_flights.is_empty(), "the switch opens a flight");
+    assert!(
+        !composer.shared_flights.is_empty(),
+        "the switch opens a flight"
+    );
     for _ in 0..200 {
         if composer.shared_flights.is_empty() {
             break;
@@ -37,7 +40,8 @@ fn anim_trace_records_a_headless_flight() {
         source.len(),
         target.len()
     );
-    let painted_w = |r: &crate::debug::animation::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
+    let painted_w =
+        |r: &crate::debug::animation::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
     // Both ends draw the SAME lerped rect, which starts at the source's size (this scene's list
     // hero is 120x80) and finishes at the target's (the detail hero is 300x160).
     assert!(
@@ -79,20 +83,31 @@ fn tier0_flight_completes_end_to_end() {
     let show = State::new(true);
 
     frame(&mut composer, &show);
-    assert!(composer.shared_flights.is_empty(), "no flight before any switch");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "no flight before any switch"
+    );
     assert!(composer.transition_layer.is_empty());
 
     // Switch list → detail.
     show.set(false);
     frame(&mut composer, &show);
-    assert_eq!(composer.shared_flights.len(), 1, "switch opens exactly one flight");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "switch opens exactly one flight"
+    );
     let fid = *composer.shared_flights.keys().next().unwrap();
     assert_eq!(
         composer.shared_flights[&fid].flight.phase,
         FlightPhase::Flying,
         "target resolved in the same post-layout poll"
     );
-    assert_eq!(composer.transition_layer.len(), 1, "source retained + detached");
+    assert_eq!(
+        composer.transition_layer.len(),
+        1,
+        "source retained + detached"
+    );
     // Exactly one live marked node (the target); it carries Target visuals.
     let marked = marked_indices(&composer);
     assert_eq!(marked.len(), 1, "one live endpoint (target)");
@@ -117,7 +132,12 @@ fn tier0_flight_completes_end_to_end() {
         if composer.shared_flights.is_empty() {
             break;
         }
-        let p = composer.shared_flights.values().next().map(|a| a.progress_value()).unwrap_or(1.0);
+        let p = composer
+            .shared_flights
+            .values()
+            .next()
+            .map(|a| a.progress_value())
+            .unwrap_or(1.0);
         if p > 0.2 && p < 0.95 {
             mid_seen = true;
             break;
@@ -128,7 +148,10 @@ fn tier0_flight_completes_end_to_end() {
     // Mid-flight paint moved/faded at the start center.
     let mut surf_mid = render_heads(&composer);
     let c = pixel_rgb(&mut surf_mid, sx, sy);
-    assert!(!close_enough(c, (255, 0, 0), 30), "mid-flight paint moved/faded, got {c:?}");
+    assert!(
+        !close_enough(c, (255, 0, 0), 30),
+        "mid-flight paint moved/faded, got {c:?}"
+    );
 
     // Run to completion.
     for _ in 0..200 {
@@ -138,7 +161,10 @@ fn tier0_flight_completes_end_to_end() {
         advance(&mut composer, &show);
     }
     assert!(composer.shared_flights.is_empty(), "flight completes");
-    assert!(composer.transition_layer.is_empty(), "retained source freed");
+    assert!(
+        composer.transition_layer.is_empty(),
+        "retained source freed"
+    );
     for idx in marked_indices(&composer) {
         assert!(
             composer.arena_nodes()[idx].transition.is_none(),
@@ -175,10 +201,12 @@ fn marker_flag_refreshes_only_when_read_in_the_marker_slot() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    let inner = f.get();
-                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, inner);
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        let inner = f.get();
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, inner);
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -202,9 +230,11 @@ fn marker_flag_refreshes_only_when_read_in_the_marker_slot() {
             let outer = f.get();
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, outer);
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, outer);
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -230,23 +260,26 @@ fn marker_flag_refreshes_only_when_read_in_the_marker_slot() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        gap_leaf(ctx, 10.0, 60.0);
-                        flag_hero(ctx, &f, &scope, 60.0, 60.0, Color::RED);
-                    } else {
-                        Row::new()
-                            .modifier(Modifier::new().fill_max_width())
-                            .build(ctx, |ctx| {
-                                gap_leaf(ctx, 40.0, 10.0);
-                                Column::new()
-                                    .modifier(Modifier::new().clip(Shape::Rectangle))
-                                    .build(ctx, |ctx| {
-                                        flag_hero(ctx, &f, &scope, 120.0, 80.0, Color::BLUE);
-                                    });
-                            });
-                    }
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        if s.get() {
+                            gap_leaf(ctx, 10.0, 60.0);
+                            flag_hero(ctx, &f, &scope, 60.0, 60.0, Color::RED);
+                        } else {
+                            Row::new().modifier(Modifier::new().fill_max_width()).build(
+                                ctx,
+                                |ctx| {
+                                    gap_leaf(ctx, 40.0, 10.0);
+                                    Column::new()
+                                        .modifier(Modifier::new().clip(Shape::Rectangle))
+                                        .build(ctx, |ctx| {
+                                            flag_hero(ctx, &f, &scope, 120.0, 80.0, Color::BLUE);
+                                        });
+                                },
+                            );
+                        }
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -304,7 +337,10 @@ fn writer_never_clobbers_another_flights_override() {
     let foreign_state = State::new(FlightMeasureFrame::IDLE);
     let foreign = FlightMeasure {
         frame: foreign_state.clone(),
-        owner: FlightKey { cid: composer.composer_id + 1000, id: 1 },
+        owner: FlightKey {
+            cid: composer.composer_id + 1000,
+            id: 1,
+        },
     };
     composer.arena.nodes[marked].flight_measure = Some(foreign);
     // Run frames of the real flight that targets this node. The default
@@ -321,7 +357,13 @@ fn writer_never_clobbers_another_flights_override() {
     // …and the CLEAR side must be just as namespaced: tearing down THIS
     // composer's flights must not drop a different flight's override.
     let key = composer.arena_nodes()[marked].slot_key;
-    composer.clear_transition_for_slot(key, FlightKey { cid: composer.composer_id, id: 1 });
+    composer.clear_transition_for_slot(
+        key,
+        FlightKey {
+            cid: composer.composer_id,
+            id: 1,
+        },
+    );
     assert!(
         composer.arena_nodes()[marked]
             .flight_measure
@@ -344,9 +386,19 @@ fn tier0_writer_skips_a_node_that_is_not_the_shared_endpoint() {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
                 if s.get() {
-                    list_layout_screen(ctx, &scope, ResizeMode::scale_to_bounds(), PlaceHolderSize::JumpCut);
+                    list_layout_screen(
+                        ctx,
+                        &scope,
+                        ResizeMode::scale_to_bounds(),
+                        PlaceHolderSize::JumpCut,
+                    );
                 } else {
-                    detail_layout_screen(ctx, &scope, ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize);
+                    detail_layout_screen(
+                        ctx,
+                        &scope,
+                        ResizeMode::RemeasureToBounds,
+                        PlaceHolderSize::AnimatedSize,
+                    );
                 }
             });
         });
@@ -405,7 +457,11 @@ fn switch_frame_layout_uses_the_animated_size() {
     frame(&mut composer);
     show.set(false);
     frame(&mut composer);
-    assert_eq!(composer.shared_flights.len(), 1, "the switch opened a flight");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "the switch opened a flight"
+    );
 
     // The frame that just ran is the SWITCH frame: the probe must sit right under the
     // animated (source) hero, not under the detail hero's natural height.
@@ -472,10 +528,22 @@ fn tier0_bouncy_spring_overshoot_renders_then_settles() {
         }
         spring_advance(&mut composer, &show, PathMotion::Linear);
     }
-    assert!(max_p > 1.0, "bouncy spring overshoots past 1.0 while alive, got {max_p}");
-    assert!(overshoot_painted, "overshoot frames must render before settle");
-    assert!(composer.shared_flights.is_empty(), "flight settles after overshoot");
-    assert!(composer.transition_layer.is_empty(), "retained source freed");
+    assert!(
+        max_p > 1.0,
+        "bouncy spring overshoots past 1.0 while alive, got {max_p}"
+    );
+    assert!(
+        overshoot_painted,
+        "overshoot frames must render before settle"
+    );
+    assert!(
+        composer.shared_flights.is_empty(),
+        "flight settles after overshoot"
+    );
+    assert!(
+        composer.transition_layer.is_empty(),
+        "retained source freed"
+    );
     // Settle lands exactly on the detail hero.
     let marked = marked_indices(&composer);
     assert_eq!(marked.len(), 1);
@@ -506,8 +574,16 @@ fn tier0_retarget_restarts_from_visual() {
     // flight opens, exactly one node retained (no leak, no double).
     show.set(true);
     frame(&mut composer, &show);
-    assert_eq!(composer.shared_flights.len(), 1, "retarget replaces, never duplicates");
-    assert_eq!(composer.transition_layer.len(), 1, "old retained freed, new retained");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "retarget replaces, never duplicates"
+    );
+    assert_eq!(
+        composer.transition_layer.len(),
+        1,
+        "old retained freed, new retained"
+    );
 
     for _ in 0..200 {
         if composer.shared_flights.is_empty() {
@@ -515,7 +591,10 @@ fn tier0_retarget_restarts_from_visual() {
         }
         advance(&mut composer, &show);
     }
-    assert!(composer.shared_flights.is_empty(), "retargeted flight completes");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "retargeted flight completes"
+    );
     assert!(composer.transition_layer.is_empty());
     // Back on the list: RED hero at its natural spot.
     let marked = marked_indices(&composer);
@@ -559,7 +638,11 @@ fn tier0_shared_bounds_enter_exit_slide_with_flight() {
             let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             let l = a.start.lerp(&e, p);
-            ((l.x + l.width / 2.0) as i32, (l.y + l.height / 2.0) as i32, p)
+            (
+                (l.x + l.width / 2.0) as i32,
+                (l.y + l.height / 2.0) as i32,
+                p,
+            )
         });
         if let Some((cx, cy, p)) = probe {
             if p > 0.45 && p < 0.55 {
@@ -598,7 +681,10 @@ fn tier0_shared_bounds_enter_exit_slide_with_flight() {
         }
         bounds_advance(&mut composer, &show);
     }
-    assert!(composer.shared_flights.is_empty(), "bounds flight completes");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "bounds flight completes"
+    );
     let marked = marked_indices(&composer);
     assert_eq!(marked.len(), 1);
     let (ex, ey) = node_center(&composer, marked[0]);
@@ -667,7 +753,10 @@ fn tier0_shared_bounds_expand_wipes_from_edge() {
         }
         expand_advance(&mut composer, &show);
     }
-    assert!(composer.shared_flights.is_empty(), "expand flight completes");
+    assert!(
+        composer.shared_flights.is_empty(),
+        "expand flight completes"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -691,8 +780,15 @@ fn tier0_double_retarget_settles() {
     }
     show.set(false);
     frame(&mut composer, &show);
-    assert_eq!(composer.shared_flights.len(), 1, "exactly one flight after double retarget");
-    assert!(composer.transition_layer.len() <= 1, "never more than one retained node");
+    assert_eq!(
+        composer.shared_flights.len(),
+        1,
+        "exactly one flight after double retarget"
+    );
+    assert!(
+        composer.transition_layer.len() <= 1,
+        "never more than one retained node"
+    );
 
     for _ in 0..300 {
         if composer.shared_flights.is_empty() {
@@ -726,13 +822,15 @@ fn switch_frame_opens_one_flight_per_marked_key_and_absorbs_later_rect_changes()
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("inside SharedTransitionLayout");
-                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        mixed_list_screen(ctx, &scope, &ww);
-                    } else {
-                        mixed_detail_screen(ctx, &scope, &ww);
-                    }
-                });
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        if s.get() {
+                            mixed_list_screen(ctx, &scope, &ww);
+                        } else {
+                            mixed_detail_screen(ctx, &scope, &ww);
+                        }
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -804,7 +902,10 @@ fn switch_frame_opens_one_flight_per_marked_key_and_absorbs_later_rect_changes()
     assert!(composer.shared_flights.is_empty(), "both complete");
     assert!(composer.transition_layer.is_empty(), "nothing retained");
     for idx in marked_indices(&composer) {
-        assert!(composer.arena_nodes()[idx].transition.is_none(), "all visuals cleared");
+        assert!(
+            composer.arena_nodes()[idx].transition.is_none(),
+            "all visuals cleared"
+        );
     }
     crate::animation::clear_all_animations();
 }

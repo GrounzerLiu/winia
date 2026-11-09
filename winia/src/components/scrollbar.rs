@@ -26,12 +26,12 @@
 //! child of a `Row` follows the direction), and a lazy list needs the `LazyScrollbar` wrappers below.
 
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
 use crate::graphics::Color;
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::theme::WiniaTheme;
 
 /// Default thickness (M3 `Thickness = 4dp`; desktop CMP often uses 8 dp with padding - winia uses 6).
@@ -72,17 +72,29 @@ pub struct ScrollbarDefaults;
 
 impl ScrollbarDefaults {
     /// The bar's cross-axis width at rest (CMP `thickness`, 6 dp).
-    pub fn thickness() -> f32 { SCROLLBAR_THICKNESS }
+    pub fn thickness() -> f32 {
+        SCROLLBAR_THICKNESS
+    }
     /// The shortest thumb (M3 `minimumThumbLength`, 24 dp).
-    pub fn thumb_min_length() -> f32 { SCROLLBAR_THUMB_MIN_LENGTH }
+    pub fn thumb_min_length() -> f32 {
+        SCROLLBAR_THUMB_MIN_LENGTH
+    }
     /// The thumb's cross-axis size while hovered or dragged (10 dp; winia grows the bar, CMP does not).
-    pub fn hover_thickness() -> f32 { SCROLLBAR_HOVER_THICKNESS }
+    pub fn hover_thickness() -> f32 {
+        SCROLLBAR_HOVER_THICKNESS
+    }
     /// The thumb colour (theme outline at 70%).
-    pub fn thumb_color(theme: &crate::theme::ThemeColors) -> Color { scrollbar_thumb_color(theme) }
+    pub fn thumb_color(theme: &crate::theme::ThemeColors) -> Color {
+        scrollbar_thumb_color(theme)
+    }
     /// The thumb colour while hovered or dragged (theme outline at full alpha).
-    pub fn hover_color(theme: &crate::theme::ThemeColors) -> Color { scrollbar_thumb_hover_color(theme) }
+    pub fn hover_color(theme: &crate::theme::ThemeColors) -> Color {
+        scrollbar_thumb_hover_color(theme)
+    }
     /// The track colour (transparent: the content behind it shows through).
-    pub fn track_color() -> Color { Color::TRANSPARENT }
+    pub fn track_color() -> Color {
+        Color::TRANSPARENT
+    }
 }
 
 /// Pure geometry: given viewport/content/scroll, compute (thumb_offset, thumb_len, visible).
@@ -95,8 +107,8 @@ pub(crate) fn scrollbar_geometry(
     thumb_max_fraction: f32,
     inset: f32,
 ) -> Option<(f32, f32)> {
-        // Non-finite input is rejected outright (the offset is a public `State`, so a caller can set
-        // NaN; NaN inside clamp or a Skia rect is undefined behaviour) - draw nothing.
+    // Non-finite input is rejected outright (the offset is a public `State`, so a caller can set
+    // NaN; NaN inside clamp or a Skia rect is undefined behaviour) - draw nothing.
     if !viewport.is_finite() || !content.is_finite() || !scroll.is_finite() {
         return None;
     }
@@ -108,8 +120,8 @@ pub(crate) fn scrollbar_geometry(
         return None;
     }
     let max_thumb = track * thumb_max_fraction;
-        // P0-1: when max_thumb < thumb_min the clamp(min > max) panics outright (guaranteed on a small
-        // track or a large thumb_min) - a track that cannot hold the minimum thumb draws nothing.
+    // P0-1: when max_thumb < thumb_min the clamp(min > max) panics outright (guaranteed on a small
+    // track or a large thumb_min) - a track that cannot hold the minimum thumb draws nothing.
     if max_thumb < thumb_min {
         return None;
     }
@@ -155,31 +167,31 @@ pub(crate) struct ScrollbarNode {
     /// The live cross-axis size (animated between `thickness` and the hover thickness).
     pub(crate) thickness_now: f32,
     pub(crate) inset: f32,
-        /// Render-time geometry (computed during build from the constraints and the States; draw only paints).
+    /// Render-time geometry (computed during build from the constraints and the States; draw only paints).
     pub(crate) thumb_offset: f32,
     pub(crate) thumb_len: f32,
-        /// The geometry is valid (content > viewport and the track can hold the thumb). Fade is gated separately.
+    /// The geometry is valid (content > viewport and the track can hold the thumb). Fade is gated separately.
     pub(crate) has_thumb: bool,
-        /// The fade alpha State (peeked during draw; not part of the key).
+    /// The fade alpha State (peeked during draw; not part of the key).
     pub(crate) fade: State<f32>,
 }
 
 impl crate::modifier::DrawNode for ScrollbarNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
-                // The fade State is peeked during draw (no recomposition - the animation engine requests a
-                // redraw per frame; snapshotting it to an f32 during build registers no dependency, so the
-                // fade would never recompose; measured).
+        // The fade State is peeked during draw (no recomposition - the animation engine requests a
+        // redraw per frame; snapshotting it to an f32 during build registers no dependency, so the
+        // fade would never recompose; measured).
         let fade = self.fade.peek();
         if !self.has_thumb || fade <= 0.01 {
             return;
         }
-                // Fade alpha multiply (M3 fade semantics).
+        // Fade alpha multiply (M3 fade semantics).
         let mul = fade.clamp(0.0, 1.0);
         let thumb_a = ((self.thumb_color.a as f32) * mul) as u8;
         let track_a = ((self.track_color.a as f32) * mul) as u8;
         let mut paint = skia_safe::Paint::default();
         paint.set_anti_alias(true);
-                // Track (full length, skipped while transparent).
+        // Track (full length, skipped while transparent).
         if track_a != 0 {
             paint.set_color(skia_safe::Color::from_argb(
                 track_a,
@@ -209,7 +221,7 @@ impl crate::modifier::DrawNode for ScrollbarNode {
                 );
             }
         }
-                // Thumb (rounded, radius = thickness/2).
+        // Thumb (rounded, radius = thickness/2).
         paint.set_color(skia_safe::Color::from_argb(
             thumb_a,
             self.thumb_color.r,
@@ -241,9 +253,9 @@ impl crate::modifier::DrawNode for ScrollbarNode {
         }
     }
     fn node_key(&self) -> String {
-                // The fade State is NOT part of the key (a per-frame animation value peeked during draw;
-                // in the key it would re-enter every frame. The write-back channel mirrors Slider's
-                // `focus_alpha`, and the engine's request_redraw drives the drawing).
+        // The fade State is NOT part of the key (a per-frame animation value peeked during draw;
+        // in the key it would re-enter every frame. The write-back channel mirrors Slider's
+        // `focus_alpha`, and the engine's request_redraw drives the drawing).
         format!(
             "scrollbar:{}:{:?}:{:?}:{}:{}:{}:{}:{}",
             self.vertical,
@@ -350,17 +362,17 @@ fn scrollbar_build_shared(
     let scroll_raw = scroll_state_src.offset.get();
     let limit = scroll_state_src.fling_limit.get();
     let scrolling = scroll_state_src.is_scroll_in_progress.get();
-        // The three quantities: the offset (read, registers a dependency) and fling_limit (read,
-        // registers a dependency); the viewport comes from its own constraint (with fill_max_height it
-        // is the parent's height, which is why the bar must sit level with the scroll container).
-        // It MUST be a build-time `get` (registers a composition dependency); a draw-time peek does not.
+    // The three quantities: the offset (read, registers a dependency) and fling_limit (read,
+    // registers a dependency); the viewport comes from its own constraint (with fill_max_height it
+    // is the parent's height, which is why the bar must sit level with the scroll container).
+    // It MUST be a build-time `get` (registers a composition dependency); a draw-time peek does not.
     let scroll = match scroll_reverse {
         Some(true) => (limit - scroll_raw).clamp(0.0, limit.max(0.0)),
         _ => scroll_raw,
     };
-        // P2-3: with reverse the offset semantics are mirrored - the scrollbar works in visual
-        // coordinates (visual 0 = the content's end = the bar at the start; visual = max - scroll).
-        // Vertical has no reverse notion, so None uses the raw offset.
+    // P2-3: with reverse the offset semantics are mirrored - the scrollbar works in visual
+    // coordinates (visual 0 = the content's end = the bar at the start; visual = max - scroll).
+    // Vertical has no reverse notion, so None uses the raw offset.
     let hover_src: MutableInteractionSource =
         ctx.remember(|| MutableInteractionSource::new()).get();
     let hovered = hover_src.is_hovered();
@@ -391,8 +403,8 @@ fn scrollbar_build_shared(
             )),
         )
         .get();
-        // Visible while hovered or dragged too (a hidden bar cannot be grabbed) - the interaction source
-        // is remembered and held.
+    // Visible while hovered or dragged too (a hidden bar cannot be grabbed) - the interaction source
+    // is remembered and held.
     let last_scroll = ctx.remember_backchannel(|| scroll);
     let scroll_active = last_scroll.peek() != scroll;
     if scroll_active {
@@ -403,32 +415,31 @@ fn scrollbar_build_shared(
     if pulse_active {
         last_pulse.set(scroll_state_src.scroll_pulse.get());
     }
-    let fade_target = if cfg.always_show || scrolling || hovered || dragged
-        || scroll_active || pulse_active
-    {
-        1.0f32
-    } else {
-        0.0f32
-    };
-        // Fade: the target alpha (always_show / scrolling / hover / dragging / scroll pulse -> 1, else
-        // 0) driven by a 250 ms tween (M3 ThumbFadeDurationMillis; the 400 ms delay lives in the
-        // LaunchedEffect). Peeked at draw time (no recomposition) - fade_state stays out of node_key.
-        //
-        // WARNING: for a wheel or programmatic scroll `scrolling` is always false (dispatch cancels and
-        // sets false; only a drag sets it true), so scrolling is detected from the offset and pulse
-        // CHANGES instead: `last_scroll` remembers the previous frame's offset, and a different value
-        // means a scroll is running (written through a Backchannel, so no recomposition - this frame's
-        // build carries on); `scroll_pulse` is bumped by dispatch when a wheel event HIT but consumed
-        // nothing (still scrolling at the top or bottom, offset unchanged, P1-3). Either change lights
-        // the fade, which is the feedback for "the end was reached" (same as M3/CMP).
-        // WARNING: a bool latch does not work (true once scrolled, never cleared -> always visible).
-        // WARNING: the key MUST contain `scroll`: a bool condition merges consecutive scrolls - the
-        // 250 ms tween reaches 1, the key then stops changing while the scroll continues, and the
-        // following 400 ms sleep fades the bar out. `scroll` changes every frame -> the effect restarts
-        // every frame -> the sleep is aborted -> the bar stays.
-        // (pulse fires once at a boundary and is NOT in the key - a single pulse in the key would
-        // restart the effect twice on the same frame as `scroll`; its `get` already registers the
-        // dependency that drives the lit frame.)
+    let fade_target =
+        if cfg.always_show || scrolling || hovered || dragged || scroll_active || pulse_active {
+            1.0f32
+        } else {
+            0.0f32
+        };
+    // Fade: the target alpha (always_show / scrolling / hover / dragging / scroll pulse -> 1, else
+    // 0) driven by a 250 ms tween (M3 ThumbFadeDurationMillis; the 400 ms delay lives in the
+    // LaunchedEffect). Peeked at draw time (no recomposition) - fade_state stays out of node_key.
+    //
+    // WARNING: for a wheel or programmatic scroll `scrolling` is always false (dispatch cancels and
+    // sets false; only a drag sets it true), so scrolling is detected from the offset and pulse
+    // CHANGES instead: `last_scroll` remembers the previous frame's offset, and a different value
+    // means a scroll is running (written through a Backchannel, so no recomposition - this frame's
+    // build carries on); `scroll_pulse` is bumped by dispatch when a wheel event HIT but consumed
+    // nothing (still scrolling at the top or bottom, offset unchanged, P1-3). Either change lights
+    // the fade, which is the feedback for "the end was reached" (same as M3/CMP).
+    // WARNING: a bool latch does not work (true once scrolled, never cleared -> always visible).
+    // WARNING: the key MUST contain `scroll`: a bool condition merges consecutive scrolls - the
+    // 250 ms tween reaches 1, the key then stops changing while the scroll continues, and the
+    // following 400 ms sleep fades the bar out. `scroll` changes every frame -> the effect restarts
+    // every frame -> the sleep is aborted -> the bar stays.
+    // (pulse fires once at a boundary and is NOT in the key - a single pulse in the key would
+    // restart the effect twice on the same frame as `scroll`; its `get` already registers the
+    // dependency that drives the lit frame.)
     let fade_state: State<f32> = ctx.remember(|| fade_target);
     let keep_visible = cfg.always_show || scrolling || hovered || dragged;
     crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
@@ -439,20 +450,20 @@ fn scrollbar_build_shared(
                 let fade_state = fade_state.clone();
                 async move {
                     if fade_target > 0.5 {
-                            // Leaving the interaction (hover out and the scroll stops) fades out after 400 ms (M3
-                            // ThumbFadeDelayMillis): one LaunchedEffect owns "show -> wait -> hide". The key holds every
-                            // input, so any change aborts the sleep and restarts it (a continuous scroll restarts every
-                            // frame -> stays visible; once it stops there is no recomposition and no restart, so the task
-                            // from the last scrolling frame sleeps the full 400 ms -> hides, exactly 400 ms after the stop).
-                            // On waking it looks only at the static hold conditions (always_show / scrolling / hover /
-                            // drag):
-                            // - any true -> stay (a resting hover must not hide, since nothing would recompose it back);
-                            // - none -> tween to 0 and hide.
-                            // WARNING: the static snapshot inside the task is the latest one - an unaborted sleep proves
-                            // none of the key inputs changed (except the scroll pulse, which only survives together with a
-                            // new `scroll` that would have aborted this task, so on waking it has always decayed).
-                            // WARNING: a "has scrolled" latch does not work (never cleared -> always visible): the pulse
-                            // plus the snapshot is the whole semantics.
+                        // Leaving the interaction (hover out and the scroll stops) fades out after 400 ms (M3
+                        // ThumbFadeDelayMillis): one LaunchedEffect owns "show -> wait -> hide". The key holds every
+                        // input, so any change aborts the sleep and restarts it (a continuous scroll restarts every
+                        // frame -> stays visible; once it stops there is no recomposition and no restart, so the task
+                        // from the last scrolling frame sleeps the full 400 ms -> hides, exactly 400 ms after the stop).
+                        // On waking it looks only at the static hold conditions (always_show / scrolling / hover /
+                        // drag):
+                        // - any true -> stay (a resting hover must not hide, since nothing would recompose it back);
+                        // - none -> tween to 0 and hide.
+                        // WARNING: the static snapshot inside the task is the latest one - an unaborted sleep proves
+                        // none of the key inputs changed (except the scroll pulse, which only survives together with a
+                        // new `scroll` that would have aborted this task, so on waking it has always decayed).
+                        // WARNING: a "has scrolled" latch does not work (never cleared -> always visible): the pulse
+                        // plus the snapshot is the whole semantics.
                         crate::animation::push_animatable(
                             fade_state.clone(),
                             1.0,
@@ -464,7 +475,7 @@ fn scrollbar_build_shared(
                             ),
                         );
                     }
-                                            // Show: tween to 1 (playing from the current value, so no flash).
+                    // Show: tween to 1 (playing from the current value, so no flash).
                     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                     if !keep_visible {
                         crate::animation::push_animatable(
@@ -483,16 +494,15 @@ fn scrollbar_build_shared(
             }
         },
     );
-                        // Hold: a scroll/hover/drag change during the delay changes the key, aborts the
-                        // sleep, and keeps the bar up.
+    // Hold: a scroll/hover/drag change during the delay changes the key, aborts the
+    // sleep, and keeps the bar up.
     let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
-        // The viewport is not known yet (first frame, constraints not settled) -> fall back to the
-        // remembered previous value; nothing is drawn on the first frame.
+    // The viewport is not known yet (first frame, constraints not settled) -> fall back to the
+    // remembered previous value; nothing is drawn on the first frame.
     let viewport = viewport_state.get();
     let viewport_for_size = viewport_state.clone();
     let viewport_for_start = viewport_state.clone();
     let content = limit + viewport;
-
 
     let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
         viewport,
@@ -506,17 +516,17 @@ fn scrollbar_build_shared(
         _ => (0.0, 0.0, false),
     };
 
-        // The viewport comes from measure, so read the previous frame's value here. v1: the scrollbar
-        // fills max height and the parent decides its constraint, so build cannot see it. It is taken
-        // from layout instead: an on_size_changed callback writes viewport_state (the same idea as
-        // NavTransition capturing its displacement baseline). 0 on the first frame -> nothing drawn,
-        // recomposed once the write-back arrives.
-        // WARNING P0-2: it MUST be a `get` (registers a composition dependency), because only `set`'s
-        // notify drives a recomposition; `peek` has no subscriber, so the write-back would never
-        // recompose and the geometry would stay stale after the first frame or a resize (the manual
-        // double-build tests hid this; the horizontal bar once kept a peek and never showed on the
-        // first frame - measured). `set` dedups by PartialEq and on_size_changed dedups per element,
-        // so a stable size stops the cycle.
+    // The viewport comes from measure, so read the previous frame's value here. v1: the scrollbar
+    // fills max height and the parent decides its constraint, so build cannot see it. It is taken
+    // from layout instead: an on_size_changed callback writes viewport_state (the same idea as
+    // NavTransition capturing its displacement baseline). 0 on the first frame -> nothing drawn,
+    // recomposed once the write-back arrives.
+    // WARNING P0-2: it MUST be a `get` (registers a composition dependency), because only `set`'s
+    // notify drives a recomposition; `peek` has no subscriber, so the write-back would never
+    // recompose and the geometry would stay stale after the first frame or a resize (the manual
+    // double-build tests hid this; the horizontal bar once kept a peek and never showed on the
+    // first frame - measured). `set` dedups by PartialEq and on_size_changed dedups per element,
+    // so a stable size stops the cycle.
     // Drag the thumb -> derive the offset. The geometry is read INSIDE the closure, not captured:
     // the first frame has no viewport yet and a lazy list's limit keeps changing, so a build-time
     // snapshot can be stale (measured: a drag against a bar built before its viewport was known
@@ -533,7 +543,9 @@ fn scrollbar_build_shared(
         let thumb_min = cfg.thumb_min_length;
         std::sync::Arc::new(move |pos_in_track: f32| {
             let viewport = viewport_state.peek();
-            let Some(limit) = measured_limit(&scroll_state) else { return; };
+            let Some(limit) = measured_limit(&scroll_state) else {
+                return;
+            };
             let content = limit + viewport;
             let Some((thumb_top, thumb_len)) = scrollbar_geometry(
                 viewport,
@@ -572,7 +584,9 @@ fn scrollbar_build_shared(
             // the position inside the track.
             let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
             let viewport = viewport_state.peek();
-            let Some(limit) = measured_limit(&scroll_state_src) else { return; };
+            let Some(limit) = measured_limit(&scroll_state_src) else {
+                return;
+            };
             let content = limit + viewport;
             // No thumb (content fits, or the track cannot hold the minimum) means nothing to drag.
             let Some((_, thumb_len)) = scrollbar_geometry(
@@ -598,25 +612,18 @@ fn scrollbar_build_shared(
             scroll_state_src.offset.set(off);
         }
     };
-    let (hover_src_clone, scroll_state_clone) =
-        (hover_src.clone(), scroll_state_src.clone());
-    let (hover_src_clone2, scroll_state_clone2) =
-        (hover_src.clone(), scroll_state_src.clone());
-        // P1-2: `drag_cancel` runs exactly the same cleanup as `end` (a lost window or a system
-        // interruption never sends `end`) - otherwise is_scroll_in_progress/dragged stay set and the
-        // fade never hides.
+    let (hover_src_clone, scroll_state_clone) = (hover_src.clone(), scroll_state_src.clone());
+    let (hover_src_clone2, scroll_state_clone2) = (hover_src.clone(), scroll_state_src.clone());
+    // P1-2: `drag_cancel` runs exactly the same cleanup as `end` (a lost window or a system
+    // interruption never sends `end`) - otherwise is_scroll_in_progress/dragged stay set and the
+    // fade never hides.
     let m = if vertical {
-        Modifier::new()
-            .width(cfg.thickness)
-            .fill_max_height()
+        Modifier::new().width(cfg.thickness).fill_max_height()
     } else {
-        Modifier::new()
-            .height(cfg.thickness)
-            .fill_max_width()
+        Modifier::new().height(cfg.thickness).fill_max_width()
     }
     .hoverable(&hover_src)
     .on_size_changed(move |w, h| {
-
         if vertical {
             let _ = w;
             viewport_state.set(h);
@@ -764,23 +771,50 @@ impl LazyScrollbar {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
-    pub fn thickness(mut self, t: f32) -> Self { self.thickness = t; self }
-    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
-    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
-    pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+    pub fn thickness(mut self, t: f32) -> Self {
+        self.thickness = t;
+        self
+    }
+    pub fn thumb_color(mut self, c: Color) -> Self {
+        self.thumb_color = Some(c);
+        self
+    }
+    pub fn track_color(mut self, c: Color) -> Self {
+        self.track_color = c;
+        self
+    }
+    pub fn thumb_min_length(mut self, l: f32) -> Self {
+        self.thumb_min_length = l;
+        self
+    }
     /// Always visible (by default only during a scroll, like `alwaysShowScrollBar`).
-    pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    pub fn always_show(mut self, v: bool) -> Self {
+        self.always_show = v;
+        self
+    }
     /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
-    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    pub fn hover_color(mut self, c: Color) -> Self {
+        self.hover_color = Some(c);
+        self
+    }
     /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
     /// `thickness`, so the grow is centred and never reflows the content).
-    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
+    pub fn hover_thickness(mut self, t: f32) -> Self {
+        self.hover_thickness = t;
+        self
+    }
     /// A lazy list's vertical scrollbar (CMP `VerticalScrollbar` adapted to LazyListState).
     /// `scroll_reverse`: a reversed lazy list (`reverse_layout(true)`) - the render mirrors the offset
     /// semantics (offset 0 = the content's end) and the scrollbar geometry and drag use the same
     /// mirrored coordinate `visual = max - scroll`. `None` and `Some(false)` are equivalent.
-    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self {
+        self.scroll_reverse = v;
+        self
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -804,7 +838,7 @@ impl LazyScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-            /// A reversed lazy list (`reverse_layout(true)` - the same value the list has).
+        /// A reversed lazy list (`reverse_layout(true)` - the same value the list has).
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
@@ -819,16 +853,24 @@ impl LazyScrollbar {
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             fling_behavior: None,
         };
-        assemble_scrollbar(ctx, key, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse, self.modifier);
+        assemble_scrollbar(
+            ctx,
+            key,
+            &assembled,
+            cfg,
+            ScrollbarAxis::Vertical,
+            self.scroll_reverse,
+            self.modifier,
+        );
     }
 }
 
-        // Assemble the ScrollState: offset/fling_limit/pulse are cloned (the same States are stable
-        // across frames); is_scroll_in_progress is a remembered false (the lazy side has no such
-        // channel; the fade relies on the change plus the pulse, and a thumb drag sets this
-        // assembled state through the scrollbar's own on_drag_start - note that does not write back
-        // to the LazyListState, but the fade reads the assembled scrolling, which is valid within
-        // the same frame; release clears the same assembled state, so nothing is left behind).
+// Assemble the ScrollState: offset/fling_limit/pulse are cloned (the same States are stable
+// across frames); is_scroll_in_progress is a remembered false (the lazy side has no such
+// channel; the fade relies on the change plus the pulse, and a thumb drag sets this
+// assembled state through the scrollbar's own on_drag_start - note that does not write back
+// to the LazyListState, but the fade reads the assembled scrolling, which is valid within
+// the same frame; release clears the same assembled state, so nothing is left behind).
 pub struct HorizontalLazyScrollbar {
     state: crate::layout::lazy::LazyListState,
     modifier: Modifier,
@@ -858,17 +900,41 @@ impl HorizontalLazyScrollbar {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
-    pub fn thickness(mut self, t: f32) -> Self { self.thickness = t; self }
-    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
-    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
-    pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
-    pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+    pub fn thickness(mut self, t: f32) -> Self {
+        self.thickness = t;
+        self
+    }
+    pub fn thumb_color(mut self, c: Color) -> Self {
+        self.thumb_color = Some(c);
+        self
+    }
+    pub fn track_color(mut self, c: Color) -> Self {
+        self.track_color = c;
+        self
+    }
+    pub fn thumb_min_length(mut self, l: f32) -> Self {
+        self.thumb_min_length = l;
+        self
+    }
+    pub fn always_show(mut self, v: bool) -> Self {
+        self.always_show = v;
+        self
+    }
     /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
-    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    pub fn hover_color(mut self, c: Color) -> Self {
+        self.hover_color = Some(c);
+        self
+    }
     /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
     /// `thickness`, so the grow is centred and never reflows the content).
-    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
+    pub fn hover_thickness(mut self, t: f32) -> Self {
+        self.hover_thickness = t;
+        self
+    }
     /// A lazy row's horizontal scrollbar (CMP `HorizontalScrollbar` adapted to LazyListState, used by
     /// `LazyRow`). The assembly semantics are identical to `LazyScrollbar`, only the axis differs;
     /// `scroll_reverse` has the same meaning (pass `Some(true)` for a reversed horizontal lazy list).
@@ -881,7 +947,10 @@ impl HorizontalLazyScrollbar {
     ///     .build(ctx);
     /// HorizontalLazyScrollbar::new(list_state).build(ctx);
     /// ```
-    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self {
+        self.scroll_reverse = v;
+        self
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -905,7 +974,7 @@ impl HorizontalLazyScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-            /// A reversed horizontal lazy list (the same value the list has).
+        /// A reversed horizontal lazy list (the same value the list has).
         let scrolling_state: State<bool> = ctx.remember(|| false);
         let assembled = crate::modifier::ScrollState {
             last_read_offset: std::sync::Arc::new(std::sync::Mutex::new(0.0)),
@@ -919,14 +988,22 @@ impl HorizontalLazyScrollbar {
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             fling_behavior: None,
         };
-        assemble_scrollbar(ctx, key, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse, self.modifier);
+        assemble_scrollbar(
+            ctx,
+            key,
+            &assembled,
+            cfg,
+            ScrollbarAxis::Horizontal,
+            self.scroll_reverse,
+            self.modifier,
+        );
     }
 }
 
 // ── VerticalScrollbar ──
 
-        // Same assembly semantics as LazyScrollbar (above): scrolling is a remembered false, the
-        // fade relies on the pulse, and a drag sets the assembled state without leaving residue.
+// Same assembly semantics as LazyScrollbar (above): scrolling is a remembered false, the
+// fade relies on the pulse, and a drag sets the assembled state without leaving residue.
 pub struct VerticalScrollbar {
     scroll: crate::modifier::ScrollState,
     modifier: Modifier,
@@ -956,15 +1033,33 @@ impl VerticalScrollbar {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
-    pub fn thickness(mut self, t: f32) -> Self { self.thickness = t; self }
-    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
-    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
-    pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+    pub fn thickness(mut self, t: f32) -> Self {
+        self.thickness = t;
+        self
+    }
+    pub fn thumb_color(mut self, c: Color) -> Self {
+        self.thumb_color = Some(c);
+        self
+    }
+    pub fn track_color(mut self, c: Color) -> Self {
+        self.track_color = c;
+        self
+    }
+    pub fn thumb_min_length(mut self, l: f32) -> Self {
+        self.thumb_min_length = l;
+        self
+    }
     /// A reversed vertical container (`vertical_scroll_reverse(true)`): the render mirrors the offset
     /// semantics (offset 0 = the content's end), and the bar's geometry and drag use the same mirrored
     /// coordinate. `None` and `Some(false)` are equivalent.
-    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self {
+        self.scroll_reverse = v;
+        self
+    }
     /// The vertical scrollbar (CMP `VerticalScrollbar`).
     ///
     /// Usage: level with the scroll container (inside a `Row`) and sharing its `ScrollState`.
@@ -977,12 +1072,21 @@ impl VerticalScrollbar {
     ///     VerticalScrollbar::new(scroll.clone()).build(ctx);
     /// });
     /// ```
-    pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    pub fn always_show(mut self, v: bool) -> Self {
+        self.always_show = v;
+        self
+    }
     /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
-    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    pub fn hover_color(mut self, c: Color) -> Self {
+        self.hover_color = Some(c);
+        self
+    }
     /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
     /// `thickness`, so the grow is centred and never reflows the content).
-    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
+    pub fn hover_thickness(mut self, t: f32) -> Self {
+        self.hover_thickness = t;
+        self
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -1006,15 +1110,23 @@ impl VerticalScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-        assemble_scrollbar(ctx, key, &self.scroll, cfg, ScrollbarAxis::Vertical, self.scroll_reverse, self.modifier);
+        assemble_scrollbar(
+            ctx,
+            key,
+            &self.scroll,
+            cfg,
+            ScrollbarAxis::Vertical,
+            self.scroll_reverse,
+            self.modifier,
+        );
     }
 }
 
 // ── HorizontalScrollbar ──
 
-        // P2-4: the ScrollState handle is part of the identity (swapping the whole state must
-        // recompose - otherwise the old offset subscription stays live and the new state has none,
-        // and the bar stays bound to the old one).
+// P2-4: the ScrollState handle is part of the identity (swapping the whole state must
+// recompose - otherwise the old offset subscription stays live and the new state has none,
+// and the bar stays bound to the old one).
 pub struct HorizontalScrollbar {
     scroll: crate::modifier::ScrollState,
     modifier: Modifier,
@@ -1044,20 +1156,47 @@ impl HorizontalScrollbar {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
-    pub fn thickness(mut self, t: f32) -> Self { self.thickness = t; self }
-    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
-    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
-    pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
-    pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+    pub fn thickness(mut self, t: f32) -> Self {
+        self.thickness = t;
+        self
+    }
+    pub fn thumb_color(mut self, c: Color) -> Self {
+        self.thumb_color = Some(c);
+        self
+    }
+    pub fn track_color(mut self, c: Color) -> Self {
+        self.track_color = c;
+        self
+    }
+    pub fn thumb_min_length(mut self, l: f32) -> Self {
+        self.thumb_min_length = l;
+        self
+    }
+    pub fn always_show(mut self, v: bool) -> Self {
+        self.always_show = v;
+        self
+    }
     /// The thumb colour while hovered or dragged (default: the theme outline at full alpha).
-    pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = Some(c); self }
+    pub fn hover_color(mut self, c: Color) -> Self {
+        self.hover_color = Some(c);
+        self
+    }
     /// The thumb's cross-axis size while hovered or dragged (default 10 dp; the layout width stays
     /// `thickness`, so the grow is centred and never reflows the content).
-    pub fn hover_thickness(mut self, t: f32) -> Self { self.hover_thickness = t; self }
+    pub fn hover_thickness(mut self, t: f32) -> Self {
+        self.hover_thickness = t;
+        self
+    }
     /// A reversed horizontal scroll (RTL - the same value the container's
     /// `horizontal_scroll_reverse` has; an RTL container such as `TabRow` passes `Some(is_rtl)`).
-    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self {
+        self.scroll_reverse = v;
+        self
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -1084,10 +1223,17 @@ impl HorizontalScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-        assemble_scrollbar(ctx, key, &self.scroll, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse, self.modifier);
+        assemble_scrollbar(
+            ctx,
+            key,
+            &self.scroll,
+            cfg,
+            ScrollbarAxis::Horizontal,
+            self.scroll_reverse,
+            self.modifier,
+        );
     }
 }
-
 
 #[cfg(test)]
 mod tests;

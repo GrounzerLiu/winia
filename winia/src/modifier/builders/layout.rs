@@ -270,25 +270,33 @@ impl Modifier {
     /// 最小宽度（对标 Compose `Modifier.widthIn(min = ...)`）——提升布局
     /// 最小约束，内容不足时撑到该宽度；受父 max 约束夹住。支持动态值。
     pub fn min_width(self, value: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::MinWidth { value: value.into() })
+        self.push(ModifierElement::MinWidth {
+            value: value.into(),
+        })
     }
 
     /// 最小高度（对标 Compose `Modifier.heightIn(min = ...)`）
     pub fn min_height(self, value: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::MinHeight { value: value.into() })
+        self.push(ModifierElement::MinHeight {
+            value: value.into(),
+        })
     }
 
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — content that would be wider
     /// is constrained to it. A minimum above it wins, as in Compose's `sizeIn`. Supports a
     /// dynamic value, so an animation can drive the cap.
     pub fn max_width(self, value: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::MaxWidth { value: value.into() })
+        self.push(ModifierElement::MaxWidth {
+            value: value.into(),
+        })
     }
 
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min resolves by chain
     /// order, see [`Self::max_width`])
     pub fn max_height(self, value: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::MaxHeight { value: value.into() })
+        self.push(ModifierElement::MaxHeight {
+            value: value.into(),
+        })
     }
 
     /// 高度填满可用空间
@@ -317,10 +325,17 @@ impl Modifier {
     /// get_offset 只取第一个，连用会静默丢分量）。对齐 `merge_graphics_layer` 模式。
     fn merge_offset(mut self, x: Option<Dimension>, y: Option<Dimension>) -> Self {
         let mut elements = std::mem::take(&mut self.elements);
-        if let Some(el) = elements.iter_mut().find(|e| matches!(e, ModifierElement::Offset { .. })) {
+        if let Some(el) = elements
+            .iter_mut()
+            .find(|e| matches!(e, ModifierElement::Offset { .. }))
+        {
             if let ModifierElement::Offset { x: ex, y: ey } = el {
-                if let Some(nx) = x { *ex = nx; }
-                if let Some(ny) = y { *ey = ny; }
+                if let Some(nx) = x {
+                    *ex = nx;
+                }
+                if let Some(ny) = y {
+                    *ey = ny;
+                }
             }
         } else {
             elements.push(ModifierElement::Offset {
@@ -352,17 +367,26 @@ impl Modifier {
     /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）。
     /// 值支持动态。
     pub fn absolute_offset(self, x: impl Into<Dimension>, y: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: y.into() })
+        self.push(ModifierElement::AbsoluteOffset {
+            x: x.into(),
+            y: y.into(),
+        })
     }
 
     /// 仅 x 方向绝对偏移（RTL 下不镜像）
     pub fn absolute_offset_x(self, x: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: Dimension::Fixed(0.0) })
+        self.push(ModifierElement::AbsoluteOffset {
+            x: x.into(),
+            y: Dimension::Fixed(0.0),
+        })
     }
 
     /// 仅 y 方向绝对偏移
     pub fn absolute_offset_y(self, y: impl Into<Dimension>) -> Self {
-        self.push(ModifierElement::AbsoluteOffset { x: Dimension::Fixed(0.0), y: y.into() })
+        self.push(ModifierElement::AbsoluteOffset {
+            x: Dimension::Fixed(0.0),
+            y: y.into(),
+        })
     }
 
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
@@ -508,7 +532,10 @@ impl Modifier {
         line: crate::layout::AlignmentLine,
         f: impl Fn(crate::unit::Size) -> f32 + Send + Sync + 'static,
     ) -> Self {
-        self.push(ModifierElement::AlignmentLineValue { line, value: std::sync::Arc::new(f) })
+        self.push(ModifierElement::AlignmentLineValue {
+            line,
+            value: std::sync::Arc::new(f),
+        })
     }
 
     /// Pad this node so the distance from its near edge to its content's alignment line is `before`
@@ -639,7 +666,11 @@ impl Modifier {
         before: Option<f32>,
         after: Option<f32>,
     ) -> Self {
-        self.push(ModifierElement::PaddingFrom { line, before, after })
+        self.push(ModifierElement::PaddingFrom {
+            line,
+            before,
+            after,
+        })
     }
 
     /// material3's default minimum touch target, `LocalMinimumInteractiveComponentSize`'s 48.dp
@@ -717,8 +748,14 @@ impl Modifier {
     /// `match_height_first = true` 时优先按高度约束推导宽度
     /// （对标 `matchHeightConstraintsFirst`）。
     pub fn aspect_ratio(self, ratio: f32, match_height_first: bool) -> Self {
-        assert!(ratio > 0.0, "aspectRatio {ratio} must be > 0（Compose 前置校验）");
-        self.push(ModifierElement::AspectRatio { ratio, match_height_first })
+        assert!(
+            ratio > 0.0,
+            "aspectRatio {ratio} must be > 0（Compose 前置校验）"
+        );
+        self.push(ModifierElement::AspectRatio {
+            ratio,
+            match_height_first,
+        })
     }
 
     /// `required_size(w, h)`（对标 Compose `Modifier.requiredSize`）——
@@ -726,17 +763,26 @@ impl Modifier {
     /// 溢出父约束——enforceIncoming=false 语义）。单轴用
     /// `required_width` / `required_height`。
     pub fn required_size(self, width: impl Into<SizeValue>, height: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::RequiredSize { width: Some(width.into()), height: Some(height.into()) })
+        self.push(ModifierElement::RequiredSize {
+            width: Some(width.into()),
+            height: Some(height.into()),
+        })
     }
 
     /// 仅强制宽度
     pub fn required_width(self, width: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::RequiredSize { width: Some(width.into()), height: None })
+        self.push(ModifierElement::RequiredSize {
+            width: Some(width.into()),
+            height: None,
+        })
     }
 
     /// 仅强制高度
     pub fn required_height(self, height: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::RequiredSize { width: None, height: Some(height.into()) })
+        self.push(ModifierElement::RequiredSize {
+            width: None,
+            height: Some(height.into()),
+        })
     }
 
     /// `test_tag(tag)`（对标 Compose `Modifier.testTag`）——给节点打测试
@@ -813,9 +859,10 @@ impl Modifier {
                 ModifierElement::Semantics(config) => Some(config),
                 _ => None,
             })
-            .fold(crate::semantics::SemanticsConfig::default(), |merged, config| {
-                config.clone().or(merged)
-            })
+            .fold(
+                crate::semantics::SemanticsConfig::default(),
+                |merged, config| config.clone().or(merged),
+            )
     }
 
     /// Whether this chain carries `clearAndSetSemantics`; the measure/report side reads the config.
@@ -828,7 +875,9 @@ impl Modifier {
 
     /// Whether this node is a focus traversal group.
     pub fn is_focus_group(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::FocusGroup))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::FocusGroup))
     }
 
     /// `focusProperties { canFocus }` — `None` when the chain does not say.
@@ -905,7 +954,12 @@ impl Modifier {
 
     /// `shadow(elevation)`——便捷版（默认形状/黑色/自动 clip）
     pub fn shadow_default(self, elevation: f32) -> Self {
-        self.shadow(elevation, Shape::Rectangle, elevation > 0.0, Color::from_argb(255, 0, 0, 0))
+        self.shadow(
+            elevation,
+            Shape::Rectangle,
+            elevation > 0.0,
+            Color::from_argb(255, 0, 0, 0),
+        )
     }
 
     /// `drop_shadow(shape, params)`（对标 Compose `Modifier.dropShadow`）——

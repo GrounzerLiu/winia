@@ -26,7 +26,12 @@ pub struct Typography {
 }
 
 impl Typography {
-    pub(crate) fn style(size: f32, line_height: f32, letter_spacing: f32, weight: FontWeight) -> TextStyle {
+    pub(crate) fn style(
+        size: f32,
+        line_height: f32,
+        letter_spacing: f32,
+        weight: FontWeight,
+    ) -> TextStyle {
         TextStyle::new()
             .font_size(TextUnit::Sp(Sp(size)))
             .line_height(line_height)
@@ -61,4 +66,3 @@ impl Default for Typography {
         Self::material3_default()
     }
 }
-

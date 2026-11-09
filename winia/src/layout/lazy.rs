@@ -25,11 +25,11 @@
 //! and has no `LazyLayout` measure-time composition. The model here is two-phase — estimate during
 //! compose, correct during measure (`docs/lazy-column.md` §2.9).
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -71,13 +71,28 @@ pub trait LazyAxis: super::axis::Axis {
 impl LazyAxis for crate::layout::axis::VerticalAxis {
     const VERTICAL: bool = true;
     fn child_constraints(c: Constraints) -> Constraints {
-        Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: f32::MAX }
+        Constraints {
+            min_width: 0.0,
+            max_width: c.max_width,
+            min_height: 0.0,
+            max_height: f32::MAX,
+        }
     }
     fn with_cross_max(c: Constraints, v: f32) -> Constraints {
-        Constraints { min_width: 0.0, max_width: v, min_height: 0.0, max_height: c.max_height }
+        Constraints {
+            min_width: 0.0,
+            max_width: v,
+            min_height: 0.0,
+            max_height: c.max_height,
+        }
     }
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
-        Constraints { min_width: c.min_width, max_width: c.max_width, min_height: v, max_height: v }
+        Constraints {
+            min_width: c.min_width,
+            max_width: c.max_width,
+            min_height: v,
+            max_height: v,
+        }
     }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().vertical_scroll(state)
@@ -87,26 +102,40 @@ impl LazyAxis for crate::layout::axis::VerticalAxis {
 impl LazyAxis for crate::layout::axis::HorizontalAxis {
     const VERTICAL: bool = false;
     fn child_constraints(c: Constraints) -> Constraints {
-        Constraints { min_width: 0.0, max_width: f32::MAX, min_height: 0.0, max_height: c.max_height }
+        Constraints {
+            min_width: 0.0,
+            max_width: f32::MAX,
+            min_height: 0.0,
+            max_height: c.max_height,
+        }
     }
     fn with_cross_max(c: Constraints, v: f32) -> Constraints {
-        Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: v }
+        Constraints {
+            min_width: 0.0,
+            max_width: c.max_width,
+            min_height: 0.0,
+            max_height: v,
+        }
     }
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
-        Constraints { min_width: v, max_width: v, min_height: c.min_height, max_height: c.max_height }
+        Constraints {
+            min_width: v,
+            max_width: v,
+            min_height: c.min_height,
+            max_height: c.max_height,
+        }
     }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().horizontal_scroll(state)
     }
 }
 
-
 pub mod grid;
-pub mod staggered;
 mod info;
 mod interval;
 mod list;
 mod policy;
+pub mod staggered;
 mod state;
 
 pub(crate) use info::*;
@@ -115,9 +144,9 @@ pub(crate) use list::*;
 pub(crate) use policy::*;
 
 pub use grid::{GridCells, LazyGrid, LazyHorizontalGrid, LazyVerticalGrid};
-pub use staggered::{LazyHorizontalStaggeredGrid, LazyStaggeredGrid, LazyVerticalStaggeredGrid};
 pub use info::{LazyListItemInfo, LazyListLayoutInfo};
 pub use list::{ItemHeightCache, LazyColumn, LazyList, LazyRow};
+pub use staggered::{LazyHorizontalStaggeredGrid, LazyStaggeredGrid, LazyVerticalStaggeredGrid};
 pub use state::LazyListState;
 
 #[cfg(test)]

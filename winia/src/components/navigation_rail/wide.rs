@@ -219,16 +219,13 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
                 header_h = size.height + WIDE_RAIL_HEADER_PADDING;
                 continue;
             }
-            items_h += size.height + RAIL_VERTICAL_PADDING
+            items_h += size.height
+                + RAIL_VERTICAL_PADDING
                 + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p;
         }
         let bounded = c.max_height < f32::MAX;
         let slack = if bounded {
-            (c.max_height
-                - RAIL_VERTICAL_PADDING
-                - WIDE_RAIL_TOP_PADDING
-                - header_h
-                - items_h)
+            (c.max_height - RAIL_VERTICAL_PADDING - WIDE_RAIL_TOP_PADDING - header_h - items_h)
                 .max(0.0)
         } else {
             0.0
@@ -500,13 +497,18 @@ impl WideNavigationRailItem {
             ),
         };
         // 胶囊展开进度（选中态）——与变形进度相互独立
-        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, wide_rail_item_morph_spec());
+        let size_progress = ctx.animate_float_as_state(
+            if selected { 1.0 } else { 0.0 },
+            wide_rail_item_morph_spec(),
+        );
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);
         let ripple_color = icon_color;
 
-        let interaction = self.interaction_source.clone()
+        let interaction = self
+            .interaction_source
+            .clone()
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
 
         let indicator_color = colors.indicator;
@@ -536,7 +538,8 @@ impl WideNavigationRailItem {
         let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
         if enabled {
             if let Some(callback) = self.on_click.clone() {
-                item_modifier = item_modifier.clickable_with_source(&interaction, move || callback());
+                item_modifier =
+                    item_modifier.clickable_with_source(&interaction, move || callback());
             }
         }
         let item_modifier = item_modifier.then(self.modifier);
@@ -555,7 +558,8 @@ impl WideNavigationRailItem {
                 // 宽轨 label 必选且恒显示
                 let label = self.label;
                 wrap_slot(ctx, Modifier::new(), |ctx| {
-                    let mut style = crate::components::navigation_bar::NavigationBarDefaults::label_style();
+                    let mut style =
+                        crate::components::navigation_bar::NavigationBarDefaults::label_style();
                     style.color = Some(label_color);
                     crate::components::text::ProvideTextStyle(style, ctx, label);
                 });
@@ -603,7 +607,9 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         // 进度最先读（layout_deps）。位置覆盖时跳过——钉死位形不因动画帧重测
-        let p = self.position_override.unwrap_or_else(|| self.position_progress.get().max(0.0).min(1.0));
+        let p = self
+            .position_override
+            .unwrap_or_else(|| self.position_progress.get().max(0.0).min(1.0));
         let size_p = self.size_progress.get().max(0.0);
 
         let loose = constraints.loosen();
@@ -620,7 +626,8 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         // 纵向内边距 = HorizontalItem.ActiveIndicatorHeight 56 减 24 的一半 = 16（故胶囊高 56）。
         let start_content_w = icon_size.width + WIDE_START_ICON_LABEL_GAP + label_size.width;
         let start_total_w = start_content_w + WIDE_INDICATOR_H_PADDING * 2.0;
-        let start_ind_h = icon_size.height.max(label_size.height) + WIDE_START_INDICATOR_V_PADDING * 2.0;
+        let start_ind_h =
+            icon_size.height.max(label_size.height) + WIDE_START_INDICATOR_V_PADDING * 2.0;
 
         let full_w = top_total_w + (start_total_w - top_total_w) * p;
         let full_h = top_ind_h + (start_ind_h - top_ind_h) * p;
@@ -643,8 +650,8 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         // Upstream animates `itemMinHeight` from `TopIconItemMinHeight` (64) down to
         // `minimumA11ySize` (48) as the rail expands (`WideNavigationRail.kt:284-289`), so the
         // two endpoints have DIFFERENT floors. winia used the plain rail's 56 for both.
-        let endpoint_min_h =
-            WIDE_RAIL_ITEM_MIN_HEIGHT + (WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED - WIDE_RAIL_ITEM_MIN_HEIGHT) * p;
+        let endpoint_min_h = WIDE_RAIL_ITEM_MIN_HEIGHT
+            + (WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED - WIDE_RAIL_ITEM_MIN_HEIGHT) * p;
         let min_h = endpoint_min_h.max(constraints.min_height);
         // 收起：拥抱内容、至少 96（CollapsedTokens.ContainerWidth）；
         // 展开：item 填满轨宽（androidx item 为全宽命中目标——若取"轨宽-内边距"
@@ -657,10 +664,16 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
             if p > 0.0 {
                 constraints.max_width.max(content_w)
             } else {
-                content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
+                content_w
+                    .max(WIDE_RAIL_COLLAPSED_WIDTH)
+                    .min(constraints.max_width)
             }
         };
-        let max_h = if constraints.max_height < f32::MAX { constraints.max_height } else { f32::MAX };
+        let max_h = if constraints.max_height < f32::MAX {
+            constraints.max_height
+        } else {
+            f32::MAX
+        };
 
         // ── Top 端点放置 ──
         let top_content_h = icon_size.height
@@ -675,7 +688,10 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
             cx - label_size.width / 2.0,
             top_v_pad + icon_size.height + INDICATOR_V_PADDING_WITH_LABEL + ITEM_ICON_LABEL_GAP,
         );
-        let top_pill = Offset::new(cx - top_total_w / 2.0, top_v_pad - INDICATOR_V_PADDING_WITH_LABEL);
+        let top_pill = Offset::new(
+            cx - top_total_w / 2.0,
+            top_v_pad - INDICATOR_V_PADDING_WITH_LABEL,
+        );
 
         // ── Start 端点放置 ──
         // androidx 展开态内容起始对齐（IndicatorExpandedPadding.horizontal =
@@ -756,5 +772,4 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
             nodes[child].measured_size = placements[index].size;
         }
     }
-
 }

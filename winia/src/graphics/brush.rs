@@ -115,11 +115,7 @@ impl Brush {
     ///
     /// `(0.0, 0.0)` is the top-left corner, `(1.0, 1.0)` the bottom-right.
     pub fn from_to(self, from: (f32, f32), to: (f32, f32)) -> Self {
-        self.map_gradient(|g| GradientBrush {
-            from,
-            to,
-            ..g
-        })
+        self.map_gradient(|g| GradientBrush { from, to, ..g })
     }
 
     /// Linear: a diagonal from the top-left corner to the bottom-right — the "card highlight" default.
@@ -139,10 +135,7 @@ impl Brush {
 
     /// Radial / sweep: the centre, as fractions of the node's bounds.
     pub fn center(self, x: f32, y: f32) -> Self {
-        self.map_gradient(|g| GradientBrush {
-            from: (x, y),
-            ..g
-        })
+        self.map_gradient(|g| GradientBrush { from: (x, y), ..g })
     }
 
     /// Radial: how far the last stop reaches, as a fraction of the node's SHORTER side.
@@ -274,22 +267,45 @@ mod tests {
         let Brush::Linear(gradient) = &brush else {
             panic!("a linear constructor must build a linear brush");
         };
-        assert_eq!(gradient.from(), (0.0, 0.5), "default start is the left edge's middle");
-        assert_eq!(gradient.to(), (1.0, 0.5), "and default end is the right edge's");
+        assert_eq!(
+            gradient.from(),
+            (0.0, 0.5),
+            "default start is the left edge's middle"
+        );
+        assert_eq!(
+            gradient.to(),
+            (1.0, 0.5),
+            "and default end is the right edge's"
+        );
         assert_eq!(brush.colors(), &[red(), blue()]);
-        assert_eq!(gradient.positions_ref(), None, "no explicit stops means evenly spread");
+        assert_eq!(
+            gradient.positions_ref(),
+            None,
+            "no explicit stops means evenly spread"
+        );
         assert_eq!(gradient.tile_mode(), BrushTile::Clamp);
     }
 
     #[test]
     fn the_orientation_helpers_set_the_expected_endpoints() {
         let endpoints = |brush: Brush| {
-            let Brush::Linear(gradient) = brush else { panic!("expected linear") };
+            let Brush::Linear(gradient) = brush else {
+                panic!("expected linear")
+            };
             (gradient.from(), gradient.to())
         };
-        assert_eq!(endpoints(Brush::linear_gradient([red()]).horizontal()), ((0.0, 0.5), (1.0, 0.5)));
-        assert_eq!(endpoints(Brush::linear_gradient([red()]).vertical()), ((0.5, 0.0), (0.5, 1.0)));
-        assert_eq!(endpoints(Brush::linear_gradient([red()]).diagonal()), ((0.0, 0.0), (1.0, 1.0)));
+        assert_eq!(
+            endpoints(Brush::linear_gradient([red()]).horizontal()),
+            ((0.0, 0.5), (1.0, 0.5))
+        );
+        assert_eq!(
+            endpoints(Brush::linear_gradient([red()]).vertical()),
+            ((0.5, 0.0), (0.5, 1.0))
+        );
+        assert_eq!(
+            endpoints(Brush::linear_gradient([red()]).diagonal()),
+            ((0.0, 0.0), (1.0, 1.0))
+        );
     }
 
     #[test]
@@ -302,9 +318,15 @@ mod tests {
         // The default centre is the node's middle, not the linear brush's left edge — the bug the
         // pixel tests in render_snapshot.rs caught.
         let default = Brush::radial_gradient([red()]);
-        let Brush::Radial(default) = &default else { panic!("expected radial") };
+        let Brush::Radial(default) = &default else {
+            panic!("expected radial")
+        };
         assert_eq!(default.from(), (0.5, 0.5));
-        assert_eq!(gradient.radius_value(), 0.5, "reaching the nearest pair of edges by default");
+        assert_eq!(
+            gradient.radius_value(),
+            0.5,
+            "reaching the nearest pair of edges by default"
+        );
     }
 
     #[test]
@@ -324,7 +346,9 @@ mod tests {
         let brush = Brush::radial_gradient([red(), blue()])
             .positions([0.2, 0.9])
             .tile(BrushTile::Repeat);
-        let Brush::Radial(gradient) = &brush else { panic!("expected radial") };
+        let Brush::Radial(gradient) = &brush else {
+            panic!("expected radial")
+        };
         assert_eq!(gradient.positions_ref(), Some(&[0.2, 0.9][..]));
         assert_eq!(gradient.tile_mode(), BrushTile::Repeat);
     }
@@ -334,7 +358,10 @@ mod tests {
         // Both forms have to coexist for `background_brush` to be one method.
         let from_value: BrushSource = Brush::solid(red()).into();
         assert_eq!(from_value.eval(), Brush::Solid(red()));
-        assert!(matches!(from_value, super::super::Dyn::Static(_)), "a value stays inline");
+        assert!(
+            matches!(from_value, super::super::Dyn::Static(_)),
+            "a value stays inline"
+        );
 
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag_in = flag.clone();
@@ -346,7 +373,11 @@ mod tests {
             }
         })
         .into();
-        assert_eq!(from_closure.eval(), Brush::Solid(red()), "the closure is re-read each time");
+        assert_eq!(
+            from_closure.eval(),
+            Brush::Solid(red()),
+            "the closure is re-read each time"
+        );
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(from_closure.eval(), Brush::Solid(blue()));
     }

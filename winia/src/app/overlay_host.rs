@@ -3,8 +3,8 @@
 //! Split out of `app.rs`. An overlay is a second composer and a second tree that the frame lays
 //! out, renders and hit-tests on top of the page — it also takes the keyboard while it is modal.
 
-use super::*;
 use super::set_ime_enabled;
+use super::*;
 
 /// Top-level popup layer instance — its own Composer composition unit (State survives across
 /// frames), rendered above the main tree (modal scrim + content).
@@ -92,7 +92,8 @@ pub(crate) struct OverlayWindow {
     /// the overlay is its own composer, so its slot keys may repeat the main tree's).
     pub(crate) hovered_slots: std::collections::HashSet<u64>,
     /// Interaction source currently pressed inside this overlay (Press ripple — released on up/cancel).
-    pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
+    pub(crate) pressed_interaction:
+        Option<(u64, crate::input::interaction::MutableInteractionSource)>,
     /// Show progress (1 = fully shown, 0 = hidden) — driven by the enter and exit animations alike:
     /// opening pushes progress to 1.0 (0→1), closing pushes it to 0.0 (1→0); the render peeks it for
     /// scale/alpha. None = no animation (always 1).
@@ -135,7 +136,9 @@ pub(crate) struct OverlayWindow {
 /// progress 1→0 (when there is an exit spec) — keep rendering until the animation finishes
 /// (matching Compose's `AnimatedVisibility` exit semantics). With no exit spec → remove at once.
 pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
-    let Some(idx) = pw.overlay.layers.iter().position(|o| o.id == id) else { return };
+    let Some(idx) = pw.overlay.layers.iter().position(|o| o.id == id) else {
+        return;
+    };
     // Already closing (duplicate close request) → skip (guards against re-entry: restarted animation / duplicate on_dismiss).
     if pw.overlay.layers[idx].closing {
         return;
@@ -159,8 +162,16 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     // layer below (an overlay that remembers a focus, else the page) — a keyboard user keeps standing
     // where they were instead of starting over.
     release_keyboard_to_lower_layer(pw);
-    if pw.focused_id.is_none() && !pw.overlay.layers.iter().any(|o| !o.closing && o.focused_id.is_some()) {
-        if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, false); }
+    if pw.focused_id.is_none()
+        && !pw
+            .overlay
+            .layers
+            .iter()
+            .any(|o| !o.closing && o.focused_id.is_some())
+    {
+        if let Some(ref sw) = pw.skia_window {
+            set_ime_enabled(&sw, false);
+        }
     }
     cleanup_overlay_interactions(&mut pw.overlay.layers[idx]);
     // Start the exit animation (progress 1→0); with no exit spec → remove at once (do not push a
@@ -169,10 +180,7 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     if has_exit {
         if let Some(p) = pw.overlay.layers[idx].progress.clone() {
             let spec = pw.overlay.layers[idx].exit_anim.as_ref().unwrap();
-            crate::animation::push_animatable_handle(
-                p, 0.0,
-                spec.animation_spec(),
-            );
+            crate::animation::push_animatable_handle(p, 0.0, spec.animation_spec());
         }
     }
     // An overlay the caller STILL declares is not removed here. `ModalBottomSheet` is the case that
@@ -183,7 +191,12 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     // sheet could never be reopened and the next recomposition rebuilt it (off-screen, with its
     // scrim) from the still-true declaration. `finish_closing_overlays` removes it once the caller
     // stops declaring it, and the fade path below is for overlays nobody re-declares.
-    let still_declared = pw.composer.overlay_active.get(&id).copied().unwrap_or(false);
+    let still_declared = pw
+        .composer
+        .overlay_active
+        .get(&id)
+        .copied()
+        .unwrap_or(false);
     if !has_exit && !still_declared {
         pw.overlay.layers.remove(idx);
     }
@@ -211,7 +224,10 @@ pub(crate) const CLOSING_DEADLINE: std::time::Duration = std::time::Duration::fr
 /// behind a scrim for a target. (`focus_scope_is_open` shares that judgement for the key
 /// fall-through.)
 pub(crate) fn keyboard_scope(pw: &PerWindow) -> Option<usize> {
-    if let Some(i) = (0..pw.overlay.layers.len()).rev().find(|&i| overlay_owns_keyboard(&pw.overlay.layers[i])) {
+    if let Some(i) = (0..pw.overlay.layers.len())
+        .rev()
+        .find(|&i| overlay_owns_keyboard(&pw.overlay.layers[i]))
+    {
         return Some(i);
     }
     (0..pw.overlay.layers.len())
@@ -224,7 +240,8 @@ fn overlay_owns_keyboard(ov: &OverlayWindow) -> bool {
     !ov.closing && ov.focus_scope && overlay_has_size(ov)
 }
 fn overlay_has_size(ov: &OverlayWindow) -> bool {
-    ov.composer.layout_root()
+    ov.composer
+        .layout_root()
         .map(|r| r.measured_size.width > 0.0 && r.measured_size.height > 0.0)
         .unwrap_or(false)
 }
@@ -236,7 +253,10 @@ fn overlay_has_size(ov: &OverlayWindow) -> bool {
 /// expression `None` too, which let characters through to the page — measured against this very
 /// gate before it was split.
 pub(crate) fn focus_scope_is_open(pw: &PerWindow) -> bool {
-    pw.overlay.layers.iter().any(|ov| !ov.closing && ov.focus_scope && overlay_has_size(ov))
+    pw.overlay
+        .layers
+        .iter()
+        .any(|ov| !ov.closing && ov.focus_scope && overlay_has_size(ov))
 }
 /// Give the keyboard to a focus-scope overlay on the frame it appears: from here on Tab and the
 /// arrow keys work inside it and the page's keys have nowhere to go.
@@ -305,7 +325,12 @@ pub(crate) fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
 /// re-marking that node. Non-destructive by construction — it only ever writes into a layer that has
 /// no focus of its own right now.
 pub(crate) fn release_keyboard_to_lower_layer(pw: &mut PerWindow) {
-    if pw.overlay.layers.iter().any(|o| !o.closing && o.focus_scope && overlay_has_size(o)) {
+    if pw
+        .overlay
+        .layers
+        .iter()
+        .any(|o| !o.closing && o.focus_scope && overlay_has_size(o))
+    {
         return; // still covered: a focus scope that is still open keeps the keyboard
     }
     for i in (0..pw.overlay.layers.len()).rev() {
@@ -320,7 +345,9 @@ pub(crate) fn release_keyboard_to_lower_layer(pw: &mut PerWindow) {
                 }
             }
         };
-        let Some((r, slot)) = remembered else { continue };
+        let Some((r, slot)) = remembered else {
+            continue;
+        };
         let nodes = pw.overlay.layers[i].composer.arena_nodes_mut();
         if let Some(id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
             crate::layout::node::clear_focus(nodes, r);
@@ -330,8 +357,12 @@ pub(crate) fn release_keyboard_to_lower_layer(pw: &mut PerWindow) {
             }
         }
     }
-    let Some(slot) = pw.overlay.suspended_focus_slot.take() else { return };
-    let Some(r) = pw.composer.layout_root_idx() else { return };
+    let Some(slot) = pw.overlay.suspended_focus_slot.take() else {
+        return;
+    };
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return;
+    };
     let nodes = pw.composer.arena_nodes_mut();
     if let Some(id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
         crate::layout::node::clear_focus(nodes, r);
@@ -354,13 +385,17 @@ pub(crate) fn release_keyboard_to_lower_layer(pw: &mut PerWindow) {
 pub(crate) fn finish_closing_overlays(pw: &mut PerWindow) {
     let now = std::time::Instant::now();
     // Ids the caller still declares this frame (`overlay_active` is written during compose).
-    let declared: Vec<u64> = pw.composer.overlay_active
+    let declared: Vec<u64> = pw
+        .composer
+        .overlay_active
         .iter()
         .filter(|(_, active)| **active)
         .map(|(&id, _)| id)
         .collect();
     pw.overlay.layers.retain_mut(|ov| {
-        if !ov.closing { return true; }
+        if !ov.closing {
+            return true;
+        }
         let is_declared = declared.contains(&ov.id);
         // No progress (no animation) should not reach here (`begin` already removed those); otherwise wait for the animation to finish.
         let progress = ov.progress.as_ref().map(|p| p.peek());
@@ -388,7 +423,10 @@ pub(crate) fn finish_closing_overlays(pw: &mut PerWindow) {
 }
 /// Whether a close has been pending past [`CLOSING_DEADLINE`] — the safety net for a tween that never
 /// reports done, and the trigger for handing a still-declared overlay back its interactivity.
-fn closing_overlay_timed_out(closing_since: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+fn closing_overlay_timed_out(
+    closing_since: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
     closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE)
 }
 /// Whether a closing overlay may be dropped: its fade finished, or it has been closing past
@@ -438,7 +476,6 @@ pub(crate) fn overlay_anchor_rect(
 }
 
 /// Overlay compose + layout (its own composition unit — constrained to the window size), plus screen positioning.
-
 mod input;
 mod placement;
 mod render;

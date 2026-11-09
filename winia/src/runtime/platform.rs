@@ -12,8 +12,8 @@
 /// 1.0.
 #[cfg(target_os = "windows")]
 pub fn font_scale() -> f32 {
-    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = match hkcu.open_subkey("Software\\Microsoft\\Accessibility") {
         Ok(key) => key,
@@ -24,7 +24,11 @@ pub fn font_scale() -> f32 {
     let percent: u32 = key
         .get_value("TextScaleFactor")
         .ok()
-        .or_else(|| key.get_value::<String, _>("TextScaleFactor").ok().and_then(|s| s.trim().parse().ok()))
+        .or_else(|| {
+            key.get_value::<String, _>("TextScaleFactor")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+        })
         .unwrap_or(100);
     // Windows' slider stops at 225%; anything outside Compose's own 0.5..=4 window is nonsense.
     (percent as f32 / 100.0).clamp(0.5, 4.0)
@@ -43,7 +47,10 @@ mod tests {
     #[test]
     fn the_platform_answers_a_usable_text_scale() {
         let scale = super::font_scale();
-        assert!((0.5..=4.0).contains(&scale), "the document text scale is inside Compose's window: {scale}");
+        assert!(
+            (0.5..=4.0).contains(&scale),
+            "the document text scale is inside Compose's window: {scale}"
+        );
     }
 
     /// The registry reader answers the value Windows writes — checked by setting it (the test
@@ -52,6 +59,9 @@ mod tests {
     #[test]
     fn the_platform_reads_the_registry_text_scale() {
         let scale = crate::runtime::platform::font_scale();
-        assert!((0.5..=4.0).contains(&scale), "inside Compose's window: {scale}");
+        assert!(
+            (0.5..=4.0).contains(&scale),
+            "inside Compose's window: {scale}"
+        );
     }
 }

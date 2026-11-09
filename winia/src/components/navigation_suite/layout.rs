@@ -1,19 +1,19 @@
-use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::{Arrangement, Constraints, LayoutDirection, MeasurePolicy};
-use crate::layout::node::{measure_node, Placement};
-use crate::unit::{Offset, Size};
-use crate::modifier::Modifier;
 use crate::components::navigation_bar::NavigationItemIconPosition;
-use crate::theme::WiniaTheme;
-use crate::layout::Alignment;
-use crate::graphics::Color;
-use crate::components::short_navigation_bar::ShortNavigationBarArrangement;
 use crate::components::navigation_rail::WideNavigationRailState;
+use crate::components::short_navigation_bar::ShortNavigationBarArrangement;
+use crate::composable;
+use crate::graphics::Color;
+use crate::layout::Alignment;
+use crate::layout::node::{Placement, measure_node};
+use crate::layout::{Arrangement, Constraints, LayoutDirection, MeasurePolicy};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 
 use super::scaffold::{
-    build_bar_shape, build_classic_rail_shape, build_drawer_shape, build_rail_shape,
-    PRIMARY_ACTION_PADDING,
+    PRIMARY_ACTION_PADDING, build_bar_shape, build_classic_rail_shape, build_drawer_shape,
+    build_rail_shape,
 };
 use super::types::{
     NavigationSuiteDefaults, NavigationSuiteItem, NavigationSuiteItems, NavigationSuiteType,
@@ -183,9 +183,9 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
             // `End` — and "trailing" is the LOGICAL one: under RTL that is the LEFT edge.
             let action_x = match (self.alignment, self.rtl) {
                 (Alignment::Center, _) => (c.max_width - action.width) / 2.0,
-                (Alignment::Start, false)
-                | (Alignment::End, true)
-                | (Alignment::Stretch, true) => PRIMARY_ACTION_PADDING,
+                (Alignment::Start, false) | (Alignment::End, true) | (Alignment::Stretch, true) => {
+                    PRIMARY_ACTION_PADDING
+                }
                 _ => c.max_width - action.width - PRIMARY_ACTION_PADDING,
             };
             vec![
@@ -195,9 +195,15 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
                 },
                 Placement {
                     size: action,
-                    position: Offset::new(action_x, c.max_height - action.height - PRIMARY_ACTION_PADDING - nav.height),
+                    position: Offset::new(
+                        action_x,
+                        c.max_height - action.height - PRIMARY_ACTION_PADDING - nav.height,
+                    ),
                 },
-                Placement { size: content, position: Offset::new(0.0, 0.0) },
+                Placement {
+                    size: content,
+                    position: Offset::new(0.0, 0.0),
+                },
             ]
         } else {
             let (nav_x, content_x) = if self.rtl {
@@ -206,14 +212,20 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
                 (0.0, nav.width)
             };
             vec![
-                Placement { size: nav, position: Offset::new(nav_x, 0.0) },
+                Placement {
+                    size: nav,
+                    position: Offset::new(nav_x, 0.0),
+                },
                 // A vertical shape keeps its action in its own header, so this slot is parked off-view
                 // rather than placed (upstream's rail branch does not place it at all).
                 Placement {
                     size: action,
                     position: Offset::new(c.max_width + 1000.0, 0.0),
                 },
-                Placement { size: content, position: Offset::new(content_x, 0.0) },
+                Placement {
+                    size: content,
+                    position: Offset::new(content_x, 0.0),
+                },
             ]
         };
         (Size::new(c.max_width, c.max_height), placements)
@@ -312,78 +324,82 @@ impl NavigationSuite {
         crate::layout::components::Stack::new()
             .modifier(modifier)
             .build(ctx, |ctx| {
-        match self.layout_type {
-            NavigationSuiteType::ShortNavigationBarCompact
-            | NavigationSuiteType::ShortNavigationBarMedium
-            | NavigationSuiteType::NavigationBar => {
-                let (bar_arrangement, icon_position, default_container) = match self.layout_type {
-                    NavigationSuiteType::ShortNavigationBarCompact => (
-                        ShortNavigationBarArrangement::EqualWeight,
-                        NavigationItemIconPosition::Top,
-                        colors.short_navigation_bar_container,
+                match self.layout_type {
+                    NavigationSuiteType::ShortNavigationBarCompact
+                    | NavigationSuiteType::ShortNavigationBarMedium
+                    | NavigationSuiteType::NavigationBar => {
+                        let (bar_arrangement, icon_position, default_container) =
+                            match self.layout_type {
+                                NavigationSuiteType::ShortNavigationBarCompact => (
+                                    ShortNavigationBarArrangement::EqualWeight,
+                                    NavigationItemIconPosition::Top,
+                                    colors.short_navigation_bar_container,
+                                ),
+                                NavigationSuiteType::NavigationBar => (
+                                    ShortNavigationBarArrangement::EqualWeight,
+                                    NavigationItemIconPosition::Top,
+                                    colors.navigation_bar_container,
+                                ),
+                                _ => (
+                                    ShortNavigationBarArrangement::Centered,
+                                    NavigationItemIconPosition::Start,
+                                    colors.short_navigation_bar_container,
+                                ),
+                            };
+                        build_bar_shape(
+                            ctx,
+                            items,
+                            bar_arrangement,
+                            icon_position,
+                            container.unwrap_or(default_container),
+                            item_colors.short_navigation_bar,
+                        );
+                    }
+                    NavigationSuiteType::WideNavigationRailCollapsed
+                    | NavigationSuiteType::WideNavigationRailExpanded => {
+                        let expanded =
+                            self.layout_type == NavigationSuiteType::WideNavigationRailExpanded;
+                        let rail_state = WideNavigationRailState::new(ctx);
+                        if expanded {
+                            rail_state.expand();
+                        } else {
+                            rail_state.collapse();
+                        }
+                        // The rail's own item token (`material3/NavigationRail.kt:271`: `FastSpatial`).
+                        let progress = ctx.animate_float_as_state(
+                            if expanded { 1.0 } else { 0.0 },
+                            crate::animation::AnimationSpec::Spring(
+                                crate::animation::SpringSpec::spatial_fast(),
+                            ),
+                        );
+                        build_rail_shape(
+                            ctx,
+                            items,
+                            rail_state,
+                            progress,
+                            container.unwrap_or(colors.wide_navigation_rail_container),
+                            arrangement,
+                            item_colors.wide_navigation_rail,
+                            action,
+                        );
+                    }
+                    NavigationSuiteType::NavigationRail => build_classic_rail_shape(
+                        ctx,
+                        items,
+                        container.unwrap_or(colors.navigation_rail_container),
+                        item_colors.wide_navigation_rail,
+                        action,
+                        arrangement,
                     ),
-                    NavigationSuiteType::NavigationBar => (
-                        ShortNavigationBarArrangement::EqualWeight,
-                        NavigationItemIconPosition::Top,
-                        colors.navigation_bar_container,
+                    NavigationSuiteType::NavigationDrawer => build_drawer_shape(
+                        ctx,
+                        items,
+                        container.unwrap_or(colors.navigation_drawer_container),
+                        action,
+                        arrangement,
                     ),
-                    _ => (
-                        ShortNavigationBarArrangement::Centered,
-                        NavigationItemIconPosition::Start,
-                        colors.short_navigation_bar_container,
-                    ),
-                };
-                build_bar_shape(
-                    ctx,
-                    items,
-                    bar_arrangement,
-                    icon_position,
-                    container.unwrap_or(default_container),
-                    item_colors.short_navigation_bar,
-                );
-            }
-            NavigationSuiteType::WideNavigationRailCollapsed
-            | NavigationSuiteType::WideNavigationRailExpanded => {
-                let expanded = self.layout_type == NavigationSuiteType::WideNavigationRailExpanded;
-                let rail_state = WideNavigationRailState::new(ctx);
-                if expanded {
-                    rail_state.expand();
-                } else {
-                    rail_state.collapse();
+                    NavigationSuiteType::None => {}
                 }
-                // The rail's own item token (`material3/NavigationRail.kt:271`: `FastSpatial`).
-                let progress = ctx.animate_float_as_state(
-                    if expanded { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
-                );
-                build_rail_shape(
-                    ctx,
-                    items,
-                    rail_state,
-                    progress,
-                    container.unwrap_or(colors.wide_navigation_rail_container),
-                    arrangement,
-                    item_colors.wide_navigation_rail,
-                    action,
-                );
-            }
-            NavigationSuiteType::NavigationRail => build_classic_rail_shape(
-                ctx,
-                items,
-                container.unwrap_or(colors.navigation_rail_container),
-                item_colors.wide_navigation_rail,
-                action,
-                arrangement,
-            ),
-            NavigationSuiteType::NavigationDrawer => build_drawer_shape(
-                ctx,
-                items,
-                container.unwrap_or(colors.navigation_drawer_container),
-                action,
-                arrangement,
-            ),
-            NavigationSuiteType::None => {}
-        }
             });
     }
 }

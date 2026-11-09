@@ -35,25 +35,27 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("scope");
-                Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    Column::new()
-                        .modifier(Modifier::new().fill_max_size())
-                        .build(ctx, |ctx| {
-                            if s.get() {
-                                under_bar_list(ctx, &scope, false);
-                            } else {
-                                under_bar_detail(ctx, &scope, false);
-                            }
-                        });
-                    // Pinned chrome, painted last → above the whole screen.
-                    Column::new()
-                        .modifier(
-                            Modifier::new()
-                                .size(400.0, 60.0)
-                                .background(Color::GREEN, Shape::Rectangle),
-                        )
-                        .build(ctx, |_| {});
-                });
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                if s.get() {
+                                    under_bar_list(ctx, &scope, false);
+                                } else {
+                                    under_bar_detail(ctx, &scope, false);
+                                }
+                            });
+                        // Pinned chrome, painted last → above the whole screen.
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(Color::GREEN, Shape::Rectangle),
+                            )
+                            .build(ctx, |_| {});
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -114,8 +116,7 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
             .and_then(|a| a.flight.target_slot)
             .expect("flight still alive in the window");
         let root = composer.layout_root_idx().expect("root");
-        let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot)
-            .expect("target node");
+        let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot).expect("target node");
         sample = Some((P_TREE_ORDER, tslot, tidx));
     }
     let (p_at_probe, _tslot, tidx) =
@@ -140,7 +141,11 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
         .expect("flight")
         .set_progress(P_ELEVATED);
     frame(&mut composer);
-    composer.arena.nodes[tidx].transition.as_mut().unwrap().elevated = true;
+    composer.arena.nodes[tidx]
+        .transition
+        .as_mut()
+        .unwrap()
+        .elevated = true;
     composer.elevated_roots.push(tidx);
     composer.rebuild_layer_order();
     let mut elevated = render_heads(&composer);

@@ -54,7 +54,9 @@ impl OverlayWindow {
         // It is the keyboard's owner again, so the page's suspended focus has to be suspended afresh
         // (the release already handed it back).
         self.claimed_keyboard = false;
-        let Some(progress) = self.progress.clone() else { return };
+        let Some(progress) = self.progress.clone() else {
+            return;
+        };
         match &self.enter_anim {
             Some(spec) => {
                 crate::animation::push_animatable_handle(progress, 1.0, spec.animation_spec());
@@ -157,10 +159,7 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             if !had_enter && now_has_enter {
                 if let Some(p) = ov.progress.clone() {
                     let spec = ov.enter_anim.as_ref().unwrap();
-                    crate::animation::push_animatable_handle(
-                        p, 1.0,
-                        spec.animation_spec(),
-                    );
+                    crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
                 }
             }
         } else {
@@ -181,13 +180,12 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                 composer.set_saveable_registry(registry);
             }
             let enter_anim = desc.enter_anim.clone();
-            pw.overlay.layers.push(OverlayWindow::new_with_composer(desc, composer));
+            pw.overlay
+                .layers
+                .push(OverlayWindow::new_with_composer(desc, composer));
             if let Some(p) = pw.overlay.layers.last().and_then(|o| o.progress.clone()) {
                 if let Some(spec) = &enter_anim {
-                    crate::animation::push_animatable_handle(
-                        p, 1.0,
-                        spec.animation_spec(),
-                    );
+                    crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
                 } else {
                     // No enter animation (but there is an exit one): show it fully at once (progress=1).
                     p.as_raw().set_backchannel(1.0);
@@ -198,7 +196,10 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     // Overlays recorded as active=false during composition → an active close → start the exit animation
     // (fire `on_dismiss` first; removal is done by `finish_closing_overlays` when the animation finishes —
     // if not reset, the overlay is kept and rendered to play the exit animation).
-    let to_close: Vec<u64> = pw.composer.overlay_active.iter()
+    let to_close: Vec<u64> = pw
+        .composer
+        .overlay_active
+        .iter()
         .filter(|(_, active)| !**active)
         .map(|(&id, _)| id)
         .collect();
@@ -208,4 +209,3 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     // Exit-animation completion check: closing and progress≈0 (or no animation spec) → really remove.
     finish_closing_overlays(pw);
 }
-

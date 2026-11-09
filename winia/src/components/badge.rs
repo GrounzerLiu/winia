@@ -9,15 +9,15 @@
 //!   （Compose BadgeOffset / BadgeWithContent*Offset）；
 //! - 徽章宽 > 6dp 视为有内容（Compose `badgePlaceable.width > BadgeTokens.Size`）。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
+use crate::graphics::{Color, Shape};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::measure_node;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
+use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 
 /// 小徽章尺寸（`BadgeTokens.Size = 6dp`）
 pub const BADGE_SIZE: f32 = 6.0;
@@ -95,8 +95,16 @@ impl Badge {
             .content_color
             .or_else(|| theme.content_color_for(container))
             .unwrap_or_else(WiniaTheme::content_color);
-        let size = if has_content { BADGE_LARGE_SIZE } else { BADGE_SIZE };
-        let shape = Shape::rounded(if has_content { BADGE_LARGE_CORNER } else { BADGE_CORNER });
+        let size = if has_content {
+            BADGE_LARGE_SIZE
+        } else {
+            BADGE_SIZE
+        };
+        let shape = Shape::rounded(if has_content {
+            BADGE_LARGE_CORNER
+        } else {
+            BADGE_CORNER
+        });
 
         // 容器：min 尺寸 + 背景（CornerFull 形状）+ 内容水平 padding
         //（背景在 padding 前——画整个节点 rect 含 padding 区，Compose 同序）
@@ -111,11 +119,7 @@ impl Badge {
 
         let key = ctx.next_key();
         let content = self.content;
-        match ctx.start_restartable_group(
-            key,
-            m,
-            BoxLayout::new().alignment(Alignment::Center),
-        ) {
+        match ctx.start_restartable_group(key, m, BoxLayout::new().alignment(Alignment::Center)) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 if let Some(content) = content {
@@ -124,15 +128,11 @@ impl Badge {
                     WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                         let mut text_style = WiniaTheme::typography().label_small;
                         text_style.color = Some(content_color);
-                        crate::components::text::ProvideTextStyle(
-                            text_style,
-                            ctx,
-                            |ctx| {
-                                crate::layout::components::Row::new()
-                                    .alignment(Alignment::Center)
-                                    .build(ctx, content);
-                            },
-                        );
+                        crate::components::text::ProvideTextStyle(text_style, ctx, |ctx| {
+                            crate::layout::components::Row::new()
+                                .alignment(Alignment::Center)
+                                .build(ctx, content);
+                        });
                     });
                 }
             }
@@ -142,7 +142,9 @@ impl Badge {
 }
 
 impl Default for Badge {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// BadgedBox 布局策略：anchor（子 0）全约束测量 + badge（子 1）宽松高度测量；
@@ -164,13 +166,18 @@ impl MeasurePolicy for BadgedBoxPolicy {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        debug_assert_eq!(children.len(), 2, "BadgedBox 需要 anchor + badge 两个子节点");
+        debug_assert_eq!(
+            children.len(),
+            2,
+            "BadgedBox 需要 anchor + badge 两个子节点"
+        );
         if children.len() < 2 {
             return (Size::ZERO, Vec::new());
         }
         // badge 先测（宽松高度——文本不占多余空间，Compose copy(minHeight = 0)）；
         // anchor 全约束
-        let (badge_size, _) = measure_node(nodes, policies, children[1], constraints.loosen_height());
+        let (badge_size, _) =
+            measure_node(nodes, policies, children[1], constraints.loosen_height());
         let (anchor_size, _) = measure_node(nodes, policies, children[0], constraints);
 
         // 用徽章宽度推断有无内容（Compose：width > BadgeTokens.Size）
@@ -225,7 +232,9 @@ impl MeasurePolicy for BadgedBoxPolicy {
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &c) in children.iter().enumerate() {
-            if i >= placements.len() { break; }
+            if i >= placements.len() {
+                break;
+            }
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
         }
@@ -354,8 +363,15 @@ mod tests {
             got[0], theme.on_surface,
             "a scheme container maps to its own content colour (surfaceContainerHigh → onSurface)"
         );
-        assert_eq!(got[1], theme.tertiary, "a custom container falls back to the ambient content colour");
-        assert_eq!(got[2], Color::from_argb(255, 9, 9, 9), "an explicit content colour wins");
+        assert_eq!(
+            got[1], theme.tertiary,
+            "a custom container falls back to the ambient content colour"
+        );
+        assert_eq!(
+            got[2],
+            Color::from_argb(255, 9, 9, 9),
+            "an explicit content colour wins"
+        );
     }
 
     /// Compose places the anchor and the badge with `placeRelative`, so the badge sits at the anchor's
@@ -375,7 +391,9 @@ mod tests {
                         let k = ctx.next_key();
                         ctx.start_leaf(
                             k,
-                            Modifier::new().size(24.0, 24.0).background(Color::WHITE, Shape::Rectangle),
+                            Modifier::new()
+                                .size(24.0, 24.0)
+                                .background(Color::WHITE, Shape::Rectangle),
                         );
                         ctx.end_node();
                     });
@@ -388,13 +406,20 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
             let nodes = composer.arena_nodes();
             for n in nodes.iter() {
-                if n.measured_size.width == 24.0 && n.measured_size.height == 24.0 && n.children.len() == 2 {
+                if n.measured_size.width == 24.0
+                    && n.measured_size.height == 24.0
+                    && n.children.len() == 2
+                {
                     return nodes[n.children[1]].position.x;
                 }
             }
             panic!("no BadgedBox found");
         };
-        assert_eq!(badge_x(crate::layout::LayoutDirection::Ltr), 18.0, "LTR: flush with the right edge");
+        assert_eq!(
+            badge_x(crate::layout::LayoutDirection::Ltr),
+            18.0,
+            "LTR: flush with the right edge"
+        );
         assert_eq!(
             badge_x(crate::layout::LayoutDirection::Rtl),
             0.0,
@@ -455,15 +480,22 @@ mod tests {
                         .build(ctx);
                 })
                 .build(ctx, |ctx| {
-                    crate::components::Text::new("anchor").font_size(40.0).build(ctx);
+                    crate::components::Text::new("anchor")
+                        .font_size(40.0)
+                        .build(ctx);
                 });
             });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
         let nodes = composer.arena_nodes();
         for n in nodes.iter() {
-            if n.children.len() == 2 && n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE).is_some() {
-                let own = n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE).unwrap();
+            if n.children.len() == 2
+                && n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE)
+                    .is_some()
+            {
+                let own = n
+                    .alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE)
+                    .unwrap();
                 let anchor_child = &nodes[n.children[0]];
                 let badge_child = &nodes[n.children[1]];
                 let anchor_line = anchor_child
@@ -500,24 +532,34 @@ mod tests {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 if badge_content {
                     BadgedBox::new(|ctx| {
-                        Badge::new().content(|ctx| {
-                            crate::components::Text::new("3").build(ctx);
-                        }).build(ctx);
-                    }).build(ctx, |ctx| {
+                        Badge::new()
+                            .content(|ctx| {
+                                crate::components::Text::new("3").build(ctx);
+                            })
+                            .build(ctx);
+                    })
+                    .build(ctx, |ctx| {
                         let k = ctx.next_key();
-                        ctx.start_leaf(k, Modifier::new()
-                            .size(24.0, 24.0)
-                            .background(Color::WHITE, Shape::Rectangle));
+                        ctx.start_leaf(
+                            k,
+                            Modifier::new()
+                                .size(24.0, 24.0)
+                                .background(Color::WHITE, Shape::Rectangle),
+                        );
                         ctx.end_node();
                     });
                 } else {
                     BadgedBox::new(|ctx| {
                         Badge::new().build(ctx);
-                    }).build(ctx, |ctx| {
+                    })
+                    .build(ctx, |ctx| {
                         let k = ctx.next_key();
-                        ctx.start_leaf(k, Modifier::new()
-                            .size(24.0, 24.0)
-                            .background(Color::WHITE, Shape::Rectangle));
+                        ctx.start_leaf(
+                            k,
+                            Modifier::new()
+                                .size(24.0, 24.0)
+                                .background(Color::WHITE, Shape::Rectangle),
+                        );
                         ctx.end_node();
                     });
                 }
@@ -532,15 +574,31 @@ mod tests {
         let mut anchor = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let mut badge = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for (i, n) in nodes.iter().enumerate() {
-            if n.measured_size.width == 24.0 && n.measured_size.height == 24.0 && n.children.len() == 2 {
+            if n.measured_size.width == 24.0
+                && n.measured_size.height == 24.0
+                && n.children.len() == 2
+            {
                 let a = &nodes[n.children[0]];
-                anchor = (a.position.x, a.position.y, a.measured_size.width, a.measured_size.height);
+                anchor = (
+                    a.position.x,
+                    a.position.y,
+                    a.measured_size.width,
+                    a.measured_size.height,
+                );
                 let b = &nodes[n.children[1]];
-                badge = (b.position.x, b.position.y, b.measured_size.width, b.measured_size.height);
+                badge = (
+                    b.position.x,
+                    b.position.y,
+                    b.measured_size.width,
+                    b.measured_size.height,
+                );
                 break;
             }
         }
-        assert!(badge.2 != 0.0 || badge.3 != 0.0, "未找到 BadgedBox 容器（24×24 ch=2）");
+        assert!(
+            badge.2 != 0.0 || badge.3 != 0.0,
+            "未找到 BadgedBox 容器（24×24 ch=2）"
+        );
         BadgeScene { anchor, badge }
     }
 
@@ -548,8 +606,12 @@ mod tests {
     fn badged_box_positions_small_badge() {
         let s = render_badged_box(false);
         assert_eq!((s.anchor.0, s.anchor.1), (0.0, 0.0), "anchor 应位于原点");
-        assert_eq!((s.badge.0, s.badge.1), (18.0, 0.0),
-            "小徽章应位于 (18,0)——左下角距锚点右上角 6×6（实际 {:?}）", s.badge);
+        assert_eq!(
+            (s.badge.0, s.badge.1),
+            (18.0, 0.0),
+            "小徽章应位于 (18,0)——左下角距锚点右上角 6×6（实际 {:?}）",
+            s.badge
+        );
         assert_eq!((s.badge.2, s.badge.3), (6.0, 6.0), "小徽章 6×6");
     }
 
@@ -557,10 +619,16 @@ mod tests {
     fn badged_box_positions_large_badge() {
         let s = render_badged_box(true);
         assert_eq!((s.anchor.0, s.anchor.1), (0.0, 0.0), "anchor 应位于原点");
-        assert_eq!(s.badge.0, 12.0,
-            "大徽章水平：左缘距锚点右缘 12dp（实际 {:?}）", s.badge);
-        assert_eq!(s.badge.1, -2.0,
-            "大徽章垂直：底边距锚点顶 14dp → y = -h+14 = -2（实际 {:?}）", s.badge);
+        assert_eq!(
+            s.badge.0, 12.0,
+            "大徽章水平：左缘距锚点右缘 12dp（实际 {:?}）",
+            s.badge
+        );
+        assert_eq!(
+            s.badge.1, -2.0,
+            "大徽章垂直：底边距锚点顶 14dp → y = -h+14 = -2（实际 {:?}）",
+            s.badge
+        );
     }
 
     // ── 徽章内容响应式（Compose 惯用法：在使用的最近作用域内读 State）──
@@ -605,7 +673,11 @@ mod tests {
         count.set(4);
         let ran = composer.recompose(make_scene(count.clone(), hits.clone(), theme));
         assert!(ran, "状态变化应触发重组");
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "徽章内容组应随状态变化重执行");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "徽章内容组应随状态变化重执行"
+        );
     }
 
     // 注：读在 content 闭包外（容器组层）的模式在隔离结构下实测也能传播
@@ -653,7 +725,14 @@ mod tests {
         // 小点 6×6 在 (0,0)——中心 (3,3) 应为 Error 色
         let c = at(&px, w, 3.0, 3.0);
         assert!(
-            close(c, (theme.error.r as i32, theme.error.g as i32, theme.error.b as i32)),
+            close(
+                c,
+                (
+                    theme.error.r as i32,
+                    theme.error.g as i32,
+                    theme.error.b as i32
+                )
+            ),
             "小徽章中心应为 Error 色（实际 {c:?}，期望 {:?}）",
             (theme.error.r, theme.error.g, theme.error.b)
         );
@@ -663,13 +742,19 @@ mod tests {
     fn badge_with_content_renders_container_and_label() {
         let theme = light_theme();
         let (px, w) = render_badge_px(|ctx| {
-            Badge::new().content(|ctx| {
-                crate::components::Text::new("3").build(ctx);
-            }).build(ctx);
+            Badge::new()
+                .content(|ctx| {
+                    crate::components::Text::new("3").build(ctx);
+                })
+                .build(ctx);
         });
         // 16×16 徽章区域统计：Error 底色像素应占多数（容器背景），
         // 同时存在 OnError 文字像素（"3" 覆盖中心——避免单点采样命中文字）
-        let error_target = (theme.error.r as i32, theme.error.g as i32, theme.error.b as i32);
+        let error_target = (
+            theme.error.r as i32,
+            theme.error.g as i32,
+            theme.error.b as i32,
+        );
         let mut error_px = 0;
         let mut label_px = 0;
         for y in 0..16i32 {
@@ -683,8 +768,14 @@ mod tests {
                 }
             }
         }
-        assert!(error_px > 100, "大徽章底色应为 Error（16×16 内实际 {error_px} 像素）");
-        assert!(label_px > 5, "大徽章内应有 OnError 文字像素（实际 {label_px}）");
+        assert!(
+            error_px > 100,
+            "大徽章底色应为 Error（16×16 内实际 {error_px} 像素）"
+        );
+        assert!(
+            label_px > 5,
+            "大徽章内应有 OnError 文字像素（实际 {label_px}）"
+        );
     }
 
     #[test]
@@ -696,11 +787,15 @@ mod tests {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 BadgedBox::new(|ctx| {
                     Badge::new().build(ctx);
-                }).build(ctx, |ctx| {
+                })
+                .build(ctx, |ctx| {
                     let k = ctx.next_key();
-                    ctx.start_leaf(k, Modifier::new()
-                        .size(24.0, 24.0)
-                        .background(Color::from_argb(255, 200, 200, 200), Shape::Rectangle));
+                    ctx.start_leaf(
+                        k,
+                        Modifier::new()
+                            .size(24.0, 24.0)
+                            .background(Color::from_argb(255, 200, 200, 200), Shape::Rectangle),
+                    );
                     ctx.end_node();
                 });
             });
@@ -723,13 +818,21 @@ mod tests {
         // 徽章中心 (21,3)（(18,0) 起 6×6）应为 Error 色
         let c = at(21.0, 3.0);
         assert!(
-            close(c, (theme.error.r as i32, theme.error.g as i32, theme.error.b as i32)),
+            close(
+                c,
+                (
+                    theme.error.r as i32,
+                    theme.error.g as i32,
+                    theme.error.b as i32
+                )
+            ),
             "BadgedBox 徽章区域应有 Error 像素（实际 {c:?}）"
         );
         // anchor 内部 (12,12) 为灰色（anchor 内容）
         let a = at(12.0, 12.0);
-        assert!(close(a, (200, 200, 200)), "anchor 内容应正常渲染（实际 {a:?}）");
+        assert!(
+            close(a, (200, 200, 200)),
+            "anchor 内容应正常渲染（实际 {a:?}）"
+        );
     }
 }
-
-

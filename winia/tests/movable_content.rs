@@ -1,8 +1,11 @@
 //! Production-key regression tests for movable content identity, updates and lifetime.
-use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
-use winia::{Composer, MovableContent};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use winia::layout::{BoxLayout, Constraints};
 use winia::prelude::*;
+use winia::{Composer, MovableContent};
 
 fn layout(composer: &mut Composer) {
     composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -17,14 +20,22 @@ fn leaf(ctx: &mut ComposeCtx, width: f32) {
 }
 fn leaves(composer: &Composer) -> Vec<(u64, f32)> {
     fn visit(nodes: &[winia::layout::node::LayoutNode], index: usize, out: &mut Vec<(u64, f32)>) {
-        if nodes[index].children.is_empty() { out.push((nodes[index].id, nodes[index].measured_size.width)); }
-        for &child in &nodes[index].children { visit(nodes, child, out); }
+        if nodes[index].children.is_empty() {
+            out.push((nodes[index].id, nodes[index].measured_size.width));
+        }
+        for &child in &nodes[index].children {
+            visit(nodes, child, out);
+        }
     }
     let mut out = Vec::new();
-    if let Some(root) = composer.layout_root_idx() { visit(composer.arena_nodes(), root, &mut out); }
+    if let Some(root) = composer.layout_root_idx() {
+        visit(composer.arena_nodes(), root, &mut out);
+    }
     out
 }
-fn widths(composer: &Composer) -> Vec<f32> { leaves(composer).into_iter().map(|(_, w)| w).collect() }
+fn widths(composer: &Composer) -> Vec<f32> {
+    leaves(composer).into_iter().map(|(_, w)| w).collect()
+}
 
 #[test]
 fn nested_state_read_remains_subscribed_and_updates() {
@@ -33,21 +44,34 @@ fn nested_state_read_remains_subscribed_and_updates() {
     let frame = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let source = value.clone();
-            let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                ctx.key("body", |ctx| Column::new().build(ctx, |ctx| leaf(ctx, source.get())));
-            }));
-            ctx.key("host", |ctx| Column::new().build(ctx, |ctx| {
-                ctx.key("ref", |ctx| handle.compose(ctx));
-            }));
+            let handle = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    ctx.key("body", |ctx| {
+                        Column::new().build(ctx, |ctx| leaf(ctx, source.get()))
+                    });
+                })
+            });
+            ctx.key("host", |ctx| {
+                Column::new().build(ctx, |ctx| {
+                    ctx.key("ref", |ctx| handle.compose(ctx));
+                })
+            });
         });
         layout(composer);
     };
     frame(&mut composer);
     assert_eq!(widths(&composer), vec![10.0]);
     value.set(20.0);
-    assert!(composer.has_pending_states(), "a live stored reader must keep its subscription");
+    assert!(
+        composer.has_pending_states(),
+        "a live stored reader must keep its subscription"
+    );
     frame(&mut composer);
-    assert_eq!(widths(&composer), vec![20.0], "invalidation must enter the current host and stored reader");
+    assert_eq!(
+        widths(&composer),
+        vec![20.0],
+        "invalidation must enter the current host and stored reader"
+    );
 }
 
 #[test]
@@ -55,20 +79,26 @@ fn fresh_captured_payload_reenters_nested_content() {
     let title = State::new(10.0_f32);
     let mut composer = Composer::new();
     let frame = |composer: &mut Composer| {
-        composer.compose(|ctx| ctx.key("owner-scope", |ctx| {
-            ctx.start_scope();
-            let current = title.get();
-            let source = ctx.key("source", |ctx| ctx.remember_backchannel(|| 10.0_f32));
-            source.set(current);
-            let handle = ctx.key("handle", |ctx| ctx.remember_movable_content(move |ctx| {
-                let captured = source.get();
-                ctx.key("body", |ctx| Column::new().build(ctx, |ctx| leaf(ctx, captured)));
-            }));
-            host(ctx);
-            ctx.key("ref", |ctx| handle.compose(ctx));
-            ctx.end_node();
-            ctx.end_scope();
-        }));
+        composer.compose(|ctx| {
+            ctx.key("owner-scope", |ctx| {
+                ctx.start_scope();
+                let current = title.get();
+                let source = ctx.key("source", |ctx| ctx.remember_backchannel(|| 10.0_f32));
+                source.set(current);
+                let handle = ctx.key("handle", |ctx| {
+                    ctx.remember_movable_content(move |ctx| {
+                        let captured = source.get();
+                        ctx.key("body", |ctx| {
+                            Column::new().build(ctx, |ctx| leaf(ctx, captured))
+                        });
+                    })
+                });
+                host(ctx);
+                ctx.key("ref", |ctx| handle.compose(ctx));
+                ctx.end_node();
+                ctx.end_scope();
+            })
+        });
         layout(composer);
     };
     frame(&mut composer);
@@ -84,24 +114,34 @@ fn dropping_owner_and_all_handles_releases_store_resources() {
     let weak = Arc::downgrade(&resource);
     let source = weak.clone();
     let mut composer = Composer::new();
-    composer.compose(|ctx| ctx.key("owner", |ctx| {
-        ctx.start_scope();
-        let handle = ctx.remember_movable_content(move |ctx| ctx.key("body", |ctx| {
-            let held = ctx.remember(|| source.upgrade().expect("initial resource"));
-            let _ = held.peek();
-            leaf(ctx, 10.0);
-        }));
-        host(ctx);
-        ctx.key("ref", |ctx| handle.compose(ctx));
-        ctx.end_node();
-        ctx.end_scope();
-    }));
+    composer.compose(|ctx| {
+        ctx.key("owner", |ctx| {
+            ctx.start_scope();
+            let handle = ctx.remember_movable_content(move |ctx| {
+                ctx.key("body", |ctx| {
+                    let held = ctx.remember(|| source.upgrade().expect("initial resource"));
+                    let _ = held.peek();
+                    leaf(ctx, 10.0);
+                })
+            });
+            host(ctx);
+            ctx.key("ref", |ctx| handle.compose(ctx));
+            ctx.end_node();
+            ctx.end_scope();
+        })
+    });
     layout(&mut composer);
     drop(resource);
     assert!(weak.upgrade().is_some());
-    composer.compose(|ctx| { host(ctx); ctx.end_node(); });
+    composer.compose(|ctx| {
+        host(ctx);
+        ctx.end_node();
+    });
     layout(&mut composer);
-    assert!(weak.upgrade().is_none(), "removed owners must not keep unreachable stores alive");
+    assert!(
+        weak.upgrade().is_none(),
+        "removed owners must not keep unreachable stores alive"
+    );
 }
 
 #[test]
@@ -111,10 +151,14 @@ fn uncomposed_trailing_child_disappears() {
     let frame = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let show = show.clone();
-            let handle = ctx.key("handle", |ctx| ctx.remember_movable_content(move |ctx| {
-                ctx.key("first", |ctx| leaf(ctx, 10.0));
-                if show.load(Ordering::SeqCst) { ctx.key("second", |ctx| leaf(ctx, 20.0)); }
-            }));
+            let handle = ctx.key("handle", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    ctx.key("first", |ctx| leaf(ctx, 10.0));
+                    if show.load(Ordering::SeqCst) {
+                        ctx.key("second", |ctx| leaf(ctx, 20.0));
+                    }
+                })
+            });
             host(ctx);
             ctx.key("ref", |ctx| handle.compose(ctx));
             ctx.end_node();
@@ -144,9 +188,13 @@ fn distinct_handles_keep_state_and_nodes_after_reordering() {
     let frame = |composer: &mut Composer, reverse: bool| {
         composer.compose(|ctx| {
             let a = inits.clone();
-            let first = ctx.key("owner-a", |ctx| ctx.remember_movable_content(move |ctx| shared_payload(ctx, &a)));
+            let first = ctx.key("owner-a", |ctx| {
+                ctx.remember_movable_content(move |ctx| shared_payload(ctx, &a))
+            });
             let b = inits.clone();
-            let second = ctx.key("owner-b", |ctx| ctx.remember_movable_content(move |ctx| shared_payload(ctx, &b)));
+            let second = ctx.key("owner-b", |ctx| {
+                ctx.remember_movable_content(move |ctx| shared_payload(ctx, &b))
+            });
             host(ctx);
             if reverse {
                 ctx.key("ref-b", |ctx| second.compose(ctx));
@@ -174,10 +222,15 @@ fn caller_explicit_keys_do_not_replace_payload_identity() {
     let frame = |composer: &mut Composer, site: &str| {
         composer.compose(|ctx| {
             let source = inits.clone();
-            let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                let marker = keyed_stmt!({ ctx.remember(|| source.fetch_add(1, Ordering::SeqCst)) });
-                keyed_stmt!({ leaf(ctx, 10.0 + marker.peek() as f32); });
-            }));
+            let handle = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    let marker =
+                        keyed_stmt!({ ctx.remember(|| source.fetch_add(1, Ordering::SeqCst)) });
+                    keyed_stmt!({
+                        leaf(ctx, 10.0 + marker.peek() as f32);
+                    });
+                })
+            });
             host(ctx);
             ctx.key(site, |ctx| handle.compose(ctx));
             ctx.end_node();
@@ -196,11 +249,25 @@ fn suite_with_captured_label(ctx: &mut ComposeCtx, input: &State<f32>) {
     use winia::components::navigation_suite::{NavigationSuiteScaffold, NavigationSuiteType};
     let captured_width = input.get();
     NavigationSuiteScaffold::new(
-        |items| items.item(true, |ctx| leaf(ctx, 5.0), move |ctx| {
-            Column::new().build(ctx, |ctx| leaf(ctx, captured_width));
-        }, || {}),
-        |ctx| { let key = ctx.next_key(); ctx.start_leaf(key, Modifier::new()); ctx.end_node(); },
-    ).layout_type(NavigationSuiteType::ShortNavigationBarCompact).transition(false).build(ctx);
+        |items| {
+            items.item(
+                true,
+                |ctx| leaf(ctx, 5.0),
+                move |ctx| {
+                    Column::new().build(ctx, |ctx| leaf(ctx, captured_width));
+                },
+                || {},
+            )
+        },
+        |ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+        },
+    )
+    .layout_type(NavigationSuiteType::ShortNavigationBarCompact)
+    .transition(false)
+    .build(ctx);
 }
 #[test]
 fn navigation_suite_refreshes_current_captured_label() {
@@ -224,8 +291,12 @@ fn skipped_idle_host_keeps_payload_visible() {
     let mut composer = Composer::new();
     let frame = |composer: &mut Composer| {
         composer.compose(|ctx| {
-            let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| ctx.key("body", |ctx| leaf(ctx, 10.0))));
-            ctx.key("host", |ctx| Column::new().build(ctx, |ctx| ctx.key("ref", |ctx| handle.compose(ctx))));
+            let handle = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| ctx.key("body", |ctx| leaf(ctx, 10.0)))
+            });
+            ctx.key("host", |ctx| {
+                Column::new().build(ctx, |ctx| ctx.key("ref", |ctx| handle.compose(ctx)))
+            });
         });
         layout(composer);
     };
@@ -242,10 +313,12 @@ fn replacing_a_reference_with_an_ordinary_node_disposes_old_payload() {
     let resource = Arc::new(());
     let source = Arc::downgrade(&resource);
     composer.compose(|ctx| {
-        let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-            let _held = ctx.remember(|| source.upgrade().unwrap());
-            leaf(ctx, 10.0);
-        }));
+        let payload = ctx.key("owner", |ctx| {
+            ctx.remember_movable_content(move |ctx| {
+                let _held = ctx.remember(|| source.upgrade().unwrap());
+                leaf(ctx, 10.0);
+            })
+        });
         host(ctx);
         ctx.key("same-site", |ctx| payload.compose(ctx));
         ctx.end_node();
@@ -271,15 +344,17 @@ fn stored_previous_sibling_lookup_uses_the_payload_tree() {
     composer.compose(|ctx| {
         let observed = observed.clone();
         let expected = expected.clone();
-        let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-            Column::new().build(ctx, |ctx| {
-                let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(18.0, 5.0));
-                ctx.end_node();
-                *expected.lock().unwrap() = Some(key);
-                *observed.lock().unwrap() = ctx.prev_sibling_slot_key();
-            });
-        }));
+        let payload = ctx.key("owner", |ctx| {
+            ctx.remember_movable_content(move |ctx| {
+                Column::new().build(ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(18.0, 5.0));
+                    ctx.end_node();
+                    *expected.lock().unwrap() = Some(key);
+                    *observed.lock().unwrap() = ctx.prev_sibling_slot_key();
+                });
+            })
+        });
         host(ctx);
         ctx.key("invoke", |ctx| payload.compose(ctx));
         ctx.end_node();
@@ -294,12 +369,16 @@ fn catching_a_payload_panic_restores_the_callers_runtime() {
     let mut composer = Composer::new();
     for _ in 0..2 {
         composer.compose(|ctx| {
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| {
-                ctx.key("body", |ctx| Column::new().build(ctx, |ctx| {
-                    leaf(ctx, 10.0);
-                    panic!("intentional payload failure");
-                }));
-            }));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(|ctx| {
+                    ctx.key("body", |ctx| {
+                        Column::new().build(ctx, |ctx| {
+                            leaf(ctx, 10.0);
+                            panic!("intentional payload failure");
+                        })
+                    });
+                })
+            });
             host(ctx);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ctx.key("invoke", |ctx| payload.compose(ctx));
@@ -309,7 +388,11 @@ fn catching_a_payload_panic_restores_the_callers_runtime() {
             ctx.end_node();
         });
         layout(&mut composer);
-        assert_eq!(widths(&composer), vec![25.0], "failed store products must not corrupt caller siblings");
+        assert_eq!(
+            widths(&composer),
+            vec![25.0],
+            "failed store products must not corrupt caller siblings"
+        );
     }
 }
 
@@ -317,13 +400,18 @@ fn catching_a_payload_panic_restores_the_callers_runtime() {
 fn explicit_duplicate_placement_is_rejected_without_corrupting_first() {
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| leaf(ctx, 10.0)));
+        let payload = ctx.key("owner", |ctx| {
+            ctx.remember_movable_content(|ctx| leaf(ctx, 10.0))
+        });
         host(ctx);
         ctx.key("first", |ctx| payload.compose(ctx));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             ctx.key("second", |ctx| payload.compose(ctx));
         }));
-        assert!(result.is_err(), "the minimal API must never silently omit unsupported duplicates");
+        assert!(
+            result.is_err(),
+            "the minimal API must never silently omit unsupported duplicates"
+        );
         ctx.key("after", |ctx| leaf(ctx, 25.0));
         ctx.end_node();
     });
@@ -344,18 +432,22 @@ fn same_composition_retry_keeps_its_state_and_discards_failed_reads() {
             let committed = committed.clone();
             let attempts = attempts.clone();
             let inits = inits.clone();
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
-                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                    let _ = first.get();
-                    ctx.changed(&123_u32);
-                    panic!("first attempt fails after reading state");
-                }
-                leaf(ctx, committed.get() + marker.peek() as f32);
-            }));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let _ = first.get();
+                        ctx.changed(&123_u32);
+                        panic!("first attempt fails after reading state");
+                    }
+                    leaf(ctx, committed.get() + marker.peek() as f32);
+                })
+            });
             host(ctx);
             if retry {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx.key("invoke", |ctx| payload.compose(ctx))));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ctx.key("invoke", |ctx| payload.compose(ctx))
+                }));
                 assert!(result.is_err());
             }
             ctx.key("invoke", |ctx| payload.compose(ctx));
@@ -367,9 +459,16 @@ fn same_composition_retry_keeps_its_state_and_discards_failed_reads() {
     let original = leaves(&composer);
     assert_eq!(widths(&composer), vec![21.0]);
     first.set(11.0);
-    assert!(!composer.has_pending_states(), "failed attempt must not leave a live subscription");
+    assert!(
+        !composer.has_pending_states(),
+        "failed attempt must not leave a live subscription"
+    );
     frame(&mut composer, false);
-    assert_eq!(inits.load(Ordering::SeqCst), 2, "only failed initialization and first committed initialization run");
+    assert_eq!(
+        inits.load(Ordering::SeqCst),
+        2,
+        "only failed initialization and first committed initialization run"
+    );
     assert_eq!(leaves(&composer), original);
     committed.set(30.0);
     assert!(composer.has_pending_states());
@@ -381,7 +480,9 @@ fn same_composition_retry_keeps_its_state_and_discards_failed_reads() {
 fn reference_to_container_replacement_survives_idle_skip() {
     let mut composer = Composer::new();
     composer.compose(|ctx| {
-        let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| leaf(ctx, 10.0)));
+        let payload = ctx.key("owner", |ctx| {
+            ctx.remember_movable_content(|ctx| leaf(ctx, 10.0))
+        });
         host(ctx);
         ctx.key("position", |ctx| payload.compose(ctx));
         ctx.end_node();
@@ -390,9 +491,13 @@ fn reference_to_container_replacement_survives_idle_skip() {
     for _ in 0..3 {
         composer.compose(|ctx| {
             host(ctx);
-            ctx.key("position", |ctx| Column::new().modifier(Modifier::new().size(50.0, 20.0)).build(ctx, |ctx| {
-                leaf(ctx, 25.0);
-            }));
+            ctx.key("position", |ctx| {
+                Column::new()
+                    .modifier(Modifier::new().size(50.0, 20.0))
+                    .build(ctx, |ctx| {
+                        leaf(ctx, 25.0);
+                    })
+            });
             ctx.end_node();
         });
         layout(&mut composer);
@@ -428,10 +533,14 @@ fn different_components_in_raw_payload_keep_their_function_identity() {
     let frame = |composer: &mut Composer| {
         composer.compose(|ctx| {
             let show_first = show_first.clone();
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                if show_first.load(Ordering::SeqCst) { first_raw_component(ctx); }
-                second_raw_component(ctx);
-            }));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    if show_first.load(Ordering::SeqCst) {
+                        first_raw_component(ctx);
+                    }
+                    second_raw_component(ctx);
+                })
+            });
             host(ctx);
             ctx.key("invoke", |ctx| payload.compose(ctx));
             ctx.end_node();
@@ -456,15 +565,17 @@ fn placement_locals_come_from_current_host_without_reinitialization() {
     let frame = |composer: &mut Composer, supplied: f32, site: &str| {
         composer.compose(|ctx| {
             let source = inits.clone();
-            let payload = LOCAL_WIDTH.provides(13.0, || ctx.key("owner", |ctx| {
-                ctx.remember_movable_content(move |ctx| {
-                    Column::new().build(ctx, |ctx| {
-                        let marker = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
-                        assert_eq!(marker.peek(), 0);
-                        leaf(ctx, LOCAL_WIDTH.current());
-                    });
+            let payload = LOCAL_WIDTH.provides(13.0, || {
+                ctx.key("owner", |ctx| {
+                    ctx.remember_movable_content(move |ctx| {
+                        Column::new().build(ctx, |ctx| {
+                            let marker = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
+                            assert_eq!(marker.peek(), 0);
+                            leaf(ctx, LOCAL_WIDTH.current());
+                        });
+                    })
                 })
-            }));
+            });
             host(ctx);
             LOCAL_WIDTH.provides(supplied, || ctx.key(site, |ctx| payload.compose(ctx)));
             ctx.end_node();
@@ -483,17 +594,23 @@ fn omitted_scope_reference_cannot_revive_under_a_later_skipped_host() {
     let mut composer = Composer::new();
     let frame = |composer: &mut Composer, mode: usize| {
         composer.compose(|ctx| {
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| leaf(ctx, 10.0)));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(|ctx| leaf(ctx, 10.0))
+            });
             host(ctx);
             ctx.key("old-host", |ctx| {
                 ctx.changed(&(mode == 0));
                 Column::new().build(ctx, |ctx| {
                     ctx.start_scope_keyed(0x9988);
-                    if mode == 0 { ctx.key("old-ref", |ctx| payload.compose(ctx)); }
+                    if mode == 0 {
+                        ctx.key("old-ref", |ctx| payload.compose(ctx));
+                    }
                     ctx.end_scope();
                 });
             });
-            if mode == 2 { ctx.key("new-host", |ctx| payload.compose(ctx)); }
+            if mode == 2 {
+                ctx.key("new-host", |ctx| payload.compose(ctx));
+            }
             ctx.end_node();
         });
         layout(composer);
@@ -501,7 +618,13 @@ fn omitted_scope_reference_cannot_revive_under_a_later_skipped_host() {
     frame(&mut composer, 0);
     frame(&mut composer, 1);
     frame(&mut composer, 2);
-    assert_eq!(widths(&composer).iter().filter(|&&width| width == 10.0).count(), 1);
+    assert_eq!(
+        widths(&composer)
+            .iter()
+            .filter(|&&width| width == 10.0)
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -510,16 +633,22 @@ fn rejected_nested_invocation_does_not_shift_following_node_identity() {
     let mut composer = Composer::new();
     let frame = |composer: &mut Composer| {
         composer.compose(|ctx| {
-            let nested = ctx.key("nested-owner", |ctx| ctx.remember_movable_content(|ctx| leaf(ctx, 99.0)));
+            let nested = ctx.key("nested-owner", |ctx| {
+                ctx.remember_movable_content(|ctx| leaf(ctx, 99.0))
+            });
             let attempt_nested = attempt_nested.clone();
-            let outer = ctx.key("outer-owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                leaf(ctx, 10.0);
-                if attempt_nested.load(Ordering::SeqCst) {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| nested.compose(ctx)));
-                    assert!(result.is_err());
-                }
-                leaf(ctx, 20.0);
-            }));
+            let outer = ctx.key("outer-owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    leaf(ctx, 10.0);
+                    if attempt_nested.load(Ordering::SeqCst) {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            nested.compose(ctx)
+                        }));
+                        assert!(result.is_err());
+                    }
+                    leaf(ctx, 20.0);
+                })
+            });
             host(ctx);
             ctx.key("outer-ref", |ctx| outer.compose(ctx));
             ctx.end_node();
@@ -542,11 +671,15 @@ fn repeated_raw_component_calls_have_independent_scopes_and_readers() {
         composer.compose(|ctx| {
             let value = value.clone();
             let inits = inits.clone();
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                repeated_raw_component(ctx, &value, &inits);
-                repeated_raw_component(ctx, &value, &inits);
-            }));
-            ctx.key("host", |ctx| Column::new().build(ctx, |ctx| payload.compose(ctx)));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    repeated_raw_component(ctx, &value, &inits);
+                    repeated_raw_component(ctx, &value, &inits);
+                })
+            });
+            ctx.key("host", |ctx| {
+                Column::new().build(ctx, |ctx| payload.compose(ctx))
+            });
         });
         layout(composer);
     };
@@ -557,7 +690,13 @@ fn repeated_raw_component_calls_have_independent_scopes_and_readers() {
     assert!(composer.has_pending_states());
     frame(&mut composer);
     assert_eq!(widths(&composer), vec![20.0, 21.0]);
-    assert_eq!(leaves(&composer).iter().map(|(id, _)| id).collect::<Vec<_>>(), original.iter().map(|(id, _)| id).collect::<Vec<_>>());
+    assert_eq!(
+        leaves(&composer)
+            .iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        original.iter().map(|(id, _)| id).collect::<Vec<_>>()
+    );
     assert_eq!(inits.load(Ordering::SeqCst), 2);
 }
 
@@ -570,7 +709,9 @@ fn repeated_raw_component(ctx: &mut ComposeCtx, value: &State<f32>, inits: &Arc<
 
 #[composable]
 fn compiler_only_parent(ctx: &mut ComposeCtx, show: &Arc<AtomicBool>, inits: &Arc<AtomicUsize>) {
-    if show.load(Ordering::SeqCst) { compiler_only_child(ctx, inits); }
+    if show.load(Ordering::SeqCst) {
+        compiler_only_child(ctx, inits);
+    }
 }
 
 #[composable]
@@ -588,9 +729,11 @@ fn removing_child_from_compiler_only_scope_disposes_its_remembered_state() {
         composer.compose(|ctx| {
             let show = show.clone();
             let inits = inits.clone();
-            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                compiler_only_parent(ctx, &show, &inits);
-            }));
+            let payload = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    compiler_only_parent(ctx, &show, &inits);
+                })
+            });
             host(ctx);
             ctx.key("invoke", |ctx| payload.compose(ctx));
             ctx.end_node();
@@ -618,18 +761,28 @@ fn completed_absence_disposes_placement_even_when_handle_is_retained() {
         composer.compose(|ctx| {
             let source = inits.clone();
             let removes = removes.clone();
-            let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
-                ctx.key("body", |ctx| {
-                    let marker = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
-                    let key = ctx.next_key();
-                    let removes = removes.clone();
-                    ctx.start_leaf_with_remove(key, Modifier::new().size(10.0 + marker.peek() as f32, 5.0), Box::new(move || { removes.fetch_add(1, Ordering::SeqCst); }));
-                    ctx.end_node();
-                });
-            }));
+            let handle = ctx.key("owner", |ctx| {
+                ctx.remember_movable_content(move |ctx| {
+                    ctx.key("body", |ctx| {
+                        let marker = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
+                        let key = ctx.next_key();
+                        let removes = removes.clone();
+                        ctx.start_leaf_with_remove(
+                            key,
+                            Modifier::new().size(10.0 + marker.peek() as f32, 5.0),
+                            Box::new(move || {
+                                removes.fetch_add(1, Ordering::SeqCst);
+                            }),
+                        );
+                        ctx.end_node();
+                    });
+                })
+            });
             *saved.lock().unwrap() = Some(handle.clone());
             host(ctx);
-            if shown { ctx.key("ref", |ctx| handle.compose(ctx)); }
+            if shown {
+                ctx.key("ref", |ctx| handle.compose(ctx));
+            }
             ctx.end_node();
         });
         layout(composer);
@@ -638,12 +791,27 @@ fn completed_absence_disposes_placement_even_when_handle_is_retained() {
     let original = leaves(&composer);
     frame(&mut composer, false);
     frame(&mut composer, false);
-    assert_eq!(removes.load(Ordering::SeqCst), 1, "a completed absent composition disposes the placement");
+    assert_eq!(
+        removes.load(Ordering::SeqCst),
+        1,
+        "a completed absent composition disposes the placement"
+    );
     frame(&mut composer, true);
-    assert_eq!(inits.load(Ordering::SeqCst), 2, "retaining a callable does not retain an absent composition");
+    assert_eq!(
+        inits.load(Ordering::SeqCst),
+        2,
+        "retaining a callable does not retain an absent composition"
+    );
     assert_ne!(leaves(&composer), original);
     *saved.lock().unwrap() = None;
-    composer.compose(|ctx| { host(ctx); ctx.end_node(); });
+    composer.compose(|ctx| {
+        host(ctx);
+        ctx.end_node();
+    });
     layout(&mut composer);
-    assert_eq!(removes.load(Ordering::SeqCst), 2, "each disposed placement runs cleanup exactly once");
+    assert_eq!(
+        removes.load(Ordering::SeqCst),
+        2,
+        "each disposed placement runs cleanup exactly once"
+    );
 }

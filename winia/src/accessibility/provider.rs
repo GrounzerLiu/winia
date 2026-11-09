@@ -30,8 +30,6 @@ impl Provider {
         }
     }
 
-
-
     /// The snapshot this provider reads — `None` before the window's first frame, which a client has
     /// to tolerate (it can attach while the app is still starting up).
     fn snapshot(&self) -> Option<Arc<WindowSemantics>> {
@@ -458,7 +456,8 @@ fn variant_i32_array(values: &[i32]) -> VARIANT {
 /// The `Result` error the generated interfaces expect, for a request that cannot be answered at all
 /// (a point outside every element, a focus query with nothing focused).
 fn not_supported() -> windows::core::Error {
-    windows::core::HRESULT(windows::Win32::UI::Accessibility::UIA_E_ELEMENTNOTAVAILABLE as i32).into()
+    windows::core::HRESULT(windows::Win32::UI::Accessibility::UIA_E_ELEMENTNOTAVAILABLE as i32)
+        .into()
 }
 
 /// "This provider does not implement that pattern", in the shape the protocol asks for it: S_OK with
@@ -520,7 +519,10 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                 UIA_TogglePatternId => TogglePattern {
                     window_id: self.window_id,
                     node_id: element.node_id,
-                    state: element.state.checked_value().unwrap_or(ToggleableState::Off),
+                    state: element
+                        .state
+                        .checked_value()
+                        .unwrap_or(ToggleableState::Off),
                 }
                 .into(),
                 UIA_SelectionItemPatternId => SelectionItemPattern {
@@ -530,10 +532,8 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                 }
                 .into(),
                 UIA_RangeValuePatternId => {
-                    let (current, min, max) = element
-                        .state
-                        .progress_value()
-                        .unwrap_or((0.0, 0.0, 1.0));
+                    let (current, min, max) =
+                        element.state.progress_value().unwrap_or((0.0, 0.0, 1.0));
                     RangeValuePattern {
                         value: current as f64,
                         min: min as f64,
@@ -569,7 +569,8 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                 UIA_ControlTypePropertyId => Ok(variant_i32(UIA_WindowControlTypeId.0)),
                 UIA_BoundingRectanglePropertyId => Ok(variant_double_array(&[x, y, w, h])),
                 UIA_NativeWindowHandlePropertyId => Ok(variant_i32(self.window_id as i32)),
-                UIA_IsContentElementPropertyId | UIA_IsControlElementPropertyId
+                UIA_IsContentElementPropertyId
+                | UIA_IsControlElementPropertyId
                 | UIA_IsEnabledPropertyId => Ok(variant_bool(true)),
                 UIA_IsKeyboardFocusablePropertyId
                 | UIA_HasKeyboardFocusPropertyId
@@ -600,17 +601,21 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             UIA_IsEnabledPropertyId => Ok(variant_bool(node.state.enabled_value().unwrap_or(true))),
             UIA_IsKeyboardFocusablePropertyId => Ok(variant_bool(node.clickable)),
             UIA_HasKeyboardFocusPropertyId => Ok(variant_bool(node.focused)),
-            UIA_IsContentElementPropertyId | UIA_IsControlElementPropertyId => Ok(variant_bool(true)),
+            UIA_IsContentElementPropertyId | UIA_IsControlElementPropertyId => {
+                Ok(variant_bool(true))
+            }
             UIA_IsOffscreenPropertyId => Ok(variant_bool(false)),
             UIA_IsInvokePatternAvailablePropertyId => {
                 Ok(variant_bool(supports_pattern(&node, UIA_InvokePatternId)))
             }
-            UIA_IsRangeValuePatternAvailablePropertyId => Ok(variant_bool(
-                supports_pattern(&node, UIA_RangeValuePatternId),
-            )),
-            UIA_IsScrollItemPatternAvailablePropertyId => Ok(variant_bool(
-                supports_pattern(&node, UIA_ScrollItemPatternId),
-            )),
+            UIA_IsRangeValuePatternAvailablePropertyId => Ok(variant_bool(supports_pattern(
+                &node,
+                UIA_RangeValuePatternId,
+            ))),
+            UIA_IsScrollItemPatternAvailablePropertyId => Ok(variant_bool(supports_pattern(
+                &node,
+                UIA_ScrollItemPatternId,
+            ))),
             UIA_RangeValueValuePropertyId => match node.state.progress_value() {
                 Some((current, _, _)) => Ok(variant_double(current as f64)),
                 None => Ok(variant_not_supported()),
@@ -636,9 +641,9 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             },
             UIA_BoundingRectanglePropertyId => Ok(variant_double_array(&[x, y, w, h])),
             UIA_AutomationIdPropertyId => Ok(variant_bstr(&format!("winia-{}", node.node_id))),
-            UIA_ClassNamePropertyId => {
-                Ok(variant_bstr(node.role.map(|role| role.name()).unwrap_or("text")))
-            }
+            UIA_ClassNamePropertyId => Ok(variant_bstr(
+                node.role.map(|role| role.name()).unwrap_or("text"),
+            )),
             UIA_FrameworkIdPropertyId => Ok(variant_bstr("winia")),
             // LiveSetting: 0 off, 1 polite, 2 assertive — the levels UIA defines, which is what a
             // client reads to decide how urgent a `LiveRegionChanged` from this element is.
@@ -671,12 +676,14 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
 // IRawElementProviderFragment
 // ═══════════════════════════════════════════════════════════
 
-
 // The `NavigateDirection_*` names are globals by the SDK's naming, matched on as if they were enum
 // variants — which is how the generated bindings model them.
 #[allow(non_upper_case_globals)]
 impl Provider_Impl {
-    fn navigate_inner(&self, direction: NavigateDirection) -> WinResult<IRawElementProviderFragment> {
+    fn navigate_inner(
+        &self,
+        direction: NavigateDirection,
+    ) -> WinResult<IRawElementProviderFragment> {
         match direction {
             NavigateDirection_Parent => {
                 if self.path.is_empty() {
@@ -737,12 +744,17 @@ impl IRawElementProviderFragment_Impl for Provider_Impl {
                 "[accessibility] Navigate dir={} path={:?} children_of_parent={}",
                 direction.0,
                 self.path,
-                self.snapshot().map(|s| s.children_at(&self.path).len()).unwrap_or(0)
+                self.snapshot()
+                    .map(|s| s.children_at(&self.path).len())
+                    .unwrap_or(0)
             );
         }
         let result = self.navigate_inner(direction);
         if trace {
-            eprintln!("[accessibility]   -> {}", if result.is_ok() { "ok" } else { "err" });
+            eprintln!(
+                "[accessibility]   -> {}",
+                if result.is_ok() { "ok" } else { "err" }
+            );
         }
         result
     }
@@ -858,4 +870,3 @@ impl IRawElementProviderFragmentRoot_Impl for Provider_Impl {
         }
     }
 }
-

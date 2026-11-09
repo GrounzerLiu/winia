@@ -16,11 +16,11 @@
 //! 面板（BottomSheet）用 `Surface` 承载 anchoredDraggable + nestedScroll（对齐
 //! Compose：`Surface { .nestedScroll(...).anchoredDraggable(...) }`）。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::selection::ToggleableState;
 use std::sync::Arc;
 
@@ -81,9 +81,15 @@ enum SurfaceInteraction {
     /// 可点击——对标 Compose `Surface(onClick=...)`
     Click(Arc<dyn Fn() + Send + Sync>),
     /// 可选中（`selected` + onClick）——对标 Compose `Surface(selected, onClick=...)`
-    Select { selected: bool, on_click: Arc<dyn Fn() + Send + Sync> },
+    Select {
+        selected: bool,
+        on_click: Arc<dyn Fn() + Send + Sync>,
+    },
     /// 可切换（`checked` + onCheckedChange）——对标 Compose `Surface(checked, onCheckedChange=...)`
-    Toggle { checked: ToggleableState, on_checked_change: Arc<dyn Fn(ToggleableState) + Send + Sync> },
+    Toggle {
+        checked: ToggleableState,
+        on_checked_change: Arc<dyn Fn(ToggleableState) + Send + Sync>,
+    },
 }
 
 /// 通用外观底板（对标 Compose material3 `Surface`）。
@@ -178,18 +184,36 @@ impl Surface {
     }
 
     /// 可选中 Surface（对标 Compose `Surface(selected, onClick=...)`——selectable 重载）。
-    pub fn selectable(mut self, selected: bool, on_click: impl Fn() + Send + Sync + 'static) -> Self {
-        self.interaction = SurfaceInteraction::Select { selected, on_click: Arc::new(on_click) };
+    pub fn selectable(
+        mut self,
+        selected: bool,
+        on_click: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.interaction = SurfaceInteraction::Select {
+            selected,
+            on_click: Arc::new(on_click),
+        };
         self
     }
 
     /// 可切换 Surface（对标 Compose `Surface(checked, onCheckedChange=...)`——toggleable 重载）。
-    pub fn toggleable(mut self, checked: bool, on_checked_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
-        let state = if checked { ToggleableState::On } else { ToggleableState::Off };
+    pub fn toggleable(
+        mut self,
+        checked: bool,
+        on_checked_change: impl Fn(bool) + Send + Sync + 'static,
+    ) -> Self {
+        let state = if checked {
+            ToggleableState::On
+        } else {
+            ToggleableState::Off
+        };
         let cb = Arc::new(move |s: ToggleableState| {
             on_checked_change(s == ToggleableState::On);
         });
-        self.interaction = SurfaceInteraction::Toggle { checked: state, on_checked_change: cb };
+        self.interaction = SurfaceInteraction::Toggle {
+            checked: state,
+            on_checked_change: cb,
+        };
         self
     }
 
@@ -223,8 +247,8 @@ impl Surface {
         // overloads at `:211`、`:317`、`:424`). The stated reason is `Surface.kt:146-150`: a Surface
         // must never look LESS raised than its ancestors. Tinting from the local value instead made
         // every nested surface in a stack read as flat as its parent.
-        let absolute_elevation = crate::theme::WiniaTheme::absolute_tonal_elevation()
-            + self.tonal_elevation;
+        let absolute_elevation =
+            crate::theme::WiniaTheme::absolute_tonal_elevation() + self.tonal_elevation;
         // The gate is the COLOUR and the switch, never this surface's own elevation. Compose's
         // `applyTonalElevation` has no elevation term at all (`ColorScheme.kt:1540-1543`) — the only
         // zero-guard is inside `surfaceColorAtElevation` (`ColorScheme.kt:1126`, `if (elevation == 0.dp)
@@ -246,7 +270,9 @@ impl Surface {
         let shadow_elevation = self.shadow_elevation;
         // 交互源：外部注入或内部 remember（对齐 Compose Surface 可选注入——同 Card 惯例，
         // 纯展示 Surface 也 remember 一个空源，开销极小）。
-        let interaction = self.interaction_source.unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+        let interaction = self
+            .interaction_source
+            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
 
         // Compose `Modifier.surface`（核心可复用链）：shadow → border → background → clip。
         // - shadow：仅 shadow_elevation > 0 时用 graphics_layer 阴影（对齐 Compose `graphicsLayer{shadowElevation, clip=false}`）
@@ -286,11 +312,18 @@ impl Surface {
                         on_click();
                     });
                 }
-                SurfaceInteraction::Toggle { checked, on_checked_change } => {
+                SurfaceInteraction::Toggle {
+                    checked,
+                    on_checked_change,
+                } => {
                     let checked = *checked;
                     let cb = on_checked_change.clone();
                     modifier = modifier.clickable_with_source(&interaction, move || {
-                        let next = if checked == ToggleableState::On { ToggleableState::Off } else { ToggleableState::On };
+                        let next = if checked == ToggleableState::On {
+                            ToggleableState::Off
+                        } else {
+                            ToggleableState::On
+                        };
                         cb(next);
                     });
                 }
@@ -333,14 +366,16 @@ impl Surface {
 }
 
 impl Default for Surface {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
+    use crate::runtime::composer::Composer;
     use crate::theme::{ThemeColors, WiniaTheme};
 
     /// Compose a surface under `theme` (and optionally with the tonal toggle) and return the colour its
@@ -365,7 +400,9 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+                    crate::modifier::ModifierElement::Background { color, .. } => {
+                        Some(color.eval())
+                    }
                     _ => None,
                 })
             })
@@ -397,7 +434,9 @@ mod tests {
             .iter()
             .filter_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+                    crate::modifier::ModifierElement::Background { color, .. } => {
+                        Some(color.eval())
+                    }
                     _ => None,
                 })
             })
@@ -416,15 +455,23 @@ mod tests {
                 Surface::new().tonal_elevation(3.0).build(ctx, |_| {});
             });
         });
-        assert_eq!(backgrounds.len(), 2, "both surfaces paint, got {backgrounds:?}");
+        assert_eq!(
+            backgrounds.len(),
+            2,
+            "both surfaces paint, got {backgrounds:?}"
+        );
         assert_eq!(
             backgrounds[0],
-            theme.surface.overlay(theme.surface_tint, compose_alpha(3.0)),
+            theme
+                .surface
+                .overlay(theme.surface_tint, compose_alpha(3.0)),
             "the outer surface is unchanged — nothing above it"
         );
         assert_eq!(
             backgrounds[1],
-            theme.surface.overlay(theme.surface_tint, compose_alpha(6.0)),
+            theme
+                .surface
+                .overlay(theme.surface_tint, compose_alpha(6.0)),
             "the inner surface adds its 3dp to the outer's, so it reads 6dp and not 3dp"
         );
         assert_ne!(
@@ -445,7 +492,9 @@ mod tests {
             let elevation = depth as f32 + 1.0;
             assert_eq!(
                 *painted,
-                theme.surface.overlay(theme.surface_tint, compose_alpha(elevation)),
+                theme
+                    .surface
+                    .overlay(theme.surface_tint, compose_alpha(elevation)),
                 "surface {depth} should read {elevation}dp"
             );
         }
@@ -466,7 +515,9 @@ mod tests {
         );
         assert_eq!(
             zero_child[1],
-            theme.surface.overlay(theme.surface_tint, compose_alpha(3.0)),
+            theme
+                .surface
+                .overlay(theme.surface_tint, compose_alpha(3.0)),
             "and that is the 3dp tint, not a flat surface"
         );
 
@@ -475,7 +526,11 @@ mod tests {
         let zero_root = painted_backgrounds(theme.clone(), true, |ctx| {
             Surface::new().tonal_elevation(0.0).build(ctx, |_| {});
         });
-        assert_eq!(zero_root, vec![theme.surface], "a lone 0dp surface paints plain surface");
+        assert_eq!(
+            zero_root,
+            vec![theme.surface],
+            "a lone 0dp surface paints plain surface"
+        );
     }
 
     #[test]
@@ -488,7 +543,9 @@ mod tests {
         });
         assert_eq!(
             painted,
-            theme.surface.overlay(theme.surface_tint, compose_alpha(level)),
+            theme
+                .surface
+                .overlay(theme.surface_tint, compose_alpha(level)),
             "Level2 tints surface by the formula's alpha"
         );
         // And the formula is the documented one, not just self-consistent: 3dp lands at 8.24%.
@@ -497,7 +554,10 @@ mod tests {
             "the Level2 alpha is ~8.24%, got {}",
             compose_alpha(level)
         );
-        assert_ne!(painted, theme.surface, "a tinted surface differs from plain surface");
+        assert_ne!(
+            painted, theme.surface,
+            "a tinted surface differs from plain surface"
+        );
     }
 
     #[test]
@@ -528,9 +588,7 @@ mod tests {
         let plain = painted_background(theme.clone(), true, |_| Surface::new());
         assert_eq!(plain, theme.surface, "no elevation leaves surface as it is");
 
-        let zero = painted_background(theme.clone(), true, |_| {
-            Surface::new().tonal_elevation(0.0)
-        });
+        let zero = painted_background(theme.clone(), true, |_| Surface::new().tonal_elevation(0.0));
         assert_eq!(zero, theme.surface, "an explicit zero is the same as none");
 
         let off = painted_background(theme.clone(), false, |_| {
@@ -550,15 +608,13 @@ mod tests {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                Surface::new()
-                    .tonal_elevation(3.0)
-                    .build(ctx, |ctx| {
-                        assert_eq!(
-                            WiniaTheme::content_color(),
-                            theme.on_surface,
-                            "a tinted surface still provides on_surface"
-                        );
-                    });
+                Surface::new().tonal_elevation(3.0).build(ctx, |ctx| {
+                    assert_eq!(
+                        WiniaTheme::content_color(),
+                        theme.on_surface,
+                        "a tinted surface still provides on_surface"
+                    );
+                });
             });
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
@@ -618,8 +674,7 @@ mod tests {
             (theme.surface.g, theme.surface_tint.g, tinted.1, "g"),
             (theme.surface.b, theme.surface_tint.b, tinted.2, "b"),
         ] {
-            let expected =
-                (flat_c as f32 * (1.0 - alpha) + tint_c as f32 * alpha).round() as i32;
+            let expected = (flat_c as f32 * (1.0 - alpha) + tint_c as f32 * alpha).round() as i32;
             assert!(
                 (tinted_c as i32 - expected).abs() <= 1,
                 "channel {name} ramps from surface toward surface_tint at alpha {alpha}: \

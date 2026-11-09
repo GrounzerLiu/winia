@@ -1,7 +1,9 @@
 //! Tests for FlowRow and FlowColumn: measurement, placement, RTL and composition.
 
 use super::*;
-use crate::layout::{Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
+use crate::layout::{
+    Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement,
+};
 use crate::unit::{Offset, Size};
 
 fn text_modifier(content: &str) -> Modifier {
@@ -105,9 +107,15 @@ fn flow_row_baseline_line_grows_the_row() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.height, 28.0, "18 above + 10 below is taller than the 20px children");
+    assert_eq!(
+        size.height, 28.0,
+        "18 above + 10 below is taller than the 20px children"
+    );
     assert_eq!(placements[0].position.y, 0.0);
-    assert_eq!(placements[1].position.y, 8.0, "10px line sits 8px below the 18px line");
+    assert_eq!(
+        placements[1].position.y, 8.0,
+        "10px line sits 8px below the 18px line"
+    );
 }
 
 /// An align_by on a line the child never publishes contributes nothing, like Row/Column.
@@ -132,7 +140,10 @@ fn flow_row_ignores_an_unpublished_baseline() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.height, 40.0, "the unspecified line must not add another 40px tail");
+    assert_eq!(
+        size.height, 40.0,
+        "the unspecified line must not add another 40px tail"
+    );
 }
 
 /// A long text inside a 100-wide FlowRow must be measured against the container width, so the
@@ -193,7 +204,11 @@ fn flow_row_does_not_place_lines_past_the_cross_maximum() {
         Constraints::new(0.0, 100.0, 0.0, 35.0),
     );
     assert_eq!(size.height, 30.0, "only the first line fits in 35px");
-    assert_eq!(placements[3].size, Size::ZERO, "the overflowing item is not placed");
+    assert_eq!(
+        placements[3].size,
+        Size::ZERO,
+        "the overflowing item is not placed"
+    );
     assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
 }
 
@@ -215,8 +230,14 @@ fn flow_row_cross_arrangement_centres_lines() {
         Constraints::new(0.0, 100.0, 100.0, 100.0),
     );
     assert_eq!(size.height, 100.0);
-    assert_eq!(placements[0].position.y, 30.0, "two lines of 20 leave 60/2 above");
-    assert_eq!(placements[3].position.y, 50.0, "the second line follows 20px later");
+    assert_eq!(
+        placements[0].position.y, 30.0,
+        "two lines of 20 leave 60/2 above"
+    );
+    assert_eq!(
+        placements[3].position.y, 50.0,
+        "the second line follows 20px later"
+    );
 }
 
 /// FlowColumn routes cross_arrangement through the same code on the horizontal cross axis.
@@ -236,7 +257,10 @@ fn flow_column_cross_arrangement_centres_columns() {
         Constraints::new(100.0, 100.0, 0.0, 70.0),
     );
     assert_eq!(size.width, 100.0);
-    assert_eq!(placements[0].position.x, 30.0, "two 20px columns leave 60/2 on each side");
+    assert_eq!(
+        placements[0].position.x, 30.0,
+        "two 20px columns leave 60/2 on each side"
+    );
     assert_eq!(placements[2].position.x, 50.0);
 }
 
@@ -258,7 +282,10 @@ fn flow_row_space_between_cross_arrangement_uses_the_gap() {
         Constraints::new(0.0, 100.0, 100.0, 100.0),
     );
     assert_eq!(placements[0].position.y, 0.0);
-    assert_eq!(placements[3].position.y, 80.0, "40 content + 60 free puts the second line at 80");
+    assert_eq!(
+        placements[3].position.y, 80.0,
+        "40 content + 60 free puts the second line at 80"
+    );
 }
 
 /// A single line with Center uses the gap-count-zero branch without dividing by zero.
@@ -273,7 +300,10 @@ fn flow_row_single_line_cross_arrangement_centres() {
         &children,
         Constraints::new(0.0, 100.0, 100.0, 100.0),
     );
-    assert_eq!(placements[0].position.y, 40.0, "20 content in 100 leaves 40 above");
+    assert_eq!(
+        placements[0].position.y, 40.0,
+        "20 content in 100 leaves 40 above"
+    );
 }
 
 /// FlowColumn mirrors the cross arrangement in RTL; Center's leading offset is mirrored too.
@@ -294,8 +324,14 @@ fn flow_column_rtl_cross_arrangement_mirrors() {
         &children,
         Constraints::new(100.0, 100.0, 0.0, 70.0),
     );
-    assert_eq!(placements[0].position.x, 50.0, "first column mirrors to the right");
-    assert_eq!(placements[2].position.x, 30.0, "second column mirrors to the left");
+    assert_eq!(
+        placements[0].position.x, 50.0,
+        "first column mirrors to the right"
+    );
+    assert_eq!(
+        placements[2].position.x, 30.0,
+        "second column mirrors to the left"
+    );
 }
 
 /// max_lines caps the row count even when the cross axis has room for more.
@@ -316,14 +352,21 @@ fn flow_row_max_lines_caps_rows() {
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
     assert_eq!(size.height, 20.0, "only the first line is kept");
-    assert_eq!(placements[3].size, Size::ZERO, "the fourth item is outside max_lines");
+    assert_eq!(
+        placements[3].size,
+        Size::ZERO,
+        "the fourth item is outside max_lines"
+    );
 }
 
 /// Compose's Visible overflow also bypasses max_lines (FlowLayoutBuildingBlocks.kt:84-90): all
 /// rows remain visible.
 #[test]
 fn flow_row_visible_overflow_ignores_max_lines() {
-    let policy = FlowRowLayout::new().max_items_in_row(3).max_lines(1).overflow(FlowOverflow::Visible);
+    let policy = FlowRowLayout::new()
+        .max_items_in_row(3)
+        .max_lines(1)
+        .overflow(FlowOverflow::Visible);
     let mut nodes: Vec<LayoutNode> = (0..7).map(|_| make_leaf(30.0, 20.0)).collect();
     let children: Vec<usize> = (0..nodes.len()).collect();
     let (size, placements) = policy.measure(
@@ -353,8 +396,15 @@ fn flow_row_visible_overflow_keeps_items_past_the_cross_maximum() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, 35.0),
     );
-    assert_eq!(size.height, 35.0, "the container is still clamped to its max");
-    assert_eq!(placements[3].size, Size::new(30.0, 30.0), "Visible paints the overflow");
+    assert_eq!(
+        size.height, 35.0,
+        "the container is still clamped to its max"
+    );
+    assert_eq!(
+        placements[3].size,
+        Size::new(30.0, 30.0),
+        "Visible paints the overflow"
+    );
     assert_eq!(placements[3].position.y, 30.0);
 }
 
@@ -454,7 +504,9 @@ fn flow_row_fill_max_row_height_fraction() {
     let mut nodes = vec![
         make_leaf(30.0, 40.0),
         LayoutNode::leaf(
-            Modifier::new().size(30.0, 10.0).fill_max_row_height_fraction(0.5),
+            Modifier::new()
+                .size(30.0, 10.0)
+                .fill_max_row_height_fraction(0.5),
         ),
     ];
     let children: Vec<usize> = (0..nodes.len()).collect();
@@ -504,8 +556,14 @@ fn flow_row_keeps_short_items_before_a_tall_one_on_the_same_line() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, 35.0),
     );
-    assert_eq!(size.height, 20.0, "the two 20px items define the visible line");
-    assert_eq!(size.width, 60.0, "the dropped 30px item is not part of the line extent");
+    assert_eq!(
+        size.height, 20.0,
+        "the two 20px items define the visible line"
+    );
+    assert_eq!(
+        size.width, 60.0,
+        "the dropped 30px item is not part of the line extent"
+    );
     assert_eq!(placements[0].size, Size::new(30.0, 20.0));
     assert_eq!(placements[1].size, Size::new(30.0, 20.0));
     assert_eq!(placements[2].size, Size::ZERO, "the 40px item does not fit");
@@ -516,7 +574,9 @@ fn flow_row_keeps_short_items_before_a_tall_one_on_the_same_line() {
 #[test]
 fn flow_row_drops_a_first_line_that_cannot_fit() {
     let policy = FlowRowLayout::new();
-    let mut nodes = vec![LayoutNode::leaf(crate::modifier::Modifier::new().required_size(30.0, 40.0))];
+    let mut nodes = vec![LayoutNode::leaf(
+        crate::modifier::Modifier::new().required_size(30.0, 40.0),
+    )];
     let (size, placements) = policy.measure(
         &mut nodes,
         &[],
@@ -546,7 +606,10 @@ fn flow_row_rtl_does_not_mirror_omitted_items() {
         Constraints::new(0.0, 100.0, 0.0, 35.0),
     );
     assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
-    assert_eq!(placements[0].position.x, 60.0, "the first item is mirrored to the right");
+    assert_eq!(
+        placements[0].position.x, 60.0,
+        "the first item is mirrored to the right"
+    );
 }
 
 /// max_lines also caps columns in FlowColumn; this pins the duplicated column wiring.
@@ -567,7 +630,11 @@ fn flow_column_max_lines_caps_columns() {
         Constraints::new(0.0, 100.0, 0.0, 70.0),
     );
     assert_eq!(size.height, 60.0, "only the first column is kept");
-    assert_eq!(placements[2].size, Size::ZERO, "the second column is outside max_lines");
+    assert_eq!(
+        placements[2].size,
+        Size::ZERO,
+        "the second column is outside max_lines"
+    );
 }
 
 /// The same item-level cross guard works on the vertical axis: a second column that does not fit
@@ -591,7 +658,11 @@ fn flow_column_drops_a_column_past_the_cross_maximum() {
     assert_eq!(size.height, 60.0, "the kept column is two 30px items tall");
     assert_eq!(placements[0].size, Size::new(20.0, 30.0));
     assert_eq!(placements[1].size, Size::new(20.0, 30.0));
-    assert_eq!(placements[2].size, Size::ZERO, "the second column does not fit");
+    assert_eq!(
+        placements[2].size,
+        Size::ZERO,
+        "the second column does not fit"
+    );
 }
 
 /// The gap before a later line is part of its cross budget: two 10px lines with 10px between them
@@ -612,10 +683,12 @@ fn flow_row_charges_cross_spacing_before_the_cutoff() {
         &children,
         Constraints::new(0.0, 80.0, 0.0, 25.0),
     );
-    assert_eq!(size.height, 10.0, "the second line plus its gap does not fit in 25px");
+    assert_eq!(
+        size.height, 10.0,
+        "the second line plus its gap does not fit in 25px"
+    );
     assert_eq!(placements[2].size, Size::ZERO);
 }
-
 
 #[test]
 fn flow_row_wraps_when_out_of_space() {
@@ -635,11 +708,18 @@ fn flow_row_wraps_when_out_of_space() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 90.0, "under wrap the container is as wide as the widest line, 90");
+    assert_eq!(
+        size.width, 90.0,
+        "under wrap the container is as wide as the widest line, 90"
+    );
     assert_eq!(size.height, 40.0, "two lines of 20");
     assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
     assert_eq!(placements[2].position, Offset::new(60.0, 0.0));
-    assert_eq!(placements[3].position, Offset::new(0.0, 20.0), "the fourth item wraps");
+    assert_eq!(
+        placements[3].position,
+        Offset::new(0.0, 20.0),
+        "the fourth item wraps"
+    );
 }
 
 #[test]
@@ -654,7 +734,10 @@ fn flow_row_fills_container_when_tight() {
         &children,
         Constraints::new(100.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 100.0, "under fill the container takes the constraint width");
+    assert_eq!(
+        size.width, 100.0,
+        "under fill the container takes the constraint width"
+    );
     assert_eq!(placements[0].position.x, 0.0);
     assert_eq!(placements[1].position.x, 30.0);
 }
@@ -713,7 +796,10 @@ fn flow_row_spacing_and_cross_alignment() {
     assert_eq!(placements[1].position.x, 38.0, "30+8");
     // Line height 30; a 10-tall item centred in it sits at y = 10.
     assert_eq!(placements[0].position.y, 10.0);
-    assert_eq!(placements[2].position.y, 40.0, "the second line starts at y = 30 + 10");
+    assert_eq!(
+        placements[2].position.y, 40.0,
+        "the second line starts at y = 30 + 10"
+    );
     assert_eq!(size.height, 50.0, "30+10+10");
 }
 
@@ -753,9 +839,16 @@ fn flow_column_wraps_to_next_column() {
         &children,
         Constraints::new(0.0, f32::MAX, 0.0, 100.0),
     );
-    assert_eq!(size.height, 90.0, "under wrap the container is as tall as the tallest column, 90");
+    assert_eq!(
+        size.height, 90.0,
+        "under wrap the container is as tall as the tallest column, 90"
+    );
     assert_eq!(size.width, 40.0, "two columns of 20");
-    assert_eq!(placements[3].position, Offset::new(20.0, 0.0), "the fourth item wraps to a new column");
+    assert_eq!(
+        placements[3].position,
+        Offset::new(20.0, 0.0),
+        "the fourth item wraps to a new column"
+    );
 }
 
 // Follow-ups from an independent review (P1/P2).
@@ -818,9 +911,20 @@ fn flow_row_single_oversized_item_clamps_line() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 100.0, "the line width is clamped to the constraint");
-    assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "the oversized first item does not wrap");
-    assert_eq!(placements[1].position, Offset::new(0.0, 20.0), "the next item wraps");
+    assert_eq!(
+        size.width, 100.0,
+        "the line width is clamped to the constraint"
+    );
+    assert_eq!(
+        placements[0].position,
+        Offset::new(0.0, 0.0),
+        "the oversized first item does not wrap"
+    );
+    assert_eq!(
+        placements[1].position,
+        Offset::new(0.0, 20.0),
+        "the next item wraps"
+    );
 }
 
 #[test]
@@ -838,7 +942,10 @@ fn flow_row_weight_uses_a_bounded_wrap_maximum() {
         &children,
         Constraints::new(0.0, 200.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 200.0, "the bounded maximum is the weight target");
+    assert_eq!(
+        size.width, 200.0,
+        "the bounded maximum is the weight target"
+    );
     assert_eq!(placements[1].size.width, 160.0, "200 - 40 fixed");
     assert_eq!(placements[1].position.x, 40.0);
 }
@@ -848,7 +955,11 @@ fn flow_row_weight_fill_false_does_not_stretch_a_short_child() {
     use crate::modifier::Modifier;
     let mut nodes = vec![
         make_leaf(30.0, 20.0),
-        LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight_fill(1.0, false)),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(30.0, 20.0)
+                .layout_weight_fill(1.0, false),
+        ),
     ];
     let children: Vec<usize> = (0..nodes.len()).collect();
     let policy = FlowRowLayout::new();
@@ -858,7 +969,10 @@ fn flow_row_weight_fill_false_does_not_stretch_a_short_child() {
         &children,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 60.0, "fill = false leaves the line at its natural size");
+    assert_eq!(
+        size.width, 60.0,
+        "fill = false leaves the line at its natural size"
+    );
     assert_eq!(placements[1].size.width, 30.0);
 }
 
@@ -917,18 +1031,19 @@ fn flow_row_weight_fills_the_line() {
         Constraints::new(100.0, 100.0, 0.0, f32::MAX),
     );
     assert_eq!(size.width, 100.0, "the weighted child fills the line");
-    assert_eq!(placements[0].size.width, 70.0, "100 - 30 fixed = 70 for weight 1");
+    assert_eq!(
+        placements[0].size.width, 70.0,
+        "100 - 30 fixed = 70 for weight 1"
+    );
     assert_eq!(placements[1].position.x, 70.0);
 }
 
 #[test]
 fn flow_row_align_self_overrides_container() {
     // P2: a per-child align_self overrides the container alignment.
-    use crate::modifier::Modifier;
     use crate::layout::Alignment;
-    let mut tall = LayoutNode::leaf(
-        Modifier::new().size(30.0, 30.0).align_self(Alignment::End),
-    );
+    use crate::modifier::Modifier;
+    let mut tall = LayoutNode::leaf(Modifier::new().size(30.0, 30.0).align_self(Alignment::End));
     let mut nodes = vec![make_leaf(30.0, 10.0), tall];
     // make_leaf is built first and tall second, so the children order is [small, tall].
     let children: Vec<usize> = (0..nodes.len()).collect();
@@ -943,9 +1058,8 @@ fn flow_row_align_self_overrides_container() {
     // because it fills the line, which proves nothing. Swap the End to the small item instead:
     let mut nodes2 = vec![
         {
-            let mut n = LayoutNode::leaf(
-                Modifier::new().size(30.0, 10.0).align_self(Alignment::End),
-            );
+            let mut n =
+                LayoutNode::leaf(Modifier::new().size(30.0, 10.0).align_self(Alignment::End));
             n
         },
         make_leaf(30.0, 30.0),
@@ -957,7 +1071,10 @@ fn flow_row_align_self_overrides_container() {
         &children2,
         Constraints::new(0.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(placements2[0].position.y, 20.0, "the small item at End sits on the line's bottom edge (30 - 10)");
+    assert_eq!(
+        placements2[0].position.y, 20.0,
+        "the small item at End sits on the line's bottom edge (30 - 10)"
+    );
     assert_eq!(placements2[1].position.y, 0.0);
 }
 
@@ -978,7 +1095,6 @@ fn flow_row_center_arrangement_in_fill() {
     assert_eq!(placements[0].position.x, 20.0);
     assert_eq!(placements[1].position.x, 50.0);
 }
-
 
 use super::*;
 use crate::modifier::Modifier;
@@ -1016,7 +1132,11 @@ fn flow_row_declares_its_parameters_for_skip() {
 
     spacing.set(8.0);
     compose(&mut composer);
-    assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
+    assert_eq!(
+        runs.get(),
+        2,
+        "a changed main_spacing re-enters the content group"
+    );
 }
 
 /// The transposed builder declares its parameters too.
@@ -1049,7 +1169,11 @@ fn flow_column_declares_its_parameters_for_skip() {
 
     spacing.set(8.0);
     compose(&mut composer);
-    assert_eq!(runs.get(), 2, "a changed main_spacing re-enters the content group");
+    assert_eq!(
+        runs.get(),
+        2,
+        "a changed main_spacing re-enters the content group"
+    );
 }
 
 /// A line dropped by the cross-axis Clip has a zero placement; it must not enter the item host as a
@@ -1079,9 +1203,7 @@ fn flow_row_clipped_items_do_not_become_animation_origins() {
         "a clipped item must not be recorded at the zero placement"
     );
 
-    let policy = FlowRowLayout::new()
-        .max_lines(2)
-        .item_animations(host);
+    let policy = FlowRowLayout::new().max_lines(2).item_animations(host);
     let (_, placements) = policy.measure(
         &mut nodes,
         &[],
@@ -1114,11 +1236,19 @@ fn flow_row_clipped_live_item_does_not_ghost() {
         .fade_out(crate::animation::TweenSpec::default());
     let host = ItemAnimationHost::default();
     let mut nodes: Vec<LayoutNode> = (0..4)
-        .map(|_| LayoutNode::leaf(Modifier::new().size(30.0, 30.0).animate_item_with(spec.clone())))
+        .map(|_| {
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(30.0, 30.0)
+                    .animate_item_with(spec.clone()),
+            )
+        })
         .collect();
     let children: Vec<usize> = (0..4).collect();
 
-    let visible = FlowRowLayout::new().max_lines(2).item_animations(host.clone());
+    let visible = FlowRowLayout::new()
+        .max_lines(2)
+        .item_animations(host.clone());
     let (_, placements) = visible.measure(
         &mut nodes,
         &[],
@@ -1126,21 +1256,38 @@ fn flow_row_clipped_live_item_does_not_ghost() {
         Constraints::new(0.0, 100.0, 0.0, 100.0),
     );
     visible.place(&mut nodes, &children, &placements);
-    let key = if nodes[3].slot_key != 0 { nodes[3].slot_key } else { nodes[3].id };
+    let key = if nodes[3].slot_key != 0 {
+        nodes[3].slot_key
+    } else {
+        nodes[3].id
+    };
     let picture = {
         let mut recorder = skia_safe::PictureRecorder::new();
         {
             let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
         }
-        recorder.finish_recording_as_picture(None).expect("a picture")
+        recorder
+            .finish_recording_as_picture(None)
+            .expect("a picture")
     };
     host.store()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .pictures
-        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
+        .insert(
+            key,
+            CapturedItem {
+                picture,
+                position: Offset::ZERO,
+                size: Size::new(1.0, 1.0),
+                content_epoch: 0,
+                paint_epoch: 0,
+            },
+        );
 
-    let clipped = FlowRowLayout::new().max_lines(1).item_animations(host.clone());
+    let clipped = FlowRowLayout::new()
+        .max_lines(1)
+        .item_animations(host.clone());
     let (_, placements) = clipped.measure(
         &mut nodes,
         &[],
@@ -1149,9 +1296,18 @@ fn flow_row_clipped_live_item_does_not_ghost() {
     );
     clipped.place(&mut nodes, &children, &placements);
     let store = host.store().lock().unwrap_or_else(|e| e.into_inner());
-    assert!(nodes[3].item_paint.is_none(), "the clipped item has no paint");
-    assert!(store.exits.is_empty(), "a live clipped item must not ghost out");
-    assert!(store.pictures.is_empty(), "its old picture must not survive");
+    assert!(
+        nodes[3].item_paint.is_none(),
+        "the clipped item has no paint"
+    );
+    assert!(
+        store.exits.is_empty(),
+        "a live clipped item must not ghost out"
+    );
+    assert!(
+        store.pictures.is_empty(),
+        "its old picture must not survive"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -1197,7 +1353,10 @@ fn flow_row_attaches_the_placement_animation_to_a_moved_child() {
         .filter_map(|&c| nodes[c].item_paint.as_ref())
         .map(|paint| paint.offset.peek())
         .find(|offset| *offset != Offset::ZERO);
-    assert!(moved.is_some(), "a child moved from row one to row two and must carry an offset");
+    assert!(
+        moved.is_some(),
+        "a child moved from row one to row two and must carry an offset"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -1242,7 +1401,10 @@ fn flow_column_attaches_the_placement_animation_to_a_moved_child() {
         .filter_map(|&c| nodes[c].item_paint.as_ref())
         .map(|paint| paint.offset.peek())
         .find(|offset| *offset != Offset::ZERO);
-    assert!(moved.is_some(), "a child moved from column three to column two and must carry an offset");
+    assert!(
+        moved.is_some(),
+        "a child moved from column three to column two and must carry an offset"
+    );
     crate::animation::clear_all_animations();
 }
 
@@ -1269,7 +1431,11 @@ fn item_animation_starts_from_the_previous_slot() {
         .expect("the marker creates an offset state")
         .offset
         .peek();
-    assert_eq!(offset, Offset::ZERO, "the first placement has nowhere to come from");
+    assert_eq!(
+        offset,
+        Offset::ZERO,
+        "the first placement has nowhere to come from"
+    );
 
     animations.begin_frame();
     animations.place(&mut nodes, 0, 1, Offset::new(30.0, 20.0), &spec, true);
@@ -1299,28 +1465,52 @@ fn removing_the_marker_does_not_ghost_a_live_item() {
 
     let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
     policy.place(&mut nodes, &children, &placements);
-    let key = if nodes[0].slot_key != 0 { nodes[0].slot_key } else { nodes[0].id };
+    let key = if nodes[0].slot_key != 0 {
+        nodes[0].slot_key
+    } else {
+        nodes[0].id
+    };
 
     let picture = {
         let mut recorder = skia_safe::PictureRecorder::new();
         {
             let _canvas = recorder.begin_recording(skia_safe::Rect::new(0.0, 0.0, 1.0, 1.0), false);
         }
-        recorder.finish_recording_as_picture(None).expect("a picture")
+        recorder
+            .finish_recording_as_picture(None)
+            .expect("a picture")
     };
     host.store()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .pictures
-        .insert(key, CapturedItem { picture, position: Offset::ZERO, size: Size::new(1.0, 1.0), content_epoch: 0, paint_epoch: 0 });
+        .insert(
+            key,
+            CapturedItem {
+                picture,
+                position: Offset::ZERO,
+                size: Size::new(1.0, 1.0),
+                content_epoch: 0,
+                paint_epoch: 0,
+            },
+        );
 
     nodes[0].modifier = Modifier::new().size(40.0, 20.0);
     let (_, placements) = policy.measure(&mut nodes, &[], &children, constraints);
     policy.place(&mut nodes, &children, &placements);
-    assert!(nodes[0].item_paint.is_none(), "the marker is gone, so nothing is painted");
+    assert!(
+        nodes[0].item_paint.is_none(),
+        "the marker is gone, so nothing is painted"
+    );
     let store = host.store().lock().unwrap_or_else(|e| e.into_inner());
-    assert!(store.exits.is_empty(), "a live item must not become a ghost");
-    assert!(store.pictures.is_empty(), "its cached picture must be dropped");
+    assert!(
+        store.exits.is_empty(),
+        "a live item must not become a ghost"
+    );
+    assert!(
+        store.pictures.is_empty(),
+        "its cached picture must be dropped"
+    );
 }
 
 /// A Flow placement animation can use a curve other than the built-in spring.
@@ -1406,17 +1596,27 @@ fn flow_row_composes_and_wraps() {
     // Find the node with four children recursively (the FlowRow container; a WiniaTheme scope has
     // no node, so the depth is not assumed).
     fn find_4(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<usize> {
-        if nodes[idx].children.len() == 4 { return Some(idx); }
+        if nodes[idx].children.len() == 4 {
+            return Some(idx);
+        }
         for &c in &nodes[idx].children {
-            if let Some(f) = find_4(nodes, c) { return Some(f); }
+            if let Some(f) = find_4(nodes, c) {
+                return Some(f);
+            }
         }
         None
     }
     let flow_idx = find_4(nodes, root).expect("there should be a FlowRow node with four children");
-    let ys: Vec<f32> = nodes[flow_idx].children.iter()
+    let ys: Vec<f32> = nodes[flow_idx]
+        .children
+        .iter()
         .map(|&c| nodes[c].position.y)
         .collect();
-    assert_eq!(ys, vec![0.0, 0.0, 0.0, 20.0], "the first three stay on the first line, the fourth wraps (ys={ys:?})");
+    assert_eq!(
+        ys,
+        vec![0.0, 0.0, 0.0, 20.0],
+        "the first three stay on the first line, the fourth wraps (ys={ys:?})"
+    );
 }
 
 /// FlowColumn end to end: a 100-tall container wraps the fourth item into a new column.
@@ -1441,23 +1641,34 @@ fn flow_column_composes_and_wraps() {
     let root = composer.layout_root_idx().expect("root");
     let nodes = composer.arena_nodes();
     fn find_4(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<usize> {
-        if nodes[idx].children.len() == 4 { return Some(idx); }
+        if nodes[idx].children.len() == 4 {
+            return Some(idx);
+        }
         for &c in &nodes[idx].children {
-            if let Some(f) = find_4(nodes, c) { return Some(f); }
+            if let Some(f) = find_4(nodes, c) {
+                return Some(f);
+            }
         }
         None
     }
-    let flow_idx = find_4(nodes, root).expect("there should be a FlowColumn node with four children");
-    let xs: Vec<f32> = nodes[flow_idx].children.iter()
+    let flow_idx =
+        find_4(nodes, root).expect("there should be a FlowColumn node with four children");
+    let xs: Vec<f32> = nodes[flow_idx]
+        .children
+        .iter()
         .map(|&c| nodes[c].position.x)
         .collect();
-    assert_eq!(xs, vec![0.0, 0.0, 0.0, 20.0], "the first three stay in the first column, the fourth wraps (xs={xs:?})");
+    assert_eq!(
+        xs,
+        vec![0.0, 0.0, 0.0, 20.0],
+        "the first three stay in the first column, the fourth wraps (xs={xs:?})"
+    );
 }
 
 /// minIntrinsicWidth must show every item the caps allow, not merely fit the cross budget.
 #[test]
 fn flow_row_min_intrinsic_width_requires_the_capped_items() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
     for _ in 0..5 {
         nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
@@ -1473,7 +1684,7 @@ fn flow_row_min_intrinsic_width_requires_the_capped_items() {
 /// With only max_lines set, minIntrinsicWidth must leave every child visible on that line.
 #[test]
 fn flow_row_min_intrinsic_width_requires_all_items_on_one_line() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
     for _ in 0..3 {
         nodes.push(LayoutNode::leaf(Modifier::new().size(40.0, 20.0)));
@@ -1481,23 +1692,30 @@ fn flow_row_min_intrinsic_width_requires_all_items_on_one_line() {
     nodes[0].children = (1..=3).collect();
     let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_lines(1))];
     let width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 20.0);
-    assert_eq!(width, 120.0, "all three items must be shown on the single line");
+    assert_eq!(
+        width, 120.0,
+        "all three items must be shown on the single line"
+    );
 }
 
 /// Intrinsic line breaking must charge main_spacing; otherwise it reports one row where measure
 /// makes two (and a min width that the real layout cannot use).
 #[test]
 fn flow_row_intrinsics_charge_main_spacing() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let mut nodes = vec![
         LayoutNode::new(Modifier::new(), Some(0)),
         LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
         LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
     ];
     nodes[0].children = vec![1, 2];
-    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().main_spacing(30.0))];
+    let policies: Vec<Box<dyn MeasurePolicy>> =
+        vec![Box::new(FlowRowLayout::new().main_spacing(30.0))];
     let height = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0);
-    assert_eq!(height, 40.0, "40 + 30 + 40 does not fit 100, so two lines of 20");
+    assert_eq!(
+        height, 40.0,
+        "40 + 30 + 40 does not fit 100, so two lines of 20"
+    );
     let width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 20.0);
     assert_eq!(width, 110.0, "the minimum width includes the 30px gap");
 }
@@ -1505,7 +1723,7 @@ fn flow_row_intrinsics_charge_main_spacing() {
 /// max_lines(0) is the empty flow for all four intrinsic queries, like measure.
 #[test]
 fn flow_row_zero_max_lines_intrinsics_are_empty() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let mut nodes = vec![
         LayoutNode::new(Modifier::new(), Some(0)),
         LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
@@ -1518,7 +1736,10 @@ fn flow_row_zero_max_lines_intrinsics_are_empty() {
         IntrinsicQuery::MinHeight,
         IntrinsicQuery::MaxHeight,
     ] {
-        assert_eq!(intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0), 0.0);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0),
+            0.0
+        );
     }
 }
 
@@ -1526,7 +1747,7 @@ fn flow_row_zero_max_lines_intrinsics_are_empty() {
 /// matching Compose's weighted IntrinsicMeasurable path.
 #[test]
 fn flow_row_intrinsics_ignore_weight_distribution() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     use crate::modifier::Modifier;
     let mut nodes = vec![
         LayoutNode::new(Modifier::new(), Some(0)),
@@ -1549,27 +1770,31 @@ fn flow_row_intrinsics_ignore_weight_distribution() {
 /// max_items(0) is the empty flow for every intrinsic query too.
 #[test]
 fn flow_row_zero_max_items_intrinsics_are_empty() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
     let mut nodes = vec![
         LayoutNode::new(Modifier::new(), Some(0)),
         LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
     ];
     nodes[0].children = vec![1];
-    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_items_in_row(0))];
+    let policies: Vec<Box<dyn MeasurePolicy>> =
+        vec![Box::new(FlowRowLayout::new().max_items_in_row(0))];
     for query in [
         IntrinsicQuery::MinWidth,
         IntrinsicQuery::MaxWidth,
         IntrinsicQuery::MinHeight,
         IntrinsicQuery::MaxHeight,
     ] {
-        assert_eq!(intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0), 0.0);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0),
+            0.0
+        );
     }
 }
 
 /// FlowColumn's intrinsic methods are the transposed versions, using height as the main axis.
 #[test]
 fn flow_column_intrinsics_are_line_aware() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
 
     let mut single = vec![text_leaf("alpha")];
     let one_height = intrinsic_size_of(&mut single, &[], 0, IntrinsicQuery::MaxHeight, 100.0);
@@ -1593,7 +1818,7 @@ fn flow_column_intrinsics_are_line_aware() {
 /// narrower width makes max height grow by another text line.
 #[test]
 fn flow_row_intrinsics_are_line_aware() {
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
 
     fn leaf_width(content: &str) -> f32 {
         let mut leaf = vec![text_leaf(content)];
@@ -1614,7 +1839,13 @@ fn flow_row_intrinsics_are_line_aware() {
         max_width >= a_width + b_width - 0.5,
         "the max width is the one-line sum ({a_width} + {b_width}, got {max_width})"
     );
-    let one_line = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, max_width);
+    let one_line = intrinsic_size_of(
+        &mut nodes,
+        &policies,
+        0,
+        IntrinsicQuery::MaxHeight,
+        max_width,
+    );
     let narrow = intrinsic_size_of(
         &mut nodes,
         &policies,
@@ -1627,5 +1858,8 @@ fn flow_row_intrinsics_are_line_aware() {
         "a width that fits one item wraps the other: {narrow} should exceed {one_line}"
     );
     let min_width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, f32::MAX);
-    assert!(min_width > 0.0 && min_width < max_width, "min width is a word, not the line");
+    assert!(
+        min_width > 0.0 && min_width < max_width,
+        "min width is a word, not the line"
+    );
 }

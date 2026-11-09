@@ -50,7 +50,12 @@ impl Drop for ScopeState {
 }
 
 impl Clone for CoroutineScope {
-    fn clone(&self) -> Self { Self { state: Arc::clone(&self.state), rt: self.rt.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            rt: self.rt.clone(),
+        }
+    }
 }
 
 impl CoroutineScope {

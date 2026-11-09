@@ -13,7 +13,9 @@ impl AppState {
         if actions.is_empty() {
             return;
         }
-        let Some(pw) = self.windows.get_mut(&window_id) else { return };
+        let Some(pw) = self.windows.get_mut(&window_id) else {
+            return;
+        };
         for action in actions {
             match action {
                 crate::semantics::UiAction::Invoke(node_id) => {
@@ -32,7 +34,9 @@ impl AppState {
                 crate::semantics::UiAction::ScrollToIndex { node, index } => {
                     // Resolve the action off the LIVE tree rather than a cached snapshot: the tree a
                     // bridge saw is one frame old by the time this runs.
-                    let Some(root) = pw.composer.layout_root_idx() else { continue };
+                    let Some(root) = pw.composer.layout_root_idx() else {
+                        continue;
+                    };
                     let tree = crate::semantics::semantics_tree(pw.composer.arena_nodes(), root);
                     let mut found: Option<crate::semantics::ScrollToIndexAction> = None;
                     for element in &tree {
@@ -50,7 +54,9 @@ impl AppState {
                     }
                     match found {
                         Some(action) => action.invoke(index),
-                        None => log::debug!("[accessibility] scroll_to_index: no element offers it"),
+                        None => {
+                            log::debug!("[accessibility] scroll_to_index: no element offers it")
+                        }
                     }
                 }
             }
@@ -63,7 +69,9 @@ impl AppState {
 
     /// Runs on every event batch from new_events, so an injected event is never lost.
     pub(crate) fn consume_debug_events(&mut self, window_id: WindowId) {
-        let Some(pw) = self.windows.get_mut(&window_id) else { return };
+        let Some(pw) = self.windows.get_mut(&window_id) else {
+            return;
+        };
         let mut handled = false;
         for evt in debug::take_queued_events(window_id.into_raw() as u64) {
             match evt {
@@ -89,7 +97,9 @@ impl AppState {
                         // Release the overlay's press (a synthesized event has no real up — otherwise
                         // the ripple/pressed state stays stuck until the overlay closes).
                         release_pressed_interaction(pw);
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                         handled = true;
                         continue;
                     }
@@ -98,7 +108,13 @@ impl AppState {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
-                            let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
+                            let path = hit_test_with_flights(
+                                arena,
+                                r,
+                                pw.composer.transition_roots(),
+                                x,
+                                y,
+                            );
                             // Debug click focus: the deepest focusable node on the path
                             // (after the text-field-v2 containerisation focus/interaction live on the
                             // container — a child of an empty field is 0 px wide and cannot be hit; the
@@ -109,12 +125,22 @@ impl AppState {
                             // a synthesized click has to be able to put focus anywhere, because
                             // that is how a following `k <char>` finds a target. Do not narrow
                             // this to match — see `clicking_an_overlay_button_does_not_steal_focus`.
-                            let (fid, sk) = path.iter().rev().find_map(|&i| {
-                                let has_focusable = arena[i].modifier.elements().iter()
-                                    .any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }));
-                                let wants_ime = arena[i].ime_callback.borrow().is_some();
-                                (has_focusable || wants_ime).then_some((arena[i].id, arena[i].slot_key))
-                            }).unwrap_or((0, 0));
+                            let (fid, sk) = path
+                                .iter()
+                                .rev()
+                                .find_map(|&i| {
+                                    let has_focusable =
+                                        arena[i].modifier.elements().iter().any(|el| {
+                                            matches!(
+                                                el,
+                                                crate::modifier::ModifierElement::Focusable { .. }
+                                            )
+                                        });
+                                    let wants_ime = arena[i].ime_callback.borrow().is_some();
+                                    (has_focusable || wants_ime)
+                                        .then_some((arena[i].id, arena[i].slot_key))
+                                })
+                                .unwrap_or((0, 0));
                             let path_len = path.len();
                             // Click detection (P2-1: reuses fire_click_along_path, with the same
                             // semantics as the main tree and overlays, so an inline copy cannot drift).
@@ -123,7 +149,9 @@ impl AppState {
                                 handled = true;
                             }
                             (fid, sk, path_len, click_handled)
-                        } else { (0, 0, 0, false) }
+                        } else {
+                            (0, 0, 0, false)
+                        }
                     };
                     if fid != 0 {
                         if let Some(r) = pw.composer.layout_root_idx() {
@@ -133,10 +161,23 @@ impl AppState {
                         }
                         pw.focused_id = Some(fid);
                         pw.focused_slot_key = Some(sk);
-                        if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, true); }
+                        if let Some(ref sw) = pw.skia_window {
+                            set_ime_enabled(&sw, true);
+                        }
                     }
-                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
-                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
+                    debug_log!(
+                        "[debug-click] pos=({:.0},{:.0}) path_len={} sf={}",
+                        x,
+                        y,
+                        _path_len,
+                        pw.scale_factor
+                    );
+                    debug_log!(
+                        "[debug-click] handled={} pos=({:.0},{:.0})",
+                        _click_handled,
+                        x,
+                        y
+                    );
                 }
                 debug::DebugEvent::SetLayoutDirection(direction) => {
                     crate::layout::direction::set_debug_direction(direction);
@@ -144,7 +185,9 @@ impl AppState {
                     for layer in &mut pw.overlay.layers {
                         layer.composer.mark_content_dirty();
                     }
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
+                    }
                     handled = true;
                 }
                 debug::DebugEvent::Text { value } => {
@@ -165,7 +208,9 @@ impl AppState {
                             dispatch_key_to_focus(pw, &ke);
                         }
                     }
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
+                    }
                     handled = true;
                 }
                 debug::DebugEvent::Key { key } => {
@@ -174,7 +219,9 @@ impl AppState {
                         // first, then `PerWindow::escape_key` runs (see the real key branch).
                         crate::app::per_window::begin_closing_selection_menu(pw);
                         pw.escape_key();
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                     } else if key == "Tab" {
                         // The SAME helper the real key path calls: this branch used to keep its own
                         // copy of the traversal rule, which silently went stale the moment the rule
@@ -182,7 +229,9 @@ impl AppState {
                         // and a UI test driving Tab over the debug server would have measured that
                         // copy instead of the framework). Shift is not expressible in `k <key>`.
                         pw.tab_move_focus(false);
-                    } else if let Some((k, ctrl, shift, alt, meta)) = parse_debug_key_with_modifiers(&key) {
+                    } else if let Some((k, ctrl, shift, alt, meta)) =
+                        parse_debug_key_with_modifiers(&key)
+                    {
                         // Any key: reuse the real keyboard dispatch path (Preview/Bubble/activation) —
                         // so WS can simulate character input, deletion and arrow keys. Modifiers default
                         // to none (Ctrl and other combinations are not supported yet — add modifier
@@ -199,7 +248,9 @@ impl AppState {
                         // Selection keys are routed exactly as the window path routes them, so a
                         // debug-driven Ctrl+C lands where a real one would.
                         if crate::app::app_state::try_selection_key(pw, &ke) {
-                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            if let Some(ref sw) = pw.skia_window {
+                                sw.request_redraw();
+                            }
                         } else if !dispatch_key_to_overlay(pw, &ke) && !focus_scope_is_open(pw) {
                             // Same gate as the real key path, and the same steps in the same order:
                             // keyboard scrolling first (a list scrolls instead of the ring jumping out),
@@ -209,13 +260,17 @@ impl AppState {
                             }
                         }
                     }
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
+                    }
                     handled = true;
                 }
                 debug::DebugEvent::FocusNext => {
                     // The real traversal rule, not a copy: this arm used to walk the main tree only.
                     pw.tab_move_focus(false);
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
+                    }
                     handled = true;
                 }
                 debug::DebugEvent::RequestFocus { id } => {
@@ -223,7 +278,10 @@ impl AppState {
                         let nodes = pw.composer.arena_nodes_mut();
                         if crate::layout::node::focus_by_id(nodes, r, id) {
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                            pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
+                            pw.focused_slot_key = pw.focused_id.and_then(|fid| {
+                                crate::layout::node::find_node_by_id(nodes, r, fid)
+                                    .map(|idx| nodes[idx].slot_key)
+                            });
                             pw.apply_ime_for_focus(pw.focused_id);
                             handled = true;
                         }
@@ -237,7 +295,11 @@ impl AppState {
                                 if ov.closing {
                                     false
                                 } else if let Some(r) = ov.composer.layout_root_idx() {
-                                    crate::layout::node::focus_by_id(ov.composer.arena_nodes_mut(), r, id)
+                                    crate::layout::node::focus_by_id(
+                                        ov.composer.arena_nodes_mut(),
+                                        r,
+                                        id,
+                                    )
                                 } else {
                                     false
                                 }
@@ -247,19 +309,31 @@ impl AppState {
                                     let ov = &pw.overlay.layers[i];
                                     let nodes = ov.composer.arena_nodes();
                                     let r = ov.composer.layout_root_idx();
-                                    let fid = r.and_then(|r| crate::layout::node::get_focus_id(nodes, r));
-                                    let (fslot, want) = fid.and_then(|f| {
-                                        r.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, f))
-                                    }).map(|found| {
-                                        (nodes[found].slot_key, node_or_descendant_wants_ime(nodes, found))
-                                    }).unwrap_or((0, false));
+                                    let fid =
+                                        r.and_then(|r| crate::layout::node::get_focus_id(nodes, r));
+                                    let (fslot, want) = fid
+                                        .and_then(|f| {
+                                            r.and_then(|r| {
+                                                crate::layout::node::find_node_by_id(nodes, r, f)
+                                            })
+                                        })
+                                        .map(|found| {
+                                            (
+                                                nodes[found].slot_key,
+                                                node_or_descendant_wants_ime(nodes, found),
+                                            )
+                                        })
+                                        .unwrap_or((0, false));
                                     (fid, fslot, want)
                                 };
                                 pw.overlay.layers[i].focused_id = fid;
                                 pw.overlay.layers[i].focused_slot_key = fid.map(|_| fslot);
                                 if pw.focused_id.is_some() {
                                     if let Some(r) = pw.composer.layout_root_idx() {
-                                        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                                        crate::layout::node::clear_focus(
+                                            pw.composer.arena_nodes_mut(),
+                                            r,
+                                        );
                                     }
                                     pw.focused_id = None;
                                     pw.focused_slot_key = None;
@@ -267,7 +341,10 @@ impl AppState {
                                 for (j, other) in pw.overlay.layers.iter_mut().enumerate() {
                                     if j != i && other.focused_id.is_some() {
                                         if let Some(r) = other.composer.layout_root_idx() {
-                                            crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
+                                            crate::layout::node::clear_focus(
+                                                other.composer.arena_nodes_mut(),
+                                                r,
+                                            );
                                         }
                                         other.focused_id = None;
                                         other.focused_slot_key = None;
@@ -305,7 +382,9 @@ impl AppState {
                     pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
                     handle_pointer_move(pw, (x, y), pw.input.last_kind.clone(), &modifiers);
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.request_redraw();
+                    }
                 }
                 debug::DebugEvent::PointerUp { x, y } => {
                     // Simulate a release: first run the real Up click detection (exercising the real
@@ -313,19 +392,27 @@ impl AppState {
                     // on_click must request_redraw — otherwise it relies on the asynchronous wake_up
                     // chain (occasionally lost → the user sees the count not refresh).
                     if detect_click(pw, (x, y)) {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                     }
                     // Execute the overlay click (same as the real path).
                     if exec_overlay_click(pw) {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                     }
                     // End the overlay drag (same as the real path).
                     if overlay_drag_up(pw) {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                     }
                     // Gesture up detection (same as the real path).
                     if gesture_up(pw, (x, y)) {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
                     }
                     // End the drag scroll: fast enough → fling (same as the real path).
                     drag_scroll_up(pw);
@@ -335,8 +422,12 @@ impl AppState {
                     if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-                                if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                            if let Some(nid) =
+                                crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+                            {
+                                if let Some(idx) =
+                                    crate::layout::node::find_node_by_id(nodes, r, nid)
+                                {
                                     if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
                                         reg.fire_on_change();
                                     }
@@ -358,14 +449,21 @@ impl AppState {
                         let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
-                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
+                        let path =
+                            hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
                         wheel_scroll_target(nodes, &path, dx, dy).map(|t| (i, t, r))
                     });
                     // An injected wheel is one notch — `s` in the debug protocol — so it pages at once
                     // instead of banking travel the way a touchpad stream does.
-                    let wheel = WheelDelta { dx, dy, kind: WheelKind::Notch };
+                    let wheel = WheelDelta {
+                        dx,
+                        dy,
+                        kind: WheelKind::Notch,
+                    };
                     let now = std::time::Instant::now();
-                    let density = crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32);
+                    let density = crate::runtime::density::density_with_system_font_scale(
+                        pw.scale_factor as f32,
+                    );
                     if let Some((i, target, r)) = overlay_target {
                         let ov = &mut pw.overlay.layers[i];
                         let outcome = apply_wheel_to_target(
@@ -387,10 +485,18 @@ impl AppState {
                         // Without the pointer it falls back to the blind search, which is what a test
                         // that never moves the mouse has to use.
                         let by_pointer = pw.input.last_pos.and_then(|(px, py)| {
-                            let path = crate::layout::node::hit_test_with_flights(nodes, r, pw.composer.transition_roots(), px, py);
+                            let path = crate::layout::node::hit_test_with_flights(
+                                nodes,
+                                r,
+                                pw.composer.transition_roots(),
+                                px,
+                                py,
+                            );
                             wheel_scroll_target(nodes, &path, dx, dy)
                         });
-                        if let Some(target) = by_pointer.or_else(|| find_scroll_target(nodes, r, dx, dy)) {
+                        if let Some(target) =
+                            by_pointer.or_else(|| find_scroll_target(nodes, r, dx, dy))
+                        {
                             // Same helper as the real wheel, so the two paths cannot drift again.
                             let outcome = apply_wheel_to_target(
                                 pw.composer.arena_nodes_mut(),
@@ -420,8 +526,15 @@ impl AppState {
                 }
             }
         }
-        if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
-        if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
+        if handled {
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
+        }
+        if debug::has_pending() {
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
+        }
     }
 }
-

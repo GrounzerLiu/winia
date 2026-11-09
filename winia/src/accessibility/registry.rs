@@ -63,7 +63,9 @@ pub(crate) fn root_provider(window_id: u64) -> IRawElementProviderSimple {
     // Every Provider implements all three interfaces, so this cast cannot fail in practice; a NULL
     // would be a better answer than a panic inside a window procedure, but there is no null interface
     // to build, so the cast is simply taken at its word.
-    fragment.cast().expect("a Provider is always an IRawElementProviderSimple")
+    fragment
+        .cast()
+        .expect("a Provider is always an IRawElementProviderSimple")
 }
 
 pub(crate) fn forget_providers(window_id: u64) {
@@ -133,4 +135,3 @@ pub(crate) unsafe extern "system" fn subclass_proc(
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
-

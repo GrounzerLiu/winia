@@ -65,13 +65,17 @@ pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
 /// alternative — re-evaluating per frame — would move the flight's target while the flight runs,
 /// because the underlying shape keeps animating under its own clock.
 pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4] {
-    let shape = modifier.elements().iter().rev().find_map(|el| match el {
-        ModifierElement::Background { shape, .. }
-        | ModifierElement::Border { shape, .. }
-        | ModifierElement::Clip { shape } => Some(shape),
-        _ => None,
-    })
-    .map(|shape| shape.eval());
+    let shape = modifier
+        .elements()
+        .iter()
+        .rev()
+        .find_map(|el| match el {
+            ModifierElement::Background { shape, .. }
+            | ModifierElement::Border { shape, .. }
+            | ModifierElement::Clip { shape } => Some(shape),
+            _ => None,
+        })
+        .map(|shape| shape.eval());
     match shape {
         None => [0.0; 4],
         Some(Shape::Rectangle) => [0.0; 4],
@@ -89,9 +93,12 @@ pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4
         }
         // Already per-corner: Compose's (top-start, top-end, bottom-end, bottom-start) in geometric
         // corners, which is the same order as `RRect::new_rect_radii`.
-        Some(Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
-            [top_left, top_right, bottom_right, bottom_left]
-        }
+        Some(Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }) => [top_left, top_right, bottom_right, bottom_left],
         Some(Shape::Pill) | Some(Shape::Circle) => {
             let m = w.min(h) / 2.0;
             [m; 4]
@@ -123,7 +130,16 @@ pub(crate) struct SharedMarker {
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
         ModifierElement::SharedTransition {
-            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay, scene,
+            scope_id,
+            key,
+            kind,
+            transform,
+            path,
+            z_index,
+            enter,
+            exit,
+            render_in_overlay,
+            scene,
         } => Some(SharedMarker {
             scope_id: *scope_id,
             key: key.clone(),
@@ -325,7 +341,9 @@ pub(crate) fn abs_rect_upward(
     // Ascent mirrors the descent in `node_abs_position` (app.rs): each level
     // adds its position minus its own scroll offset. Keep the two in sync.
     while let Some(pid) = nodes[cur].parent_id {
-        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let Some(&pidx) = id_to_idx.get(&pid) else {
+            break;
+        };
         let p = &nodes[pidx];
         let (dx, dy) = scroll_offset_for_node(p);
         ax += p.position.x - dx;
@@ -382,7 +400,11 @@ pub(crate) fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, below: bool
         1.0
     } else {
         let (l0, l1) = (lut[k - 1], lut[k]);
-        let f = if l1 > l0 { (target - l0) / (l1 - l0) } else { 0.0 };
+        let f = if l1 > l0 {
+            (target - l0) / (l1 - l0)
+        } else {
+            0.0
+        };
         ((k - 1) as f32 + f) / (LUT - 1) as f32
     };
     let ang = HALF_PI * frac;
@@ -419,4 +441,3 @@ pub(crate) struct FlightMeasureFrame {
     /// target size so the surrounding layout holds still.
     pub reported: Option<Size>,
 }
-

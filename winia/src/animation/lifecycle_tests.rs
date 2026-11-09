@@ -17,7 +17,12 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
         state: state.clone(),
         bounds: crate::runtime::state::Backchannel::new(None),
     };
-    let fast = || AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(5), interpolator::Linear::new()));
+    let fast = || {
+        AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(5),
+            interpolator::Linear::new(),
+        ))
+    };
     // Only the lines that describe THIS state: another test's motion (the registries are global) must
     // neither satisfy these assertions nor make them fail.
     let mine = |want: &str| -> bool {
@@ -28,13 +33,22 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
     };
 
     // A soft spring: the test needs it still running after a few frames, with ~2 s of margin.
-    anim.animate_to(100.0, SpringSpec { stiffness: 20.0, ..SpringSpec::default() });
+    anim.animate_to(
+        100.0,
+        SpringSpec {
+            stiffness: 20.0,
+            ..SpringSpec::default()
+        },
+    );
     for _ in 0..3 {
         update_animations();
         _clock.advance(Duration::from_millis(2));
     }
     assert!(has_animation_for_state(sid), "the spring is running");
-    assert!(mine("spring("), "a spring is registered before the re-target");
+    assert!(
+        mine("spring("),
+        "a spring is registered before the re-target"
+    );
 
     // Per-frame path (what `animate*AsState` calls): same target, new spec - ignored on purpose.
     push_animatable(state.clone(), 100.0, fast());
@@ -105,7 +119,9 @@ fn a_slot_owned_motion_dies_with_its_slot() {
                 slot_owned_branch(ctx, target.get(), sid.clone());
             }
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        composer.layout(crate::layout::constraints::Constraints::new(
+            0.0, 100.0, 0.0, 100.0,
+        ));
     };
 
     frame(&mut composer); // the state is created ON its target: nothing to move yet
@@ -137,10 +153,10 @@ fn a_slot_owned_motion_dies_with_its_slot() {
 fn test_infinite_transition_auto_dispose() {
     // The global animation table is shared, hence the serial lock (parallel clears would wipe it).
     let (_guard, _clock) = crate::animation::tests::serial_clock();
-    use crate::runtime::composer::{Composer, GroupStatus};
-    use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
+    use crate::layout::constraints::Constraints;
     use crate::modifier::Modifier;
+    use crate::runtime::composer::{Composer, GroupStatus};
     use crate::runtime::state::State;
     use std::time::Duration;
 
@@ -183,12 +199,18 @@ fn test_infinite_transition_auto_dispose() {
     // Frame 1: the animation is registered and live.
     build(&mut composer, &holder, &sid_holder);
     let sid = sid_holder.borrow().unwrap();
-    assert!(has_animation_for_state(sid), "frame 1 should have a live infinite animation");
+    assert!(
+        has_animation_for_state(sid),
+        "frame 1 should have a live infinite animation"
+    );
 
     // Frame 2: show=false removes the composition point, on_remove disposes, the table empties.
     holder.borrow().as_ref().unwrap().set(false);
     build(&mut composer, &holder, &sid_holder);
-    assert!(!has_animation_for_state(sid), "the infinite animation is disposed when its composition point goes away");
+    assert!(
+        !has_animation_for_state(sid),
+        "the infinite animation is disposed when its composition point goes away"
+    );
 }
 
 /// T6: an explicit dispose plus the on_remove firing is idempotent: no panic, table unchanged.
@@ -196,10 +218,10 @@ fn test_infinite_transition_auto_dispose() {
 fn test_infinite_transition_manual_dispose_idempotent() {
     // The global animation table is shared, hence the serial lock (parallel clears would wipe it).
     let (_guard, _clock) = crate::animation::tests::serial_clock();
-    use crate::runtime::composer::{Composer, GroupStatus};
-    use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
+    use crate::layout::constraints::Constraints;
     use crate::modifier::Modifier;
+    use crate::runtime::composer::{Composer, GroupStatus};
     use crate::runtime::state::State;
     use std::time::Duration;
 
@@ -241,123 +263,171 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     // Frame 1: register.
     build(&mut composer, &holder, &inf_holder);
     let sid = inf_holder.borrow().as_ref().unwrap().ids.lock().unwrap()[0];
-    assert!(has_animation_for_state(sid), "frame 1 should have an infinite animation");
+    assert!(
+        has_animation_for_state(sid),
+        "frame 1 should have an infinite animation"
+    );
 
     // Explicit dispose (the user path) empties the table.
     inf_holder.borrow().as_ref().unwrap().dispose();
-    assert!(!has_animation_for_state(sid), "the table should be empty after an explicit dispose");
+    assert!(
+        !has_animation_for_state(sid),
+        "the table should be empty after an explicit dispose"
+    );
 
     // The composition point goes away, so on_remove fires again (ids are drained: idempotent).
     holder.borrow().as_ref().unwrap().set(false);
     build(&mut composer, &holder, &inf_holder);
-    assert!(!has_animation_for_state(sid), "the table is still empty after both triggers (idempotent)");
+    assert!(
+        !has_animation_for_state(sid),
+        "the table is still empty after both triggers (idempotent)"
+    );
 }
 
-    /// Wiring test for the table-driven interpolators (v1's 29 curves plus `Linear`).
-    #[test]
-    fn tween_uses_table_interpolator() {
-        let (_guard, _clock) = crate::animation::tests::serial_clock();
-        use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
-        // 1. The default is Compose's `tween()` easing, `FastOutSlowIn` — not a linear ramp. Its
-        //    midpoint sits at 0.776 (see `interpolator::tests` for the solved reference values).
-        let t = TweenSpec::default();
-        assert!(
-            (t.interpolator.interpolate(0.5) - 0.7756).abs() < 0.01,
-            "the default easing is FastOutSlowIn, midpoint = {}",
-            t.interpolator.interpolate(0.5)
-        );
-        // 1b. An explicitly linear ramp still is one — `TweenSpec::new(dur, Linear::new())`.
-        let linear = TweenSpec::new(Duration::from_millis(300), Linear::new());
-        assert_eq!(linear.interpolator.interpolate(0.5), 0.5, "an explicit Linear midpoint = 0.5");
-        // 2. A table-driven curve takes effect (EaseInQuad's midpoint is below 0.5 — it eases in).
-        let ease = Arc::new(EaseInQuad::new());
-        assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad's midpoint must be below 0.5");
-        assert!(ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0, "the ends are clamped");
-        // 3. Engine wiring: an Animatable animated by a table interpolator. After 60 ms (t ≈ 0.2)
-        //    EaseInQuad(0.2) = 0.04 → about 4, while linear(0.2) = 0.2 → about 20: five times apart,
-        //    so a ±10 ms jitter in the sleep cannot blur the two.
-        let st = State::new(0.0f32);
-        let mut anim = Motion::new(st.clone());
-        anim.animate_to(
-            100.0,
-            AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(300), delay: Duration::ZERO, interpolator: Arc::new(EaseInQuad::new()),
-            }),
-        );
-        _clock.advance(Duration::from_millis(60));
-        anim.update();
-        let v = st.peek();
-        assert!(
-            v > 0.0 && v < 10.0,
-            "EaseInQuad after 60 ms must be far below linear (got {}, linear is about 20)",
-            v
-        );
-        // Control: the same 300 ms tween through its own declared interpolator reaches about 20.
-        let st2 = State::new(0.0f32);
-        let mut anim2 = Motion::new(st2.clone());
-        anim2.animate_to(
-            100.0,
-            AnimationSpec::Tween(TweenSpec::new(
-                Duration::from_millis(300),
-                crate::animation::interpolator::Linear::new(),
-            )),
-        );
-        _clock.advance(Duration::from_millis(60));
-        anim2.update();
-        assert!((st2.peek() - 20.0).abs() < 5.0, "linear after 60 ms should be about 20 (got {})", st2.peek());
-    }
+/// Wiring test for the table-driven interpolators (v1's 29 curves plus `Linear`).
+#[test]
+fn tween_uses_table_interpolator() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
+    // 1. The default is Compose's `tween()` easing, `FastOutSlowIn` — not a linear ramp. Its
+    //    midpoint sits at 0.776 (see `interpolator::tests` for the solved reference values).
+    let t = TweenSpec::default();
+    assert!(
+        (t.interpolator.interpolate(0.5) - 0.7756).abs() < 0.01,
+        "the default easing is FastOutSlowIn, midpoint = {}",
+        t.interpolator.interpolate(0.5)
+    );
+    // 1b. An explicitly linear ramp still is one — `TweenSpec::new(dur, Linear::new())`.
+    let linear = TweenSpec::new(Duration::from_millis(300), Linear::new());
+    assert_eq!(
+        linear.interpolator.interpolate(0.5),
+        0.5,
+        "an explicit Linear midpoint = 0.5"
+    );
+    // 2. A table-driven curve takes effect (EaseInQuad's midpoint is below 0.5 — it eases in).
+    let ease = Arc::new(EaseInQuad::new());
+    assert!(
+        ease.interpolate(0.5) < 0.5,
+        "EaseInQuad's midpoint must be below 0.5"
+    );
+    assert!(
+        ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0,
+        "the ends are clamped"
+    );
+    // 3. Engine wiring: an Animatable animated by a table interpolator. After 60 ms (t ≈ 0.2)
+    //    EaseInQuad(0.2) = 0.04 → about 4, while linear(0.2) = 0.2 → about 20: five times apart,
+    //    so a ±10 ms jitter in the sleep cannot blur the two.
+    let st = State::new(0.0f32);
+    let mut anim = Motion::new(st.clone());
+    anim.animate_to(
+        100.0,
+        AnimationSpec::Tween(TweenSpec {
+            duration: Duration::from_millis(300),
+            delay: Duration::ZERO,
+            interpolator: Arc::new(EaseInQuad::new()),
+        }),
+    );
+    _clock.advance(Duration::from_millis(60));
+    anim.update();
+    let v = st.peek();
+    assert!(
+        v > 0.0 && v < 10.0,
+        "EaseInQuad after 60 ms must be far below linear (got {}, linear is about 20)",
+        v
+    );
+    // Control: the same 300 ms tween through its own declared interpolator reaches about 20.
+    let st2 = State::new(0.0f32);
+    let mut anim2 = Motion::new(st2.clone());
+    anim2.animate_to(
+        100.0,
+        AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(300),
+            crate::animation::interpolator::Linear::new(),
+        )),
+    );
+    _clock.advance(Duration::from_millis(60));
+    anim2.update();
+    assert!(
+        (st2.peek() - 20.0).abs() < 5.0,
+        "linear after 60 ms should be about 20 (got {})",
+        st2.peek()
+    );
+}
 
-    /// Regression: after an overshooting interpolator (Elastic/Back) finishes, the animation must
-    /// settle exactly on the target. Previously completion used eased >= 1.0, so the overshoot ended
-    /// the animation early at an out-of-range value.
-    #[test]
-    fn tween_overshoot_interpolator_settles_at_target() {
-        let (_guard, _clock) = crate::animation::tests::serial_clock();
-        use crate::animation::interpolator::{EaseOutElastic, Interpolator};
-        // The curve itself already has eased > 1.0 at t ~ 0.98 (the overshoot).
-        let ease = EaseOutElastic::new();
-        assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic should overshoot (> 1.0) near the end");
-        // Advance the full duration: it must settle exactly on 100 (before the fix it stopped at the overshoot).
-        let st = State::new(0.0f32);
-        let mut anim = Motion::new(st.clone());
-        anim.animate_to(
-            100.0,
-            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutElastic::new())),
-        );
-        let mut frames = 0;
-        while anim.update() && frames < 30 {
-            _clock.advance(Duration::from_millis(40));
-            frames += 1;
-        }
-        assert!(frames < 30, "the animation should converge");
-        assert_eq!(st.peek(), 100.0, "an overshooting interpolator must settle exactly on the target");
+/// Regression: after an overshooting interpolator (Elastic/Back) finishes, the animation must
+/// settle exactly on the target. Previously completion used eased >= 1.0, so the overshoot ended
+/// the animation early at an out-of-range value.
+#[test]
+fn tween_overshoot_interpolator_settles_at_target() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    use crate::animation::interpolator::{EaseOutElastic, Interpolator};
+    // The curve itself already has eased > 1.0 at t ~ 0.98 (the overshoot).
+    let ease = EaseOutElastic::new();
+    assert!(
+        ease.interpolate(0.98) > 1.0,
+        "EaseOutElastic should overshoot (> 1.0) near the end"
+    );
+    // Advance the full duration: it must settle exactly on 100 (before the fix it stopped at the overshoot).
+    let st = State::new(0.0f32);
+    let mut anim = Motion::new(st.clone());
+    anim.animate_to(
+        100.0,
+        AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(200),
+            EaseOutElastic::new(),
+        )),
+    );
+    let mut frames = 0;
+    while anim.update() && frames < 30 {
+        _clock.advance(Duration::from_millis(40));
+        frames += 1;
     }
+    assert!(frames < 30, "the animation should converge");
+    assert_eq!(
+        st.peek(),
+        100.0,
+        "an overshooting interpolator must settle exactly on the target"
+    );
+}
 
-    /// The Keyframes done frame must settle exactly on the target too, like Tween and Spring: with a
-    /// final progress < 1.0 the interpolated value is not `to`.
-    #[test]
-    fn keyframes_settles_at_target() {
-        let (_guard, _clock) = crate::animation::tests::serial_clock();
-        let st = State::new(0.0f32);
-        let mut anim = Motion::new(st.clone());
-        // The last frame has progress 0.8 (< 1.0): using the interpolated value at done would not equal to.
-        anim.animate_to(
-            100.0,
-            AnimationSpec::Keyframes(KeyframesSpec {
-                duration: Duration::from_millis(200),
-                frames: vec![
-                    (0.0, 0.0, Arc::new(crate::animation::interpolator::Linear::new())),
-                    (0.8, 50.0, Arc::new(crate::animation::interpolator::Linear::new())),
-                ],
-            }),
-        );
-        let mut frames = 0;
-        while anim.update() && frames < 20 {
-            _clock.advance(Duration::from_millis(40));
-            frames += 1;
-        }
-        assert!(frames < 20, "keyframes should converge");
-        assert_eq!(st.peek(), 100.0, "keyframes must settle exactly on the target even when the last progress < 1.0");
+/// The Keyframes done frame must settle exactly on the target too, like Tween and Spring: with a
+/// final progress < 1.0 the interpolated value is not `to`.
+#[test]
+fn keyframes_settles_at_target() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    let st = State::new(0.0f32);
+    let mut anim = Motion::new(st.clone());
+    // The last frame has progress 0.8 (< 1.0): using the interpolated value at done would not equal to.
+    anim.animate_to(
+        100.0,
+        AnimationSpec::Keyframes(KeyframesSpec {
+            duration: Duration::from_millis(200),
+            frames: vec![
+                (
+                    0.0,
+                    0.0,
+                    Arc::new(crate::animation::interpolator::Linear::new()),
+                ),
+                (
+                    0.8,
+                    50.0,
+                    Arc::new(crate::animation::interpolator::Linear::new()),
+                ),
+            ],
+        }),
+    );
+    let mut frames = 0;
+    while anim.update() && frames < 20 {
+        _clock.advance(Duration::from_millis(40));
+        frames += 1;
     }
+    assert!(frames < 20, "keyframes should converge");
+    assert_eq!(
+        st.peek(),
+        100.0,
+        "keyframes must settle exactly on the target even when the last progress < 1.0"
+    );
+}
 
 /// With a frozen clock the engine's trajectory is a function of time, so a test can assert WHERE the
 /// value is at each timestamp instead of sleeping and sampling whenever the machine wakes up.
@@ -466,4 +536,3 @@ fn the_overrun_guard_honours_a_value_bound() {
     );
     clear_all_animations();
 }
-

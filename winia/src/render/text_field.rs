@@ -1,5 +1,5 @@
-use super::*;
 use super::paint::*;
+use super::*;
 
 // ── The text-field container's visuals (M3 Filled/Outlined) ──
 
@@ -35,10 +35,10 @@ pub(super) fn draw_text_field_container(
             let mut lp = Paint::default();
             lp.set_color4f(Color4f::from(indicator), None);
             lp.set_anti_alias(true);
-            canvas.draw_rect(Rect::new(
-                rect.left, rect.bottom - w,
-                rect.right, rect.bottom,
-            ), &lp);
+            canvas.draw_rect(
+                Rect::new(rect.left, rect.bottom - w, rect.right, rect.bottom),
+                &lp,
+            );
         }
         crate::text::field::TextFieldVariant::Outlined => {
             // The outline: a centred 1 or 2 px stroke with 4 dp corners, broken at the label gap.
@@ -50,8 +50,10 @@ pub(super) fn draw_text_field_container(
             bp.set_stroke_width(w);
             let inset = w / 2.0;
             let border_rect = Rect::new(
-                rect.left + inset, rect.top + inset,
-                rect.right - inset, rect.bottom - inset,
+                rect.left + inset,
+                rect.top + inset,
+                rect.right - inset,
+                rect.bottom - inset,
             );
             if let Some(cut) = cutout {
                 // The gap: clip out the label's area (Difference) before stroking the outline.
@@ -65,7 +67,6 @@ pub(super) fn draw_text_field_container(
         }
     }
 }
-
 
 /// Draw a label or supporting text: a small run with no layout cache, built through
 /// `build_plain_paragraph` every time. The volume is tiny, so the cost is acceptable.
@@ -112,7 +113,10 @@ pub(super) fn draw_text_field_aux_text(
 /// flight transform; inset logic mirrors `draw_border`).
 pub(super) fn draw_border_morphed(
     canvas: &Canvas,
-    x: f32, y: f32, w: f32, h: f32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
     width: f32,
     color: &crate::graphics::Color,
     r: [(f32, f32); 4],
@@ -124,16 +128,23 @@ pub(super) fn draw_border_morphed(
     paint.set_anti_alias(true);
     let inset = width / 2.0;
     let sr = Rect::new(x + inset, y + inset, x + w - inset, y + h - inset);
-    let v = |i: usize| {
-        skia_safe::Vector::new((r[i].0 - inset).max(0.0), (r[i].1 - inset).max(0.0))
-    };
+    let v = |i: usize| skia_safe::Vector::new((r[i].0 - inset).max(0.0), (r[i].1 - inset).max(0.0));
     canvas.draw_rrect(
         skia_safe::RRect::new_rect_radii(sr, &[v(0), v(1), v(2), v(3)]),
         &paint,
     );
 }
 
-pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
+pub(super) fn draw_border(
+    canvas: &Canvas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    width: f32,
+    color: &crate::graphics::Color,
+    shape: &crate::graphics::Shape,
+) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
     paint.set_style(skia_safe::paint::Style::Stroke);
@@ -142,9 +153,18 @@ pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width
     let inset = width / 2.0;
     let sr = Rect::new(x + inset, y + inset, x + w - inset, y + h - inset);
     match shape {
-        crate::graphics::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
+        crate::graphics::Shape::Rectangle => {
+            canvas.draw_rect(sr, &paint);
+        }
         crate::graphics::Shape::RoundedRect { corner_radius } => {
-            canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
+            canvas.draw_rrect(
+                RRect::new_rect_xy(
+                    sr,
+                    (*corner_radius - inset).max(0.0),
+                    (*corner_radius - inset).max(0.0),
+                ),
+                &paint,
+            );
         }
         crate::graphics::Shape::PillToRounded { corner_radius, t } => {
             let percent = sr.width().min(sr.height()) / 2.0;
@@ -153,12 +173,15 @@ pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let r = (*radius - inset).max(0.0);
-            let rr = RRect::new_rect_radii(sr, &[
-                skia_safe::Vector::new(r, r),
-                skia_safe::Vector::new(r, r),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = RRect::new_rect_radii(
+                sr,
+                &[
+                    skia_safe::Vector::new(r, r),
+                    skia_safe::Vector::new(r, r),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
         crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -167,7 +190,12 @@ pub(super) fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width
         crate::graphics::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(sr, (*radius - inset).max(0.0)), &paint);
         }
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => {
             // Same inset rule as the other radii: the border is drawn on the inset rect, so its
             // corners shrink by the stroke's half width (a 1 dp border on a 4 dp inner corner must
             // not paint outside the fill it wraps).
@@ -239,12 +267,15 @@ pub(crate) fn draw_focus(
     }
     let mut paint = Paint::default();
     // Alpha follows `focus_indicator_alpha`: in on focus, out on blur.
-    paint.set_color4f(Color4f::new(
-        color.r as f32 / 255.0,
-        color.g as f32 / 255.0,
-        color.b as f32 / 255.0,
-        color.a as f32 / 255.0 * alpha.clamp(0.0, 1.0),
-    ), None);
+    paint.set_color4f(
+        Color4f::new(
+            color.r as f32 / 255.0,
+            color.g as f32 / 255.0,
+            color.b as f32 / 255.0,
+            color.a as f32 / 255.0 * alpha.clamp(0.0, 1.0),
+        ),
+        None,
+    );
     paint.set_style(skia_safe::paint::Style::Stroke);
     paint.set_stroke_width(FOCUS_WIDTH);
     paint.set_anti_alias(true);
@@ -256,7 +287,11 @@ pub(crate) fn draw_focus(
         // as it lands the background. (A second review round measured this being false
         // before the radii divided by the paint scale: the ring was elliptical by the
         // same factor as the background, up to 8.7% on a width-preserving flight.)
-        let grow = if rect.width() > 0.0 { sr.width() / rect.width() } else { 1.0 };
+        let grow = if rect.width() > 0.0 {
+            sr.width() / rect.width()
+        } else {
+            1.0
+        };
         let rr = RRect::new_rect_radii(
             sr,
             &crate::transition::rrect_vectors(
@@ -267,7 +302,9 @@ pub(crate) fn draw_focus(
         return;
     }
     match shape {
-        crate::graphics::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
+        crate::graphics::Shape::Rectangle => {
+            canvas.draw_rect(sr, &paint);
+        }
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             // The radius grows with the expansion, so the ring stays concentric with the component.
             let r = (*corner_radius + inset).max(0.0) * scale;
@@ -280,12 +317,15 @@ pub(crate) fn draw_focus(
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let r = (*radius + inset).max(0.0) * scale;
-            let rr = RRect::new_rect_radii(sr, &[
-                skia_safe::Vector::new(r, r),
-                skia_safe::Vector::new(r, r),
-                skia_safe::Vector::new(0.0, 0.0),
-                skia_safe::Vector::new(0.0, 0.0),
-            ]);
+            let rr = RRect::new_rect_radii(
+                sr,
+                &[
+                    skia_safe::Vector::new(r, r),
+                    skia_safe::Vector::new(r, r),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ],
+            );
             canvas.draw_rrect(rr, &paint);
         }
         crate::graphics::Shape::RightRoundedRect { radius } => {
@@ -296,7 +336,12 @@ pub(crate) fn draw_focus(
             let r = (*radius + inset).max(0.0) * scale;
             canvas.draw_rrect(rrect_left_rounded(sr, r), &paint);
         }
-        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => {
             let grow = |value: f32| (value + inset).max(0.0) * scale;
             canvas.draw_rrect(
                 rrect_corners(
@@ -328,9 +373,16 @@ pub(super) fn draw_text_with_selection(
     color: &crate::graphics::Color,
     font_weight: crate::text::FontWeight,
     font_style: crate::text::FontSlant,
-    x: f32, y: f32, w: f32, h: f32,
-    max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool,
-    letter_spacing: f32, line_height: Option<f32>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    max_lines: usize,
+    align: crate::text::TextAlign,
+    overflow: crate::text::TextOverflow,
+    soft_wrap: bool,
+    letter_spacing: f32,
+    line_height: Option<f32>,
     registrar: Option<crate::text::selection::SelectionRegistrar>,
     slot_key: u64,
     selection_bg: crate::graphics::Color,
@@ -340,7 +392,10 @@ pub(super) fn draw_text_with_selection(
     // The fallback must agree with the cached path about a geometric transform: the paragraph is
     // built in its own space and painted through the same matrix (see `render::pass`).
     let scale_x = transform.map(|t| t.scale_x).unwrap_or(1.0).max(0.0001);
-    if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {
+    if registrar
+        .and_then(|reg| reg.selected_range(slot_key))
+        .is_some()
+    {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(
             selection_bg.a,
@@ -348,14 +403,30 @@ pub(super) fn draw_text_with_selection(
             selection_bg.g,
             selection_bg.b,
         ));
-        canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
+        canvas.draw_rect(
+            skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2),
+            &paint,
+        );
     }
     // The fallback path rebuilds through the shared constructor when the cache is missing: the same
     // logic the measure pass runs, from one source of truth.
     let para = crate::layout::node::build_plain_paragraph(
-        content, font_size, color, font_weight, font_style,
-        max_lines, align, overflow, soft_wrap, letter_spacing, line_height,
-        false, false, None, None, w / scale_x,
+        content,
+        font_size,
+        color,
+        font_weight,
+        font_style,
+        max_lines,
+        align,
+        overflow,
+        soft_wrap,
+        letter_spacing,
+        line_height,
+        false,
+        false,
+        None,
+        None,
+        w / scale_x,
     );
     // The line-height offset has to be applied here too, or an uncached text would paint at a
     // different height than the same text once it has been measured. Shared arithmetic, so the two
@@ -376,7 +447,11 @@ pub(super) fn draw_text_with_selection(
             || para.height() > h + 0.5);
     if clipped {
         canvas.save();
-        canvas.clip_rect(skia_safe::Rect::new(x, y, x + w, y + para.height()), None, Some(false));
+        canvas.clip_rect(
+            skia_safe::Rect::new(x, y, x + w, y + para.height()),
+            None,
+            Some(false),
+        );
     }
     match transform {
         Some(t) => {
@@ -423,4 +498,3 @@ pub(super) fn draw_text(
     };
     para.paint(canvas, x_offset, y);
 }
-

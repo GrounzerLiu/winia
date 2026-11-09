@@ -3,19 +3,16 @@
 //! 参考：旧版 winia v1 的 text_field 实现 + Compose Foundation 1.11.4 源码
 //! （KeyCommand/KeyMapping/UndoManager 语义）
 
-use crate::text::field::{
-    TextFieldColors, TextFieldSlotRole, TextFieldVariant,
-};
+use crate::components::text::ProvideTextStyle;
+use crate::composable;
+use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::modifier::Modifier;
-use crate::composable;
-use crate::components::text::{ProvideTextStyle};
 use crate::text::TextStyle;
+use crate::text::field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
 use crate::theme::WiniaTheme;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
-
 
 mod colors;
 mod edit;

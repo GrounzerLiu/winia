@@ -39,7 +39,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         (i0.1 - row.1).abs() < 2.0,
         "the cross axis is not mirrored: {i0:?} in {row:?}"
     );
-    assert!((i0.2 - 100.0).abs() < 1.0, "the tile keeps its 100 dp width: {i0:?}");
+    assert!(
+        (i0.2 - 100.0).abs() < 1.0,
+        "the tile keeps its 100 dp width: {i0:?}"
+    );
 
     // 2. RTL column: the main axis still runs downward, the cross axis mirrors, so a 120 dp item
     //    hugs the right edge, 16 dp (the start padding) in. A vertical list has no translate, so this
@@ -55,7 +58,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         (c0.1 - column.1).abs() < 2.0 && c1.1 > c0.1,
         "and the items still stack downward: {c0:?} {c1:?} in {column:?}"
     );
-    assert!((c0.2 - 120.0).abs() < 1.0, "the 120 dp item is not stretched: {c0:?}");
+    assert!(
+        (c0.2 - 120.0).abs() < 1.0,
+        "the 120 dp item is not stretched: {c0:?}"
+    );
 
     // 3. Unbounded cross axis: the column inside a horizontal scroll reports 50 + 6 + 4 dp. The
     //    sentinel would come out as 3.4e38 here, which is what the bound below rejects.
@@ -74,7 +80,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         unbounded.2 <= clip.2 + 1.0,
         "and it fits inside the clipped strip: {unbounded:?} in {clip:?}"
     );
-    assert!((u0.2 - 50.0).abs() < 1.0, "the item keeps its 50 dp width: {u0:?}");
+    assert!(
+        (u0.2 - 50.0).abs() < 1.0,
+        "the item keeps its 50 dp width: {u0:?}"
+    );
 
     // 4. The LTR control: index 0 at the left, ascending.
     let ltr_row = app.expect_tag("lazy-ltr-row");
@@ -88,7 +97,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
 
     // 5. Scroll the RTL COLUMN: a drag that starts inside it must move the window — item 0 leaves,
     //    later items arrive. This is what the 200 entries are for.
-    assert!(app.find_tag("lazy-rtl-col-item-0").is_some(), "item 0 starts visible");
+    assert!(
+        app.find_tag("lazy-rtl-col-item-0").is_some(),
+        "item 0 starts visible"
+    );
     let col = app.expect_tag("lazy-rtl-column");
     let cx = col.0 + col.2 / 2.0;
     let cy = col.1 + col.3 / 2.0;
@@ -106,7 +118,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
     // an RTL list — dragging leftward is clamped at offset 0, which is exactly what this test caught.
     let row = app.expect_tag("lazy-rtl-row");
     let ry = row.1 + row.3 / 2.0;
-    assert!(app.find_tag("lazy-rtl-item-0").is_some(), "item 0 starts visible");
+    assert!(
+        app.find_tag("lazy-rtl-item-0").is_some(),
+        "item 0 starts visible"
+    );
     app.drag(row.0 + 40.0, ry, row.0 + row.2 - 40.0, ry);
     app.expect_eventually_timeout("the RTL row scrolls", Duration::from_secs(2), |app| {
         app.refresh();
@@ -118,10 +133,14 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
     //    through the same queue a platform bridge uses. The first element that offers it in the
     //    window is card 1's row, so the row's own tiles prove it moved.
     app.send("si 50");
-    app.expect_eventually_timeout("ScrollToIndex jumps the row", Duration::from_secs(3), |app| {
-        app.refresh();
-        app.find_tag("lazy-rtl-item-50").is_some() && app.find_tag("lazy-rtl-item-0").is_none()
-    });
+    app.expect_eventually_timeout(
+        "ScrollToIndex jumps the row",
+        Duration::from_secs(3),
+        |app| {
+            app.refresh();
+            app.find_tag("lazy-rtl-item-50").is_some() && app.find_tag("lazy-rtl-item-0").is_none()
+        },
+    );
 
     // 8. The AMBIENT route, not just the modifier: flipping the window's direction mirrors the row
     //    that carries no direction of its own, which is the path an OS-level RTL switch takes.
@@ -139,7 +158,10 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
         Duration::from_secs(2),
         |app| {
             app.refresh();
-            match (app.find_tag("lazy-ltr-item-0"), app.find_tag("lazy-ltr-item-1")) {
+            match (
+                app.find_tag("lazy-ltr-item-0"),
+                app.find_tag("lazy-ltr-item-1"),
+            ) {
                 (Some(a), Some(b)) => b.0 < a.0,
                 _ => false,
             }
@@ -155,10 +177,14 @@ fn lazy_layout_demo_mirrors_scrolls_and_stays_bounded() {
     // 8. `layoutInfo` is live: the LTR card prints its visible range from `state.layout_info()`, and
     //    scrolling the row must change that text — a measure-time write reaching a composable reader.
     //    `all_texts` reports each node as `text(<content>)`, so the match is on containment.
-    app.expect_eventually_timeout("the layout-info label resolves", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.all_texts().iter().any(|text| text.contains("items 0-"))
-    });
+    app.expect_eventually_timeout(
+        "the layout-info label resolves",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.all_texts().iter().any(|text| text.contains("items 0-"))
+        },
+    );
     let label_before = app
         .all_texts()
         .into_iter()
@@ -264,8 +290,14 @@ fn lazy_ops_buttons_drive_the_list() {
         info.contains("of 51") && info.contains("first 0")
     });
     let baseline = ops_info(&mut app);
-    assert!(baseline.contains("forward true"), "there is room ahead: {baseline:?}");
-    assert!(baseline.contains("backward false"), "and none behind: {baseline:?}");
+    assert!(
+        baseline.contains("forward true"),
+        "there is room ahead: {baseline:?}"
+    );
+    assert!(
+        baseline.contains("backward false"),
+        "and none behind: {baseline:?}"
+    );
     // LOCK: user_scroll(false) — the container keeps CLIPPING and the gestures stop reaching it.
     click_tag(&mut app, "lazy-toggle-lock");
     app.expect_eventually_timeout("lock on", Duration::from_secs(2), |app| {
@@ -353,21 +385,26 @@ fn lazy_ops_buttons_drive_the_list() {
         ops_info(app).contains("reverse true")
     });
 
-
     // PAGER: fill_items + snap_paging — "next page" lands on page 2 and that page is on screen.
     app.expect_eventually_timeout("the pager reports page 1", Duration::from_secs(2), |app| {
         app.refresh();
-        app.all_texts().iter().any(|text| text.contains("page 1 of 5"))
+        app.all_texts()
+            .iter()
+            .any(|text| text.contains("page 1 of 5"))
     });
     click_tag(&mut app, "lazy-next-page");
     app.expect_eventually_timeout("next page", Duration::from_secs(2), |app| {
         app.refresh();
-        app.all_texts().iter().any(|text| text.contains("page 2 of 5"))
+        app.all_texts()
+            .iter()
+            .any(|text| text.contains("page 2 of 5"))
             && app.find_tag("lazy-page-1").is_some()
     });
     click_tag(&mut app, "lazy-first-page");
     app.expect_eventually_timeout("first page", Duration::from_secs(2), |app| {
         app.refresh();
-        app.all_texts().iter().any(|text| text.contains("page 1 of 5"))
+        app.all_texts()
+            .iter()
+            .any(|text| text.contains("page 1 of 5"))
     });
 }

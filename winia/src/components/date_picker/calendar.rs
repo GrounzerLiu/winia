@@ -116,8 +116,7 @@ pub fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let month = month as i64;
     let day = day as i64;
     let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
-    let day_of_era =
-        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
 }
 
@@ -132,7 +131,11 @@ pub fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_index = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
     let year = year + if month <= 2 { 1 } else { 0 };
     (year as i32, month as u32, day as u32)
 }
@@ -283,7 +286,11 @@ impl CalendarModel {
     pub fn month_of(&self, year: i32, month: u32) -> CalendarMonth {
         let first = CalendarDate::new(year, month, 1).expect("month 1..=12 names a real month");
         let difference = first.day_of_week() as i64 - self.locale.first_day_of_week as i64;
-        let offset = if difference < 0 { difference + DAYS_IN_WEEK as i64 } else { difference };
+        let offset = if difference < 0 {
+            difference + DAYS_IN_WEEK as i64
+        } else {
+            difference
+        };
         CalendarMonth {
             year,
             month,
@@ -334,15 +341,21 @@ impl CalendarModel {
         }
         let order = format.field_order();
         let (year_digits, month, day) = match order {
-            DateInputFieldOrder::MonthDayYear => {
-                (&digits[4..8], digits[0..2].parse().ok()?, digits[2..4].parse().ok()?)
-            }
-            DateInputFieldOrder::DayMonthYear => {
-                (&digits[4..8], digits[2..4].parse().ok()?, digits[0..2].parse().ok()?)
-            }
-            DateInputFieldOrder::YearMonthDay => {
-                (&digits[0..4], digits[4..6].parse().ok()?, digits[6..8].parse().ok()?)
-            }
+            DateInputFieldOrder::MonthDayYear => (
+                &digits[4..8],
+                digits[0..2].parse().ok()?,
+                digits[2..4].parse().ok()?,
+            ),
+            DateInputFieldOrder::DayMonthYear => (
+                &digits[4..8],
+                digits[2..4].parse().ok()?,
+                digits[0..2].parse().ok()?,
+            ),
+            DateInputFieldOrder::YearMonthDay => (
+                &digits[0..4],
+                digits[4..6].parse().ok()?,
+                digits[6..8].parse().ok()?,
+            ),
         };
         let year: i32 = year_digits.parse().ok()?;
         CalendarDate::new(year, month, day)
@@ -383,7 +396,11 @@ impl CalendarModel {
     /// returns and the picker's year menu shows (`DatePicker.kt:1565-1568`).
     pub fn format_month_year(&self, month_start_millis: i64) -> String {
         let month = self.month_of_millis(month_start_millis);
-        format!("{} {}", self.locale.month_names[month.month as usize - 1], month.year)
+        format!(
+            "{} {}",
+            self.locale.month_names[month.month as usize - 1],
+            month.year
+        )
     }
 
     /// The date as text, `Sep 1, 2024`; with `for_content_description` the verbose form, which carries the
@@ -396,7 +413,12 @@ impl CalendarModel {
             let weekday = &self.locale.weekday_names[date.day_of_week() as usize - 1].0;
             format!("{weekday}, {month} {}, {}", date.day, date.year)
         } else {
-            format!("{} {}, {}", &month[..3.min(month.len())], date.day, date.year)
+            format!(
+                "{} {}, {}",
+                &month[..3.min(month.len())],
+                date.day,
+                date.year
+            )
         }
     }
 
@@ -436,7 +458,6 @@ pub trait SelectableDates: Send + Sync {
 pub struct AllDates;
 
 impl SelectableDates for AllDates {}
-
 
 /// The rows a month grid always draws, whether or not the month needs them (`MaxCalendarRows`,
 /// `DatePicker.kt:2303`).

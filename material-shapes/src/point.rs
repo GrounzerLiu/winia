@@ -1,6 +1,6 @@
-use std::ops::MulAssign;
 use crate::cubic::PointTransformer;
 use crate::utils::require;
+use std::ops::MulAssign;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Point(pub f32, pub f32);

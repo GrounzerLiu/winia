@@ -169,7 +169,11 @@ pub(crate) fn skia_color(c: Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
 
-pub(crate) fn paint_stroke(width: f32, cap: ProgressIndicatorStrokeCap, color: Color) -> skia_safe::Paint {
+pub(crate) fn paint_stroke(
+    width: f32,
+    cap: ProgressIndicatorStrokeCap,
+    color: Color,
+) -> skia_safe::Paint {
     let mut paint = skia_safe::Paint::default();
     paint.set_anti_alias(true);
     paint.set_style(skia_safe::PaintStyle::Stroke);
@@ -178,4 +182,3 @@ pub(crate) fn paint_stroke(width: f32, cap: ProgressIndicatorStrokeCap, color: C
     paint.set_color(skia_color(color));
     paint
 }
-

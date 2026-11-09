@@ -10,11 +10,11 @@
 //! 所有 SVG 渲染统一走 Skia 内置 `svg::Dom`（不自研路径解析）：
 //! 裸 path 数据会被包成最小 `<svg viewBox="0 0 24 24">` 文档后交给 Dom。
 
-use crate::graphics::{IconSource, IconSpec, SymbolAxes};
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::modifier::{Modifier};
 use crate::graphics::{AxisValue, Color};
+use crate::graphics::{IconSource, IconSpec, SymbolAxes};
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
@@ -90,9 +90,13 @@ impl Tint {
     ) -> Option<crate::graphics::Dyn<Color>> {
         use crate::graphics::Dyn;
         match self {
-            Tint::Auto => source.default_tinted().then_some(Dyn::Static(default_content)),
+            Tint::Auto => source
+                .default_tinted()
+                .then_some(Dyn::Static(default_content)),
             Tint::Color(c) => Some(c),
-            Tint::None => source.carries_no_colour().then_some(Dyn::Static(default_content)),
+            Tint::None => source
+                .carries_no_colour()
+                .then_some(Dyn::Static(default_content)),
         }
     }
 }
@@ -286,25 +290,37 @@ mod tests {
     use super::*;
     use crate::theme::ThemeColors;
 
-
-
     #[test]
     fn tint_auto_resolves_by_source() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let path_src = IconSource::svg_path("M0 0h1z");
         assert_eq!(
-            Tint::Auto.resolve(&path_src, theme.on_surface).map(|t| t.eval()),
+            Tint::Auto
+                .resolve(&path_src, theme.on_surface)
+                .map(|t| t.eval()),
             Some(theme.on_surface)
         );
         let file_src = IconSource::file("logo.png");
-        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface).map(|t| t.eval()), None, "a file keeps its own colours");
-        assert_eq!(Tint::None.resolve(&path_src, theme.on_surface).map(|t| t.eval()), None);
         assert_eq!(
-            Tint::Color(Color::RED.into()).resolve(&file_src, theme.on_surface).map(|t| t.eval()),
+            Tint::Auto
+                .resolve(&file_src, theme.on_surface)
+                .map(|t| t.eval()),
+            None,
+            "a file keeps its own colours"
+        );
+        assert_eq!(
+            Tint::None
+                .resolve(&path_src, theme.on_surface)
+                .map(|t| t.eval()),
+            None
+        );
+        assert_eq!(
+            Tint::Color(Color::RED.into())
+                .resolve(&file_src, theme.on_surface)
+                .map(|t| t.eval()),
             Some(Color::RED)
         );
     }
-
 
     /// A state-driven tint is a PARAMETER read at paint: one painted spec follows the state, and two
     /// specs backed by states compare equal (changing the state is not a new request).
@@ -337,10 +353,17 @@ mod tests {
         };
 
         let spec = painted(&composer);
-        assert!(spec.is_dynamic(), "an Icon::tint(&state) is a paint-time carrier");
+        assert!(
+            spec.is_dynamic(),
+            "an Icon::tint(&state) is a paint-time carrier"
+        );
         assert_eq!(spec.eval(), Color::RED);
         tint.set(Color::BLUE);
-        assert_eq!(spec.eval(), Color::BLUE, "the SAME element reads the new value");
+        assert_eq!(
+            spec.eval(),
+            Color::BLUE,
+            "the SAME element reads the new value"
+        );
         assert_eq!(painted(&composer).eval(), Color::BLUE);
 
         // Two specs backed by the same kind of request are the same parameter; a literal is not.
@@ -387,11 +410,19 @@ mod tests {
         };
 
         compose(&mut composer);
-        assert_eq!(painted_tint(&composer), Some(Color::RED), "the first frame paints the tint");
+        assert_eq!(
+            painted_tint(&composer),
+            Some(Color::RED),
+            "the first frame paints the tint"
+        );
 
         // Painting again with nothing changed must keep the same spec.
         compose(&mut composer);
-        assert_eq!(painted_tint(&composer), Some(Color::RED), "an unchanged frame paints the same tint");
+        assert_eq!(
+            painted_tint(&composer),
+            Some(Color::RED),
+            "an unchanged frame paints the same tint"
+        );
 
         tint.update(|c| *c = Color::BLUE);
         compose(&mut composer);

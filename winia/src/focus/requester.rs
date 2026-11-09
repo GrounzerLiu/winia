@@ -61,15 +61,23 @@ pub struct FocusRequester {
 
 impl FocusRequester {
     pub fn new() -> Self {
-        FocusRequester { id: NEXT_FOCUS_ID.fetch_add(1, Ordering::Relaxed), window_id: current_focus_window() }
+        FocusRequester {
+            id: NEXT_FOCUS_ID.fetch_add(1, Ordering::Relaxed),
+            window_id: current_focus_window(),
+        }
     }
 
-    pub fn id(&self) -> u64 { self.id }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 
     /// Request focus. Works with or without the `debug-server` feature; the request is applied
     /// on the next frame's `RedrawRequested`.
     pub fn request_focus(&self) {
-        FOCUS_REQUESTS.lock().unwrap().push(FocusRequest { window_id: self.window_id, id: self.id });
+        FOCUS_REQUESTS.lock().unwrap().push(FocusRequest {
+            window_id: self.window_id,
+            id: self.id,
+        });
         // Also go through the debug channel, preserving the old behaviour.
         #[cfg(feature = "debug-server")]
         crate::debug::queue_event(crate::debug::DebugEvent::RequestFocus { id: self.id });
@@ -77,9 +85,13 @@ impl FocusRequester {
 }
 
 impl Default for FocusRequester {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl From<&FocusRequester> for FocusRequester {
-    fn from(fr: &FocusRequester) -> Self { fr.clone() }
+    fn from(fr: &FocusRequester) -> Self {
+        fr.clone()
+    }
 }

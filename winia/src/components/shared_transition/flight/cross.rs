@@ -3,9 +3,9 @@ use super::*;
 impl Composer {
     /// Any non-terminal Tier1 flight in this map (z-order + idle gating).
     pub(crate) fn has_cross_flights(&self) -> bool {
-        self.shared_flights.values().any(|a| {
-            !is_terminal(a.flight.phase) && a.source_cid != a.target_cid
-        })
+        self.shared_flights
+            .values()
+            .any(|a| !is_terminal(a.flight.phase) && a.source_cid != a.target_cid)
     }
 
     /// Window-level Tier1 matcher + driver (app loop, after ALL composers laid
@@ -89,7 +89,12 @@ impl Composer {
     pub(crate) fn poll_one_cross_flight(all: &mut [&mut Composer], id: FlightId) {
         // Snapshot endpoints (main map).
         let (s_cid, t_cid, scope, key) = match all[0].shared_flights.get(&id) {
-            Some(a) => (a.source_cid, a.target_cid, a.flight.scope_id, a.flight.key.clone()),
+            Some(a) => (
+                a.source_cid,
+                a.target_cid,
+                a.flight.scope_id,
+                a.flight.key.clone(),
+            ),
             None => return,
         };
         // Resolve composer indices (endpoint composer gone ⟹ cancel).
@@ -105,7 +110,11 @@ impl Composer {
             let t = &all[ti];
             match t.shared_live_map().get(&(scope, key.clone())) {
                 Some(&slot) => {
-                    Some(slot) != all[0].shared_flights.get(&id).and_then(|a| a.flight.target_slot)
+                    Some(slot)
+                        != all[0]
+                            .shared_flights
+                            .get(&id)
+                            .and_then(|a| a.flight.target_slot)
                 }
                 None => true,
             }
@@ -130,7 +139,10 @@ impl Composer {
             a.flight.progress = a.progress_value();
         }
         Self::write_cross_visuals(&mut *all, si, ti, id);
-        let done = all[0].shared_flights.get(&id).is_some_and(flight_progress_done);
+        let done = all[0]
+            .shared_flights
+            .get(&id)
+            .is_some_and(flight_progress_done);
         if done {
             let acts = all[0]
                 .shared_flights
@@ -146,9 +158,18 @@ impl Composer {
                 .unwrap_or((None, None, None));
             if let (Some(slot), Some(idx)) = (sslot, sidx) {
                 let owner = &mut all[si];
-                if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+                if owner
+                    .arena
+                    .nodes
+                    .get(idx)
+                    .is_some_and(|n| n.slot_key == slot)
+                {
                     let mut visited = crate::layout::node::NodeMarks::default();
-                    owner.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
+                    owner.arena.free_node_skip(
+                        idx,
+                        &crate::layout::node::NodeMarks::default(),
+                        &mut visited,
+                    );
                 }
                 owner.transition_layer.retain(|&x| x != idx);
             }
@@ -160,7 +181,10 @@ impl Composer {
                 // The override carries the OWNER's identity (the composer whose
                 // map holds the flight = main), not the peer's: that is what the
                 // cross-writer stamps on the node.
-                let owner_key = FlightKey { cid: all[0].composer_id, id };
+                let owner_key = FlightKey {
+                    cid: all[0].composer_id,
+                    id,
+                };
                 let peer = &mut all[ti];
                 peer.clear_transition_for_slot(slot, owner_key);
             }
@@ -177,9 +201,18 @@ impl Composer {
         };
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
             if let Some(owner) = all.iter_mut().find(|c| c.composer_id == a.source_cid) {
-                if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+                if owner
+                    .arena
+                    .nodes
+                    .get(idx)
+                    .is_some_and(|n| n.slot_key == slot)
+                {
                     let mut visited = crate::layout::node::NodeMarks::default();
-                    owner.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
+                    owner.arena.free_node_skip(
+                        idx,
+                        &crate::layout::node::NodeMarks::default(),
+                        &mut visited,
+                    );
                 }
                 owner.transition_layer.retain(|&x| x != idx);
             }
@@ -196,7 +229,10 @@ impl Composer {
             // looked for a key nobody wrote, so the override was never cleared and the
             // element stayed frozen at the outgoing size forever (review round 3,
             // reproduced with a live override dump).
-            let owner_key = FlightKey { cid: all[0].composer_id, id };
+            let owner_key = FlightKey {
+                cid: all[0].composer_id,
+                id,
+            };
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
                 peer.clear_transition_for_slot(slot, owner_key);
             }
@@ -210,7 +246,12 @@ impl Composer {
     /// around `screen_pos`) are NOT folded into the visuals — while the panel
     /// animates (~200ms) the flight leads/lags the panel transform by that
     /// delta. Fixing it means plumbing the overlay progress into cross-poll.
-    pub(crate) fn write_cross_visuals(all: &mut [&mut Composer], owner_idx: usize, peer_idx: usize, id: FlightId) {
+    pub(crate) fn write_cross_visuals(
+        all: &mut [&mut Composer],
+        owner_idx: usize,
+        peer_idx: usize,
+        id: FlightId,
+    ) {
         let snapshot = all[0].shared_flights.get(&id).map(|a| {
             (
                 a.start,
@@ -263,7 +304,10 @@ impl Composer {
         let (so, to) = (all[owner_idx].screen_origin, all[peer_idx].screen_origin);
         // Same rule as the Tier-0 writer: a straight path paints the flown edges, an arc bends the
         // parameterised rect instead.
-        let flown = all[0].shared_flights.get(&id).map(|a| a.edges.peek().bounds());
+        let flown = all[0]
+            .shared_flights
+            .get(&id)
+            .map(|a| a.edges.peek().bounds());
         let flown_source = if matches!(path, PathMotion::Linear) {
             flown.map(|r| off_origin(r, so))
         } else {
@@ -276,7 +320,12 @@ impl Composer {
         };
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
             let owner = &mut all[owner_idx];
-            if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+            if owner
+                .arena
+                .nodes
+                .get(idx)
+                .is_some_and(|n| n.slot_key == slot)
+            {
                 owner.arena.nodes[idx].transition = Some(TransitionVisual {
                     start: off_origin(start, so),
                     end: off_origin(end, so),
@@ -333,7 +382,10 @@ impl Composer {
                         peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                             None
                         } else {
-                            Some(FlightMeasure { frame: measure_state, owner: mine })
+                            Some(FlightMeasure {
+                                frame: measure_state,
+                                owner: mine,
+                            })
                         };
                     }
                     if !frame.is_idle() || had_override {
@@ -380,7 +432,11 @@ impl Composer {
     /// composer, or free it same-frame when unmatched (invisible removal).
     /// Freshness (peer lacked the key last frame) plus Tier0-busy guards keep
     /// stable duplicates (same hero shown in two places) from ever pairing.
-    pub(crate) fn match_pending_source(all: &mut [&mut Composer], owner_idx: usize, p: PendingSource) {
+    pub(crate) fn match_pending_source(
+        all: &mut [&mut Composer],
+        owner_idx: usize,
+        p: PendingSource,
+    ) {
         let kk = (p.scope_id, p.key.clone());
         for peer_idx in 0..all.len() {
             if peer_idx == owner_idx {
@@ -418,12 +474,16 @@ impl Composer {
                     .map(|(_, sl)| *sl)?;
                 // Tier0-active keys belong to Tier0 (both maps).
                 if peer.shared_flights.values().any(|a| {
-                    !is_terminal(a.flight.phase) && a.flight.scope_id == kk.0 && a.flight.key == kk.1
+                    !is_terminal(a.flight.phase)
+                        && a.flight.scope_id == kk.0
+                        && a.flight.key == kk.1
                 }) {
                     return None;
                 }
                 if all[0].shared_flights.values().any(|a| {
-                    !is_terminal(a.flight.phase) && a.flight.scope_id == kk.0 && a.flight.key == kk.1
+                    !is_terminal(a.flight.phase)
+                        && a.flight.scope_id == kk.0
+                        && a.flight.key == kk.1
                 }) {
                     return None;
                 }
@@ -503,9 +563,7 @@ impl Composer {
                 }
                 let bounds_fx = match enter {
                     Some(enter) => {
-                        let exit = source_marker
-                            .and_then(|m| m.exit)
-                            .unwrap_or_default();
+                        let exit = source_marker.and_then(|m| m.exit).unwrap_or_default();
                         Some((enter, exit))
                     }
                     None => None,
@@ -539,10 +597,19 @@ impl Composer {
             });
             debug_assert_eq!(
                 acts,
-                vec![FlightAction::CollectBounds { source_slot: p.old_slot, target_slot: h.slot }]
+                vec![FlightAction::CollectBounds {
+                    source_slot: p.old_slot,
+                    target_slot: h.slot
+                }]
             );
-            let acts = flight.on_event(FlightEvent::BoundsReady { start: p.start, end: h.end });
-            debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+            let acts = flight.on_event(FlightEvent::BoundsReady {
+                start: p.start,
+                end: h.end,
+            });
+            debug_assert!(matches!(
+                acts.as_slice(),
+                [FlightAction::StartFlight { .. }]
+            ));
             // The cross-composer flight animates its four edges, plus the scalar clock its content
             // crossfade rides.
             let edges = State::new(crate::transition::FlightEdges::of(&p.start));
@@ -594,9 +661,18 @@ impl Composer {
         // Unmatched: free retained same-frame (invisible plain removal).
         {
             let owner = &mut all[owner_idx];
-            if owner.arena.nodes.get(p.src_idx).is_some_and(|n| n.slot_key == p.old_slot) {
+            if owner
+                .arena
+                .nodes
+                .get(p.src_idx)
+                .is_some_and(|n| n.slot_key == p.old_slot)
+            {
                 let mut visited = crate::layout::node::NodeMarks::default();
-                owner.arena.free_node_skip(p.src_idx, &crate::layout::node::NodeMarks::default(), &mut visited);
+                owner.arena.free_node_skip(
+                    p.src_idx,
+                    &crate::layout::node::NodeMarks::default(),
+                    &mut visited,
+                );
             }
             owner.transition_layer.retain(|&x| x != p.src_idx);
         }
@@ -615,4 +691,3 @@ pub(crate) const MORPH_EPS: f32 = 0.5;
 pub(crate) fn size_delta(a: &SharedBounds, b: &SharedBounds) -> f32 {
     (a.width - b.width).abs().max((a.height - b.height).abs())
 }
-

@@ -95,7 +95,10 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
         self.run_step(std::sync::Arc::new(Mutex::new(queue)));
     }
 
-    fn run_step(&self, queue: std::sync::Arc<Mutex<std::collections::VecDeque<(T, AnimationSpec)>>>) {
+    fn run_step(
+        &self,
+        queue: std::sync::Arc<Mutex<std::collections::VecDeque<(T, AnimationSpec)>>>,
+    ) {
         let Some((target, spec)) = queue.lock().unwrap().pop_front() else {
             return;
         };
@@ -187,7 +190,12 @@ impl ComposeCtx<'_> {
             previous.set(last.peek());
             last.set(target.clone());
         }
-        Transition { target, previous: previous.peek(), spec, label }
+        Transition {
+            target,
+            previous: previous.peek(),
+            spec,
+            label,
+        }
     }
 }
 
@@ -475,4 +483,3 @@ impl InfiniteTransition {
         }
     }
 }
-

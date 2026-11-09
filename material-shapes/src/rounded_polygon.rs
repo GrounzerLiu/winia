@@ -1438,14 +1438,20 @@ mod polygon_tests {
                 ),
             );
             assert_points_equalish(
-                Point(square_cubics[i].control_0_x(), square_cubics[i].control_0_y()) + offset,
+                Point(
+                    square_cubics[i].control_0_x(),
+                    square_cubics[i].control_0_y(),
+                ) + offset,
                 Point(
                     translated_square_cubics[i].control_0_x(),
                     translated_square_cubics[i].control_0_y(),
                 ),
             );
             assert_points_equalish(
-                Point(square_cubics[i].control_1_x(), square_cubics[i].control_1_y()) + offset,
+                Point(
+                    square_cubics[i].control_1_x(),
+                    square_cubics[i].control_1_y(),
+                ) + offset,
                 Point(
                     translated_square_cubics[i].control_1_x(),
                     translated_square_cubics[i].control_1_y(),

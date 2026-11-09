@@ -31,12 +31,15 @@ fn two_rs(second_initial: &str, keys: bool) -> (PerWindow, RegSlot, State<String
         SelectionContainer::new()
             .modifier(Modifier::new().size(300.0, 200.0))
             .build(ctx, move |ctx| {
-                *r.lock().unwrap() = Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
+                *r.lock().unwrap() =
+                    Some(crate::text::selection::LOCAL_SELECTION_REGISTRAR.current());
                 Column::new().build(ctx, move |ctx| {
                     // Both States are read INSIDE the column body: a read outside it never re-enters
                     // this group, so the subtree would never change (the trap in the review).
                     let (a, b) = (f.get(), s.get());
-                    let mut run = |ctx: &mut crate::runtime::composer::ComposeCtx, which: u8, text: String| {
+                    let mut run = |ctx: &mut crate::runtime::composer::ComposeCtx,
+                                   which: u8,
+                                   text: String| {
                         let build = move |ctx: &mut crate::runtime::composer::ComposeCtx| {
                             if !text.is_empty() {
                                 crate::components::Text::new(text)
@@ -79,7 +82,8 @@ fn inserting_a_keyed_sibling_above_keeps_the_selection_on_its_own_text() {
 
     r.set_selection(0, 3);
     assert_eq!(
-        r.build_selection().map(|s| (s.start(), s.end(), s.text().to_string())),
+        r.build_selection()
+            .map(|s| (s.start(), s.end(), s.text().to_string())),
         Some((0, 3, "BBB".to_string())),
         "precondition: BBB is selected"
     );
@@ -88,7 +92,8 @@ fn inserting_a_keyed_sibling_above_keeps_the_selection_on_its_own_text() {
     relayout(&mut pw);
 
     assert_eq!(
-        r.build_selection().map(|s| (s.start(), s.end(), s.text().to_string())),
+        r.build_selection()
+            .map(|s| (s.start(), s.end(), s.text().to_string())),
         Some((3, 6, "BBB".to_string())),
         "still BBB, now at 3..6"
     );
@@ -104,13 +109,17 @@ fn removing_a_keyed_sibling_above_keeps_the_selection() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     r.set_selection(3, 6);
-    assert_eq!(r.build_selection().map(|s| s.text().to_string()), Some("BBB".to_string()));
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("BBB".to_string())
+    );
 
     first.set(String::new());
     relayout(&mut pw);
 
     assert_eq!(
-        r.build_selection().map(|s| (s.start(), s.end(), s.text().to_string())),
+        r.build_selection()
+            .map(|s| (s.start(), s.end(), s.text().to_string())),
         Some((0, 3, "BBB".to_string())),
         "the selection follows its run to the new offsets"
     );
@@ -125,7 +134,10 @@ fn changing_the_selected_run_ends_the_selection_but_a_neighbour_does_not() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     r.set_selection(0, 2);
-    assert_eq!(r.build_selection().map(|s| s.text().to_string()), Some("BB".to_string()));
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("BB".to_string())
+    );
 
     // A neighbour changing must NOT end it.
     first.set("AAA".to_string());
@@ -139,7 +151,10 @@ fn changing_the_selected_run_ends_the_selection_but_a_neighbour_does_not() {
     // The covered run itself changing must.
     second.set("BBBB".to_string());
     relayout(&mut pw);
-    assert!(r.build_selection().is_none(), "the covered run was rewritten");
+    assert!(
+        r.build_selection().is_none(),
+        "the covered run was rewritten"
+    );
 }
 
 /// Without a stable key the run below a newly inserted one is RE-KEYED, so the registrar sees the
@@ -152,15 +167,17 @@ fn a_shifted_key_ends_the_selection_rather_than_moving_it() {
     let r = reg.lock().unwrap().clone().expect("registered");
 
     r.set_selection(0, 3);
-    assert_eq!(r.build_selection().map(|s| s.text().to_string()), Some("BBB".to_string()));
+    assert_eq!(
+        r.build_selection().map(|s| s.text().to_string()),
+        Some("BBB".to_string())
+    );
 
     first.set("AAA".to_string());
     relayout(&mut pw);
 
     let after = r.build_selection().map(|s| s.text().to_string());
     assert_eq!(
-        after,
-        None,
+        after, None,
         "the re-keyed run reads as a content change, so Compose's rule ends the selection"
     );
 }

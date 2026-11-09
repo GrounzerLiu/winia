@@ -155,14 +155,22 @@ impl VisibilityTransition {
     }
     pub fn fade_in(spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        Self { fade: true, fade_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            fade: true,
+            fade_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     pub fn fade_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::fade_in(spec)
     }
     pub fn expand_in(spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        Self { expand: true, size_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            expand: true,
+            size_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     pub fn shrink_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::expand_in(spec)
@@ -170,7 +178,11 @@ impl VisibilityTransition {
     /// Horizontal expand (cf. Compose `expandHorizontally`).
     pub fn expand_in_h(spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        Self { expand_h: true, size_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            expand_h: true,
+            size_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     /// Horizontal shrink (cf. Compose `shrinkHorizontally`).
     pub fn shrink_out_h(spec: impl Into<AnimationSpec>) -> Self {
@@ -178,7 +190,11 @@ impl VisibilityTransition {
     }
     pub fn slide_in(dir: SlideDirection, spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        Self { slide: Some((dir, SlideOffset::default())), slide_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            slide: Some((dir, SlideOffset::default())),
+            slide_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     pub fn slide_out(dir: SlideDirection, spec: impl Into<AnimationSpec>) -> Self {
         Self::slide_in(dir, spec)
@@ -190,7 +206,11 @@ impl VisibilityTransition {
         spec: impl Into<AnimationSpec>,
     ) -> Self {
         let spec = spec.into();
-        Self { slide: Some((dir, offset)), slide_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            slide: Some((dir, offset)),
+            slide_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     pub fn slide_out_offset(
         dir: SlideDirection,
@@ -201,7 +221,11 @@ impl VisibilityTransition {
     }
     pub fn scale_in(spec: impl Into<AnimationSpec>) -> Self {
         let spec = spec.into();
-        Self { scale: true, scale_spec: Some(spec.clone()), ..Self::base(spec) }
+        Self {
+            scale: true,
+            scale_spec: Some(spec.clone()),
+            ..Self::base(spec)
+        }
     }
     pub fn scale_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::scale_in(spec)
@@ -238,15 +262,35 @@ impl VisibilityTransition {
     pub fn plus(self, other: VisibilityTransition) -> VisibilityTransition {
         VisibilityTransition {
             fade: self.fade || other.fade,
-            alpha_from: if self.fade { self.alpha_from } else { other.alpha_from },
+            alpha_from: if self.fade {
+                self.alpha_from
+            } else {
+                other.alpha_from
+            },
             slide: self.slide.or(other.slide),
             expand: self.expand || other.expand,
-            expand_from: if self.expand { self.expand_from } else { other.expand_from },
+            expand_from: if self.expand {
+                self.expand_from
+            } else {
+                other.expand_from
+            },
             expand_h: self.expand_h || other.expand_h,
-            expand_from_h: if self.expand_h { self.expand_from_h } else { other.expand_from_h },
+            expand_from_h: if self.expand_h {
+                self.expand_from_h
+            } else {
+                other.expand_from_h
+            },
             scale: self.scale || other.scale,
-            scale_from: if self.scale { self.scale_from } else { other.scale_from },
-            transform_origin: if self.scale { self.transform_origin } else { other.transform_origin },
+            scale_from: if self.scale {
+                self.scale_from
+            } else {
+                other.scale_from
+            },
+            transform_origin: if self.scale {
+                self.transform_origin
+            } else {
+                other.transform_origin
+            },
             spec: self.spec.clone(),
             fade_spec: self.fade_spec.or(other.fade_spec),
             size_spec: self.size_spec.or(other.size_spec),
@@ -390,7 +434,11 @@ pub struct ChannelValues {
 impl ChannelValues {
     /// One progress for every channel.
     pub fn uniform(progress: f32) -> Self {
-        Self { fade: progress, slide: progress, scale: progress }
+        Self {
+            fade: progress,
+            slide: progress,
+            scale: progress,
+        }
     }
 }
 
@@ -444,4 +492,3 @@ impl Default for VisibilityTransition {
         }
     }
 }
-

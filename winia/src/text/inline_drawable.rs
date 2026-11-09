@@ -4,9 +4,9 @@
 //! the paragraph keeps it, and `Paragraph::paint` asks Skia for `get_rects_for_placeholders()` to
 //! find where each one goes.
 
-use skia_safe::{Canvas, Data, FontMgr, Paint, Rect};
 use skia_safe::canvas::SrcRectConstraint;
 use skia_safe::svg;
+use skia_safe::{Canvas, Data, FontMgr, Paint, Rect};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
@@ -42,7 +42,11 @@ impl Debug for ImageDrawable {
 impl ImageDrawable {
     /// From a Skia image, scaled to the given size.
     pub fn from_image(image: skia_safe::Image, width: f32, height: f32) -> Self {
-        Self { image, width, height }
+        Self {
+            image,
+            width,
+            height,
+        }
     }
 
     /// Decoded from PNG/JPEG bytes and scaled to the given size.
@@ -54,9 +58,19 @@ impl ImageDrawable {
 
 impl InlineDrawable for ImageDrawable {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
-        let src = Rect::new(0.0, 0.0, self.image.width() as f32, self.image.height() as f32);
+        let src = Rect::new(
+            0.0,
+            0.0,
+            self.image.width() as f32,
+            self.image.height() as f32,
+        );
         let dst = Rect::new(x, y, x + self.width, y + self.height);
-        canvas.draw_image_rect(&self.image, Some((&src, SrcRectConstraint::Fast)), &dst, &Paint::default());
+        canvas.draw_image_rect(
+            &self.image,
+            Some((&src, SrcRectConstraint::Fast)),
+            &dst,
+            &Paint::default(),
+        );
     }
 
     fn size(&self) -> (f32, f32) {
@@ -100,14 +114,22 @@ impl SvgDrawable {
     pub fn from_bytes(data: &[u8], width: f32, height: f32) -> Option<Self> {
         let mut dom = svg::Dom::from_bytes(data, FontMgr::default()).ok()?;
         dom.set_container_size((width, height));
-        Some(Self { dom: parking_lot::Mutex::new(dom), width, height })
+        Some(Self {
+            dom: parking_lot::Mutex::new(dom),
+            width,
+            height,
+        })
     }
 
     /// Loaded from an SVG string and scaled to the given size.
     pub fn from_str(svg_str: &str, width: f32, height: f32) -> Option<Self> {
         let mut dom = svg::Dom::from_str(svg_str, FontMgr::default()).ok()?;
         dom.set_container_size((width, height));
-        Some(Self { dom: parking_lot::Mutex::new(dom), width, height })
+        Some(Self {
+            dom: parking_lot::Mutex::new(dom),
+            width,
+            height,
+        })
     }
 }
 
@@ -153,12 +175,14 @@ mod tests {
     #[test]
     fn an_svg_drawable_can_be_drawn_from_two_threads() {
         use std::sync::Arc;
-        let drawable: Arc<dyn InlineDrawable> = Arc::new(SvgDrawable::from_str(SQUARE, 10.0, 10.0).expect("svg parses"));
+        let drawable: Arc<dyn InlineDrawable> =
+            Arc::new(SvgDrawable::from_str(SQUARE, 10.0, 10.0).expect("svg parses"));
         let mut handles = Vec::new();
         for _ in 0..4 {
             let d = drawable.clone();
             handles.push(std::thread::spawn(move || {
-                let mut surface = skia_safe::surfaces::raster_n32_premul((20, 20)).expect("surface");
+                let mut surface =
+                    skia_safe::surfaces::raster_n32_premul((20, 20)).expect("surface");
                 for _ in 0..50 {
                     d.draw(surface.canvas(), 0.0, 0.0);
                 }

@@ -35,20 +35,19 @@
 //! - Expanded 宽轨已实现（见本文件后半部分）；组件文档：docs/navigation-rail.md
 
 use crate::composable;
+use crate::graphics::{Color, GraphicsLayerParams, Shape};
+use crate::input::interaction::MutableInteractionSource;
+use crate::layout::components::Column;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::layout::{Alignment, Arrangement, BoxLayout};
+use crate::modifier::Modifier;
+use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition, next_overlay_id};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
-use crate::layout::{Alignment, Arrangement, BoxLayout};
-use crate::layout::components::Column;
-use crate::modifier::{Modifier};
-use crate::graphics::{Color, GraphicsLayerParams, Shape};
-use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
-use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
-
 
 mod item;
 mod modal;
@@ -61,17 +60,16 @@ pub(crate) use tokens::*;
 pub(crate) use wide::*;
 
 pub use item::NavigationRailItem;
-pub use modal::{modal_rail_expanded_shape, ModalWideNavigationRail};
+pub use modal::{ModalWideNavigationRail, modal_rail_expanded_shape};
 pub use rail::NavigationRail;
 pub use tokens::{
-    rail_item_colors, NavigationRailItemColors, WindowInsets, NAVIGATION_RAIL_ICON_SIZE,
-    NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH,
-    NAVIGATION_RAIL_ITEM_HEIGHT, NAVIGATION_RAIL_WIDTH,
+    NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH,
+    NAVIGATION_RAIL_ITEM_HEIGHT, NAVIGATION_RAIL_WIDTH, NavigationRailItemColors, WindowInsets,
+    rail_item_colors,
 };
 pub use wide::{
-    WideNavigationRail, WideNavigationRailItem, WideNavigationRailState,
     WIDE_RAIL_COLLAPSED_WIDTH, WIDE_RAIL_EXPANDED_MAX_WIDTH, WIDE_RAIL_EXPANDED_MIN_WIDTH,
-    WIDE_RAIL_TOP_PADDING,
+    WIDE_RAIL_TOP_PADDING, WideNavigationRail, WideNavigationRailItem, WideNavigationRailState,
 };
 
 #[cfg(test)]

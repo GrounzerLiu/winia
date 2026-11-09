@@ -11,9 +11,8 @@ use crate::runtime::composition_local::CompositionLocal;
 use crate::unit::Density;
 use std::sync::LazyLock;
 
-static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> = LazyLock::new(|| {
-    CompositionLocal::new(|| Density::standard())
-});
+static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> =
+    LazyLock::new(|| CompositionLocal::new(|| Density::standard()));
 
 /// The process-wide text scale — the "make text bigger" accessibility setting.
 ///

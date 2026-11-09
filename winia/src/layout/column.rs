@@ -10,12 +10,12 @@
 //! The implementation delegates to `flex::measure_flex::<VerticalAxis>()`.
 
 use super::constraints::Constraints;
-use crate::unit::Size;
+use super::container::build_container;
 use super::flex;
 use super::node::*;
-use super::container::build_container;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::Size;
 
 /// Column's layout policy.
 #[derive(Debug, Clone)]
@@ -36,14 +36,28 @@ impl ColumnLayout {
         }
     }
 
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
-    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
-    pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
+    pub fn spacing(mut self, s: f32) -> Self {
+        self.spacing = s;
+        self
+    }
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
+        self
+    }
 }
 
 impl Default for ColumnLayout {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MeasurePolicy for ColumnLayout {
@@ -86,7 +100,13 @@ impl MeasurePolicy for ColumnLayout {
         children: &[usize],
         width: f32,
     ) -> f32 {
-        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MinHeight, width, self.spacing)
+        flex::flex_intrinsic_main(
+            ctx,
+            children,
+            IntrinsicQuery::MinHeight,
+            width,
+            self.spacing,
+        )
     }
 
     /// `VerticalMaxHeight`
@@ -96,7 +116,13 @@ impl MeasurePolicy for ColumnLayout {
         children: &[usize],
         width: f32,
     ) -> f32 {
-        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MaxHeight, width, self.spacing)
+        flex::flex_intrinsic_main(
+            ctx,
+            children,
+            IntrinsicQuery::MaxHeight,
+            width,
+            self.spacing,
+        )
     }
 
     /// `VerticalMinWidth`: `intrinsicCrossAxisSize(measurables, maxIntrinsicHeight, minIntrinsicWidth, availableHeight)`
@@ -150,9 +176,16 @@ mod tests {
             .direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(30.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_, placements) =
-            column.measure(&mut nodes, &[], &children, Constraints::new(100.0, 100.0, 0.0, 100.0));
-        assert_eq!(placements[0].position.x, 70.0, "the child hugs the RIGHT edge in RTL");
+        let (_, placements) = column.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(100.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].position.x, 70.0,
+            "the child hugs the RIGHT edge in RTL"
+        );
     }
 
     fn make_leaf(width: f32, height: f32) -> LayoutNode {
@@ -187,8 +220,14 @@ mod tests {
             size.height, 50.0,
             "the column is content + sibling, not the 500 the parent offered"
         );
-        assert_eq!(placements[0].size.height, 20.0, "the child keeps its own height");
-        assert_eq!(placements[1].position.y, 20.0, "the sibling follows the content");
+        assert_eq!(
+            placements[0].size.height, 20.0,
+            "the child keeps its own height"
+        );
+        assert_eq!(
+            placements[1].position.y, 20.0,
+            "the sibling follows the content"
+        );
     }
 
     /// The default `Modifier::layout_weight` still fills: the share is exact, so the same two
@@ -203,8 +242,14 @@ mod tests {
             &children,
             Constraints::new(0.0, 100.0, 0.0, 500.0),
         );
-        assert_eq!(size.height, 500.0, "a filling weight takes the whole bounded axis");
-        assert_eq!(placements[0].size.height, 470.0, "500 less the sibling's 30");
+        assert_eq!(
+            size.height, 500.0,
+            "a filling weight takes the whole bounded axis"
+        );
+        assert_eq!(
+            placements[0].size.height, 470.0,
+            "500 less the sibling's 30"
+        );
     }
 
     /// A spreading arrangement does not grow a content-sized container: the same two children as the
@@ -303,15 +348,16 @@ mod tests {
     fn a_spacing_too_large_for_the_axis_collapses_the_child_after_it() {
         let mut nodes = vec![make_leaf(100.0, 40.0), make_leaf(100.0, 40.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (size, placements) = ColumnLayout::new()
-            .spacing(60.0)
-            .measure(
-                &mut nodes,
-                &[],
-                &children,
-                Constraints::new(0.0, 100.0, 0.0, 100.0),
-            );
-        assert_eq!(placements[0].size.height, 40.0, "the first child keeps its height");
+        let (size, placements) = ColumnLayout::new().spacing(60.0).measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(
+            placements[0].size.height, 40.0,
+            "the first child keeps its height"
+        );
         assert_eq!(
             placements[1].size.height, 0.0,
             "the 60 dp gap took the rest of the axis, as it does in Compose"
@@ -327,14 +373,12 @@ mod tests {
     fn a_zero_sized_child_charges_its_gap() {
         let mut nodes = vec![make_leaf(0.0, 0.0), make_leaf(100.0, 100.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_, placements) = ColumnLayout::new()
-            .spacing(30.0)
-            .measure(
-                &mut nodes,
-                &[],
-                &children,
-                Constraints::new(0.0, 100.0, 0.0, 100.0),
-            );
+        let (_, placements) = ColumnLayout::new().spacing(30.0).measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
         assert_eq!(
             placements[1].size.height, 70.0,
             "the second child is measured against the axis less the empty child's 30 dp gap"
@@ -344,7 +388,11 @@ mod tests {
     #[test]
     fn a_column_stacks_its_children_top_to_bottom() {
         let column = ColumnLayout::new();
-        let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0), make_leaf(120.0, 10.0)];
+        let mut nodes = vec![
+            make_leaf(100.0, 20.0),
+            make_leaf(80.0, 30.0),
+            make_leaf(120.0, 10.0),
+        ];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.height, 60.0); // 20+30+10
@@ -361,23 +409,33 @@ mod tests {
         let mut nodes = vec![make_leaf(100.0, 20.0)];
         let children: Vec<usize> = vec![0];
         let (size, placements) = ColumnLayout::new().measure(
-            &mut nodes, &[], &children,
+            &mut nodes,
+            &[],
+            &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
-        assert_eq!(placements[0].size.width, 100.0, "the child keeps its natural width, not the tight parent's");
-        assert_eq!(size.width, 432.0, "the Column itself honours the tight parent (432); only the children are loose");
+        assert_eq!(
+            placements[0].size.width, 100.0,
+            "the child keeps its natural width, not the tight parent's"
+        );
+        assert_eq!(
+            size.width, 432.0,
+            "the Column itself honours the tight parent (432); only the children are loose"
+        );
     }
 
     #[test]
     fn a_fill_max_width_child_fills_a_tight_parent() {
         // Under a tight parent a fill_max_width child still fills: an explicit fill beats the loose range.
         use crate::modifier::Modifier;
-        let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().fill_max_width().height(20.0)),
-        ];
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().fill_max_width().height(20.0),
+        )];
         let children: Vec<usize> = vec![0];
         let (size, placements) = ColumnLayout::new().measure(
-            &mut nodes, &[], &children,
+            &mut nodes,
+            &[],
+            &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
         assert_eq!(placements[0].size.width, 432.0, "fill_max_width fills");
@@ -391,10 +449,15 @@ mod tests {
         let mut nodes = vec![make_leaf(100.0, 20.0)];
         let children: Vec<usize> = vec![0];
         let (size, placements) = ColumnLayout::new().alignment(Alignment::Stretch).measure(
-            &mut nodes, &[], &children,
+            &mut nodes,
+            &[],
+            &children,
             Constraints::new(432.0, 432.0, 0.0, 1000.0),
         );
-        assert_eq!(placements[0].size.width, 432.0, "a Stretch child fills the container's width");
+        assert_eq!(
+            placements[0].size.width, 432.0,
+            "a Stretch child fills the container's width"
+        );
         assert_eq!(size.width, 432.0);
     }
 
@@ -413,7 +476,8 @@ mod tests {
         let column = ColumnLayout::new().alignment(Alignment::End);
         let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(100.0, 20.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
-        let (_size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        let (_size, placements) =
+            column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
     }
@@ -435,11 +499,23 @@ impl Column {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
 
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
-    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
+    pub fn spacing(mut self, s: f32) -> Self {
+        self.spacing = s;
+        self
+    }
 
     /// NOT a macro, on purpose: a macro would open an inner scope, the content's top-level
     /// `State::get()` would register on THAT scope, the parent would never learn about it and the
@@ -453,7 +529,10 @@ impl Column {
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
         // Direction: an explicit modifier wins over the CompositionLocal default.
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         build_container(
             ctx,
             self.modifier,
@@ -468,5 +547,7 @@ impl Column {
 }
 
 impl Default for Column {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

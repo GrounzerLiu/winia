@@ -1,7 +1,7 @@
 //! The flow measurement algorithm shared by FlowRow and FlowColumn.
 
-use crate::layout::flex::FlexAxis;
 use super::FlowOverflow;
+use crate::layout::flex::FlexAxis;
 use crate::layout::node::{compute_spacing, measure_node};
 use crate::layout::{
     Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement,
@@ -36,7 +36,13 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     if max_lines == 0 || max_items_in_main_axis == 0 {
         return (
             Size::ZERO,
-            vec![Placement { size: Size::ZERO, position: Offset::new(0.0, 0.0) }; n],
+            vec![
+                Placement {
+                    size: Size::ZERO,
+                    position: Offset::new(0.0, 0.0)
+                };
+                n
+            ],
         );
     }
 
@@ -68,7 +74,11 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     for i in 0..n {
         let item_main = A::main_size(child_sizes[i]);
         let index_in_line = i - line_start;
-        let need = if index_in_line == 0 { item_main } else { main_spacing + item_main };
+        let need = if index_in_line == 0 {
+            item_main
+        } else {
+            main_spacing + item_main
+        };
         // P1 fix: the count branch is independent of can_wrap (max_items is orthogonal to room);
         // the room branch still needs can_wrap, since unbounded means infinite room.
         let should_wrap = index_in_line >= max_items
@@ -140,11 +150,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
                 nodes[child].modifier.get_fill_max_column_width()
             };
             let cc = if let Some(fraction) = fill_fraction {
-                A::build_phase2_with_cross(
-                    allocated,
-                    fills[i],
-                    line_cross_natural * fraction,
-                )
+                A::build_phase2_with_cross(allocated, fills[i], line_cross_natural * fraction)
             } else {
                 A::build_phase2(constraints, allocated, fills[i], false)
             };
@@ -243,7 +249,11 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         // the flex containers do (RowColumnMeasurePolicy.kt:228-251).
         let line_cross = line_cross.max(line_before + line_after);
         visible_lines.push((s, end));
-        line_infos.push(LineInfo { main, cross: line_cross, line_before });
+        line_infos.push(LineInfo {
+            main,
+            cross: line_cross,
+            line_before,
+        });
         used_cross += gap + line_cross;
         if truncated {
             break;
@@ -363,8 +373,5 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         }
     }
 
-    (
-        A::size(container_main, container_cross),
-        placements,
-    )
+    (A::size(container_main, container_cross), placements)
 }

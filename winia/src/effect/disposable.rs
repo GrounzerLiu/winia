@@ -16,7 +16,9 @@ pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
 }
 
 impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
-    pub fn new(key: T) -> Self { Self { key } }
+    pub fn new(key: T) -> Self {
+        Self { key }
+    }
 
     /// `#[composable]`: its internal remember/attach_cleanup takes a stable base from the
     /// `build` call site.
@@ -27,8 +29,12 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
         effect: impl Fn(T) -> F + Send + 'static,
     ) {
         // `remember_handle` for the same reason as `LaunchedEffect`: bookkeeping, never written.
-        let state: Arc<Mutex<DisposableState<T>>> =
-            ctx.remember_handle(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
+        let state: Arc<Mutex<DisposableState<T>>> = ctx.remember_handle(|| {
+            Arc::new(Mutex::new(DisposableState {
+                prev_key: None,
+                cleanup: None,
+            }))
+        });
 
         let state_clone = Arc::clone(&state);
         let key_changed = {

@@ -5,8 +5,8 @@
 
 use crate::runtime::composer::AndroidUi;
 
-pub mod jni;
 pub(crate) mod insets;
+pub mod jni;
 pub(crate) mod permissions;
 pub(crate) mod theme;
 pub use jni::AndroidJni;

@@ -1,8 +1,8 @@
 //! FlexBox's tests: the pipeline cases, the intrinsic walk and the wiring above it.
 
 use super::*;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
 use crate::layout::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement};
 use crate::modifier::Modifier;
 use crate::unit::{Offset, Size};
 
@@ -48,7 +48,11 @@ fn a_row_packs_its_items_at_the_start() {
         &mut nodes,
         Constraints::new(0.0, 300.0, 0.0, 100.0),
     );
-    assert_eq!(size, Size::new(150.0, 20.0), "a row is as wide as its content");
+    assert_eq!(
+        size,
+        Size::new(150.0, 20.0),
+        "a row is as wide as its content"
+    );
     assert_eq!(xs(&placements), vec![0.0, 50.0, 100.0]);
 }
 
@@ -98,7 +102,11 @@ fn wrap_breaks_the_line_when_the_next_item_does_not_fit() {
     // the widest line, which is 200 — not the incoming maximum.
     assert_eq!(size, Size::new(200.0, 40.0));
     assert_eq!(xs(&placements), vec![0.0, 100.0, 0.0]);
-    assert_eq!(ys(&placements), vec![0.0, 0.0, 20.0], "the third item starts line two");
+    assert_eq!(
+        ys(&placements),
+        vec![0.0, 0.0, 20.0],
+        "the third item starts line two"
+    );
 }
 
 #[test]
@@ -216,7 +224,10 @@ fn align_items_stretch_fills_the_line_cross() {
         &mut nodes,
         Constraints::new(0.0, 300.0, 0.0, 100.0),
     );
-    assert_eq!(placements[0].size.height, 60.0, "stretch takes the line extent");
+    assert_eq!(
+        placements[0].size.height, 60.0,
+        "stretch takes the line extent"
+    );
     assert_eq!(placements[1].size.height, 60.0);
 }
 
@@ -235,16 +246,16 @@ fn align_self_overrides_align_items() {
         &mut nodes,
         Constraints::new(0.0, 300.0, 0.0, 100.0),
     );
-    assert_eq!(ys(&placements), vec![0.0, 40.0], "the second item hugs the line's end");
+    assert_eq!(
+        ys(&placements),
+        vec![0.0, 40.0],
+        "the second item hugs the line's end"
+    );
 }
 
 #[test]
 fn align_content_space_between_distributes_the_lines() {
-    let mut nodes = vec![
-        leaf(100.0, 20.0),
-        leaf(100.0, 20.0),
-        leaf(100.0, 20.0),
-    ];
+    let mut nodes = vec![leaf(100.0, 20.0), leaf(100.0, 20.0), leaf(100.0, 20.0)];
     let (size, placements) = run(
         FlexBoxConfig::new()
             .wrap(FlexWrap::Wrap)
@@ -259,7 +270,7 @@ fn align_content_space_between_distributes_the_lines() {
 }
 
 #[test]
-fn order_reorders_the_items () {
+fn order_reorders_the_items() {
     let mut nodes = vec![
         item_leaf(20.0, 20.0, FlexItemConfig::new().order(2)),
         item_leaf(20.0, 20.0, FlexItemConfig::new().order(0)),
@@ -391,7 +402,10 @@ fn wrap_reverse_keeps_the_lines_inside_the_cross_extent() {
         Constraints::new(0.0, 150.0, 240.0, 240.0),
     );
     assert_eq!(size.height, 240.0);
-    let ys: Vec<f32> = placements.iter().map(|placement| placement.position.y).collect();
+    let ys: Vec<f32> = placements
+        .iter()
+        .map(|placement| placement.position.y)
+        .collect();
     assert!(
         (ys[0] - 220.0).abs() < 0.5 && (ys[1] - 110.0).abs() < 0.5 && (ys[2] - 0.0).abs() < 0.5,
         "the three lines span 0..240 with the first line at the cross-start (the bottom): {ys:?}"
@@ -447,7 +461,9 @@ fn a_baseline_line_lines_up_the_texts() {
     assert_eq!(texts.len(), 2, "two texts in the line");
     let nodes = composer.arena_nodes();
     let line = crate::layout::node::AlignmentLine::FIRST_BASELINE;
-    let first = nodes[texts[0]].alignment_line(line).expect("small text has a baseline");
+    let first = nodes[texts[0]]
+        .alignment_line(line)
+        .expect("small text has a baseline");
     let second = nodes[texts[1]]
         .alignment_line(line)
         .expect("large text has a baseline");
@@ -554,7 +570,7 @@ fn an_unmarked_item_leaves_no_ghost_behind() {
 #[cfg(test)]
 mod intrinsic_tests {
     use super::*;
-    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    use crate::layout::{IntrinsicQuery, intrinsic_size_of};
 
     /// Query one intrinsic of a FlexBox whose children are the given fixed sizes.
     fn intrinsic_of(
@@ -595,13 +611,18 @@ mod intrinsic_tests {
             IntrinsicQuery::MinHeight,
             100.0,
         );
-        assert_eq!(height, 100.0, "two items fit a 100 dp width (cross 40), the third wraps (60)");
+        assert_eq!(
+            height, 100.0,
+            "two items fit a 100 dp width (cross 40), the third wraps (60)"
+        );
     }
 
     #[test]
     fn the_max_intrinsic_width_breaks_at_the_line_cap() {
         let capped = FlexBoxLayout::new(
-            FlexBoxConfig::new().wrap(FlexWrap::Wrap).max_items_in_each_line(2),
+            FlexBoxConfig::new()
+                .wrap(FlexWrap::Wrap)
+                .max_items_in_each_line(2),
         );
         assert_eq!(
             intrinsic_of(capped, &[(40.0, 20.0); 3], IntrinsicQuery::MaxWidth, 20.0),
@@ -620,13 +641,25 @@ mod intrinsic_tests {
     fn a_column_sums_its_min_height_and_wraps_its_min_width() {
         let column = FlexBoxConfig::new().direction(FlexDirection::Column);
         assert_eq!(
-            intrinsic_of(FlexBoxLayout::new(column), &[(40.0, 20.0); 2], IntrinsicQuery::MinHeight, 100.0),
+            intrinsic_of(
+                FlexBoxLayout::new(column),
+                &[(40.0, 20.0); 2],
+                IntrinsicQuery::MinHeight,
+                100.0
+            ),
             40.0,
             "no wrap: the two heights add up"
         );
-        let wrapping = FlexBoxConfig::new().direction(FlexDirection::Column).wrap(FlexWrap::Wrap);
+        let wrapping = FlexBoxConfig::new()
+            .direction(FlexDirection::Column)
+            .wrap(FlexWrap::Wrap);
         assert_eq!(
-            intrinsic_of(FlexBoxLayout::new(wrapping), &[(40.0, 20.0); 2], IntrinsicQuery::MinWidth, 100.0),
+            intrinsic_of(
+                FlexBoxLayout::new(wrapping),
+                &[(40.0, 20.0); 2],
+                IntrinsicQuery::MinWidth,
+                100.0
+            ),
             40.0,
             "the cross axis of a wrapping column is the widest line, one item each"
         );
@@ -638,7 +671,7 @@ mod intrinsic_tests {
 #[cfg(test)]
 mod intrinsic_wiring_tests {
     use super::*;
-    use crate::layout::{intrinsic_size_of, BoxLayout, IntrinsicQuery, IntrinsicSize};
+    use crate::layout::{BoxLayout, IntrinsicQuery, IntrinsicSize, intrinsic_size_of};
 
     #[test]
     fn a_flex_box_under_width_intrinsic_min_answers_the_flex_intrinsic() {

@@ -31,20 +31,46 @@ pub struct SpanStyle {
 }
 
 impl SpanStyle {
-    pub fn new() -> Self { Self::default() }
-    pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
-    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self { self.font_size = Some(size.into()); self }
-    pub fn font_weight(mut self, weight: FontWeight) -> Self { self.font_weight = Some(weight); self }
-    pub fn bold(self) -> Self { self.font_weight(FontWeight::BOLD) }
-    pub fn font_style(mut self, style: FontSlant) -> Self { self.font_style = Some(style); self }
-    pub fn italic(self) -> Self { self.font_style(FontSlant::Italic) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self {
+        self.font_size = Some(size.into());
+        self
+    }
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.font_weight = Some(weight);
+        self
+    }
+    pub fn bold(self) -> Self {
+        self.font_weight(FontWeight::BOLD)
+    }
+    pub fn font_style(mut self, style: FontSlant) -> Self {
+        self.font_style = Some(style);
+        self
+    }
+    pub fn italic(self) -> Self {
+        self.font_style(FontSlant::Italic)
+    }
     pub fn letter_spacing(mut self, spacing: impl Into<TextUnit>) -> Self {
         self.letter_spacing = Some(spacing.into());
         self
     }
-    pub fn background(mut self, color: Color) -> Self { self.background = Some(color); self }
-    pub fn decoration(mut self, decoration: TextDecoration) -> Self { self.decoration = Some(decoration); self }
-    pub fn underline(self) -> Self { self.decoration(TextDecoration::UNDERLINE) }
+    pub fn background(mut self, color: Color) -> Self {
+        self.background = Some(color);
+        self
+    }
+    pub fn decoration(mut self, decoration: TextDecoration) -> Self {
+        self.decoration = Some(decoration);
+        self
+    }
+    pub fn underline(self) -> Self {
+        self.decoration(TextDecoration::UNDERLINE)
+    }
 
     /// `other`'s fields over this one — Compose's `SpanStyle.merge`.
     pub fn merge(&self, other: &SpanStyle) -> SpanStyle {
@@ -69,7 +95,10 @@ pub struct AnnotatedString {
 
 impl AnnotatedString {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), spans: Vec::new() }
+        Self {
+            text: text.into(),
+            spans: Vec::new(),
+        }
     }
 
     /// Text and spans together; a span outside the text is dropped, one that runs past the end is
@@ -83,17 +112,29 @@ impl AnnotatedString {
             .filter_map(|(range, style)| {
                 let start = range.start.min(len);
                 let end = range.end.min(len);
-                if start < end { Some((start..end, style)) } else { None }
+                if start < end {
+                    Some((start..end, style))
+                } else {
+                    None
+                }
             })
             .collect();
         Self { text, spans }
     }
 
-    pub fn text(&self) -> &str { &self.text }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
     /// Length in CHARACTERS (Compose's `length`).
-    pub fn len(&self) -> usize { self.text.chars().count() }
-    pub fn is_empty(&self) -> bool { self.text.is_empty() }
-    pub fn span_styles(&self) -> &[(Range<usize>, SpanStyle)] { &self.spans }
+    pub fn len(&self) -> usize {
+        self.text.chars().count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+    pub fn span_styles(&self) -> &[(Range<usize>, SpanStyle)] {
+        &self.spans
+    }
 
     /// Add a style range. Pushed order is merge order: the later span wins field by field.
     pub fn with_style(mut self, range: Range<usize>, style: SpanStyle) -> Self {
@@ -126,7 +167,12 @@ impl AnnotatedString {
         let len = self.len();
         let start = range.start.min(len);
         let end = range.end.min(len);
-        let text: String = self.text.chars().skip(start).take(end.saturating_sub(start)).collect();
+        let text: String = self
+            .text
+            .chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect();
         let mut spans = Vec::new();
         for (span_range, style) in &self.spans {
             let from = span_range.start.max(start);
@@ -174,9 +220,17 @@ mod annotated_tests {
     fn a_range_outside_the_text_is_clamped_or_dropped() {
         let text = AnnotatedString::from_parts(
             "abc",
-            vec![(0..99, SpanStyle::new().bold()), (5..9, SpanStyle::new().italic())],
+            vec![
+                (0..99, SpanStyle::new().bold()),
+                (5..9, SpanStyle::new().italic()),
+            ],
         );
-        assert_eq!(text.span_styles().len(), 1, "the empty span is dropped: {:?}", text.span_styles());
+        assert_eq!(
+            text.span_styles().len(),
+            1,
+            "the empty span is dropped: {:?}",
+            text.span_styles()
+        );
         assert_eq!(text.span_styles()[0].0, 0..3);
     }
 }

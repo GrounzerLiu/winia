@@ -28,7 +28,8 @@ pub struct TabRow {
     /// positions this row just computed, which is the only place they exist — see `TabIndicatorScope`.
     /// `Fn` behind an `Arc`, not `FnOnce`: every measurement runs it (a later frame measures again),
     /// the same shape `BoxWithConstraints`' content has.
-    pub(crate) indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+    pub(crate) indicator_slot:
+        Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }
 
 /// What a custom indicator gets to know: where every tab ended up, and which one is selected.
@@ -50,7 +51,8 @@ impl TabIndicatorScope {
 
     /// The selected tab's index, clamped into range.
     pub fn selected_index(&self) -> usize {
-        self.selected_index.min(self.positions.len().saturating_sub(1))
+        self.selected_index
+            .min(self.positions.len().saturating_sub(1))
     }
 
     /// The selected tab's position, if there is a tab at all.
@@ -148,29 +150,47 @@ impl TabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
 
-        let container_color = self.container_color.unwrap_or_else(|| TabRowDefaults::container_color(&theme));
+        let container_color = self
+            .container_color
+            .unwrap_or_else(|| TabRowDefaults::container_color(&theme));
         let content_color = self.content_color.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_content_color(&theme) }
-            else { TabRowDefaults::secondary_content_color(&theme) }
+            if self.follow_content_size {
+                TabRowDefaults::primary_content_color(&theme)
+            } else {
+                TabRowDefaults::secondary_content_color(&theme)
+            }
         });
-        let divider_color = self.divider_color.unwrap_or_else(|| TabRowDefaults::divider_color(&theme));
+        let divider_color = self
+            .divider_color
+            .unwrap_or_else(|| TabRowDefaults::divider_color(&theme));
         let indicator_color = self.indicator_color.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_indicator_color(&theme) }
-            else { TabRowDefaults::secondary_indicator_color(&theme) }
+            if self.follow_content_size {
+                TabRowDefaults::primary_indicator_color(&theme)
+            } else {
+                TabRowDefaults::secondary_indicator_color(&theme)
+            }
         });
         let indicator_shape = self.indicator_shape.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_indicator_shape() }
-            else { TabRowDefaults::secondary_indicator_shape() }
+            if self.follow_content_size {
+                TabRowDefaults::primary_indicator_shape()
+            } else {
+                TabRowDefaults::secondary_indicator_shape()
+            }
         });
 
         // 动画状态
         let offset_state = ctx.remember(|| 0.0f32);
         let width_state = ctx.remember(|| 0.0f32);
         // AtomicBool 非 Clone——用 Arc 包装在 State 中共享
-        let initialized = ctx.remember(|| std::sync::Arc::new(AtomicBool::new(false))).get();
+        let initialized = ctx
+            .remember(|| std::sync::Arc::new(AtomicBool::new(false)))
+            .get();
         // Arc<AtomicBool> 可 Clone，共享于 policy 与 build 之间
 
         let content = self.content;
@@ -199,15 +219,20 @@ impl TabRow {
                 });
                 // 分隔线 leaf
                 let div_key = ctx.next_key();
-                ctx.start_leaf(div_key, Modifier::new()
-                    .fill_max_width()
-                    .height(1.0)
-                    .background(divider_color, Shape::Rectangle));
+                ctx.start_leaf(
+                    div_key,
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(1.0)
+                        .background(divider_color, Shape::Rectangle),
+                );
                 ctx.end_node();
                 // 指示条 leaf
                 let ind_key = ctx.next_key();
-                ctx.start_leaf(ind_key, Modifier::new()
-                    .background(indicator_color, indicator_shape));
+                ctx.start_leaf(
+                    ind_key,
+                    Modifier::new().background(indicator_color, indicator_shape),
+                );
                 ctx.end_node();
             }
         }
@@ -228,6 +253,6 @@ pub(crate) struct TabRowLayoutPolicy {
     pub(crate) direction: LayoutDirection,
     /// The caller's indicator, when there is one: composed at measure time with the positions
     /// (see `TabRow::indicator`).
-    pub(crate) indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+    pub(crate) indicator_slot:
+        Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }
-

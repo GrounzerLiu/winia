@@ -66,19 +66,26 @@ pub struct AlignmentLine {
 ///
 /// The type compares by value, so a constant id would make every `AlignmentLine::vertical(Min)`
 /// collide with every other one — the two built-ins have fixed ids below the counter's start.
-pub(crate) static NEXT_ALIGNMENT_LINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
+pub(crate) static NEXT_ALIGNMENT_LINE_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(2);
 
 impl AlignmentLine {
     /// The distance from a node's top to the baseline of its first line of text
     /// (`AlignmentLine.FirstBaseline`, whose merger is `::min`). Published by text leaves, which is
     /// what makes `Modifier::align_by_baseline` useful.
-    pub const FIRST_BASELINE: AlignmentLine =
-        AlignmentLine { horizontal: true, id: 0, merger: LineMerger::Min };
+    pub const FIRST_BASELINE: AlignmentLine = AlignmentLine {
+        horizontal: true,
+        id: 0,
+        merger: LineMerger::Min,
+    };
 
     /// The distance to the baseline of the LAST line of text (`AlignmentLine.LastBaseline`,
     /// `::max`) — the line to align by when the bottom of the text block is what should line up.
-    pub const LAST_BASELINE: AlignmentLine =
-        AlignmentLine { horizontal: true, id: 1, merger: LineMerger::Max };
+    pub const LAST_BASELINE: AlignmentLine = AlignmentLine {
+        horizontal: true,
+        id: 1,
+        merger: LineMerger::Max,
+    };
 
     /// A caller-defined line: Compose's `HorizontalAlignmentLine(merger)` /
     /// `VerticalAlignmentLine(merger)` in one constructor, chosen by `horizontal`.
@@ -137,7 +144,10 @@ pub(crate) enum ImeEdit {
     /// Replace the current selection with the committed text (empty text deletes the selection).
     Commit(String),
     /// Delete bytes before and after the current selection.
-    DeleteSurrounding { before_bytes: usize, after_bytes: usize },
+    DeleteSurrounding {
+        before_bytes: usize,
+        after_bytes: usize,
+    },
 }
 
 /// One node of the layout tree.
@@ -281,10 +291,10 @@ pub struct LayoutNode {
     /// The cursor-position callback (TextField updates its selection from it after a click).
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
     /// The IME preedit callback (TextField handles Preedit with it).
-    pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
+    pub(crate) ime_callback:
+        std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
     /// The IME committed-edit callback (TextField handles Commit and DeleteSurrounding with it).
-    pub(crate) ime_edit_callback:
-        std::cell::RefCell<Option<Box<dyn Fn(ImeEdit) + Send>>>,
+    pub(crate) ime_edit_callback: std::cell::RefCell<Option<Box<dyn Fn(ImeEdit) + Send>>>,
     /// The IME composing range (the render pass underlines it).
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
     /// The focus ring's colour, captured from the theme during composition (the CompositionLocal is
@@ -373,7 +383,10 @@ impl LayoutNode {
     /// Where this node reports `line`, or `None` when it does not report that line at all — Compose's
     /// `AlignmentLine.Unspecified`.
     pub fn alignment_line(&self, line: AlignmentLine) -> Option<f32> {
-        self.alignment_lines.iter().find(|(l, _)| *l == line).map(|(_, v)| *v)
+        self.alignment_lines
+            .iter()
+            .find(|(l, _)| *l == line)
+            .map(|(_, v)| *v)
     }
 
     /// Whether this node's text still matches the snapshot taken when it was last materialized. A
@@ -435,7 +448,9 @@ impl LayoutNode {
 
 impl Drop for LayoutNode {
     fn drop(&mut self) {
-        if let Some(f) = self.on_remove.take() { f(); }
+        if let Some(f) = self.on_remove.take() {
+            f();
+        }
     }
 }
 
@@ -471,7 +486,12 @@ impl LayoutNode {
             children_have_z: false,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
+            scroll_viewport_height: 0.0,
+            scroll_viewport_width: 0.0,
+            scroll_content_height: 0.0,
+            scroll_content_width: 0.0,
+            scroll_reverse: false,
+            parent_id: None,
             last_global_position: None,
             focus_reported: false,
             focus_group_memory: None,
@@ -488,7 +508,9 @@ impl LayoutNode {
             ime_edit_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
-            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),
+            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(
+                102, 0x42, 0x86, 0xF4,
+            )),
             composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
@@ -571,7 +593,12 @@ impl Default for LayoutNode {
             children_have_z: false,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
+            scroll_viewport_height: 0.0,
+            scroll_viewport_width: 0.0,
+            scroll_content_height: 0.0,
+            scroll_content_width: 0.0,
+            scroll_reverse: false,
+            parent_id: None,
             last_global_position: None,
             focus_reported: false,
             focus_group_memory: None,
@@ -588,7 +615,9 @@ impl Default for LayoutNode {
             ime_edit_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
-            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(102, 0x42, 0x86, 0xF4)),
+            selection_color: std::cell::Cell::new(crate::graphics::Color::from_argb(
+                102, 0x42, 0x86, 0xF4,
+            )),
             composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
@@ -716,7 +745,13 @@ pub struct NodeArena {
 
 impl NodeArena {
     pub fn new() -> Self {
-        Self { nodes: Vec::new(), policies: Vec::new(), free_policies: Vec::new(), free: Vec::new(), root: None }
+        Self {
+            nodes: Vec::new(),
+            policies: Vec::new(),
+            free_policies: Vec::new(),
+            free: Vec::new(),
+            root: None,
+        }
     }
 
     /// Allocates a measure policy in the pool (reusing a recycled slot first) and returns its index
@@ -767,14 +802,13 @@ impl NodeArena {
     /// `skip` holds the nodes this frame reused: they are already attached to this frame's tree, so
     /// freeing one would recurse into that tree, form a cycle and overflow the stack — they must be
     /// skipped. `visited` is a defensive cycle check (a malformed tree terminates recursion).
-    pub(crate) fn free_node_skip(
-        &mut self,
-        idx: usize,
-        skip: &NodeMarks,
-        visited: &mut NodeMarks,
-    ) {
-        if !visited.insert(idx) { return; }
-        if skip.contains(idx) { return; }
+    pub(crate) fn free_node_skip(&mut self, idx: usize, skip: &NodeMarks, visited: &mut NodeMarks) {
+        if !visited.insert(idx) {
+            return;
+        }
+        if skip.contains(idx) {
+            return;
+        }
         // Defensive: a node being freed must not belong to this frame's tree (reused nodes are in
         // `skip`, new ones are absent from `prev_node_by_key`; breaking that invariant would silently
         // free a live node).
@@ -787,7 +821,9 @@ impl NodeArena {
             self.free_node_skip(c, skip, visited);
         }
         self.recycle_policy(idx);
-        if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
+        if let Some(f) = self.nodes[idx].on_remove.take() {
+            f();
+        }
         self.nodes[idx] = LayoutNode::default();
         self.free.push(idx);
     }
@@ -807,7 +843,9 @@ impl NodeArena {
             self.free_node(c);
         }
         self.recycle_policy(idx);
-        if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
+        if let Some(f) = self.nodes[idx].on_remove.take() {
+            f();
+        }
         self.nodes[idx] = LayoutNode::default();
         self.free.push(idx);
     }
@@ -815,17 +853,28 @@ impl NodeArena {
     /// Attaches a child to its parent (the child is already in the pool — `start_node` allocated it;
     /// this only links the index and sets `parent_id`).
     pub fn add_child(&mut self, parent: usize, child_idx: usize) {
-
         self.nodes[parent].children.push(child_idx);
         self.nodes[child_idx].parent_id = Some(self.nodes[parent].id);
     }
 
-    pub fn get(&self, idx: usize) -> &LayoutNode { &self.nodes[idx] }
-    pub fn get_mut(&mut self, idx: usize) -> &mut LayoutNode { &mut self.nodes[idx] }
-    pub fn root(&self) -> Option<&LayoutNode> { self.root.map(|i| &self.nodes[i]) }
-    pub fn root_mut(&mut self) -> Option<&mut LayoutNode> { self.root.map(|i| &mut self.nodes[i]) }
-    pub fn root_idx(&self) -> Option<usize> { self.root }
-    pub fn set_root(&mut self, idx: usize) { self.root = Some(idx); }
+    pub fn get(&self, idx: usize) -> &LayoutNode {
+        &self.nodes[idx]
+    }
+    pub fn get_mut(&mut self, idx: usize) -> &mut LayoutNode {
+        &mut self.nodes[idx]
+    }
+    pub fn root(&self) -> Option<&LayoutNode> {
+        self.root.map(|i| &self.nodes[i])
+    }
+    pub fn root_mut(&mut self) -> Option<&mut LayoutNode> {
+        self.root.map(|i| &mut self.nodes[i])
+    }
+    pub fn root_idx(&self) -> Option<usize> {
+        self.root
+    }
+    pub fn set_root(&mut self, idx: usize) {
+        self.root = Some(idx);
+    }
 
     /// A read-only recursive walk — `fn(arena, idx)`.
     pub fn for_each(&self, mut f: impl FnMut(&NodeArena, usize)) {
@@ -841,4 +890,3 @@ impl NodeArena {
         }
     }
 }
-

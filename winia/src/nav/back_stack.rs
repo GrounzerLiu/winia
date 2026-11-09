@@ -19,12 +19,16 @@ pub struct NavBackStack<K: NavKey> {
 impl<K: NavKey> NavBackStack<K> {
     /// 创建空 back stack
     pub fn new() -> Self {
-        Self { state: State::new(Vec::new()) }
+        Self {
+            state: State::new(Vec::new()),
+        }
     }
 
     /// 创建带初始路由的 back stack
     pub fn with_initial(initial: K) -> Self {
-        Self { state: State::new(vec![initial]) }
+        Self {
+            state: State::new(vec![initial]),
+        }
     }
 
     /// 当前栈（读——注册依赖；观察者用）
@@ -54,13 +58,17 @@ impl<K: NavKey> NavBackStack<K> {
     /// 返回（pop 栈顶）——对标 Nav3 `backStack.removeLastOrNull()`
     pub fn pop(&self) -> Option<K> {
         let mut popped = None;
-        self.state.update(|v| { popped = v.pop(); });
+        self.state.update(|v| {
+            popped = v.pop();
+        });
         popped
     }
 
     /// 移除栈顶（无返回值版本——与 pop 相同语义）
     pub fn remove_last(&self) {
-        self.state.update(|v| { v.pop(); });
+        self.state.update(|v| {
+            v.pop();
+        });
     }
 
     /// 清空（回到空栈）
@@ -250,4 +258,3 @@ impl<K: NavKey> NavEntry<K> {
         (self.content)(ctx, &self.key);
     }
 }
-

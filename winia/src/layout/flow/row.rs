@@ -5,11 +5,11 @@ use crate::layout::{
     Alignment, Arrangement, Constraints, HorizontalAxis, LayoutDirection, LayoutNode,
     MeasurePolicy, Placement,
 };
-use crate::unit::Size;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::Size;
 
-use super::{measure::measure_flow, FlowOverflow};
+use super::{FlowOverflow, measure::measure_flow};
 
 /// The FlowRow measure policy: a horizontal main axis that wraps when a line is too wide.
 ///
@@ -60,23 +60,50 @@ impl FlowRowLayout {
     }
 
     /// Sets the main-axis arrangement inside a line.
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
     /// Sets the default cross-axis alignment of an item inside its line.
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
     /// Sets the distribution of free cross-axis space between lines.
-    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self {
+        self.cross_arrangement = a;
+        self
+    }
     /// Sets the gap between items in one line.
-    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn main_spacing(mut self, s: f32) -> Self {
+        self.main_spacing = s;
+        self
+    }
     /// Sets the gap between lines.
-    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self {
+        self.cross_spacing = s;
+        self
+    }
     /// Sets the maximum number of items per line.
-    pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+    pub fn max_items_in_row(mut self, m: usize) -> Self {
+        self.max_items_in_row = m;
+        self
+    }
     /// Sets the maximum number of lines.
-    pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    pub fn max_lines(mut self, m: usize) -> Self {
+        self.max_lines = m;
+        self
+    }
     /// Selects the overflow policy.
-    pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    pub fn overflow(mut self, o: FlowOverflow) -> Self {
+        self.overflow = o;
+        self
+    }
     /// Sets the layout direction used for mirroring.
-    pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
+        self
+    }
 
     pub(crate) fn item_animations(
         mut self,
@@ -88,7 +115,9 @@ impl FlowRowLayout {
 }
 
 impl Default for FlowRowLayout {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MeasurePolicy for FlowRowLayout {
@@ -228,7 +257,6 @@ impl MeasurePolicy for FlowRowLayout {
     }
 }
 
-
 /// A flowing row: a line wraps once the main axis is full (chip groups, tag clouds, wrapping
 /// toolbars).
 ///
@@ -273,23 +301,50 @@ impl FlowRow {
 
     /// Appends the caller's modifier. The modifier is placed on the flow container itself, so
     /// layout, paint and semantics attributes travel with the container.
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
     /// Sets the main-axis arrangement inside a line.
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
     /// Sets the default cross-axis alignment of an item inside its line; `align_self` overrides it.
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
     /// Sets the distribution of free cross-axis space between lines.
-    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self {
+        self.cross_arrangement = a;
+        self
+    }
     /// Sets the gap between items in one line.
-    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn main_spacing(mut self, s: f32) -> Self {
+        self.main_spacing = s;
+        self
+    }
     /// Sets the gap between lines.
-    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self {
+        self.cross_spacing = s;
+        self
+    }
     /// Sets the maximum number of items per line. Zero produces an empty flow.
-    pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+    pub fn max_items_in_row(mut self, m: usize) -> Self {
+        self.max_items_in_row = m;
+        self
+    }
     /// Sets the maximum number of lines. Zero produces an empty flow; Visible ignores the cap.
-    pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    pub fn max_lines(mut self, m: usize) -> Self {
+        self.max_lines = m;
+        self
+    }
     /// Selects the overflow policy.
-    pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    pub fn overflow(mut self, o: FlowOverflow) -> Self {
+        self.overflow = o;
+        self
+    }
 
     /// Composes the row and its children.
     ///
@@ -307,7 +362,10 @@ impl FlowRow {
         ctx.changed(&self.max_items_in_row);
         ctx.changed(&self.max_lines);
         ctx.changed(&self.overflow);
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         // The host is cheap and always present; item state is only allocated for markers.
         // Per INSTANCE: position_key() resolves to the innermost GROUP, so two flows under one parent
@@ -339,5 +397,7 @@ impl FlowRow {
 }
 
 impl Default for FlowRow {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

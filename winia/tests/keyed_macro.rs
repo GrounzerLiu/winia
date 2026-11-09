@@ -4,15 +4,17 @@
 //! `#[composable_keyed]` 只注入 RAII scope guard，**不做** remember/next_key
 //! 编译期替换——裸 ctx 调用必须用 `keyed_stmt!` 标记获得语句级稳定 base，
 //! 否则运行期 fail-fast panic（见下方 negative test）。
-use winia::runtime::composer::Composer;
 use winia::prelude::*;
+use winia::runtime::composer::Composer;
 
 #[composable_keyed]
 fn light_ui(ctx: &mut ComposeCtx, flag: bool) {
     // 定稿契约：remember 也需 keyed_stmt! 标记（语句 id = 调用位置哈希）
     let count = keyed_stmt!({ ctx.remember(|| 0) });
     if flag {
-        keyed_stmt!({ Text::new("x").build(ctx); });
+        keyed_stmt!({
+            Text::new("x").build(ctx);
+        });
     }
     let _ = count.get();
 }
@@ -34,8 +36,11 @@ fn composable_keyed_runs() {
     let root = composer.layout_root_idx().unwrap();
     // keyed_stmt 内的 Text 物化并测量（layout 后 size 非零）
     let n = &composer.arena_nodes()[root];
-    assert!(n.measured_size.width > 0.0 && n.measured_size.height > 0.0,
-        "keyed_stmt 内组件应物化并测量（size={:?}）", n.measured_size);
+    assert!(
+        n.measured_size.width > 0.0 && n.measured_size.height > 0.0,
+        "keyed_stmt 内组件应物化并测量（size={:?}）",
+        n.measured_size
+    );
 }
 
 #[composable_keyed]
@@ -48,7 +53,7 @@ fn keyed_returns(ctx: &mut ComposeCtx) -> i32 {
 /// 必须 panic——静默降级会重新引入跨语句 key 漂移（设计文档 §1.2 根因）。
 #[test]
 fn composable_keyed_bare_remember_fails_fast() {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

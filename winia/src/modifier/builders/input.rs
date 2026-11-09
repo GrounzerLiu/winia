@@ -23,8 +23,12 @@ impl Modifier {
             on_click: Arc::new(on_click),
             interaction: Some(source.clone()),
         })
-        .push(ModifierElement::Focusable { interaction: Some(source.clone()) })
-        .push(ModifierElement::Hoverable { interaction: source })
+        .push(ModifierElement::Focusable {
+            interaction: Some(source.clone()),
+        })
+        .push(ModifierElement::Hoverable {
+            interaction: source,
+        })
     }
 
     // ── 手势（对标 Compose detectTapGestures / detectDragGestures） ──
@@ -85,7 +89,9 @@ impl Modifier {
 
     /// 标记为可获焦点并绑定交互源——焦点变化自动发射 Focus/Unfocus
     pub fn focusable_with_source(self, source: &MutableInteractionSource) -> Self {
-        self.push(ModifierElement::Focusable { interaction: Some(source.clone()) })
+        self.push(ModifierElement::Focusable {
+            interaction: Some(source.clone()),
+        })
     }
 
     /// Compose Desktop's `Modifier.pointerHoverIcon(icon)`: while the pointer is over this node
@@ -112,7 +118,9 @@ impl Modifier {
 
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
     pub fn hoverable(self, source: &MutableInteractionSource) -> Self {
-        self.push(ModifierElement::Hoverable { interaction: source.clone() })
+        self.push(ModifierElement::Hoverable {
+            interaction: source.clone(),
+        })
     }
 
     /// 水波纹指示（对标 Compose `indication` + Material ripple）。
@@ -175,19 +183,22 @@ impl Modifier {
 
     /// 绘制图标（Icon 组件内部使用）——tint/autoMirror/可变轴在渲染期求值
     /// 自定义绘制：渲染期以节点 rect 调用闭包（Canvas 原语——轨道/刻度/
-/// thumb 等动态绘制；对齐 Compose Canvas/drawWithCache 的轻量替代）。
-/// 闭包在渲染期调用——读 State::peek() 不触发重组（值变化由外部 notify 驱动重绘）。
-pub fn draw(self, f: impl Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync + 'static) -> Self {
-    self.push(ModifierElement::CustomDraw { f: Arc::new(f) })
-}
+    /// thumb 等动态绘制；对齐 Compose Canvas/drawWithCache 的轻量替代）。
+    /// 闭包在渲染期调用——读 State::peek() 不触发重组（值变化由外部 notify 驱动重绘）。
+    pub fn draw(
+        self,
+        f: impl Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::CustomDraw { f: Arc::new(f) })
+    }
 
-/// 禁用框架自动焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 胶囊，
-/// 而非整个组件 rect）
-pub fn no_focus_ring(self) -> Self {
-    self.push(ModifierElement::NoFocusRing)
-}
+    /// 禁用框架自动焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 胶囊，
+    /// 而非整个组件 rect）
+    pub fn no_focus_ring(self) -> Self {
+        self.push(ModifierElement::NoFocusRing)
+    }
 
-pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
+    pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
     }
 
@@ -223,24 +234,45 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
 
     /// 关联 FocusRequester（不消耗所有权）
     pub fn on_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None })
+        self.push(ModifierElement::KbEvent {
+            on_key: Some(Arc::new(handler)),
+            on_pre_key: None,
+        })
     }
 
     /// 预拦截按键事件
-    pub fn on_pre_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) })
+    pub fn on_pre_key_event(
+        self,
+        handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::KbEvent {
+            on_key: None,
+            on_pre_key: Some(Arc::new(handler)),
+        })
     }
 
     /// 关联 FocusRequester
 
     /// 指针事件（inner→outer 冒泡）
-    pub fn on_pointer_event(self, handler: impl Fn(&PointerEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::PointerEvent { on_ptr: Some(Arc::new(handler)), on_pre_ptr: None })
+    pub fn on_pointer_event(
+        self,
+        handler: impl Fn(&PointerEvent) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::PointerEvent {
+            on_ptr: Some(Arc::new(handler)),
+            on_pre_ptr: None,
+        })
     }
 
     /// 预拦截指针事件（outer→inner）
-    pub fn on_pre_pointer_event(self, handler: impl Fn(&PointerEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::PointerEvent { on_ptr: None, on_pre_ptr: Some(Arc::new(handler)) })
+    pub fn on_pre_pointer_event(
+        self,
+        handler: impl Fn(&PointerEvent) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::PointerEvent {
+            on_ptr: None,
+            on_pre_ptr: Some(Arc::new(handler)),
+        })
     }
 
     /// 关联 FocusRequester
@@ -482,7 +514,10 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// A static parameter set stays static (the mutator is applied now, at build time); a dynamic one
     /// stays a closure (the mutator runs inside it, per paint). The mutators here only assign captured
     /// values, so this loses no dynamism.
-    pub(super) fn merge_graphics_layer(mut self, f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static) -> Self {
+    pub(super) fn merge_graphics_layer(
+        mut self,
+        f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static,
+    ) -> Self {
         let f = Arc::new(f);
         // mem::take 取出 elements（空 Vec 占位）——局部修改后再放回，
         // 完全避开 self 借用与 push 的冲突
@@ -573,11 +608,13 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
                             p
                         }))
                     }
-                    crate::graphics::Dyn::Dynamic(g) => crate::graphics::Dyn::Dynamic(Arc::new(move || {
-                        let mut p = g();
-                        f(&mut p);
-                        p
-                    })),
+                    crate::graphics::Dyn::Dynamic(g) => {
+                        crate::graphics::Dyn::Dynamic(Arc::new(move || {
+                            let mut p = g();
+                            f(&mut p);
+                            p
+                        }))
+                    }
                 };
             }
         } else {
@@ -615,7 +652,10 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         // Overscroll is attached HERE, from the ambient factory, so a plain `Column + vertical_scroll`
         // bounces exactly like a LazyColumn (Compose's `useLocalOverscrollFactory = true`). A caller
         // that already pushed its own effect is left alone - the chain's first `Overscroll` wins.
-        let mut out = self.push(ModifierElement::VerticalScroll { state: state.clone(), reverse: false });
+        let mut out = self.push(ModifierElement::VerticalScroll {
+            state: state.clone(),
+            reverse: false,
+        });
         if !out.has_overscroll() {
             if let Some(effect) = crate::overscroll::ambient_effect(&state) {
                 out = out.overscroll(&effect);
@@ -627,12 +667,17 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// Horizontal scrolling.
     /// Marks the node as a lazy scroll container (LazyColumn internal - the content-height State).
     pub fn lazy_scroll(self, content_height: crate::runtime::state::Backchannel<f32>) -> Self {
-        self.push(ModifierElement::LazyScroll { content_height, reverse: false })
+        self.push(ModifierElement::LazyScroll {
+            content_height,
+            reverse: false,
+        })
     }
 
     /// Whether a lazy list is laid out in reverse (`reverseLayout`: the render mirrors the scroll translate).
     pub fn is_lazy_scroll_reverse(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::LazyScroll { reverse: true, .. }))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::LazyScroll { reverse: true, .. }))
     }
 
     /// The reverse-layout marker for a lazy list (`reverseLayout`: the render mirrors the scroll translate).
@@ -653,10 +698,7 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     }
 
     /// The same marker with an explicit placement/fade contract.
-    pub fn animate_item_with(
-        self,
-        spec: crate::animation::item::ItemAnimationSpec,
-    ) -> Self {
+    pub fn animate_item_with(self, spec: crate::animation::item::ItemAnimationSpec) -> Self {
         self.push(ModifierElement::AnimateItem(spec))
     }
 
@@ -699,8 +741,13 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         })
     }
 
-    pub fn nested_scroll(self, connection: impl crate::nested_scroll::NestedScrollConnection + 'static) -> Self {
-        self.push(ModifierElement::NestedScroll { connection: Arc::new(connection) })
+    pub fn nested_scroll(
+        self,
+        connection: impl crate::nested_scroll::NestedScrollConnection + 'static,
+    ) -> Self {
+        self.push(ModifierElement::NestedScroll {
+            connection: Arc::new(connection),
+        })
     }
 
     /// Attach an already-shared nested-scroll connection - for a component that keeps a handle of its
@@ -731,7 +778,10 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// Horizontal scrolling, bound to a `ScrollState` (mirrors `vertical_scroll`).
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         // No builder-time `get` side effect (same as `vertical_scroll`, State Phase 4).
-        let mut out = self.push(ModifierElement::HorizontalScroll { state: state.clone(), reverse: false });
+        let mut out = self.push(ModifierElement::HorizontalScroll {
+            state: state.clone(),
+            reverse: false,
+        });
         if !out.has_overscroll() {
             if let Some(effect) = crate::overscroll::ambient_effect(&state) {
                 out = out.overscroll(&effect);
@@ -742,7 +792,9 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
 
     /// Whether horizontal scrolling is reversed (RTL: the render mirrors the scroll translate - offset 0 shows the content's end).
     pub fn is_horizontal_scroll_reverse(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::HorizontalScroll { reverse: true, .. }))
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::HorizontalScroll { reverse: true, .. }))
     }
 
     /// The reverse marker for horizontal scrolling (RTL: the `scroll_reverse` semantics - the render

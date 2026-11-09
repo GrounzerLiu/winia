@@ -80,8 +80,8 @@ mod polygon_validation_tests {
     fn fies_anti_clockwise_oriented_polygon_sharp() {
         let valid = RoundedPolygonBuilder::from_vertices(&PENTAGON_POINTS).build();
 
-        let broken = RoundedPolygonBuilder::from_vertices(&REVERSE_ORIENTED_PENTAGON_POINTS)
-            .build();
+        let broken =
+            RoundedPolygonBuilder::from_vertices(&REVERSE_ORIENTED_PENTAGON_POINTS).build();
 
         fixes(broken, &valid);
     }

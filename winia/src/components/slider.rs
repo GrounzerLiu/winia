@@ -17,13 +17,13 @@
 //! （DrawNode）挂载——具名类型（调试树可见）、`node_key` 精确 Skip、
 //! 绘制参数结构体化可单测。原 `Modifier::draw` 匿名闭包已替换。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::input::{KbEvent, KbEventType};
-use crate::graphics::{Color};
+use crate::graphics::Color;
 use crate::input::interaction::MutableInteractionSource;
+use crate::input::{KbEvent, KbEventType};
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -112,13 +112,21 @@ impl SliderColors {
 
     /// 拇指色（enabled × disabled）
     pub fn thumb_color(&self, enabled: bool) -> Color {
-        if enabled { self.thumb_color } else { self.disabled_thumb_color }
+        if enabled {
+            self.thumb_color
+        } else {
+            self.disabled_thumb_color
+        }
     }
 
     /// 轨道色（active = 值之前的已走过部分）
     pub fn track_color(&self, enabled: bool, active: bool) -> Color {
         if !enabled {
-            if active { self.disabled_active_track_color } else { self.disabled_inactive_track_color }
+            if active {
+                self.disabled_active_track_color
+            } else {
+                self.disabled_inactive_track_color
+            }
         } else if active {
             self.active_track_color
         } else {
@@ -129,7 +137,11 @@ impl SliderColors {
     /// 刻度色（active 区 / inactive 区）
     pub fn tick_color(&self, enabled: bool, active: bool) -> Color {
         if !enabled {
-            if active { self.disabled_active_tick_color } else { self.disabled_inactive_tick_color }
+            if active {
+                self.disabled_active_tick_color
+            } else {
+                self.disabled_inactive_tick_color
+            }
         } else if active {
             self.active_tick_color
         } else {
@@ -186,7 +198,11 @@ pub fn value_at_x(local_x: f32, width: f32, min: f32, max: f32, steps: i32) -> f
 
 /// 值 → 轨道位置分数（0..1，clamp）
 pub fn fraction_from_value(value: f32, min: f32, max: f32) -> f32 {
-    if max <= min { 0.0 } else { ((value - min) / (max - min)).clamp(0.0, 1.0) }
+    if max <= min {
+        0.0
+    } else {
+        ((value - min) / (max - min)).clamp(0.0, 1.0)
+    }
 }
 
 /// Slider 组件 Builder（对标 material3 `Slider(value, onValueChange, ...)`）
@@ -272,11 +288,18 @@ impl Slider {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
-        let interaction = self.interaction_source
+        let colors = self
+            .colors
+            .unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
+        let interaction = self
+            .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let (min, max) = self.value_range;
-        let (min, max) = if max > min { (min, max) } else { (min, min + 1.0) };
+        let (min, max) = if max > min {
+            (min, max)
+        } else {
+            (min, min + 1.0)
+        };
         let steps = self.steps;
         // A discrete slider only ever SHOWS an on-tick value: Compose snaps in `SliderState`'s
         // setter, so a caller-supplied value lands on the nearest tick as well, not just a dragged
@@ -329,7 +352,9 @@ impl Slider {
             let v_press = set_value.clone();
             m = m.on_press(move |pos| {
                 src.emit_press_at(pos);
-                if let Some(cb) = &v_press { cb(value_at_x(pos.0, tw_press.get(), min, max, steps)); }
+                if let Some(cb) = &v_press {
+                    cb(value_at_x(pos.0, tw_press.get(), min, max, steps));
+                }
             });
             // 点击跳转（TapOnTap——点击位置即新值，对齐 Compose onTap）+ 释放
             let v = set_value.clone();
@@ -338,8 +363,12 @@ impl Slider {
             let src2 = interaction.clone();
             m = m.on_tap(move |pos| {
                 src2.emit_release();
-                if let Some(cb) = &v { cb(value_at_x(pos.0, tw.get(), min, max, steps)); }
-                if let Some(cb) = &f { cb(); }
+                if let Some(cb) = &v {
+                    cb(value_at_x(pos.0, tw.get(), min, max, steps));
+                }
+                if let Some(cb) = &f {
+                    cb();
+                }
             });
             // 拖动（对齐 Compose draggable：start 跳转 + move 绝对位置跟随）
             // drag 发射 dragged 状态（thumb 宽减半）——手势回调不自动 emit
@@ -349,17 +378,23 @@ impl Slider {
             let src3 = interaction.clone();
             m = m.on_drag_start(move |pos| {
                 src3.emit_drag_start();
-                if let Some(cb) = &v2 { cb(value_at_x(pos.0, tw2.get(), min, max, steps)); }
+                if let Some(cb) = &v2 {
+                    cb(value_at_x(pos.0, tw2.get(), min, max, steps));
+                }
             });
             let v3 = set_value.clone();
             m = m.on_drag(move |pos, _delta| {
-                if let Some(cb) = &v3 { cb(value_at_x(pos.0, tw_drag.get(), min, max, steps)); }
+                if let Some(cb) = &v3 {
+                    cb(value_at_x(pos.0, tw_drag.get(), min, max, steps));
+                }
             });
             let src4 = interaction.clone();
             m = m.on_drag_end(move || {
                 src4.emit_drag_end();
                 src4.emit_release();
-                if let Some(cb) = &f2 { cb(); }
+                if let Some(cb) = &f2 {
+                    cb();
+                }
             });
             let src5 = interaction.clone();
             m = m.on_drag_cancel(move || {
@@ -402,7 +437,11 @@ pub(crate) fn handle_key(
 ) -> bool {
     use winit::keyboard::{Key, NamedKey};
     let range_len = max - min;
-    let actual_steps = if steps > 0 { steps + 1 } else { SLIDER_KEYBOARD_DEFAULT_STEPS };
+    let actual_steps = if steps > 0 {
+        steps + 1
+    } else {
+        SLIDER_KEYBOARD_DEFAULT_STEPS
+    };
     let delta = range_len / actual_steps as f32;
     let page = ((actual_steps / 10).clamp(1, 10)) as f32;
     let call = |v: f32| {
@@ -411,23 +450,49 @@ pub(crate) fn handle_key(
         }
     };
     match ke.event_type {
-        KbEventType::KeyDown => {
-            match &ke.key {
-                Key::Named(NamedKey::Home) => { call(min); true }
-                Key::Named(NamedKey::End) => { call(max); true }
-                Key::Named(NamedKey::ArrowRight) => { call(value + delta); true }
-                Key::Named(NamedKey::ArrowLeft) => { call(value - delta); true }
-                Key::Named(NamedKey::PageUp) => { call(value + page * delta); true }
-                Key::Named(NamedKey::PageDown) => { call(value - page * delta); true }
-                _ => false,
+        KbEventType::KeyDown => match &ke.key {
+            Key::Named(NamedKey::Home) => {
+                call(min);
+                true
             }
-        }
+            Key::Named(NamedKey::End) => {
+                call(max);
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                call(value + delta);
+                true
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                call(value - delta);
+                true
+            }
+            Key::Named(NamedKey::PageUp) => {
+                call(value + page * delta);
+                true
+            }
+            Key::Named(NamedKey::PageDown) => {
+                call(value - page * delta);
+                true
+            }
+            _ => false,
+        },
         KbEventType::KeyUp => {
-            let consumed = matches!(&ke.key,
-                Key::Named(NamedKey::Home | NamedKey::End | NamedKey::ArrowRight | NamedKey::ArrowLeft
-                    | NamedKey::PageUp | NamedKey::PageDown));
+            let consumed = matches!(
+                &ke.key,
+                Key::Named(
+                    NamedKey::Home
+                        | NamedKey::End
+                        | NamedKey::ArrowRight
+                        | NamedKey::ArrowLeft
+                        | NamedKey::PageUp
+                        | NamedKey::PageDown
+                )
+            );
             if consumed {
-                if let Some(cb) = on_value_change_finished { cb(); }
+                if let Some(cb) = on_value_change_finished {
+                    cb();
+                }
             }
             consumed
         }
@@ -466,8 +531,17 @@ impl crate::modifier::DrawNode for SliderTrackNode {
         let focused = self.interaction.is_focused_value();
         let focus_alpha = self.interaction.focus_indicator_alpha_value();
         draw_slider(
-            canvas, rect, &self.colors, self.enabled, self.value,
-            self.min, self.max, self.steps, self.thumb_active, focused, focus_alpha,
+            canvas,
+            rect,
+            &self.colors,
+            self.enabled,
+            self.value,
+            self.min,
+            self.max,
+            self.steps,
+            self.thumb_active,
+            focused,
+            focus_alpha,
         );
     }
     fn node_key(&self) -> String {
@@ -544,7 +618,9 @@ pub(crate) fn draw_track_body(
 ) {
     let w = rect.width();
     let h = rect.height();
-    if w <= 0.0 || h <= 0.0 || thumb_values.is_empty() { return; }
+    if w <= 0.0 || h <= 0.0 || thumb_values.is_empty() {
+        return;
+    }
     let cy = rect.top + h / 2.0;
 
     let inactive = colors.track_color(enabled, false);
@@ -559,9 +635,8 @@ pub(crate) fn draw_track_body(
     let track_right = rect.right;
     let track_w = w;
     // Thumb centre = corner + (w - 2 × corner) × fraction (an end value lands on its stop).
-    let pos_of = |v: f32| {
-        track_left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max)
-    };
+    let pos_of =
+        |v: f32| track_left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max);
     let has_ticks = steps > 0;
 
     let start_pos = pos_of(start_value);
@@ -579,7 +654,16 @@ pub(crate) fn draw_track_body(
     let left_seg_end = start_pos - end_gap;
     if left_seg_end > track_left + threshold {
         let color = if single_sided { &active } else { &inactive };
-        draw_track_path(canvas, track_left, left_seg_end, cy, SLIDER_TRACK_HEIGHT, corner, inside, color);
+        draw_track_path(
+            canvas,
+            track_left,
+            left_seg_end,
+            cy,
+            SLIDER_TRACK_HEIGHT,
+            corner,
+            inside,
+            color,
+        );
     }
 
     // ── Active segment ──
@@ -588,33 +672,71 @@ pub(crate) fn draw_track_body(
     // BOTH ends of a range — stops one thumb gap short of its thumb, so the thumb reads as the end
     // of the fill and the last `gap` pixels stay clear. That is the whole rule; a range that reaches
     // an end is not special-cased, which is what makes a range look like a single slider at its ends.
-    let active_left = if single_sided { track_left } else { start_pos + end_gap };
+    let active_left = if single_sided {
+        track_left
+    } else {
+        start_pos + end_gap
+    };
     let active_right = end_pos - end_gap;
-    let left_r = if active_left <= track_left { corner } else { inside };
-    let right_r = if active_right >= track_right { corner } else { inside };
+    let left_r = if active_left <= track_left {
+        corner
+    } else {
+        inside
+    };
+    let right_r = if active_right >= track_right {
+        corner
+    } else {
+        inside
+    };
     if active_right - active_left > left_r.max(right_r) {
-        draw_track_path(canvas, active_left, active_right, cy, SLIDER_TRACK_HEIGHT, left_r, right_r, &active);
+        draw_track_path(
+            canvas,
+            active_left,
+            active_right,
+            cy,
+            SLIDER_TRACK_HEIGHT,
+            left_r,
+            right_r,
+            &active,
+        );
     }
 
     // ── Right segment: [end_pos + gap, track_right] ──
     let right_seg_start = end_pos + end_gap;
     if right_seg_start < track_right - threshold {
-        draw_track_path(canvas, right_seg_start, track_right, cy, SLIDER_TRACK_HEIGHT, inside, corner, &inactive);
+        draw_track_path(
+            canvas,
+            right_seg_start,
+            track_right,
+            cy,
+            SLIDER_TRACK_HEIGHT,
+            inside,
+            corner,
+            &inactive,
+        );
     }
 
     // ── Ticks (steps + 2 dots) on the inset axis, active inside the active segment ──
     // A tick under a thumb is not drawn (the thumb would sit on top of the stop dot).
-    let overlap_thumb = |x: f32| thumb_values.iter().any(|v| {
-        (x - pos_of(*v)).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0
-    });
+    let overlap_thumb = |x: f32| {
+        thumb_values
+            .iter()
+            .any(|v| (x - pos_of(*v)).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0)
+    };
     if has_ticks {
         let radius = SLIDER_TICK_SIZE / 2.0;
         let mut tp = skia_safe::Paint::default();
         tp.set_anti_alias(true);
         for f in tick_fractions(steps).iter() {
             let x = track_left + corner + (track_w - 2.0 * corner) * f;
-            if overlap_thumb(x) { continue; }
-            let color = if x >= active_left && x <= active_right { active_tick } else { inactive_tick };
+            if overlap_thumb(x) {
+                continue;
+            }
+            let color = if x >= active_left && x <= active_right {
+                active_tick
+            } else {
+                inactive_tick
+            };
             tp.set_color(skia_color(color));
             canvas.draw_circle(skia_safe::Point::new(x, cy), radius, &tp);
         }
@@ -634,11 +756,19 @@ pub(crate) fn draw_track_body(
     sp.set_anti_alias(true);
     if left_seg_end > track_left + threshold && !overlap_thumb(track_left + corner) {
         sp.set_color(skia_color(stop_start_c));
-        canvas.draw_circle(skia_safe::Point::new(track_left + corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
+        canvas.draw_circle(
+            skia_safe::Point::new(track_left + corner, cy),
+            SLIDER_TICK_SIZE / 2.0,
+            &sp,
+        );
     }
     if right_seg_start < track_right - threshold && !overlap_thumb(track_right - corner) {
         sp.set_color(skia_color(stop_end_c));
-        canvas.draw_circle(skia_safe::Point::new(track_right - corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
+        canvas.draw_circle(
+            skia_safe::Point::new(track_right - corner, cy),
+            SLIDER_TICK_SIZE / 2.0,
+            &sp,
+        );
     }
 }
 
@@ -660,7 +790,11 @@ pub(crate) fn draw_thumb(
     let thumb_c = colors.thumb_color(enabled);
     // ⚠ `cx` is absolute — the callers add their own origin, and adding one twice is exactly the
     // bug that drew a thumb right of its track (2026-08 debug-server measurement).
-    let thumb_w = if active { SLIDER_ACTIVE_THUMB_WIDTH } else { SLIDER_THUMB_WIDTH };
+    let thumb_w = if active {
+        SLIDER_ACTIVE_THUMB_WIDTH
+    } else {
+        SLIDER_THUMB_WIDTH
+    };
     let thumb_h = SLIDER_THUMB_HEIGHT;
     let rrect = skia_safe::RRect::new_rect_xy(
         skia_safe::Rect::from_xywh(cx - thumb_w / 2.0, cy - thumb_h / 2.0, thumb_w, thumb_h),
@@ -688,7 +822,15 @@ pub(crate) fn draw_thumb(
         // For a centre line 8 from the thumb centre: gap = 8 - thumb half width (2) - 1.5 = 4.5.
         let end_gap = SLIDER_THUMB_WIDTH / 2.0 + SLIDER_THUMB_GAP;
         let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
-        crate::render::draw_focus(canvas, ring_rect, &crate::graphics::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
+        crate::render::draw_focus(
+            canvas,
+            ring_rect,
+            &crate::graphics::Shape::Pill,
+            None,
+            thumb_c,
+            focus_alpha,
+            ring_gap,
+        );
     }
 }
 
@@ -709,14 +851,15 @@ pub(crate) fn draw_track(
     single_sided: bool,
     focus_alpha: f32,
 ) {
-    if thumbs.is_empty() { return; }
+    if thumbs.is_empty() {
+        return;
+    }
     let h = rect.height();
     let cy = rect.top + h / 2.0;
     let corner = SLIDER_TRACK_HEIGHT / 2.0;
     let track_w = rect.width();
-    let pos_of = |v: f32| {
-        rect.left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max)
-    };
+    let pos_of =
+        |v: f32| rect.left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max);
     // The span the body draws between: the thumbs are passed sorted, so the first and last are its
     // ends (for the single slider they are the same thumb).
     let values: Vec<f32> = thumbs.iter().map(|t| t.value).collect();
@@ -734,7 +877,16 @@ pub(crate) fn draw_track(
         &values,
     );
     for t in thumbs {
-        draw_thumb(canvas, pos_of(t.value), cy, colors, enabled, t.active, t.focused, focus_alpha);
+        draw_thumb(
+            canvas,
+            pos_of(t.value),
+            cy,
+            colors,
+            enabled,
+            t.active,
+            t.focused,
+            focus_alpha,
+        );
     }
 }
 
@@ -758,7 +910,11 @@ pub(crate) fn draw_slider(
         rect,
         colors,
         enabled,
-        &[TrackThumb { value, active: thumb_active, focused }],
+        &[TrackThumb {
+            value,
+            active: thumb_active,
+            focused,
+        }],
         min,
         max,
         steps,
@@ -780,7 +936,9 @@ fn draw_track_path(
     end_r: f32,
     color: &Color,
 ) {
-    if x1 <= x0 { return; }
+    if x1 <= x0 {
+        return;
+    }
     let half = height / 2.0;
     let top = cy - half;
     let rrect = skia_safe::RRect::new_rect_radii(
@@ -801,8 +959,6 @@ fn draw_track_path(
 fn skia_color(c: Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
-
-
 
 #[cfg(test)]
 mod tests;

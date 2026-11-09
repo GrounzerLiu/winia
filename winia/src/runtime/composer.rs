@@ -9,18 +9,18 @@
 //! - 重组调度: 批处理状态变化，在下一帧重组
 //! - Key 管理: 全局唯一 key 计数器
 
-use crate::runtime::state::{ComposerSubscription, State, StateId, StateSignal};
-use crate::transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;
+use crate::runtime::state::{ComposerSubscription, State, StateId, StateSignal};
+use crate::transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
+use std::any::Any;
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::any::Any;
-use std::cell::Cell;
-use std::cell::RefCell;
 
 /// RAII guard：语句作用域结束（含 return/break/continue/panic 提前退出）自动 pop_stmt。
 /// 零大小——Drop 直接操作 thread_local 栈（不持有 &mut ctx，无借用冲突）。
@@ -28,7 +28,9 @@ pub struct StmtGuard;
 
 impl Drop for StmtGuard {
     fn drop(&mut self) {
-        STMT_STACK.with(|s| { s.borrow_mut().pop(); });
+        STMT_STACK.with(|s| {
+            s.borrow_mut().pop();
+        });
     }
 }
 
@@ -41,7 +43,9 @@ pub struct ScopeGuard {
 }
 impl Drop for ScopeGuard {
     fn drop(&mut self) {
-        unsafe { (*self.composer).end_scope(); }
+        unsafe {
+            (*self.composer).end_scope();
+        }
     }
 }
 
@@ -112,9 +116,8 @@ fn begin_runtime_frame() -> RuntimeFrameGuard {
         }),
         group_stack: GROUP_STACK.with(|groups| std::mem::take(&mut *groups.borrow_mut())),
         stmt_stack: STMT_STACK.with(|stmts| std::mem::take(&mut *stmts.borrow_mut())),
-        measured_layout_keys: MEASURED_LAYOUT_KEYS.with(|keys| {
-            std::mem::replace(&mut *keys.borrow_mut(), None)
-        }),
+        measured_layout_keys: MEASURED_LAYOUT_KEYS
+            .with(|keys| std::mem::replace(&mut *keys.borrow_mut(), None)),
     };
     RUNTIME_FRAME_STACK.with(|frames| frames.borrow_mut().push(previous));
     RuntimeFrameGuard { id, active: true }
@@ -149,7 +152,6 @@ impl Drop for RuntimeFrameGuard {
         }
     }
 }
-
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
 /// 支持跨帧按类型比较（`Box<dyn Any>` 无法通用 PartialEq，用 trait object 桥接）。
@@ -208,7 +210,9 @@ pub(crate) mod param_alloc {
 
 /// 两个参数序列是否逐项相等（数量相同 + 类型/值全等）
 fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     a.iter().zip(b.iter()).all(|(x, y)| x.eq_any(&**y))
 }
 
@@ -241,8 +245,10 @@ pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
 /// → 身份空间 2^32（碰撞概率高——checkbox 循环子项即碰撞）。
 pub(crate) fn mix_key(base: u64, c: u64) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
-    h ^= base; h = h.wrapping_mul(0x100000001b3);
-    h ^= c; h = h.wrapping_mul(0x100000001b3);
+    h ^= base;
+    h = h.wrapping_mul(0x100000001b3);
+    h ^= c;
+    h = h.wrapping_mul(0x100000001b3);
     h
 }
 
@@ -269,23 +275,21 @@ fn begin_layout_measure_tracking() {
 }
 
 fn take_layout_measure_keys() -> HashSet<u64> {
-    MEASURED_LAYOUT_KEYS
-        .with(|keys| keys.borrow_mut().take().unwrap_or_default())
+    MEASURED_LAYOUT_KEYS.with(|keys| keys.borrow_mut().take().unwrap_or_default())
 }
-
 
 mod ctx;
 mod engine;
 mod slot_table;
 mod transactions;
 
-pub use ctx::ComposeCtx;
 #[cfg(target_os = "android")]
 pub use ctx::AndroidUi;
+pub use ctx::ComposeCtx;
 pub use engine::Composer;
 pub use slot_table::GroupStatus;
-pub(crate) use slot_table::{SlotStatus, SlotTable};
 use slot_table::{NodeDesc, SlotTableRuntimeSnapshot};
+pub(crate) use slot_table::{SlotStatus, SlotTable};
 
 #[cfg(test)]
 mod tests;

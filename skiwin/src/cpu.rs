@@ -1,4 +1,4 @@
-use crate::{capture, SkiwinError, SkiwinResult, SkiaWindowTrait, SoftBufferSurface};
+use crate::{capture, SkiaWindowTrait, SkiwinError, SkiwinResult, SoftBufferSurface};
 use skia_safe::{ImageInfo, Surface};
 use std::num::NonZeroU32;
 use std::ops::Deref;

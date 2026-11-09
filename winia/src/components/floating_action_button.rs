@@ -5,17 +5,17 @@
 //! semantics are different from a fixed-size FAB.
 
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::{Backchannel, State};
-use crate::layout::constraints::Constraints;
-use crate::layout::LayoutDirection;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::{ComponentState, MutableInteractionSource};
+use crate::layout::BoxLayout;
+use crate::layout::LayoutDirection;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::{Backchannel, State};
 use crate::theme::{ThemeColors, WiniaTheme};
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 /// FAB size variants from the Material 3 token families.
@@ -130,7 +130,9 @@ impl FloatingActionButtonColors {
     /// "on" colour, and a colour with no pair — a caller's own — falls back to `on_surface`, which
     /// is what the ambient content colour carries for the default theme.
     pub fn from_container(theme: &ThemeColors, container: Color) -> Self {
-        let content = theme.content_color_for(container).unwrap_or(theme.on_surface);
+        let content = theme
+            .content_color_for(container)
+            .unwrap_or(theme.on_surface);
         Self::from_pair(theme, container, content)
     }
 
@@ -385,10 +387,7 @@ impl FloatingActionButton {
         // (`FloatingActionButton.kt:155`), where `tonalElevation()` is the DEFAULT elevation
         // (`:624-626`). Only a container that resolves to `surface` is tinted, so the usual
         // `primaryContainer` FAB is unaffected.
-        let tonal_elevation = self
-            .elevation
-            .map(|e| e.tonal_elevation())
-            .unwrap_or(0.0);
+        let tonal_elevation = self.elevation.map(|e| e.tonal_elevation()).unwrap_or(0.0);
         let container = crate::components::surface::tonal_background(
             theme,
             colors.container_color(self.enabled),
@@ -414,9 +413,14 @@ impl FloatingActionButton {
                 let last_kind: Backchannel<Option<crate::animation::ElevationInteraction>> =
                     ctx.remember_backchannel(|| None);
                 let to = state.elevation_interaction();
-                let from = if state.enabled { last_kind.peek() } else { None };
-                let spec = crate::animation::elevation_spec_for_pair(from, to)
-                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+                let from = if state.enabled {
+                    last_kind.peek()
+                } else {
+                    None
+                };
+                let spec = crate::animation::elevation_spec_for_pair(from, to).unwrap_or(
+                    crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()),
+                );
                 last_kind.set(to);
                 Some(ctx.animate_float_as_state(elevation.for_state(&state), spec))
             }
@@ -495,7 +499,6 @@ impl Default for FloatingActionButton {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests;
@@ -828,10 +831,7 @@ impl ExtendedFloatingActionButton {
             .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
-        let tonal_elevation = self
-            .elevation
-            .map(|e| e.tonal_elevation())
-            .unwrap_or(0.0);
+        let tonal_elevation = self.elevation.map(|e| e.tonal_elevation()).unwrap_or(0.0);
         let container = crate::components::surface::tonal_background(
             theme,
             colors.container_color(self.enabled),
@@ -870,9 +870,14 @@ impl ExtendedFloatingActionButton {
                 let last_kind: Backchannel<Option<crate::animation::ElevationInteraction>> =
                     ctx.remember_backchannel(|| None);
                 let to = state.elevation_interaction();
-                let from = if state.enabled { last_kind.peek() } else { None };
-                let spec = crate::animation::elevation_spec_for_pair(from, to)
-                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+                let from = if state.enabled {
+                    last_kind.peek()
+                } else {
+                    None
+                };
+                let spec = crate::animation::elevation_spec_for_pair(from, to).unwrap_or(
+                    crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()),
+                );
                 last_kind.set(to);
                 Some(ctx.animate_float_as_state(elevation.for_state(&state), spec))
             }
@@ -910,7 +915,11 @@ impl ExtendedFloatingActionButton {
         }
 
         match self.content {
-            ExtendedFabContent::IconText { text, icon, expanded } => {
+            ExtendedFabContent::IconText {
+                text,
+                icon,
+                expanded,
+            } => {
                 // The expand/collapse progress — see `fab_size_spec`.
                 let progress = ctx.animate_float_as_state(
                     if expanded.get() { 1.0 } else { 0.0 },
@@ -936,26 +945,38 @@ impl ExtendedFloatingActionButton {
                         });
                         wrap_fab_slot_with(ctx, text_alpha, |ctx| {
                             WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(label_style.clone(), ctx, |ctx| {
-                                    // The tier's icon-label gap, bled into the text slot so the
-                                    // gap moves with the padding. The baseline's is 12 dp
-                                    // (`ExtendedFabEndIconPadding`).
-                                    text(ctx);
-                                });
+                                crate::components::text::ProvideTextStyle(
+                                    label_style.clone(),
+                                    ctx,
+                                    |ctx| {
+                                        // The tier's icon-label gap, bled into the text slot so the
+                                        // gap moves with the padding. The baseline's is 12 dp
+                                        // (`ExtendedFabEndIconPadding`).
+                                        text(ctx);
+                                    },
+                                );
                             });
                         });
                     }
                 }
             }
             ExtendedFabContent::Row(content) => {
-                match ctx.start_restartable_group(key, modifier, ExtendedFabContentPolicy { metrics }) {
+                match ctx.start_restartable_group(
+                    key,
+                    modifier,
+                    ExtendedFabContentPolicy { metrics },
+                ) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         wrap_fab_slot(ctx, |ctx| {
                             WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(label_style.clone(), ctx, |ctx| {
-                                    content(ctx);
-                                });
+                                crate::components::text::ProvideTextStyle(
+                                    label_style.clone(),
+                                    ctx,
+                                    |ctx| {
+                                        content(ctx);
+                                    },
+                                );
                             });
                         });
                     }
@@ -1010,8 +1031,9 @@ impl MeasurePolicy for ExtendedFabContentPolicy {
         let (content_size, _) = measure_node(nodes, policies, children[0], loose);
         // The floor is the OUTER width; the padding sits inside it, which is why the row's
         // content is centred in the container rather than offset by the padding.
-        let width = (content_size.width + self.metrics.row_start_padding + self.metrics.row_end_padding)
-            .max(self.metrics.row_min_width);
+        let width =
+            (content_size.width + self.metrics.row_start_padding + self.metrics.row_end_padding)
+                .max(self.metrics.row_min_width);
         let height = content_size.height.max(self.metrics.height);
         let position = Offset::new(
             (width - content_size.width) / 2.0,
@@ -1019,7 +1041,10 @@ impl MeasurePolicy for ExtendedFabContentPolicy {
         );
         (
             Size::new(width, height),
-            vec![Placement { size: content_size, position }],
+            vec![Placement {
+                size: content_size,
+                position,
+            }],
         )
     }
 
@@ -1116,5 +1141,4 @@ impl MeasurePolicy for ExtendedFabLayoutPolicy {
             nodes[child].measured_size = placements[index].size;
         }
     }
-
 }

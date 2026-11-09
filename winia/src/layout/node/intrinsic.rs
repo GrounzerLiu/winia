@@ -72,7 +72,9 @@ impl<'a> IntrinsicCtx<'a> {
     ) -> Size {
         let _probe = IntrinsicProbeGuard::enter(query);
         let policy: &dyn MeasurePolicy = &*self.policies[self.policy_idx];
-        policy.measure(self.nodes, self.policies, children, constraints).0
+        policy
+            .measure(self.nodes, self.policies, children, constraints)
+            .0
     }
 
     /// Ask a CHILD node for one of its intrinsic measurements, through its own modifier chain.
@@ -85,7 +87,10 @@ impl<'a> IntrinsicCtx<'a> {
     /// arithmetic (Row/Column) prices weighted children itself, because a weighted child has no
     /// intrinsic size of its own — the parent hands it a share of the available space.
     pub fn child_weight(&self, child: usize) -> f32 {
-        self.nodes[child].modifier.get_layout_weight().unwrap_or(0.0)
+        self.nodes[child]
+            .modifier
+            .get_layout_weight()
+            .unwrap_or(0.0)
     }
 }
 
@@ -167,7 +172,11 @@ pub(crate) fn intrinsic_axis_range(m: &crate::modifier::Modifier, horizontal: bo
                 // Padding is a chain NODE: walking outward, it adds its extent to whatever the inner
                 // range is, because the node's box includes the padding. An unbounded maximum stays
                 // unbounded (there is nothing to add it to).
-                let pad = if horizontal { start + end } else { top + bottom };
+                let pad = if horizontal {
+                    start + end
+                } else {
+                    top + bottom
+                };
                 lo += pad;
                 if hi < f32::MAX {
                     hi += pad;
@@ -210,7 +219,10 @@ pub(crate) fn intrinsic_axis_range(m: &crate::modifier::Modifier, horizontal: bo
                 lo = lo.clamp(tmin, tmax);
                 hi = hi.clamp(tmin, tmax);
             }
-            crate::modifier::SizeStep::DefaultMin { min_width, min_height } => {
+            crate::modifier::SizeStep::DefaultMin {
+                min_width,
+                min_height,
+            } => {
                 if let Some(v) = if horizontal { min_width } else { min_height } {
                     lo = lo.max(v);
                     hi = hi.max(v);
@@ -231,15 +243,7 @@ pub(crate) fn intrinsic_size_of(
 ) -> f32 {
     let horizontal = query.is_width();
     // Read the whole chain in one borrow and let it go: the content query needs `nodes` mutably.
-    let (
-        lo,
-        hi,
-        pad_axis,
-        pad_other,
-        intrinsic_request,
-        other_axis_scrolled,
-        aspect,
-    ) = {
+    let (lo, hi, pad_axis, pad_other, intrinsic_request, other_axis_scrolled, aspect) = {
         let m = &nodes[idx].modifier;
         let (lo, hi) = intrinsic_axis_range(m, horizontal);
         let aspect = m.aspect_ratio_constraint();
@@ -258,7 +262,11 @@ pub(crate) fn intrinsic_size_of(
             hi,
             if horizontal { pad_x } else { pad_y },
             if horizontal { pad_y } else { pad_x },
-            if horizontal { m.intrinsic_width_request() } else { m.intrinsic_height_request() },
+            if horizontal {
+                m.intrinsic_width_request()
+            } else {
+                m.intrinsic_height_request()
+            },
             other_axis_scrolled,
             aspect,
         )
@@ -302,7 +310,11 @@ pub(crate) fn intrinsic_size_of(
         // extreme the modifier declares.
         content_intrinsic(nodes, policies, idx, declared, other)
     } else if let Some((ratio, _)) = aspect.filter(|_| aspect_other < f32::MAX) {
-        let v = if horizontal { aspect_other * ratio } else { aspect_other / ratio };
+        let v = if horizontal {
+            aspect_other * ratio
+        } else {
+            aspect_other / ratio
+        };
         if v.is_finite() && v > 0.0 {
             v
         } else {
@@ -361,12 +373,24 @@ pub(crate) fn content_intrinsic(
                 nodes[idx].measured_size.height
             };
         }
-        let mut ctx = IntrinsicCtx { nodes, policies, policy_idx: pidx };
+        let mut ctx = IntrinsicCtx {
+            nodes,
+            policies,
+            policy_idx: pidx,
+        };
         return match query {
-            IntrinsicQuery::MinWidth => policies[pidx].min_intrinsic_width(&mut ctx, &children, other),
-            IntrinsicQuery::MaxWidth => policies[pidx].max_intrinsic_width(&mut ctx, &children, other),
-            IntrinsicQuery::MinHeight => policies[pidx].min_intrinsic_height(&mut ctx, &children, other),
-            IntrinsicQuery::MaxHeight => policies[pidx].max_intrinsic_height(&mut ctx, &children, other),
+            IntrinsicQuery::MinWidth => {
+                policies[pidx].min_intrinsic_width(&mut ctx, &children, other)
+            }
+            IntrinsicQuery::MaxWidth => {
+                policies[pidx].max_intrinsic_width(&mut ctx, &children, other)
+            }
+            IntrinsicQuery::MinHeight => {
+                policies[pidx].min_intrinsic_height(&mut ctx, &children, other)
+            }
+            IntrinsicQuery::MaxHeight => {
+                policies[pidx].max_intrinsic_height(&mut ctx, &children, other)
+            }
         };
     }
     leaf_intrinsic(nodes, idx, query, other)
@@ -379,7 +403,12 @@ pub(crate) fn content_intrinsic(
 ///   paragraph takes at the asked width (plus the supporting-text reserve the measure branch adds);
 /// - an image reports its intrinsic size on both axes;
 /// - anything else measures nothing, so it is 0 (the pipeline gives it its fixed axis, if any).
-pub(crate) fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: IntrinsicQuery, other: f32) -> f32 {
+pub(crate) fn leaf_intrinsic(
+    nodes: &mut Vec<LayoutNode>,
+    idx: usize,
+    query: IntrinsicQuery,
+    other: f32,
+) -> f32 {
     if nodes[idx].has_text_content {
         // A width query carries the HEIGHT in `other`, so it must not become the layout width (the
         // richtext branch below already guards this): the paragraph is built unbounded and its own
@@ -413,10 +442,17 @@ pub(crate) fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: Int
         let saved = nodes[idx].cached_paragraph.borrow_mut().take();
         let size = measure_and_cache_richtext(&nodes[idx], layout_width);
         *nodes[idx].cached_paragraph.borrow_mut() = saved;
-        return if query.is_width() { size.width } else { size.height };
+        return if query.is_width() {
+            size.width
+        } else {
+            size.height
+        };
     }
     if nodes[idx].has_image_content {
-        let (iw, ih) = nodes[idx].modifier.image_intrinsic_size().unwrap_or((0.0, 0.0));
+        let (iw, ih) = nodes[idx]
+            .modifier
+            .image_intrinsic_size()
+            .unwrap_or((0.0, 0.0));
         // An image has one size; min and max agree, which is what the pipeline does for images.
         return if query.is_width() { iw } else { ih };
     }
@@ -424,4 +460,3 @@ pub(crate) fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: Int
     // (`intrinsic_size_of` returns the fixed value without asking the content).
     0.0
 }
-

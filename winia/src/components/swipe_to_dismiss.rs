@@ -19,12 +19,12 @@
 //! vertical drag belongs to the list, a horizontal one to the row (see `app::gesture_move`).
 
 use crate::composable;
-use crate::runtime::composer::ComposeCtx;
-use crate::runtime::state::State;
 use crate::layout::Alignment;
+use crate::layout::components::Stack;
 use crate::modifier::Modifier;
 use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
-use crate::layout::components::Stack;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use std::sync::Arc;
 
 /// Distance (logical px) a drag must pass for the release to land on the dismiss anchor — Compose
@@ -122,7 +122,10 @@ impl SwipeToDismissBoxState {
     pub fn new(initial_value: SwipeToDismissBoxValue) -> Self {
         let mut anchored = AnchoredDraggableState::new(initial_value);
         anchored.set_velocity_threshold_dp(SWIPE_DISMISS_VELOCITY_THRESHOLD);
-        Self { anchored, reported: State::new(None) }
+        Self {
+            anchored,
+            reported: State::new(None),
+        }
     }
 
     /// The dismissed value already reported to `on_dismiss`, if any.
@@ -380,8 +383,20 @@ impl SwipeToDismissBox {
     /// The fixture `fixture_swipe_dismiss` and the demo pass a state they created in the item's own
     /// scope, which is also what a caller who reads `progress()` or drives `dismiss(v)` needs.
     #[composable]
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) {
-        let SwipeToDismissBox { state, background, modifier, allow_start, allow_end, gestures_enabled, on_dismiss } = self;
+    pub fn build(
+        self,
+        ctx: &mut ComposeCtx,
+        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+    ) {
+        let SwipeToDismissBox {
+            state,
+            background,
+            modifier,
+            allow_start,
+            allow_end,
+            gestures_enabled,
+            on_dismiss,
+        } = self;
         // Declare the scalar parameters: a slot compares these to decide whether this component has to
         // re-run at all (`ctx.changed` is how the framework's builders do it), and the flags below are
         // plain values a caller can flip without any other dependency changing.
@@ -399,7 +414,9 @@ impl SwipeToDismissBox {
         // parked at `Settled`, which is what a fresh state is.
         if state.offset().is_nan() {
             let parked = state.position_of(state.settled_value());
-            state.offset_state().set(if parked.is_nan() { 0.0 } else { parked });
+            state
+                .offset_state()
+                .set(if parked.is_nan() { 0.0 } else { parked });
         }
         let settled = state.settled_value();
 
@@ -489,18 +506,21 @@ impl SwipeToDismissBox {
         }
         let host = host.then(modifier);
 
-        Stack::new().modifier(host).alignment(Alignment::Start).build(ctx, |ctx| {
-            if let Some(background) = background {
-                background(ctx);
-            }
-            // The content is moved by a LAYOUT offset rather than a graphics translation: the
-            // placement participates in hit testing, so the content is clickable where it is drawn.
-            // `absolute_offset`, not `offset`: the displacement is a physical distance, and a plain
-            // offset would mirror its x under RTL.
-            Stack::new()
-                .modifier(Modifier::new().absolute_offset(state.offset_state(), 0.0))
-                .build(ctx, |ctx| content(ctx));
-        });
+        Stack::new()
+            .modifier(host)
+            .alignment(Alignment::Start)
+            .build(ctx, |ctx| {
+                if let Some(background) = background {
+                    background(ctx);
+                }
+                // The content is moved by a LAYOUT offset rather than a graphics translation: the
+                // placement participates in hit testing, so the content is clickable where it is drawn.
+                // `absolute_offset`, not `offset`: the displacement is a physical distance, and a plain
+                // offset would mirror its x under RTL.
+                Stack::new()
+                    .modifier(Modifier::new().absolute_offset(state.offset_state(), 0.0))
+                    .build(ctx, |ctx| content(ctx));
+            });
     }
 }
 
@@ -552,21 +572,41 @@ mod tests {
 
         let start_only = state();
         start_only.update_anchors(300.0, true, false);
-        assert_eq!(start_only.position_of(SwipeToDismissBoxValue::StartToEnd), 300.0);
+        assert_eq!(
+            start_only.position_of(SwipeToDismissBoxValue::StartToEnd),
+            300.0
+        );
         assert!(
-            start_only.position_of(SwipeToDismissBoxValue::EndToStart).is_nan(),
+            start_only
+                .position_of(SwipeToDismissBoxValue::EndToStart)
+                .is_nan(),
             "a disabled direction must have no anchor to settle on"
         );
 
         let end_only = state();
         end_only.update_anchors(300.0, false, true);
-        assert!(end_only.position_of(SwipeToDismissBoxValue::StartToEnd).is_nan());
-        assert_eq!(end_only.position_of(SwipeToDismissBoxValue::EndToStart), -300.0);
+        assert!(
+            end_only
+                .position_of(SwipeToDismissBoxValue::StartToEnd)
+                .is_nan()
+        );
+        assert_eq!(
+            end_only.position_of(SwipeToDismissBoxValue::EndToStart),
+            -300.0
+        );
 
         let neither = state();
         neither.update_anchors(300.0, false, false);
-        assert!(neither.position_of(SwipeToDismissBoxValue::StartToEnd).is_nan());
-        assert!(neither.position_of(SwipeToDismissBoxValue::EndToStart).is_nan());
+        assert!(
+            neither
+                .position_of(SwipeToDismissBoxValue::StartToEnd)
+                .is_nan()
+        );
+        assert!(
+            neither
+                .position_of(SwipeToDismissBoxValue::EndToStart)
+                .is_nan()
+        );
         assert_eq!(neither.position_of(SwipeToDismissBoxValue::Settled), 0.0);
     }
 
@@ -667,6 +707,10 @@ mod tests {
 
         s.update_anchors(300.0, false, true); // that direction is switched off at runtime
         assert_eq!(s.settled_value(), SwipeToDismissBoxValue::Settled);
-        assert_eq!(s.offset(), 0.0, "the row came back instead of hanging off the edge");
+        assert_eq!(
+            s.offset(),
+            0.0,
+            "the row came back instead of hanging off the edge"
+        );
     }
 }

@@ -30,7 +30,8 @@ pub struct ScrollableTabRow {
     pub(crate) min_tab_width: f32,
     /// A caller-supplied indicator (see [`ScrollableTabRow::indicator`]). Like the fixed variant's,
     /// it is composed DURING measurement, because the positions are measure-time data.
-    pub(crate) indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+    pub(crate) indicator_slot:
+        Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }
 
 /// 可滚动 TabRow 默认值（对齐 Compose `TabRowDefaults`）。
@@ -38,9 +39,13 @@ pub struct ScrollableTabRowDefaults;
 
 impl ScrollableTabRowDefaults {
     /// 最小 tab 宽（`ScrollableTabRowMinTabWidth = 90dp`）
-    pub fn min_tab_width() -> f32 { SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH }
+    pub fn min_tab_width() -> f32 {
+        SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH
+    }
     /// 起始边缘 padding（`ScrollableTabRowEdgeStartPadding = 52dp`）
-    pub fn edge_start_padding() -> f32 { SCROLLABLE_TAB_ROW_EDGE_START_PADDING }
+    pub fn edge_start_padding() -> f32 {
+        SCROLLABLE_TAB_ROW_EDGE_START_PADDING
+    }
 }
 
 impl ScrollableTabRow {
@@ -141,37 +146,61 @@ impl ScrollableTabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let is_rtl = direction == LayoutDirection::Rtl;
 
-        let scroll_state = self.scroll_state.clone()
+        let scroll_state = self
+            .scroll_state
+            .clone()
             .unwrap_or_else(|| ctx.remember(|| crate::modifier::ScrollState::new()).get());
 
-        let container_color = self.container_color.unwrap_or_else(|| TabRowDefaults::container_color(&theme));
+        let container_color = self
+            .container_color
+            .unwrap_or_else(|| TabRowDefaults::container_color(&theme));
         let content_color = self.content_color.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_content_color(&theme) }
-            else { TabRowDefaults::secondary_content_color(&theme) }
+            if self.follow_content_size {
+                TabRowDefaults::primary_content_color(&theme)
+            } else {
+                TabRowDefaults::secondary_content_color(&theme)
+            }
         });
-        let divider_color = self.divider_color.unwrap_or_else(|| TabRowDefaults::divider_color(&theme));
+        let divider_color = self
+            .divider_color
+            .unwrap_or_else(|| TabRowDefaults::divider_color(&theme));
         let indicator_color = self.indicator_color.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_indicator_color(&theme) }
-            else { TabRowDefaults::secondary_indicator_color(&theme) }
+            if self.follow_content_size {
+                TabRowDefaults::primary_indicator_color(&theme)
+            } else {
+                TabRowDefaults::secondary_indicator_color(&theme)
+            }
         });
         let indicator_shape = self.indicator_shape.unwrap_or_else(|| {
-            if self.follow_content_size { TabRowDefaults::primary_indicator_shape() }
-            else { TabRowDefaults::secondary_indicator_shape() }
+            if self.follow_content_size {
+                TabRowDefaults::primary_indicator_shape()
+            } else {
+                TabRowDefaults::secondary_indicator_shape()
+            }
         });
 
         // 动画状态（同固定 TabRow）
         let offset_state = ctx.remember(|| 0.0f32);
         let width_state = ctx.remember(|| 0.0f32);
-        let initialized = ctx.remember(|| std::sync::Arc::new(AtomicBool::new(false))).get();
+        let initialized = ctx
+            .remember(|| std::sync::Arc::new(AtomicBool::new(false)))
+            .get();
         // ScrollableTabData：上次 selected（跨帧记住——动画触发依据）
-        let last_selected = ctx.remember(|| std::sync::Arc::new(AtomicI32::new(-1))).get();
+        let last_selected = ctx
+            .remember(|| std::sync::Arc::new(AtomicI32::new(-1)))
+            .get();
         // 上次 direction（0=LTR 1=RTL）——direction 变化时 offset 语义镜像翻转，
         // 必须重置 last_selected 强制下帧重新居中（用户实测：切方向后选中不居中）
-        let last_dir = ctx.remember(|| std::sync::Arc::new(AtomicI32::new(-1))).get();
+        let last_dir = ctx
+            .remember(|| std::sync::Arc::new(AtomicI32::new(-1)))
+            .get();
         let dir_code = if is_rtl { 1 } else { 0 };
         if last_dir.load(Ordering::Relaxed) != dir_code {
             last_dir.store(dir_code, Ordering::Relaxed);
@@ -215,15 +244,20 @@ impl ScrollableTabRow {
                 });
                 // 分隔线 leaf（内容全宽——随滚动平移）
                 let div_key = ctx.next_key();
-                ctx.start_leaf(div_key, Modifier::new()
-                    .fill_max_width()
-                    .height(1.0)
-                    .background(divider_color, Shape::Rectangle));
+                ctx.start_leaf(
+                    div_key,
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(1.0)
+                        .background(divider_color, Shape::Rectangle),
+                );
                 ctx.end_node();
                 // 指示条 leaf（内容坐标系——随滚动平移）
                 let ind_key = ctx.next_key();
-                ctx.start_leaf(ind_key, Modifier::new()
-                    .background(indicator_color, indicator_shape));
+                ctx.start_leaf(
+                    ind_key,
+                    Modifier::new().background(indicator_color, indicator_shape),
+                );
                 ctx.end_node();
             }
         }
@@ -253,7 +287,8 @@ struct ScrollableTabRowLayoutPolicy {
     /// 重测 → fling_limit 就绪 → 正确居中滚动。
     pub(crate) layout_seen: State<bool>,
     /// See [`ScrollableTabRow::indicator`]: composed at measure time with the positions.
-    pub(crate) indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+    pub(crate) indicator_slot:
+        Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }
 
 /// Manual, not derived: the indicator slot is a closure, which has no `Debug`.
@@ -302,13 +337,23 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         let mut natural_widths = Vec::with_capacity(tab_count);
         for i in 0..tab_count {
             let h = intrinsic_size_of(
-                nodes, policies, children[i], IntrinsicQuery::MaxHeight, f32::MAX,
+                nodes,
+                policies,
+                children[i],
+                IntrinsicQuery::MaxHeight,
+                f32::MAX,
             );
-            if h > layout_height { layout_height = h; }
+            if h > layout_height {
+                layout_height = h;
+            }
         }
         for i in 0..tab_count {
             natural_widths.push(intrinsic_size_of(
-                nodes, policies, children[i], IntrinsicQuery::MaxWidth, f32::MAX,
+                nodes,
+                policies,
+                children[i],
+                IntrinsicQuery::MaxWidth,
+                f32::MAX,
             ));
         }
 
@@ -323,12 +368,12 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             // the 24dp touch target (TabRow.kt:601-603) — the minimum width a tab is forced to does
             // NOT shrink the indicator's content box, so this is the one place that does not clamp to
             // the placed width.
-            let content_width = (natural_widths[i] - HORIZONTAL_TEXT_PADDING * 2.0)
-                .max(MIN_INDICATOR_WIDTH);
+            let content_width =
+                (natural_widths[i] - HORIZONTAL_TEXT_PADDING * 2.0).max(MIN_INDICATOR_WIDTH);
             tab_measurements.push((width, size, content_width));
         }
-        let layout_width = 2.0 * self.edge_padding
-            + tab_measurements.iter().map(|(w, _, _)| w).sum::<f32>();
+        let layout_width =
+            2.0 * self.edge_padding + tab_measurements.iter().map(|(w, _, _)| w).sum::<f32>();
 
         // 放置 tab：LTR 从左往右（edge_padding 起），RTL 从右往左（镜像）
         let is_rtl = self.direction == LayoutDirection::Rtl;
@@ -337,19 +382,27 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         for i in 0..tab_count {
             let (width, size, content_width) = tab_measurements[i];
             let left = if is_rtl {
-                layout_width - self.edge_padding
-                    - tab_measurements[..=i].iter().map(|(w, _, _)| w).sum::<f32>()
+                layout_width
+                    - self.edge_padding
+                    - tab_measurements[..=i]
+                        .iter()
+                        .map(|(w, _, _)| w)
+                        .sum::<f32>()
             } else {
-                self.edge_padding
-                    + tab_measurements[..i].iter().map(|(w, _, _)| w).sum::<f32>()
+                self.edge_padding + tab_measurements[..i].iter().map(|(w, _, _)| w).sum::<f32>()
             };
             positions.push(TabPosition::new(left, width, content_width));
-            placements.push(Placement { size, position: Offset::new(left, 0.0) });
+            placements.push(Placement {
+                size,
+                position: Offset::new(left, 0.0),
+            });
         }
 
         // 分隔线（内容全宽）
         let (div_size, _) = measure_node(
-            nodes, policies, children[n - 2],
+            nodes,
+            policies,
+            children[n - 2],
             Constraints::new(0.0, layout_width, 0.0, f32::MAX),
         );
         placements.push(Placement {
@@ -360,7 +413,11 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         // 指示条（与固定版同：居中于 slot，双 State 动画）
         let (target_offset, target_width) = if self.selected_tab_index < tab_count {
             let pos = &positions[self.selected_tab_index];
-            let w = if self.follow_content_size { pos.content_width } else { pos.width };
+            let w = if self.follow_content_size {
+                pos.content_width
+            } else {
+                pos.width
+            };
             (pos.left + (pos.width - w) / 2.0, w)
         } else {
             (0.0, 0.0)
@@ -398,7 +455,11 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             self.initialized.store(true, Ordering::Relaxed);
         } else {
             let spec = indicator_spring();
-            crate::animation::push_animatable(self.offset_state.clone(), target_offset, spec.clone());
+            crate::animation::push_animatable(
+                self.offset_state.clone(),
+                target_offset,
+                spec.clone(),
+            );
             crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
         }
 
@@ -474,7 +535,11 @@ impl ScrollableTabRowLayoutPolicy {
     /// The strip's natural width: the tabs side by side at their natural widths, each forced up to
     /// the row's minimum touch-target width, plus the row's edge padding — the `layout_width` its
     /// measure computes.
-    pub(crate) fn strip_intrinsic_width(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize]) -> f32 {
+    pub(crate) fn strip_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+    ) -> f32 {
         let tab_count = tab_count_of(children);
         if tab_count == 0 {
             return 0.0;
@@ -492,7 +557,12 @@ impl ScrollableTabRowLayoutPolicy {
     ///
     /// Extracted from `measure` because a caller-supplied indicator takes the same early-return path
     /// and must still get this: the selected tab is centred whether or not the caller draws the bar.
-    pub(crate) fn scroll_selected_into_view(&self, positions: &[TabPosition], layout_width: f32, is_rtl: bool) {
+    pub(crate) fn scroll_selected_into_view(
+        &self,
+        positions: &[TabPosition],
+        layout_width: f32,
+        is_rtl: bool,
+    ) {
         let sel = self.selected_tab_index as i32;
         // ⚠ 首帧延迟：policy.measure 执行时滚动容器的 fling_limit 尚未回写
         //（measure_node 在 policy.measure **之后** 才写 fling_limit，node.rs:1535-1551），
@@ -527,5 +597,3 @@ impl ScrollableTabRowLayoutPolicy {
 }
 
 // ── 测试 ──
-
-

@@ -75,7 +75,6 @@ pub fn overlay_reveal_clip_height(height: f32, dy: f32, reveal: f32) -> Option<f
     }
 }
 
-
 /// Overlay **enter animation** spec (mirrors Compose content-layer
 /// `AnimatedVisibility` `enter = scaleIn + fadeIn` — Compose Dialog itself has no
 /// built-in animation; material2's fixed scale+fade lives in the content layer;
@@ -167,18 +166,45 @@ impl OverlayAnimSpec {
 
     /// Scale only (no fade).
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
+        Self {
+            scale_from: from,
+            fade: false,
+            slide_from_y: 0.0,
+            reveal_top: false,
+            duration,
+            delay: std::time::Duration::ZERO,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            anchor_pivot: false,
+        }
     }
 
     /// Fade only.
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
+        Self {
+            scale_from: 1.0,
+            fade: true,
+            slide_from_y: 0.0,
+            reveal_top: false,
+            duration,
+            delay: std::time::Duration::ZERO,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            anchor_pivot: false,
+        }
     }
 
     /// Dropdown slide + fade (slide_in y=-height/2 with fade — mirrors docked
     /// dropdown `slideIn(-height/2) + fadeIn`).
     pub fn slide_down(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
+        Self {
+            scale_from: 1.0,
+            fade: true,
+            slide_from_y: -0.5,
+            reveal_top: false,
+            duration,
+            delay: std::time::Duration::ZERO,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            anchor_pivot: false,
+        }
     }
 
     /// Hold the start value for `delay` before the animation runs (Compose's `delayMillis`). See the field
@@ -190,7 +216,10 @@ impl OverlayAnimSpec {
     }
 
     /// Custom easing curve.
-    pub fn with_interpolator(mut self, interp: impl crate::animation::interpolator::Interpolator + 'static) -> Self {
+    pub fn with_interpolator(
+        mut self,
+        interp: impl crate::animation::interpolator::Interpolator + 'static,
+    ) -> Self {
         self.interpolator = std::sync::Arc::new(interp);
         self
     }
@@ -230,7 +259,16 @@ impl OverlayAnimSpec {
     /// expand — true shared-element morph needs anchor geometry; 300-400ms
     /// with EaseOutCubic lands crisply).
     pub fn expand_fade(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
+        Self {
+            scale_from: 1.0,
+            fade: true,
+            slide_from_y: 0.0,
+            reveal_top: true,
+            duration,
+            delay: std::time::Duration::ZERO,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            anchor_pivot: false,
+        }
     }
 
     pub(crate) fn apply(&self, t: f32) -> (f32, f32, f32, f32) {
@@ -248,6 +286,7 @@ impl OverlayAnimSpec {
 }
 
 impl Default for OverlayAnimSpec {
-    fn default() -> Self { Self::default_enter() }
+    fn default() -> Self {
+        Self::default_enter()
+    }
 }
-

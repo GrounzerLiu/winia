@@ -5,8 +5,8 @@
 //! - 本模块消费 DescNode → arena 树（Skip 恢复 / 节点复用 / 降级重建）
 //! - `collect_layout_index` / `collect_node_keys`：物化后的 arena 收集（slot_key → 节点索引）
 
-use crate::runtime::composer::Composer;
 use crate::layout::node::NodeArena;
+use crate::runtime::composer::Composer;
 
 /// 组合产物描述树节点（物化输入）。
 pub(crate) struct DescNode {
@@ -95,17 +95,20 @@ pub(crate) fn materialize(composer: &mut Composer) {
     // ALSO empty right after an in-place claim took the whole tree (`try_claim_skipped_subtree`), and
     // there the repair is pure waste: reuse is already guaranteed, and rebuilding the index would add
     // a whole-tree walk to the frame the claim just made cheap. `claims.0` tells the two apart.
-    if claims.0 == 0
-        && composer.prev_node_by_key.is_empty()
-        && composer.arena.root.is_some()
-    {
-        crate::runtime::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
+    if claims.0 == 0 && composer.prev_node_by_key.is_empty() && composer.arena.root.is_some() {
+        crate::runtime::materialize::collect_node_keys(
+            &composer.arena,
+            composer.arena.root.unwrap(),
+            &mut composer.prev_node_by_key,
+        );
     }
     composer.arena.root = None;
     // Size the arena before building into it: `alloc` pushes, and a node `Vec` growing 0 → 4000 does it
     // by doubling, moving every node already in it (~500 bytes each) about a dozen times. See
     // `NodeArena::reserve_nodes`.
-    composer.arena.reserve_nodes(composer.slot_table.slot_count_bound());
+    composer
+        .arena
+        .reserve_nodes(composer.slot_table.slot_count_bound());
     for desc in descs {
         materialize_node(composer, desc, None);
     }
@@ -261,8 +264,35 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 }
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
-pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, clear_registrar, focus_color, selection_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, ime_edit_callback, composing_range, direction, children } = desc;
+pub(crate) fn materialize_node(
+    composer: &mut Composer,
+    desc: DescNode,
+    parent: Option<usize>,
+) -> Option<usize> {
+    let DescNode {
+        key,
+        skip,
+        claimed,
+        modifier,
+        preserve_modifier,
+        policy,
+        on_remove,
+        dirty,
+        registrar,
+        clear_registrar,
+        focus_color,
+        selection_color,
+        composing_color,
+        cursor_index,
+        cursor_visible,
+        cursor_callback,
+        display_focused,
+        ime_callback,
+        ime_edit_callback,
+        composing_range,
+        direction,
+        children,
+    } = desc;
     // Detached across this node's descriptor-driven child rebuild and re-attached at the end: the
     // subcomposed child has no descriptor (see `LayoutNode::subcomposed_child`).
     let mut adopted_child: Option<usize> = None;
@@ -312,9 +342,13 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                     let sz = n.measured_size;
                     eprintln!(
                         "[mat] skip key={:x} preserve={} size=({:.0},{:.0}) text={:?}",
-                        key, preserve_modifier, sz.width, sz.height,
+                        key,
+                        preserve_modifier,
+                        sz.width,
+                        sz.height,
                         n.modifier.elements().iter().find_map(|el| match el {
-                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
+                            crate::modifier::ModifierElement::TextContent { content, .. } =>
+                                Some(content.clone()),
                             _ => None,
                         })
                     );
@@ -379,10 +413,16 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                     eprintln!(
                         "[mat-fb] key={:x} text={:?}",
                         key,
-                        composer.arena.nodes[idx].modifier.elements().iter().find_map(|el| match el {
-                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
-                            _ => None,
-                        })
+                        composer.arena.nodes[idx]
+                            .modifier
+                            .elements()
+                            .iter()
+                            .find_map(|el| match el {
+                                crate::modifier::ModifierElement::TextContent {
+                                    content, ..
+                                } => Some(content.clone()),
+                                _ => None,
+                            })
                     );
                 }
                 Some(idx)
@@ -400,7 +440,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 } else {
                     Some(composer.arena.alloc_policy(p))
                 }
-            } else { None }
+            } else {
+                None
+            }
         } else {
             policy.map(|p| composer.arena.alloc_policy(p))
         };
@@ -411,7 +453,8 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             // between here and the re-attach.
             adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
             let n = &mut composer.arena.nodes[idx];
-            let children_changed = n.children.len() != children.len() + usize::from(adopted_child.is_some());
+            let children_changed =
+                n.children.len() != children.len() + usize::from(adopted_child.is_some());
             n.children.clear();
             // 按新 modifier 重新判定内容类型（复用路径不重建节点——必须同步
             // content-kind 标记，否则 measure_node 按旧标记走错路径：
@@ -608,7 +651,11 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     // New or changed descendants must be measured before a clean ancestor can fold. Waiting for
     // collect_layout_index (which runs after measurement) leaves newly inserted children at 0x0.
-    if composer.arena.nodes[index].children.iter().any(|&child| composer.arena.nodes[child].dirty) {
+    if composer.arena.nodes[index]
+        .children
+        .iter()
+        .any(|&child| composer.arena.nodes[child].dirty)
+    {
         composer.arena.nodes[index].dirty = true;
     }
     Some(index)
@@ -714,8 +761,15 @@ fn insert_reuse_key(
             .unwrap_or_else(|| "根".to_string());
         panic!(
             "[dup-key] slot_key 冲突：sk={:#x} 节点 idx={} pos={:?} size={:?} {}（depth={}）             覆盖了已有节点 idx={} pos={:?} size={:?}             ——同一组合位置出现两个节点（key 漂移/结构变化漏配 ctx.key？）。             修复：①结构变化处加 ctx.key() ②检查列表实例隔离 ③组件调用点在              #[composable] 内",
-            arena.nodes[idx].slot_key, idx, a.position, a.measured_size, parent_desc, depth,
-            prev, b.position, b.measured_size
+            arena.nodes[idx].slot_key,
+            idx,
+            a.position,
+            a.measured_size,
+            parent_desc,
+            depth,
+            prev,
+            b.position,
+            b.measured_size
         );
     }
 }

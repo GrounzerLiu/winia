@@ -1,26 +1,39 @@
 use super::*;
 
-pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
+pub(crate) fn render_overlays(
+    overlays: &[OverlayWindow],
+    canvas: &skia_safe::Canvas,
+    scale: f32,
+    window: (f32, f32),
+) {
     for ov in overlays {
         // Show progress → (scale, alpha, dy, reveal): driven by the progress State (peek —
         // zero recomposition during render). Opening: progress 0→1, apply() forward; closing:
         // progress 1→0, apply_exit() reverse. dy = height-multiple offset; reveal = revealed
         // height multiple (used for top expansion).
-        let (anim_scale, anim_alpha, anim_dy, anim_reveal) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
-            (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // entering
-            (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // exiting
-            _ => (1.0, 1.0, 0.0, 1.0),                                     // no animation
-        };
+        let (anim_scale, anim_alpha, anim_dy, anim_reveal) =
+            match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
+                (Some(p), false, Some(spec), _) => spec.apply(p.peek()), // entering
+                (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()), // exiting
+                _ => (1.0, 1.0, 0.0, 1.0),                               // no animation
+            };
         // Modal scrim (fades in/out — follows the content alpha).
         if ov.modal {
             let mut mask = skia_safe::Paint::default();
-            mask.set_color(skia_safe::Color::from_argb((110.0 * anim_alpha) as u8, 0, 0, 0));
+            mask.set_color(skia_safe::Color::from_argb(
+                (110.0 * anim_alpha) as u8,
+                0,
+                0,
+                0,
+            ));
             canvas.draw_rect(
                 skia_safe::Rect::from_xywh(0.0, 0.0, window.0 * scale, window.1 * scale),
                 &mask,
             );
         }
-        let Some(r) = ov.composer.layout_root_idx() else { continue; };
+        let Some(r) = ov.composer.layout_root_idx() else {
+            continue;
+        };
         let nodes = ov.composer.arena_nodes();
         canvas.save();
         canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
@@ -28,7 +41,9 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
         // ⚠ scale comes after translate — position first, then scale (the scale centre = the overlay's top-left
         // + half the content size, i.e. the content centre); slide comes after the scale and before content
         // drawing (a layout-space displacement).
-        let size = ov.composer.layout_root()
+        let size = ov
+            .composer
+            .layout_root()
             .map(|r| (r.measured_size.width, r.measured_size.height))
             .unwrap_or((0.0, 0.0));
         // While sliding/revealing, clip to the content box (matching upstream's `.clip(dropdownShape)` on the dropdown

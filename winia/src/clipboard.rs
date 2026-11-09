@@ -119,7 +119,14 @@ mod tests {
         assert_eq!(applied, 2);
         assert_eq!(seen, vec!["first".to_string(), "second".to_string()]);
         let mut again = 0;
-        assert_eq!(drain_with(|_| { again += 1; true }), 0, "the queue is empty after a drain");
+        assert_eq!(
+            drain_with(|_| {
+                again += 1;
+                true
+            }),
+            0,
+            "the queue is empty after a drain"
+        );
         assert_eq!(again, 0);
     }
 
@@ -148,7 +155,11 @@ mod tests {
         }
         let queued = take_pending();
         assert_eq!(queued.len(), MAX_PENDING);
-        assert_eq!(queued.first().map(String::as_str), Some("t3"), "the oldest three were dropped");
+        assert_eq!(
+            queued.first().map(String::as_str),
+            Some("t3"),
+            "the oldest three were dropped"
+        );
         assert_eq!(queued.last().map(String::as_str), Some("t10"));
     }
 }

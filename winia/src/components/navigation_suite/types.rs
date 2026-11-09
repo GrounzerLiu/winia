@@ -1,9 +1,11 @@
 use crate::composable;
+use crate::graphics::Color;
+use crate::layout::Arrangement;
+use crate::layout::adaptive::{
+    HeightSizeClass, WidthSizeClass, window_height_size_class, window_width_size_class,
+};
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::layout::Arrangement;
-use crate::layout::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
-use crate::graphics::Color;
 use std::sync::Arc;
 /// `NavigationSuiteColors`: the container/content pair each shape draws with (`NavigationSuiteDefaults
 /// .colors()`).
@@ -65,12 +67,10 @@ impl NavigationSuiteDefaults {
     /// `NavigationSuiteDefaults.itemColors()`.
     pub fn item_colors(theme: &crate::theme::ThemeColors) -> NavigationSuiteItemColors {
         NavigationSuiteItemColors {
-            short_navigation_bar: crate::components::navigation_bar::NavigationBarItemColors::from_theme(
-                theme,
-            ),
-            wide_navigation_rail: crate::components::navigation_rail::NavigationRailItemColors::from_theme(
-                theme,
-            ),
+            short_navigation_bar:
+                crate::components::navigation_bar::NavigationBarItemColors::from_theme(theme),
+            wide_navigation_rail:
+                crate::components::navigation_rail::NavigationRailItemColors::from_theme(theme),
         }
     }
 }
@@ -278,4 +278,3 @@ pub fn remember_navigation_suite_scaffold_state(
     ctx.remember(|| NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible))
         .get()
 }
-

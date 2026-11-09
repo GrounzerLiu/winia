@@ -12,8 +12,8 @@
 //! - Single-level popups (nesting will follow).
 
 pub mod anchored_draggable;
-use std::sync::Arc;
 use crate::composable;
+use std::sync::Arc;
 
 /// Where a panel anchored to a node starts, and how it gets to its final place.
 ///
@@ -26,7 +26,6 @@ use crate::composable;
 /// and the layout pass does the interpolation.
 ///
 /// The two endpoints are resolved by `anchor_slide_origin` in the layout pass.
-
 mod anim;
 mod desc;
 mod dialog;
@@ -36,7 +35,10 @@ mod popup;
 pub(crate) use desc::*;
 pub(crate) use placement::*;
 
-pub use anim::{anchor_slide_lerp, overlay_reveal_clip_height, overlay_transform_origin, AnchorSlide, OverlayAnimSpec};
+pub use anim::{
+    AnchorSlide, OverlayAnimSpec, anchor_slide_lerp, overlay_reveal_clip_height,
+    overlay_transform_origin,
+};
 pub use desc::OverlayDesc;
 pub use dialog::Dialog;
 pub use placement::PopupPosition;

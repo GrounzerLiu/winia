@@ -29,7 +29,10 @@ pub fn install(window: &dyn winit::window::Window, window_id: u64) -> bool {
         log::warn!("[accessibility] SetWindowSubclass failed; UIA is unavailable for this window");
     }
     if std::env::var_os("WINIA_A11Y_TRACE").is_some() {
-        eprintln!("[accessibility] install window_id={window_id} hwnd={:?} ok={installed}", hwnd.0);
+        eprintln!(
+            "[accessibility] install window_id={window_id} hwnd={:?} ok={installed}",
+            hwnd.0
+        );
     }
     installed
 }
@@ -175,9 +178,9 @@ pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
             last.focused_properties
                 .iter()
                 .filter(|(property, hash)| {
-                    focused_properties
-                        .iter()
-                        .any(|(now_property, now_hash)| now_property == property && now_hash != hash)
+                    focused_properties.iter().any(|(now_property, now_hash)| {
+                        now_property == property && now_hash != hash
+                    })
                 })
                 .map(|(property, _)| *property)
                 .collect()
@@ -204,7 +207,12 @@ pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
         last.focused_properties = focused_properties;
         last.live_regions = live.clone();
         last.seen_a_frame = true;
-        (structure_changed, focus_moved, property_changes, live_changed)
+        (
+            structure_changed,
+            focus_moved,
+            property_changes,
+            live_changed,
+        )
     };
 
     if trace {
@@ -241,7 +249,8 @@ pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
             });
             if let Ok(simple) = provider.cast::<IRawElementProviderSimple>() {
                 // SAFETY: as above.
-                let result = unsafe { UiaRaiseAutomationEvent(&simple, UIA_AutomationFocusChangedEventId) };
+                let result =
+                    unsafe { UiaRaiseAutomationEvent(&simple, UIA_AutomationFocusChangedEventId) };
                 if trace {
                     eprintln!("[accessibility] raised focus-changed for {path:?}: {result:?}");
                 }
@@ -253,7 +262,8 @@ pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
             // answers instead — a client that asks `GetFocus` then gets nothing, which is the truth.
             let root = root_provider(window_id);
             // SAFETY: as above.
-            let result = unsafe { UiaRaiseAutomationEvent(&root, UIA_AutomationFocusChangedEventId) };
+            let result =
+                unsafe { UiaRaiseAutomationEvent(&root, UIA_AutomationFocusChangedEventId) };
             if trace {
                 eprintln!("[accessibility] raised focus-changed (left everything): {result:?}");
             }
@@ -289,13 +299,14 @@ pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
                 }
             }
         }
-
     }
 
     // Live regions: a snackbar appearing, or its text changing, is spoken without the user doing
     // anything — which is the whole point of the mode.
     for id in live_changed {
-        let Some(path) = path_of_node(snapshot, id) else { continue };
+        let Some(path) = path_of_node(snapshot, id) else {
+            continue;
+        };
         let provider = cached_provider(window_id, &path, || Provider {
             window_id,
             path: path.clone(),
@@ -351,4 +362,3 @@ fn hwnd_of(window: &dyn winit::window::Window) -> Option<HWND> {
 pub(crate) struct ProviderContext {
     pub(crate) window_id: u64,
 }
-

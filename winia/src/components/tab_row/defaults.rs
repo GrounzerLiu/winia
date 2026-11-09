@@ -50,7 +50,11 @@ impl TabRowDefaults {
     /// ⚠ 当前 Tab::build 的选中色走 `self.selected_content_color.unwrap_or(content_color)`
     ///（TabRow 注入的 contentColor），不经由此函数——保留供未来 scrollable/自定义使用。
     pub fn selected_content_color(theme: &crate::theme::ThemeColors, is_primary: bool) -> Color {
-        if is_primary { theme.primary } else { theme.on_surface }
+        if is_primary {
+            theme.primary
+        } else {
+            theme.on_surface
+        }
     }
 
     /// 未选中 Tab 内容色（InactiveLabelTextColor = OnSurfaceVariant）
@@ -65,4 +69,3 @@ impl TabRowDefaults {
         s
     }
 }
-

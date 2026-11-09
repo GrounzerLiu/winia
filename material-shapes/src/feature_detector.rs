@@ -1,6 +1,6 @@
 use crate::cubic::Cubic;
 use crate::feature::Feature;
-use crate::utils::{collinear_ish, RELAXED_DISTANCE_EPSILON};
+use crate::utils::{RELAXED_DISTANCE_EPSILON, collinear_ish};
 
 /// Convert cubics to Features in a 1:1 mapping of [`Cubic::as_feature`] unless
 /// - two subsequent cubics are not continuous, in which case an empty corner needs to be added in
@@ -84,8 +84,8 @@ impl Cubic {
         )
     }
 
-     /// Determines if all of this' points align with next's points. For straight lines, this is the same
-     /// as if next was a continuation of this.
+    /// Determines if all of this' points align with next's points. For straight lines, this is the same
+    /// as if next was a continuation of this.
     pub fn aligns_ish_with(&self, next: &Cubic) -> bool {
         self.straight_ish() && next.straight_ish() && self.smoothes_into_ish(next)
             || self.zero_length()

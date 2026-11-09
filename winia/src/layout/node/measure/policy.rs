@@ -7,10 +7,10 @@ use super::*;
 /// A type implementing this trait owns one container's layout logic.
 /// A type implementing this trait owns one container's layout logic.
 pub trait MeasurePolicy: std::fmt::Debug {
-/// The measure phase: given the constraints, return this node's size and the children's placements.
-/// Arena flavour: `children` holds child indices and nodes/policies are split borrows (the policy
-/// lives in the policies pool, the node in nodes, so field-level borrows cannot clash). An
-/// implementation measures its children through `measure_node(nodes, policies, c, cc)`.
+    /// The measure phase: given the constraints, return this node's size and the children's placements.
+    /// Arena flavour: `children` holds child indices and nodes/policies are split borrows (the policy
+    /// lives in the policies pool, the node in nodes, so field-level borrows cannot clash). An
+    /// implementation measures its children through `measure_node(nodes, policies, c, cc)`.
     fn measure(
         &self,
         nodes: &mut Vec<LayoutNode>,
@@ -19,7 +19,7 @@ pub trait MeasurePolicy: std::fmt::Debug {
         constraints: Constraints,
     ) -> (Size, Vec<Placement>);
 
-/// The layout phase: given the assigned size, place the children.
+    /// The layout phase: given the assigned size, place the children.
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
 
     /// Whether this policy composes content DURING measurement (`layout::subcompose`).
@@ -131,5 +131,3 @@ pub trait MeasurePolicy: std::fmt::Debug {
         None
     }
 }
-
-

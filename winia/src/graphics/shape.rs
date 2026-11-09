@@ -1,6 +1,5 @@
 //! `Shape` — how a background, border or clip is outlined (Compose's `graphics.Shape`).
 
-
 /// A shape outline (used for background / border / clip).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
@@ -60,10 +59,7 @@ pub enum Shape {
     /// inset one, the focus ring against the grown one). It is written out at each site rather
     /// than routed through the resolver, so a new arm there must do the same — NOT fall back on
     /// a rectangle, which is how the ripple once clipped a morphing button to a rect.
-    PillToRounded {
-        corner_radius: f32,
-        t: f32,
-    },
+    PillToRounded { corner_radius: f32, t: f32 },
 }
 
 impl Shape {
@@ -116,7 +112,12 @@ impl Shape {
     /// (top-start, top-end, bottom-end, bottom-start) but in GEOMETRIC corners — see
     /// [`Shape::Corners`].
     pub fn corners(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
-        Shape::Corners { top_left, top_right, bottom_right, bottom_left }
+        Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }
     }
 }
 
@@ -129,7 +130,13 @@ mod tests {
     /// half the SHORT side, so a 100 x 40 box starts at 20, not at 50.
     #[test]
     fn a_pill_transition_resolves_against_the_box() {
-        let at = |t: f32| Shape::PillToRounded { corner_radius: 8.0, t }.resolved_for_box(100.0, 40.0);
+        let at = |t: f32| {
+            Shape::PillToRounded {
+                corner_radius: 8.0,
+                t,
+            }
+            .resolved_for_box(100.0, 40.0)
+        };
 
         // t = 0 resolves to the RADIUS Pill clamps to (half the short side), not to the `Pill`
         // variant — every arm paints the two identically, and `Shape` is a plain enum with
@@ -140,14 +147,22 @@ mod tests {
         assert_eq!(
             // A 100 x 40 box starts at a 20 radius and the fixed end is 8: t = 2 overshoots it
             // by 24, i.e. past zero.
-            Shape::PillToRounded { corner_radius: 8.0, t: 2.0 }.resolved_for_box(100.0, 40.0),
+            Shape::PillToRounded {
+                corner_radius: 8.0,
+                t: 2.0
+            }
+            .resolved_for_box(100.0, 40.0),
             Shape::rounded(0.0),
             "an out-of-range t is clamped at zero, like every other radius arm"
         );
 
         // Half the SHORT side, not half the width: the same call in a tall box uses the width.
         assert_eq!(
-            Shape::PillToRounded { corner_radius: 8.0, t: 0.0 }.resolved_for_box(40.0, 100.0),
+            Shape::PillToRounded {
+                corner_radius: 8.0,
+                t: 0.0
+            }
+            .resolved_for_box(40.0, 100.0),
             Shape::rounded(20.0)
         );
     }
@@ -166,7 +181,11 @@ mod tests {
             Shape::right_rounded(7.0),
             Shape::left_rounded(8.0),
         ] {
-            assert_eq!(shape.resolved_for_box(80.0, 40.0), shape, "{shape:?} is unchanged");
+            assert_eq!(
+                shape.resolved_for_box(80.0, 40.0),
+                shape,
+                "{shape:?} is unchanged"
+            );
         }
     }
 }

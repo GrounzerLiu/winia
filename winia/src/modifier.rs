@@ -5,42 +5,34 @@
 //! - 左到右 = 外到内
 //! - 分为三类: LayoutModifier / DrawModifier / PointerInputModifier
 
-use std::sync::Arc;
-use std::ops::Range;
-use std::fmt::{self, Debug};
 #[cfg(test)]
 use crate::fling::SnapInfo;
+use crate::graphics::{
+    BackgroundColor, Color, ColorFilter, FilterQuality, GraphicsLayerParams, GraphicsLayerSpec,
+    ShadowParams, Shape, TransformOrigin,
+};
 use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
+use crate::input::interaction::MutableInteractionSource;
 use crate::input::{KbEvent, PointerEvent};
 use crate::layout::{Dimension, IntrinsicSize, SizeValue};
 use crate::text::RichSpanStyle;
-use crate::input::interaction::MutableInteractionSource;
-use crate::graphics::{
-    BackgroundColor, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
-    GraphicsLayerSpec, ShadowParams, Shape, TransformOrigin,
-};
-
+use std::fmt::{self, Debug};
+use std::ops::Range;
+use std::sync::Arc;
 
 // ── Dimension ──
 
-
 // ── Shape ──
 
-
 // ── Color (占位) ──
-
 
 // ── Modifier ──
 
 // ── KbEvent ──
 
-
 // ── PointerEvent ──
 
-
 // ── 图片绘制类型（ColorFilter / FilterQuality / BlendMode——对齐 Compose ui.graphics）──
-
-
 
 // ── Modifier ──
 
@@ -169,7 +161,9 @@ impl Modifier {
 
     /// Open wrapping-draw-node iteration (render pipeline — before at the background
     /// layer, after above content).
-    pub(crate) fn draw_wrap_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawWrapNode>> {
+    pub(crate) fn draw_wrap_nodes(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<dyn DrawWrapNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::DrawWrap(w) => Some(w),
             _ => None,
@@ -193,7 +187,9 @@ impl Modifier {
     }
 
     /// 开放布局节点迭代（测量管线用——resolved_size 之后串行变换约束）。
-    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutModifierNode>> {
+    pub(crate) fn layout_nodes(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutModifierNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Layout(l) => Some(l),
             _ => None,
@@ -218,12 +214,9 @@ impl Default for Modifier {
     }
 }
 
-
 // ── 查询方法: 布局参数提取 ──
 
-
 // ── ScrollState ──
-
 
 /// TextField 支持文本绘制参数（画在容器底部外侧 4dp）
 #[derive(Clone, Debug)]
@@ -243,25 +236,21 @@ impl SupportingVisual {
     }
 }
 
-
+pub use crate::scroll::state::ScrollState;
 /// 滚动状态，对齐 Compose ScrollState
 
 #[cfg(test)]
 pub(crate) use crate::scroll::state::snap_target;
-pub use crate::scroll::state::ScrollState;
 
 pub use crate::focus::FocusRequester;
-pub(crate) use crate::focus::{focus_window, take_focus_requests, FocusWindowGuard};
+pub(crate) use crate::focus::{FocusWindowGuard, focus_window, take_focus_requests};
 
 // ── 测试 ──
-
 
 #[cfg(test)]
 mod tests;
 
 // ── RichSpanStyle ──
-
-
 
 mod debug;
 mod param_eq;

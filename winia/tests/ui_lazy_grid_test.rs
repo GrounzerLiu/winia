@@ -83,7 +83,10 @@ fn a_staggered_grid_drifts_its_lanes() {
         (i0.1 - i1.1).abs() <= 1.0,
         "both lanes start at the same main offset: {i0:?} {i1:?}"
     );
-    assert!(i1.0 > i0.0, "the second item opens the second lane: {i0:?} {i1:?}");
+    assert!(
+        i1.0 > i0.0,
+        "the second item opens the second lane: {i0:?} {i1:?}"
+    );
     assert!(
         i0.2 > 100.0,
         "a tile fills its lane instead of measuring zero wide: {i0:?}"
@@ -134,8 +137,12 @@ fn a_staggered_grid_drifts_its_lanes() {
         "three lanes put the first three tiles on one row: {l0:?} {l1:?} {l2:?}"
     );
     app.click_tag("jump-end");
-    app.expect_eventually_timeout("end jumps to the last item", Duration::from_secs(2), |app| {
-        app.refresh();
-        app.find_tag("stagger-item-39").is_some()
-    });
+    app.expect_eventually_timeout(
+        "end jumps to the last item",
+        Duration::from_secs(2),
+        |app| {
+            app.refresh();
+            app.find_tag("stagger-item-39").is_some()
+        },
+    );
 }

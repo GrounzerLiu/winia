@@ -18,12 +18,42 @@ mod settings;
 
 fn tile_color(index: usize) -> Color {
     const COLORS: [Color; 6] = [
-        Color { r: 0x4C, g: 0xAF, b: 0x50, a: 255 },
-        Color { r: 0x21, g: 0x96, b: 0xF3, a: 255 },
-        Color { r: 0xFF, g: 0x98, b: 0x00, a: 255 },
-        Color { r: 0x9C, g: 0x27, b: 0xB0, a: 255 },
-        Color { r: 0x00, g: 0xBC, b: 0xD4, a: 255 },
-        Color { r: 0xE9, g: 0x1E, b: 0x63, a: 255 },
+        Color {
+            r: 0x4C,
+            g: 0xAF,
+            b: 0x50,
+            a: 255,
+        },
+        Color {
+            r: 0x21,
+            g: 0x96,
+            b: 0xF3,
+            a: 255,
+        },
+        Color {
+            r: 0xFF,
+            g: 0x98,
+            b: 0x00,
+            a: 255,
+        },
+        Color {
+            r: 0x9C,
+            g: 0x27,
+            b: 0xB0,
+            a: 255,
+        },
+        Color {
+            r: 0x00,
+            g: 0xBC,
+            b: 0xD4,
+            a: 255,
+        },
+        Color {
+            r: 0xE9,
+            g: 0x1E,
+            b: 0x63,
+            a: 255,
+        },
     ];
     COLORS[index % COLORS.len()]
 }
@@ -113,7 +143,9 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
     let animate = ctx.remember(|| State::new(false)).get();
     // The ids are the animation identity: removing the FIRST one keeps the others' identity, so they
     // slide instead of re-entering.
-    let ids = ctx.remember(|| State::new((0..6u64).collect::<Vec<u64>>())).get();
+    let ids = ctx
+        .remember(|| State::new((0..6u64).collect::<Vec<u64>>()))
+        .get();
 
     let direction_value = match direction.get() {
         0 => FlexDirection::Row,
@@ -148,14 +180,12 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("FlexBox — CSS flex in winia").font_size(18.0).build(ctx);
+            Text::new("FlexBox — CSS flex in winia")
+                .font_size(18.0)
+                .build(ctx);
             Text::new(format!(
                 "{:?} | {:?} | justify {:?} | align {:?} | lines {:?}",
-                direction_value,
-                wrap_value,
-                justify_value,
-                align_value,
-                align_content_value
+                direction_value, wrap_value, justify_value, align_value, align_content_value
             ))
             .font_size(11.0)
             .modifier(Modifier::new().test_tag("fb-status"))
@@ -264,16 +294,29 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
                     // demo's scope and this group would Skip with the old tiles (component-authoring 3.2).
                     let animate_on = animate.get();
                     let list = ids.get();
-                    ctx.keyed_for_each(list, |id| *id, |ctx, id| {
-                        tile(ctx, id as usize, direction_value.is_horizontal(), animate_on);
-                    });
+                    ctx.keyed_for_each(
+                        list,
+                        |id| *id,
+                        |ctx, id| {
+                            tile(
+                                ctx,
+                                id as usize,
+                                direction_value.is_horizontal(),
+                                animate_on,
+                            );
+                        },
+                    );
                 });
 
             // grow shares the FREE space, so it needs a line with room left: three tiles whose grow
             // weights are 2 and 1 plus a fixed one sit in a strip that is not full. No state here, so
             // no wrapper problem.
             FlexBox::new()
-                .config(FlexBoxConfig::new().gap(8.0).align_items(FlexAlignItems::Stretch))
+                .config(
+                    FlexBoxConfig::new()
+                        .gap(8.0)
+                        .align_items(FlexAlignItems::Stretch),
+                )
                 .modifier(
                     Modifier::new()
                         .fill_max_width()

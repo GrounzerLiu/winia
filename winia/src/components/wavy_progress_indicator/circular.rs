@@ -174,8 +174,15 @@ impl CircularWavyProgressIndicator {
             Modifier::new()
                 .size(WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_SIZE)
                 .draw_node(CircularWavyIndeterminateNode {
-                    color, track_color, stroke_width, track_stroke_width,
-                    cap, gap_size, amplitude, wavelength, enable_motion,
+                    color,
+                    track_color,
+                    stroke_width,
+                    track_stroke_width,
+                    cap,
+                    gap_size,
+                    amplitude,
+                    wavelength,
+                    enable_motion,
                     wave_offset: wave_offset.clone(),
                     global: global.clone(),
                     additional: additional.clone(),
@@ -227,15 +234,21 @@ impl CircularWavyProgressIndicator {
             Modifier::new()
                 .size(WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_SIZE)
                 .draw_node(CircularWavyDeterminateNode {
-                    color, track_color, stroke_width, track_stroke_width,
-                    cap, gap_size, progress, wavelength, enable_motion,
+                    color,
+                    track_color,
+                    stroke_width,
+                    track_stroke_width,
+                    cap,
+                    gap_size,
+                    progress,
+                    wavelength,
+                    enable_motion,
                     amplitude_token,
                     amplitude_state: amplitude_state.clone(),
                     wave_offset: wave_for_draw.clone(),
                     cache: shapes_cache.clone(),
                 })
         };
-
 
         // Same rule as the plain indicators: the value is what a progress bar IS to a screen reader,
         // and an indeterminate one has none to report.
@@ -373,13 +386,21 @@ impl std::fmt::Debug for CircularWavyIndeterminateNode {
 impl crate::modifier::DrawNode for CircularWavyIndeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_circular_wavy_indeterminate(
-            canvas, rect,
-            self.color, self.track_color,
-            self.stroke_width, self.track_stroke_width,
-            self.cap, self.gap_size,
-            self.amplitude, self.wavelength, self.enable_motion,
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.stroke_width,
+            self.track_stroke_width,
+            self.cap,
+            self.gap_size,
+            self.amplitude,
+            self.wavelength,
+            self.enable_motion,
             self.wave_offset.peek(),
-            self.global.peek(), self.additional.peek(), self.progress_anim.peek(),
+            self.global.peek(),
+            self.additional.peek(),
+            self.progress_anim.peek(),
             &self.cache,
         );
     }
@@ -435,13 +456,18 @@ impl std::fmt::Debug for CircularWavyDeterminateNode {
 impl crate::modifier::DrawNode for CircularWavyDeterminateNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         draw_circular_wavy_determinate(
-            canvas, rect,
-            self.color, self.track_color,
-            self.stroke_width, self.track_stroke_width,
-            self.cap, self.gap_size,
+            canvas,
+            rect,
+            self.color,
+            self.track_color,
+            self.stroke_width,
+            self.track_stroke_width,
+            self.cap,
+            self.gap_size,
             self.progress,
             self.amplitude_state.peek(),
-            self.wavelength, self.enable_motion,
+            self.wavelength,
+            self.enable_motion,
             self.wave_offset.peek(),
             &self.cache,
         );
@@ -602,7 +628,12 @@ pub(crate) fn build_circular_wavy_paths(
     (track_path, progress_path)
 }
 
-pub(crate) fn process_circular_path(path: &mut skia_safe::Path, width: f32, height: f32, stroke_width: f32) {
+pub(crate) fn process_circular_path(
+    path: &mut skia_safe::Path,
+    width: f32,
+    height: f32,
+    stroke_width: f32,
+) {
     let scale_matrix = skia_safe::Matrix::scale((width - stroke_width, height - stroke_width));
     *path = path.make_transform(&scale_matrix);
     let bounds = *path.bounds();
@@ -719,5 +750,3 @@ impl CircularShapesCache {
         }
     }
 }
-
-

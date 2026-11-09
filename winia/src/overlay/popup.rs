@@ -102,7 +102,11 @@ impl Popup {
     /// `build` always executes (even when `visible=false`) — records
     /// `active=false` for `sync` to delete.
     #[composable]
-    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static) {
+    pub fn build(
+        self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
+    ) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
@@ -141,5 +145,8 @@ impl Popup {
     }
 }
 
-impl Default for Popup { fn default() -> Self { Self::new(false) } }
-
+impl Default for Popup {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}

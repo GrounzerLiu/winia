@@ -118,63 +118,63 @@ impl ThemeColors {
 
     pub(crate) fn from_scheme(s: &material_colors::scheme::Scheme) -> Self {
         Self {
-            primary:              rgb(s.primary),
-            on_primary:           rgb(s.on_primary),
-            primary_container:    rgb(s.primary_container),
+            primary: rgb(s.primary),
+            on_primary: rgb(s.on_primary),
+            primary_container: rgb(s.primary_container),
             on_primary_container: rgb(s.on_primary_container),
-            inverse_primary:      rgb(s.inverse_primary),
-            primary_fixed:        rgb(s.primary_fixed),
-            primary_fixed_dim:    rgb(s.primary_fixed_dim),
-            on_primary_fixed:     rgb(s.on_primary_fixed),
+            inverse_primary: rgb(s.inverse_primary),
+            primary_fixed: rgb(s.primary_fixed),
+            primary_fixed_dim: rgb(s.primary_fixed_dim),
+            on_primary_fixed: rgb(s.on_primary_fixed),
             on_primary_fixed_variant: rgb(s.on_primary_fixed_variant),
 
-            secondary:              rgb(s.secondary),
-            on_secondary:           rgb(s.on_secondary),
-            secondary_container:    rgb(s.secondary_container),
+            secondary: rgb(s.secondary),
+            on_secondary: rgb(s.on_secondary),
+            secondary_container: rgb(s.secondary_container),
             on_secondary_container: rgb(s.on_secondary_container),
-            secondary_fixed:        rgb(s.secondary_fixed),
-            secondary_fixed_dim:    rgb(s.secondary_fixed_dim),
-            on_secondary_fixed:     rgb(s.on_secondary_fixed),
+            secondary_fixed: rgb(s.secondary_fixed),
+            secondary_fixed_dim: rgb(s.secondary_fixed_dim),
+            on_secondary_fixed: rgb(s.on_secondary_fixed),
             on_secondary_fixed_variant: rgb(s.on_secondary_fixed_variant),
 
-            tertiary:              rgb(s.tertiary),
-            on_tertiary:           rgb(s.on_tertiary),
-            tertiary_container:    rgb(s.tertiary_container),
+            tertiary: rgb(s.tertiary),
+            on_tertiary: rgb(s.on_tertiary),
+            tertiary_container: rgb(s.tertiary_container),
             on_tertiary_container: rgb(s.on_tertiary_container),
-            tertiary_fixed:        rgb(s.tertiary_fixed),
-            tertiary_fixed_dim:    rgb(s.tertiary_fixed_dim),
-            on_tertiary_fixed:     rgb(s.on_tertiary_fixed),
+            tertiary_fixed: rgb(s.tertiary_fixed),
+            tertiary_fixed_dim: rgb(s.tertiary_fixed_dim),
+            on_tertiary_fixed: rgb(s.on_tertiary_fixed),
             on_tertiary_fixed_variant: rgb(s.on_tertiary_fixed_variant),
 
-            error:              rgb(s.error),
-            on_error:           rgb(s.on_error),
-            error_container:    rgb(s.error_container),
+            error: rgb(s.error),
+            on_error: rgb(s.on_error),
+            error_container: rgb(s.error_container),
             on_error_container: rgb(s.on_error_container),
 
-            surface_dim:               rgb(s.surface_dim),
-            surface:                   rgb(s.surface),
-            surface_tint:              rgb(s.surface_tint),
-            surface_bright:            rgb(s.surface_bright),
-            surface_container_lowest:  rgb(s.surface_container_lowest),
-            surface_container_low:     rgb(s.surface_container_low),
-            surface_container:         rgb(s.surface_container),
-            surface_container_high:    rgb(s.surface_container_high),
+            surface_dim: rgb(s.surface_dim),
+            surface: rgb(s.surface),
+            surface_tint: rgb(s.surface_tint),
+            surface_bright: rgb(s.surface_bright),
+            surface_container_lowest: rgb(s.surface_container_lowest),
+            surface_container_low: rgb(s.surface_container_low),
+            surface_container: rgb(s.surface_container),
+            surface_container_high: rgb(s.surface_container_high),
             surface_container_highest: rgb(s.surface_container_highest),
-            surface_variant:           rgb(s.surface_variant),
+            surface_variant: rgb(s.surface_variant),
 
-            on_surface:         rgb(s.on_surface),
+            on_surface: rgb(s.on_surface),
             on_surface_variant: rgb(s.on_surface_variant),
 
-            outline:         rgb(s.outline),
+            outline: rgb(s.outline),
             outline_variant: rgb(s.outline_variant),
 
-            inverse_surface:    rgb(s.inverse_surface),
+            inverse_surface: rgb(s.inverse_surface),
             inverse_on_surface: rgb(s.inverse_on_surface),
 
-            background:    rgb(s.background),
+            background: rgb(s.background),
             on_background: rgb(s.on_background),
-            shadow:        rgb(s.shadow),
-            scrim:         rgb(s.scrim),
+            shadow: rgb(s.shadow),
+            scrim: rgb(s.scrim),
         }
     }
 
@@ -188,8 +188,12 @@ impl ThemeColors {
         Self::from_scheme(&theme.schemes.dark)
     }
 
-    pub fn default_light() -> Self { Self::light_from_seed(0x6750A4) }
-    pub fn default_dark() -> Self  { Self::dark_from_seed(0x6750A4) }
+    pub fn default_light() -> Self {
+        Self::light_from_seed(0x6750A4)
+    }
+    pub fn default_dark() -> Self {
+        Self::dark_from_seed(0x6750A4)
+    }
 }
 
 /// 0.5's colour type is `Rgb`; the `Argb` it replaced also carried the alpha, and an M3 scheme colour
@@ -218,11 +222,13 @@ pub(crate) fn rgb(a: Rgb) -> Color {
 /// dark. Written by [`set_system_dark_mode`] — an application that wants to pin its theme, or a test.
 /// The platform's own `WindowEvent::ThemeChanged` does NOT pin anything: it OBSERVES the system, which is
 /// why it is recorded in a separate slot below.
-pub(crate) static SYSTEM_THEME_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(crate) static SYSTEM_THEME_MODE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
 /// The last value the platform reported for the system theme: `-1` = never reported, `0` = light,
 /// `1` = dark. Consulted only while the mode follows the system; [`is_system_dark_theme`] falls back to
 /// detection, which is also the only source on platforms whose event never fires (X11, Wayland).
-pub(crate) static SYSTEM_THEME_DARK: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+pub(crate) static SYSTEM_THEME_DARK: std::sync::atomic::AtomicI8 =
+    std::sync::atomic::AtomicI8::new(-1);
 /// The mode as a REACTIVE value, and the one the composition actually reads: a tracked read of it is what
 /// makes a window's composer wake at all when the mode changes (each window composes in its own composer,
 /// and a composer with nothing pending is never asked to redraw). The atomic above stays for the callers
@@ -232,14 +238,16 @@ pub(crate) static SYSTEM_THEME_STATE: std::sync::LazyLock<crate::runtime::state:
 /// How many times the SYSTEM theme may have changed. A window records the epoch it last resolved at and
 /// re-resolves when it moves — per WINDOW state, deliberately: a single process-wide "pending" flag is
 /// consumed by whichever window renders first, which left every other window on its old palette.
-pub(crate) static SYSTEM_THEME_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+pub(crate) static SYSTEM_THEME_EPOCH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
 /// Set when every window should be asked for a frame because the mode moved.
 ///
 /// Windows that follow the system are woken by their own dependency on the mode, but not every window has
 /// one: a window whose content an application composed itself (through `app::open_window_with_title`) has
 /// nothing to wake it, and a mode change can come from a background thread that cannot reach the windows.
 /// The app loop drains this — it is the one place that knows them.
-pub(crate) static THEME_REDRAW_ALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static THEME_REDRAW_ALL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Whether every window should be asked for a frame (the app loop's check).
 pub(crate) fn take_theme_redraw_all() -> bool {
@@ -336,6 +344,9 @@ pub fn is_system_dark_theme() -> bool {
 /// The palette the system theme resolves to right now (the default M3 palettes; a pinned mode outranks
 /// the system).
 pub(crate) fn system_theme_colors() -> ThemeColors {
-    if is_system_dark_theme() { ThemeColors::default_dark() } else { ThemeColors::default_light() }
+    if is_system_dark_theme() {
+        ThemeColors::default_dark()
+    } else {
+        ThemeColors::default_light()
+    }
 }
-

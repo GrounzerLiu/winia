@@ -11,12 +11,12 @@
 //!   回 16×16 还是保持 28×28；
 //! - 拖拽：容器跟随手指（2..22），释放按中点 12 判定切换。
 
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::layout::BoxLayout;
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
+use crate::layout::BoxLayout;
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -116,28 +116,32 @@ impl SwitchColors {
         let transparent = Color::from_argb(0, 0, 0, 0);
         let over = |c: Color, a: f32| theme.surface.overlay(c, a);
         Self::new(
-            theme.on_primary,                  // checked_thumb
-            theme.primary,                     // checked_track
-            transparent,                       // checked_border
-            theme.on_primary_container,        // checked_icon
-            theme.outline,                     // unchecked_thumb
-            theme.surface_container_highest,   // unchecked_track
-            theme.outline,                     // unchecked_border
-            theme.surface_container_highest,   // unchecked_icon
-            theme.surface,                     // disabled_checked_thumb（opacity 1.0）
-            over(theme.on_surface, 0.12),      // disabled_checked_track
-            transparent,                       // disabled_checked_border
-            over(theme.on_surface, 0.38),      // disabled_checked_icon
-            over(theme.on_surface, 0.38),      // disabled_unchecked_thumb
+            theme.on_primary,                            // checked_thumb
+            theme.primary,                               // checked_track
+            transparent,                                 // checked_border
+            theme.on_primary_container,                  // checked_icon
+            theme.outline,                               // unchecked_thumb
+            theme.surface_container_highest,             // unchecked_track
+            theme.outline,                               // unchecked_border
+            theme.surface_container_highest,             // unchecked_icon
+            theme.surface,                               // disabled_checked_thumb（opacity 1.0）
+            over(theme.on_surface, 0.12),                // disabled_checked_track
+            transparent,                                 // disabled_checked_border
+            over(theme.on_surface, 0.38),                // disabled_checked_icon
+            over(theme.on_surface, 0.38),                // disabled_unchecked_thumb
             over(theme.surface_container_highest, 0.12), // disabled_unchecked_track
-            over(theme.on_surface, 0.12),      // disabled_unchecked_border
+            over(theme.on_surface, 0.12),                // disabled_unchecked_border
             over(theme.surface_container_highest, 0.38), // disabled_unchecked_icon
         )
     }
 
     pub fn thumb_color(&self, enabled: bool, checked: bool) -> Color {
         if !enabled {
-            if checked { self.disabled_checked_thumb } else { self.disabled_unchecked_thumb }
+            if checked {
+                self.disabled_checked_thumb
+            } else {
+                self.disabled_unchecked_thumb
+            }
         } else if checked {
             self.checked_thumb
         } else {
@@ -147,7 +151,11 @@ impl SwitchColors {
 
     pub fn track_color(&self, enabled: bool, checked: bool) -> Color {
         if !enabled {
-            if checked { self.disabled_checked_track } else { self.disabled_unchecked_track }
+            if checked {
+                self.disabled_checked_track
+            } else {
+                self.disabled_unchecked_track
+            }
         } else if checked {
             self.checked_track
         } else {
@@ -157,7 +165,11 @@ impl SwitchColors {
 
     pub fn border_color(&self, enabled: bool, checked: bool) -> Color {
         if !enabled {
-            if checked { self.disabled_checked_border } else { self.disabled_unchecked_border }
+            if checked {
+                self.disabled_checked_border
+            } else {
+                self.disabled_unchecked_border
+            }
         } else if checked {
             self.checked_border
         } else {
@@ -167,7 +179,11 @@ impl SwitchColors {
 
     pub fn icon_color(&self, enabled: bool, checked: bool) -> Color {
         if !enabled {
-            if checked { self.disabled_checked_icon } else { self.disabled_unchecked_icon }
+            if checked {
+                self.disabled_checked_icon
+            } else {
+                self.disabled_unchecked_icon
+            }
         } else if checked {
             self.checked_icon
         } else {
@@ -394,9 +410,11 @@ impl Switch {
             crate::semantics::SemanticsConfig::new()
                 .role(crate::semantics::SemanticsRole::Switch)
                 .merge_descendants(true)
-                .state(crate::semantics::SemanticsState::new()
-                    .checked_bool(self.checked)
-                    .enabled(self.enabled)),
+                .state(
+                    crate::semantics::SemanticsState::new()
+                        .checked_bool(self.checked)
+                        .enabled(self.enabled),
+                ),
         );
         modifier = modifier.then(self.modifier);
 
@@ -413,11 +431,7 @@ impl Switch {
                 let do_x = drag_offset.clone();
                 let o1 = container_offset.clone();
                 let offset_eff = move || {
-                    if da_x.get() {
-                        do_x.get()
-                    } else {
-                        o1.get()
-                    }
+                    if da_x.get() { do_x.get() } else { o1.get() }
                 };
                 let container = Modifier::new()
                     .size(SWITCH_THUMB_CONTAINER_SIZE, SWITCH_THUMB_CONTAINER_SIZE)
@@ -486,7 +500,6 @@ impl Switch {
         self.colors
     }
 }
-
 
 #[cfg(test)]
 mod tests;

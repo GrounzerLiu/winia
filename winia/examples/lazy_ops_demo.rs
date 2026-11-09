@@ -14,12 +14,12 @@
 use letclone::clone;
 use winia::prelude::*;
 
-#[path = "common/settings.rs"]
-mod settings;
 #[path = "common/lazy_kit.rs"]
 mod kit;
+#[path = "common/settings.rs"]
+mod settings;
 
-use kit::{accent, action, card, list_name, palette, tile, INITIAL, PAGES, STEP};
+use kit::{INITIAL, PAGES, STEP, accent, action, card, list_name, palette, tile};
 
 /// `items_from` with stable keys (add/remove at the head), `scroll_to_item`, `animate_scroll_to_item`,
 /// `fling`, `reverse_layout`, `user_scroll(false)`, `sticky_header`, both paddings, `spacing`,

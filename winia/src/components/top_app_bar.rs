@@ -1,17 +1,19 @@
 //! Material 3 TopAppBar with a single moving title slot.
 
+use crate::components::text::ProvideTextStyle;
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset, Size};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier, ScrollState};
-use crate::graphics::{Color, GraphicsLayerParams, Shape};
-use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
-use crate::components::text::{ProvideTextStyle};
+use crate::nested_scroll::{
+    NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity,
+};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::text::{TextOverflow, TextStyle};
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 
 pub const TOP_APP_BAR_HEIGHT: f32 = 64.0;
 pub const TOP_APP_BAR_MEDIUM_HEIGHT: f32 = 112.0;
@@ -48,17 +50,66 @@ pub enum TopAppBarVariant {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TopAppBarColors {
-    pub container: Color, pub scrolled_container: Color, pub title: Color,
-    pub subtitle: Color, pub navigation: Color, pub actions: Color,
+    pub container: Color,
+    pub scrolled_container: Color,
+    pub title: Color,
+    pub subtitle: Color,
+    pub navigation: Color,
+    pub actions: Color,
 }
 impl TopAppBarColors {
-    pub fn new(container: Color, title: Color, subtitle: Color, navigation: Color, actions: Color) -> Self { Self { container, scrolled_container: container, title, subtitle, navigation, actions } }
-    pub fn scrolled_container(mut self, color: Color) -> Self { self.scrolled_container = color; self }
-    pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self { Self::new(theme.surface, theme.on_surface, theme.on_surface_variant, theme.on_surface, theme.on_surface_variant).scrolled_container(theme.surface_container) }
-    pub fn container_color(&self, variant: TopAppBarVariant, scroll_offset: f32, collapse_fraction: f32) -> Color {
+    pub fn new(
+        container: Color,
+        title: Color,
+        subtitle: Color,
+        navigation: Color,
+        actions: Color,
+    ) -> Self {
+        Self {
+            container,
+            scrolled_container: container,
+            title,
+            subtitle,
+            navigation,
+            actions,
+        }
+    }
+    pub fn scrolled_container(mut self, color: Color) -> Self {
+        self.scrolled_container = color;
+        self
+    }
+    pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
+        Self::new(
+            theme.surface,
+            theme.on_surface,
+            theme.on_surface_variant,
+            theme.on_surface,
+            theme.on_surface_variant,
+        )
+        .scrolled_container(theme.surface_container)
+    }
+    pub fn container_color(
+        &self,
+        variant: TopAppBarVariant,
+        scroll_offset: f32,
+        collapse_fraction: f32,
+    ) -> Color {
         match variant {
-            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => if scroll_offset != 0.0 { self.scrolled_container } else { self.container },
-            TopAppBarVariant::Medium | TopAppBarVariant::Large | TopAppBarVariant::MediumFlexible | TopAppBarVariant::LargeFlexible => color_lerp(self.container, self.scrolled_container, fast_out_linear_in(collapse_fraction)),
+            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => {
+                if scroll_offset != 0.0 {
+                    self.scrolled_container
+                } else {
+                    self.container
+                }
+            }
+            TopAppBarVariant::Medium
+            | TopAppBarVariant::Large
+            | TopAppBarVariant::MediumFlexible
+            | TopAppBarVariant::LargeFlexible => color_lerp(
+                self.container,
+                self.scrolled_container,
+                fast_out_linear_in(collapse_fraction),
+            ),
         }
     }
 }
@@ -71,17 +122,48 @@ pub struct TopAppBarState {
 }
 impl TopAppBarState {
     pub fn new(expanded_height: f32) -> Self {
-        Self { height_offset_limit: crate::State::new(-(expanded_height - TOP_APP_BAR_HEIGHT).max(0.0)), height_offset: crate::State::new(0.0), content_offset: crate::State::new(0.0) }
+        Self {
+            height_offset_limit: crate::State::new(
+                -(expanded_height - TOP_APP_BAR_HEIGHT).max(0.0),
+            ),
+            height_offset: crate::State::new(0.0),
+            content_offset: crate::State::new(0.0),
+        }
     }
-    pub fn collapsed_fraction(&self) -> f32 { let limit = self.height_offset_limit.get(); if limit >= 0.0 { 0.0 } else { (self.height_offset.get() / limit).clamp(0.0, 1.0) } }
-    pub fn current_height(&self, expanded_height: f32) -> f32 { (expanded_height + self.height_offset.get()).max(TOP_APP_BAR_HEIGHT) }
-    pub fn is_collapsed(&self) -> bool { self.collapsed_fraction() >= 1.0 }
-    pub fn overlapped_fraction(&self) -> f32 { let limit = self.height_offset_limit.get(); if limit >= 0.0 { 0.0 } else { (1.0 - ((limit + self.content_offset.get().abs()).clamp(limit, 0.0) / limit)).clamp(0.0, 1.0) } }
-    pub fn is_overlapped(&self) -> bool { self.overlapped_fraction() > 0.01 }
+    pub fn collapsed_fraction(&self) -> f32 {
+        let limit = self.height_offset_limit.get();
+        if limit >= 0.0 {
+            0.0
+        } else {
+            (self.height_offset.get() / limit).clamp(0.0, 1.0)
+        }
+    }
+    pub fn current_height(&self, expanded_height: f32) -> f32 {
+        (expanded_height + self.height_offset.get()).max(TOP_APP_BAR_HEIGHT)
+    }
+    pub fn is_collapsed(&self) -> bool {
+        self.collapsed_fraction() >= 1.0
+    }
+    pub fn overlapped_fraction(&self) -> f32 {
+        let limit = self.height_offset_limit.get();
+        if limit >= 0.0 {
+            0.0
+        } else {
+            (1.0 - ((limit + self.content_offset.get().abs()).clamp(limit, 0.0) / limit))
+                .clamp(0.0, 1.0)
+        }
+    }
+    pub fn is_overlapped(&self) -> bool {
+        self.overlapped_fraction() > 0.01
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TopAppBarScrollMode { Pinned, EnterAlways, ExitUntilCollapsed }
+pub enum TopAppBarScrollMode {
+    Pinned,
+    EnterAlways,
+    ExitUntilCollapsed,
+}
 
 #[derive(Clone)]
 pub struct TopAppBarNestedConnection {
@@ -91,20 +173,52 @@ pub struct TopAppBarNestedConnection {
     scroll: Option<ScrollState>,
 }
 impl TopAppBarNestedConnection {
-    pub fn new(state: TopAppBarState, mode: TopAppBarScrollMode) -> Self { Self { state, mode, scroll: None } }
-    pub fn with_scroll(state: TopAppBarState, mode: TopAppBarScrollMode, scroll: ScrollState) -> Self { Self { state, mode, scroll: Some(scroll) } }
-    pub fn state(&self) -> TopAppBarState { self.state.clone() }
+    pub fn new(state: TopAppBarState, mode: TopAppBarScrollMode) -> Self {
+        Self {
+            state,
+            mode,
+            scroll: None,
+        }
+    }
+    pub fn with_scroll(
+        state: TopAppBarState,
+        mode: TopAppBarScrollMode,
+        scroll: ScrollState,
+    ) -> Self {
+        Self {
+            state,
+            mode,
+            scroll: Some(scroll),
+        }
+    }
+    pub fn state(&self) -> TopAppBarState {
+        self.state.clone()
+    }
 }
 impl NestedScrollConnection for TopAppBarNestedConnection {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
         #[cfg(debug_assertions)]
         if crate::app::drag_trace_enabled() {
-            eprintln!("[topbar-pre] mode={:?} source={:?} available.y={} height_offset={} limit={}",
-                self.mode, source, available.y,
-                self.state.height_offset.get(), self.state.height_offset_limit.get());
+            eprintln!(
+                "[topbar-pre] mode={:?} source={:?} available.y={} height_offset={} limit={}",
+                self.mode,
+                source,
+                available.y,
+                self.state.height_offset.get(),
+                self.state.height_offset_limit.get()
+            );
         }
-        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling) { return ScrollDelta::ZERO; }
-        if available.y == 0.0 { return ScrollDelta::ZERO; }
+        if matches!(self.mode, TopAppBarScrollMode::Pinned)
+            || !matches!(
+                source,
+                NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling
+            )
+        {
+            return ScrollDelta::ZERO;
+        }
+        if available.y == 0.0 {
+            return ScrollDelta::ZERO;
+        }
         let limit = self.state.height_offset_limit.get();
         let current = self.state.height_offset.get();
         // 非折叠（limit>=0）时 height 不变、consumed=0，但仍要累计 content_offset
@@ -115,23 +229,45 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         // content_offset 改在 on_post_scroll 按子滚动实际消费量累计（保证回滚到顶归零）
         ScrollDelta::new(0.0, consumed)
     }
-    fn on_post_scroll(&self, consumed: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
-        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling) { return ScrollDelta::ZERO; }
+    fn on_post_scroll(
+        &self,
+        consumed: ScrollDelta,
+        available: ScrollDelta,
+        source: NestedScrollSource,
+    ) -> ScrollDelta {
+        if matches!(self.mode, TopAppBarScrollMode::Pinned)
+            || !matches!(
+                source,
+                NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling
+            )
+        {
+            return ScrollDelta::ZERO;
+        }
         if let Some(scroll) = &self.scroll {
             // 直接镜像子滚动真实 offset，避免累加漂移（滚回顶部 offset=0 → 颜色复原）
             self.state.content_offset.set(scroll.offset.get());
         } else {
             // 无子滚动引用时退化为按 consumed 累计（兼容旧用法）
-            self.state.content_offset.update(|value| *value += consumed.y);
+            self.state
+                .content_offset
+                .update(|value| *value += consumed.y);
         }
-        if self.mode == TopAppBarScrollMode::ExitUntilCollapsed && available.y > 0.0 && consumed.y == 0.0 { return self.on_pre_scroll(available, source); }
+        if self.mode == TopAppBarScrollMode::ExitUntilCollapsed
+            && available.y > 0.0
+            && consumed.y == 0.0
+        {
+            return self.on_pre_scroll(available, source);
+        }
         ScrollDelta::ZERO
     }
     fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity {
         let delta = ScrollDelta::new(0.0, available.y / 60.0);
         let consumed = self.on_pre_scroll(delta, NestedScrollSource::Fling);
         let consumed_velocity = consumed.y.signum() * consumed.y.abs().min(available.y.abs());
-        ScrollVelocity { x: 0.0, y: consumed_velocity }
+        ScrollVelocity {
+            x: 0.0,
+            y: consumed_velocity,
+        }
     }
     fn on_post_fling(&self, _: ScrollVelocity, available: ScrollVelocity) -> ScrollVelocity {
         if self.mode != TopAppBarScrollMode::ExitUntilCollapsed
@@ -151,30 +287,87 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         );
         available
     }
-
 }
 
+#[derive(Clone)]
+enum TopAppBarBehaviorKind {
+    Legacy(ScrollState),
+    Nested(TopAppBarState, TopAppBarScrollMode),
+}
 
 #[derive(Clone)]
-enum TopAppBarBehaviorKind { Legacy(ScrollState), Nested(TopAppBarState, TopAppBarScrollMode) }
-
-#[derive(Clone)]
-pub struct TopAppBarScrollBehavior { kind: TopAppBarBehaviorKind, expanded_height: f32, collapsed_height: f32 }
+pub struct TopAppBarScrollBehavior {
+    kind: TopAppBarBehaviorKind,
+    expanded_height: f32,
+    collapsed_height: f32,
+}
 
 impl TopAppBarScrollBehavior {
     pub fn new(scroll: ScrollState, expanded_height: f32) -> Self {
-        assert!(expanded_height >= TOP_APP_BAR_HEIGHT, "TopAppBar expanded height ({expanded_height}) must be at least {TOP_APP_BAR_HEIGHT}");
-        Self { kind: TopAppBarBehaviorKind::Legacy(scroll), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT }
+        assert!(
+            expanded_height >= TOP_APP_BAR_HEIGHT,
+            "TopAppBar expanded height ({expanded_height}) must be at least {TOP_APP_BAR_HEIGHT}"
+        );
+        Self {
+            kind: TopAppBarBehaviorKind::Legacy(scroll),
+            expanded_height,
+            collapsed_height: TOP_APP_BAR_HEIGHT,
+        }
     }
-    pub fn pinned(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::Pinned), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
-    pub fn enter_always(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::EnterAlways), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
-    pub fn exit_until_collapsed(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::ExitUntilCollapsed), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
-    pub fn expanded_height(&self) -> f32 { self.expanded_height }
-    pub fn collapsed_height(&self) -> f32 { self.collapsed_height }
-    pub fn collapse_range(&self) -> f32 { self.expanded_height - self.collapsed_height }
-    pub fn collapse_fraction(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => { let r = self.collapse_range(); if r <= 0.0 { 0.0 } else { (scroll.offset.get() / r).clamp(0.0, 1.0) } }, TopAppBarBehaviorKind::Nested(state, _) => state.collapsed_fraction() } }
-    pub fn current_height(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(_) => self.expanded_height - self.collapse_range() * self.collapse_fraction(), TopAppBarBehaviorKind::Nested(state, _) => state.current_height(self.expanded_height) } }
-    pub fn is_collapsed(&self) -> bool { self.collapse_fraction() >= 1.0 }
+    pub fn pinned(state: TopAppBarState, expanded_height: f32) -> Self {
+        Self {
+            kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::Pinned),
+            expanded_height,
+            collapsed_height: TOP_APP_BAR_HEIGHT,
+        }
+    }
+    pub fn enter_always(state: TopAppBarState, expanded_height: f32) -> Self {
+        Self {
+            kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::EnterAlways),
+            expanded_height,
+            collapsed_height: TOP_APP_BAR_HEIGHT,
+        }
+    }
+    pub fn exit_until_collapsed(state: TopAppBarState, expanded_height: f32) -> Self {
+        Self {
+            kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::ExitUntilCollapsed),
+            expanded_height,
+            collapsed_height: TOP_APP_BAR_HEIGHT,
+        }
+    }
+    pub fn expanded_height(&self) -> f32 {
+        self.expanded_height
+    }
+    pub fn collapsed_height(&self) -> f32 {
+        self.collapsed_height
+    }
+    pub fn collapse_range(&self) -> f32 {
+        self.expanded_height - self.collapsed_height
+    }
+    pub fn collapse_fraction(&self) -> f32 {
+        match &self.kind {
+            TopAppBarBehaviorKind::Legacy(scroll) => {
+                let r = self.collapse_range();
+                if r <= 0.0 {
+                    0.0
+                } else {
+                    (scroll.offset.get() / r).clamp(0.0, 1.0)
+                }
+            }
+            TopAppBarBehaviorKind::Nested(state, _) => state.collapsed_fraction(),
+        }
+    }
+    pub fn current_height(&self) -> f32 {
+        match &self.kind {
+            TopAppBarBehaviorKind::Legacy(_) => {
+                self.expanded_height - self.collapse_range() * self.collapse_fraction()
+            }
+            TopAppBarBehaviorKind::Nested(state, _) => state.current_height(self.expanded_height),
+        }
+    }
+    pub fn is_collapsed(&self) -> bool {
+        self.collapse_fraction() >= 1.0
+    }
 
     /// [`is_collapsed`](Self::is_collapsed) as a `State` that notifies only on the transition.
     ///
@@ -189,11 +382,43 @@ impl TopAppBarScrollBehavior {
         let source = self.clone();
         crate::runtime::flow::remember_derived_state(ctx, move || source.is_collapsed())
     }
-    pub fn state(&self) -> Option<TopAppBarState> { match &self.kind { TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()), _ => None } }
-    pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::new(state.clone(), *mode)), _ => None } }
-    pub fn nested_scroll_connection_with_scroll(&self, scroll: ScrollState) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::with_scroll(state.clone(), *mode, scroll)), _ => None } }
-    pub fn scroll_state(&self) -> Option<ScrollState> { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => Some(scroll.clone()), _ => None } }
-    fn scroll_offset(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => scroll.offset.get(), TopAppBarBehaviorKind::Nested(state, _) => state.content_offset.get() } }
+    pub fn state(&self) -> Option<TopAppBarState> {
+        match &self.kind {
+            TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()),
+            _ => None,
+        }
+    }
+    pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> {
+        match &self.kind {
+            TopAppBarBehaviorKind::Nested(state, mode) => {
+                Some(TopAppBarNestedConnection::new(state.clone(), *mode))
+            }
+            _ => None,
+        }
+    }
+    pub fn nested_scroll_connection_with_scroll(
+        &self,
+        scroll: ScrollState,
+    ) -> Option<TopAppBarNestedConnection> {
+        match &self.kind {
+            TopAppBarBehaviorKind::Nested(state, mode) => Some(
+                TopAppBarNestedConnection::with_scroll(state.clone(), *mode, scroll),
+            ),
+            _ => None,
+        }
+    }
+    pub fn scroll_state(&self) -> Option<ScrollState> {
+        match &self.kind {
+            TopAppBarBehaviorKind::Legacy(scroll) => Some(scroll.clone()),
+            _ => None,
+        }
+    }
+    fn scroll_offset(&self) -> f32 {
+        match &self.kind {
+            TopAppBarBehaviorKind::Legacy(scroll) => scroll.offset.get(),
+            TopAppBarBehaviorKind::Nested(state, _) => state.content_offset.get(),
+        }
+    }
 }
 
 pub struct TopAppBar {
@@ -202,42 +427,103 @@ pub struct TopAppBar {
     subtitle: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     navigation_icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     actions: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
-    colors: Option<TopAppBarColors>, modifier: Modifier, scroll_behavior: Option<TopAppBarScrollBehavior>,
+    colors: Option<TopAppBarColors>,
+    modifier: Modifier,
+    scroll_behavior: Option<TopAppBarScrollBehavior>,
 }
 impl TopAppBar {
-    pub fn new(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Standard, title) }
-    pub fn center_aligned(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::CenterAligned, title) }
-    pub fn medium(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Medium, title) }
-    pub fn large(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Large, title) }
+    pub fn new(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::Standard, title)
+    }
+    pub fn center_aligned(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::CenterAligned, title)
+    }
+    pub fn medium(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::Medium, title)
+    }
+    pub fn large(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::Large, title)
+    }
     /// `MediumFlexibleTopAppBar` (`material3/AppBar.kt:614`): a two-row bar whose expanded height
     /// follows the SUBTITLE — 112 without one, 136 with. The subtitle is optional here, exactly as
     /// `subtitle: (@Composable () -> Unit)? = null` is upstream.
-    pub fn medium_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::MediumFlexible, title) }
+    pub fn medium_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::MediumFlexible, title)
+    }
     /// `LargeFlexibleTopAppBar` (`material3/AppBar.kt:808`): 120 without a subtitle, 152 with, and
     /// the only variant that sets its title in `DisplaySmall`.
-    pub fn large_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::LargeFlexible, title) }
-    fn with_variant(variant: TopAppBarVariant, title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self { variant, title: Box::new(title), subtitle: None, navigation_icon: None, actions: None, colors: None, modifier: Modifier::new(), scroll_behavior: None } }
-    pub fn navigation_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.navigation_icon = Some(Box::new(f)); self }
-    pub fn actions(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.actions = Some(Box::new(f)); self }
-    pub fn subtitle(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.subtitle = Some(Box::new(f)); self }
-    pub fn colors(mut self, colors: TopAppBarColors) -> Self { self.colors = Some(colors); self }
-    pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
-    pub fn scroll_behavior(mut self, behavior: TopAppBarScrollBehavior) -> Self { self.scroll_behavior = Some(behavior); self }
-    pub fn variant(&self) -> TopAppBarVariant { self.variant }
+    pub fn large_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::with_variant(TopAppBarVariant::LargeFlexible, title)
+    }
+    fn with_variant(
+        variant: TopAppBarVariant,
+        title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            variant,
+            title: Box::new(title),
+            subtitle: None,
+            navigation_icon: None,
+            actions: None,
+            colors: None,
+            modifier: Modifier::new(),
+            scroll_behavior: None,
+        }
+    }
+    pub fn navigation_icon(
+        mut self,
+        f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.navigation_icon = Some(Box::new(f));
+        self
+    }
+    pub fn actions(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.actions = Some(Box::new(f));
+        self
+    }
+    pub fn subtitle(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.subtitle = Some(Box::new(f));
+        self
+    }
+    pub fn colors(mut self, colors: TopAppBarColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+    pub fn scroll_behavior(mut self, behavior: TopAppBarScrollBehavior) -> Self {
+        self.scroll_behavior = Some(behavior);
+        self
+    }
+    pub fn variant(&self) -> TopAppBarVariant {
+        self.variant
+    }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.variant);
         if let Some(behavior) = &self.scroll_behavior {
             match &behavior.kind {
-                TopAppBarBehaviorKind::Legacy(scroll) => { ctx.changed(&scroll.offset); }
-                TopAppBarBehaviorKind::Nested(state, _) => { ctx.changed(&state.height_offset); ctx.changed(&state.content_offset); }
+                TopAppBarBehaviorKind::Legacy(scroll) => {
+                    ctx.changed(&scroll.offset);
+                }
+                TopAppBarBehaviorKind::Nested(state, _) => {
+                    ctx.changed(&state.height_offset);
+                    ctx.changed(&state.content_offset);
+                }
             }
         }
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let colors = self
+            .colors
+            .unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         // The subtitle is read BEFORE the height: a flexible bar's expanded height depends on it
         // (112/136 and 120/152 — `expanded_height`).
@@ -248,7 +534,13 @@ impl TopAppBar {
         // scroll pixel; the derived boolean flips only when that fact changes.
         let two_row = is_two_row(self.variant);
         let fraction = if two_row {
-            self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0)
+            self.scroll_behavior
+                .as_ref()
+                .map(|behavior| {
+                    debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON);
+                    behavior.collapse_fraction()
+                })
+                .unwrap_or(0.0)
         } else {
             0.0
         };
@@ -258,27 +550,54 @@ impl TopAppBar {
         // `Medium/LargeTitleBottomPadding` (`AppBar.kt:3548-3551`) — 24 / 28, and the flexible pair
         // takes the one its own size tier names.
         let bottom_inset = match self.variant {
-            TopAppBarVariant::Large | TopAppBarVariant::LargeFlexible => TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET,
+            TopAppBarVariant::Large | TopAppBarVariant::LargeFlexible => {
+                TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET
+            }
             _ => TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET,
         };
-        let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
-        let title_style = title_style(if is_two_row(self.variant) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
+        let policy = TopAppBarLayoutPolicy {
+            variant: self.variant,
+            fraction,
+            direction,
+            navigation_present,
+            actions_present,
+            subtitle_present,
+            expanded_height: expanded,
+            bottom_inset,
+        };
+        let title_style = title_style(
+            if is_two_row(self.variant) {
+                expanded_title_style(self.variant)
+            } else {
+                WiniaTheme::typography().title_large
+            },
+            colors.title,
+        );
         let scroll_offset = if two_row {
-            self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0)
+            self.scroll_behavior
+                .as_ref()
+                .map(|behavior| behavior.scroll_offset())
+                .unwrap_or(0.0)
         } else {
             // The first consumer of the flow layer: `snapshot_flow` watches `offset != 0`, and the
             // `State` it feeds is what this composition depends on.
             let scrolled = match &self.scroll_behavior {
                 Some(behavior) => {
                     let source = behavior.clone();
-                    crate::runtime::flow::remember_derived_state(ctx, move || source.scroll_offset() != 0.0).get()
+                    crate::runtime::flow::remember_derived_state(ctx, move || {
+                        source.scroll_offset() != 0.0
+                    })
+                    .get()
                 }
                 None => false,
             };
             if scrolled { 1.0 } else { 0.0 }
         };
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
-        let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
+        let container_color = if matches!(
+            self.variant,
+            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned
+        ) {
             // M3 animates this one with DefaultEffects — see `top_app_bar_container_spec`.
             ctx.animate_color_as_state(
                 target_container,
@@ -288,17 +607,60 @@ impl TopAppBar {
             crate::runtime::state::State::new(target_container)
         };
         let rendered_container = container_color.clone();
-        let root_modifier = Modifier::new().fill_max_width().height(height).background(move || rendered_container.peek(), Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
-        let title = self.title; let subtitle = self.subtitle; let navigation = self.navigation_icon; let actions = self.actions; let variant_for_subtitle = self.variant;
+        let root_modifier = Modifier::new()
+            .fill_max_width()
+            .height(height)
+            .background(move || rendered_container.peek(), Shape::Rectangle)
+            .clip(Shape::Rectangle)
+            .then(self.modifier);
+        let title = self.title;
+        let subtitle = self.subtitle;
+        let navigation = self.navigation_icon;
+        let actions = self.actions;
+        let variant_for_subtitle = self.variant;
         match ctx.start_restartable_group(key, root_modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                slot(ctx, Modifier::new().size(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-navigation"), |ctx| { if let Some(navigation) = navigation { WiniaTheme::with_content_color(colors.navigation, ctx, navigation); } });
-                slot(ctx, Modifier::new().test_tag("top-app-bar-title"), |ctx| { ProvideTextStyle(title_style, ctx, title); });
-                slot(ctx, alpha(fraction).test_tag("top-app-bar-subtitle"), |ctx| { if let Some(subtitle) = subtitle { let mut style = subtitle_style(variant_for_subtitle); style.color = Some(colors.subtitle); ProvideTextStyle(style, ctx, subtitle); } });
+                slot(
+                    ctx,
+                    Modifier::new()
+                        .size(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE)
+                        .test_tag("top-app-bar-navigation"),
+                    |ctx| {
+                        if let Some(navigation) = navigation {
+                            WiniaTheme::with_content_color(colors.navigation, ctx, navigation);
+                        }
+                    },
+                );
+                slot(ctx, Modifier::new().test_tag("top-app-bar-title"), |ctx| {
+                    ProvideTextStyle(title_style, ctx, title);
+                });
+                slot(
+                    ctx,
+                    alpha(fraction).test_tag("top-app-bar-subtitle"),
+                    |ctx| {
+                        if let Some(subtitle) = subtitle {
+                            let mut style = subtitle_style(variant_for_subtitle);
+                            style.color = Some(colors.subtitle);
+                            ProvideTextStyle(style, ctx, subtitle);
+                        }
+                    },
+                );
                 // actions 横向排列（Compose 契约：多个 action 并排而非叠放——
                 // 槽位本身是 BoxLayout/Stack 语义，直接放多个子组件会重叠）
-                slot(ctx, Modifier::new().min_height(TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-actions"), |ctx| { if let Some(actions) = actions { WiniaTheme::with_content_color(colors.actions, ctx, |ctx| { crate::layout::Row::new().build(ctx, actions); }); } });
+                slot(
+                    ctx,
+                    Modifier::new()
+                        .min_height(TOP_APP_BAR_ICON_SLOT_SIZE)
+                        .test_tag("top-app-bar-actions"),
+                    |ctx| {
+                        if let Some(actions) = actions {
+                            WiniaTheme::with_content_color(colors.actions, ctx, |ctx| {
+                                crate::layout::Row::new().build(ctx, actions);
+                            });
+                        }
+                    },
+                );
             }
         }
         ctx.set_current_node_focus_color(theme.primary);
@@ -314,11 +676,30 @@ fn fast_out_linear_in(t: f32) -> f32 {
 fn color_lerp(from: Color, to: Color, fraction: f32) -> Color {
     let t = fraction.clamp(0.0, 1.0);
     let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-    Color::from_argb(lerp(from.a, to.a), lerp(from.r, to.r), lerp(from.g, to.g), lerp(from.b, to.b))
+    Color::from_argb(
+        lerp(from.a, to.a),
+        lerp(from.r, to.r),
+        lerp(from.g, to.g),
+        lerp(from.b, to.b),
+    )
 }
 
-fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) { let key = ctx.next_key(); match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) { GroupStatus::Skip => {}, GroupStatus::Enter => content(ctx) }; ctx.end_restartable_group(); }
-fn alpha(fraction: f32) -> Modifier { Modifier::new().graphics_layer(move || GraphicsLayerParams { alpha: 1.0 - fraction, clip: true, ..Default::default() }) }
+fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) {
+    let key = ctx.next_key();
+    match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center))
+    {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => content(ctx),
+    };
+    ctx.end_restartable_group();
+}
+fn alpha(fraction: f32) -> Modifier {
+    Modifier::new().graphics_layer(move || GraphicsLayerParams {
+        alpha: 1.0 - fraction,
+        clip: true,
+        ..Default::default()
+    })
+}
 /// The bar's EXPANDED height, which for the two flexible variants depends on the subtitle —
 /// upstream carries two constants per variant and picks between them at the call site
 /// (`AppBar.kt:1938-1945` for medium, `:1952-1959` for large). Public because a caller building
@@ -330,16 +711,30 @@ pub fn expanded_height(v: TopAppBarVariant, subtitle_present: bool) -> f32 {
         TopAppBarVariant::Medium => TOP_APP_BAR_MEDIUM_HEIGHT,
         TopAppBarVariant::Large => TOP_APP_BAR_LARGE_HEIGHT,
         TopAppBarVariant::MediumFlexible => {
-            if subtitle_present { TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT } else { TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT }
+            if subtitle_present {
+                TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT
+            } else {
+                TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT
+            }
         }
         TopAppBarVariant::LargeFlexible => {
-            if subtitle_present { TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT } else { TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT }
+            if subtitle_present {
+                TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT
+            } else {
+                TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT
+            }
         }
     }
 }
 /// The variants whose title starts on a row of its own and slides down while the bar expands.
 fn is_two_row(v: TopAppBarVariant) -> bool {
-    matches!(v, TopAppBarVariant::Medium | TopAppBarVariant::Large | TopAppBarVariant::MediumFlexible | TopAppBarVariant::LargeFlexible)
+    matches!(
+        v,
+        TopAppBarVariant::Medium
+            | TopAppBarVariant::Large
+            | TopAppBarVariant::MediumFlexible
+            | TopAppBarVariant::LargeFlexible
+    )
 }
 
 /// The title's text style while the bar is EXPANDED — `AppBar*Tokens.TitleFont`, with the small
@@ -377,50 +772,188 @@ fn subtitle_style(v: TopAppBarVariant) -> TextStyle {
 fn top_app_bar_container_spec() -> crate::animation::SpringSpec {
     crate::animation::SpringSpec::effects_default()
 }
-fn title_style(mut s: TextStyle, color: Color) -> TextStyle { s.color = Some(color); s.max_lines = Some(1); s.overflow = Some(TextOverflow::Ellipsis); s }
+fn title_style(mut s: TextStyle, color: Color) -> TextStyle {
+    s.color = Some(color);
+    s.max_lines = Some(1);
+    s.overflow = Some(TextOverflow::Ellipsis);
+    s
+}
 
 #[derive(Debug, Clone)]
-struct TopAppBarLayoutPolicy { variant: TopAppBarVariant, fraction: f32, direction: LayoutDirection, navigation_present: bool, actions_present: bool, subtitle_present: bool, expanded_height: f32, bottom_inset: f32 }
+struct TopAppBarLayoutPolicy {
+    variant: TopAppBarVariant,
+    fraction: f32,
+    direction: LayoutDirection,
+    navigation_present: bool,
+    actions_present: bool,
+    subtitle_present: bool,
+    expanded_height: f32,
+    bottom_inset: f32,
+}
 impl MeasurePolicy for TopAppBarLayoutPolicy {
-    fn measure(&self, nodes: &mut Vec<LayoutNode>, policies: &[Box<dyn MeasurePolicy>], children: &[usize], c: Constraints) -> (Size, Vec<Placement>) {
-        let width = c.max_width; let height = if c.max_height < f32::MAX { c.max_height } else { self.expanded_height - (self.expanded_height - TOP_APP_BAR_HEIGHT) * self.fraction };
-        let (nav, _) = measure_node(nodes, policies, children[0], Constraints::fixed(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE));
-        let (actions, _) = measure_node(nodes, policies, children[3], Constraints::new(0.0, width, 0.0, TOP_APP_BAR_ICON_SLOT_SIZE));
-        let nav_w = if self.navigation_present { nav.width } else { 0.0 }; let actions_w = if self.actions_present { actions.width } else { 0.0 };
-        let start = TOP_APP_BAR_HORIZONTAL_PADDING + nav_w.max(TOP_APP_BAR_TITLE_INSET); let end = (width - TOP_APP_BAR_HORIZONTAL_PADDING - actions_w).max(start);
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        c: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let width = c.max_width;
+        let height = if c.max_height < f32::MAX {
+            c.max_height
+        } else {
+            self.expanded_height - (self.expanded_height - TOP_APP_BAR_HEIGHT) * self.fraction
+        };
+        let (nav, _) = measure_node(
+            nodes,
+            policies,
+            children[0],
+            Constraints::fixed(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE),
+        );
+        let (actions, _) = measure_node(
+            nodes,
+            policies,
+            children[3],
+            Constraints::new(0.0, width, 0.0, TOP_APP_BAR_ICON_SLOT_SIZE),
+        );
+        let nav_w = if self.navigation_present {
+            nav.width
+        } else {
+            0.0
+        };
+        let actions_w = if self.actions_present {
+            actions.width
+        } else {
+            0.0
+        };
+        let start = TOP_APP_BAR_HORIZONTAL_PADDING + nav_w.max(TOP_APP_BAR_TITLE_INSET);
+        let end = (width - TOP_APP_BAR_HORIZONTAL_PADDING - actions_w).max(start);
         let title_c = Constraints::new(0.0, (end - start).max(0.0), 0.0, self.expanded_height);
         let (title, _) = measure_node(nodes, policies, children[1], title_c);
-        let subtitle_c = Constraints::new(0.0, (width - 2.0 * (TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET)).max(0.0), 0.0, self.expanded_height);
+        let subtitle_c = Constraints::new(
+            0.0,
+            (width - 2.0 * (TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET)).max(0.0),
+            0.0,
+            self.expanded_height,
+        );
         let (subtitle, _) = measure_node(nodes, policies, children[2], subtitle_c);
         let gap = if self.subtitle_present { 4.0 } else { 0.0 };
-        let collapsed_x_ltr = if self.variant == TopAppBarVariant::CenterAligned { ((width - title.width) / 2.0).clamp(start, (end - title.width).max(start)) } else { start };
+        let collapsed_x_ltr = if self.variant == TopAppBarVariant::CenterAligned {
+            ((width - title.width) / 2.0).clamp(start, (end - title.width).max(start))
+        } else {
+            start
+        };
         let expanded_x_ltr = TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET;
         let collapsed_y = (TOP_APP_BAR_HEIGHT - title.height).max(0.0) / 2.0;
-        let expanded_y = (self.expanded_height - self.bottom_inset - title.height - if self.subtitle_present { gap + subtitle.height } else { 0.0 }).max(TOP_APP_BAR_HEIGHT);
-        let x_ltr = if is_two_row(self.variant) { expanded_x_ltr + (collapsed_x_ltr - expanded_x_ltr) * self.fraction } else { collapsed_x_ltr };
-        let title_x = if self.direction == LayoutDirection::Ltr { x_ltr } else { width - x_ltr - title.width };
-        let title_y = if is_two_row(self.variant) { expanded_y + (collapsed_y - expanded_y) * self.fraction } else { collapsed_y };
-        let subtitle_x = if self.direction == LayoutDirection::Ltr { expanded_x_ltr } else { width - expanded_x_ltr - subtitle.width };
+        let expanded_y = (self.expanded_height
+            - self.bottom_inset
+            - title.height
+            - if self.subtitle_present {
+                gap + subtitle.height
+            } else {
+                0.0
+            })
+        .max(TOP_APP_BAR_HEIGHT);
+        let x_ltr = if is_two_row(self.variant) {
+            expanded_x_ltr + (collapsed_x_ltr - expanded_x_ltr) * self.fraction
+        } else {
+            collapsed_x_ltr
+        };
+        let title_x = if self.direction == LayoutDirection::Ltr {
+            x_ltr
+        } else {
+            width - x_ltr - title.width
+        };
+        let title_y = if is_two_row(self.variant) {
+            expanded_y + (collapsed_y - expanded_y) * self.fraction
+        } else {
+            collapsed_y
+        };
+        let subtitle_x = if self.direction == LayoutDirection::Ltr {
+            expanded_x_ltr
+        } else {
+            width - expanded_x_ltr - subtitle.width
+        };
         let subtitle_y = expanded_y + title.height + gap;
-        let nav_x = if self.direction == LayoutDirection::Ltr { TOP_APP_BAR_HORIZONTAL_PADDING } else { width - TOP_APP_BAR_HORIZONTAL_PADDING - nav.width };
-        let action_x = if self.direction == LayoutDirection::Ltr { width - TOP_APP_BAR_HORIZONTAL_PADDING - actions.width } else { TOP_APP_BAR_HORIZONTAL_PADDING };
+        let nav_x = if self.direction == LayoutDirection::Ltr {
+            TOP_APP_BAR_HORIZONTAL_PADDING
+        } else {
+            width - TOP_APP_BAR_HORIZONTAL_PADDING - nav.width
+        };
+        let action_x = if self.direction == LayoutDirection::Ltr {
+            width - TOP_APP_BAR_HORIZONTAL_PADDING - actions.width
+        } else {
+            TOP_APP_BAR_HORIZONTAL_PADDING
+        };
         let slot_y = (TOP_APP_BAR_HEIGHT - TOP_APP_BAR_ICON_SLOT_SIZE) / 2.0;
-        (Size::new(width, height), vec![Placement { size: nav, position: Offset::new(nav_x, slot_y) }, Placement { size: title, position: Offset::new(title_x, title_y) }, Placement { size: subtitle, position: Offset::new(subtitle_x, subtitle_y) }, Placement { size: actions, position: Offset::new(action_x, slot_y) }])
+        (
+            Size::new(width, height),
+            vec![
+                Placement {
+                    size: nav,
+                    position: Offset::new(nav_x, slot_y),
+                },
+                Placement {
+                    size: title,
+                    position: Offset::new(title_x, title_y),
+                },
+                Placement {
+                    size: subtitle,
+                    position: Offset::new(subtitle_x, subtitle_y),
+                },
+                Placement {
+                    size: actions,
+                    position: Offset::new(action_x, slot_y),
+                },
+            ],
+        )
     }
-    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) { for (i, &child) in children.iter().enumerate() { nodes[child].position = placements[i].position; nodes[child].measured_size = placements[i].size; } }
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (i, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[i].position;
+            nodes[child].measured_size = placements[i].size;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*; use crate::runtime::composer::Composer;
-    fn layout(bar: TopAppBar, w: f32) -> Composer { let mut c = Composer::new(); c.compose(|ctx| bar.build(ctx)); c.layout(Constraints::new(0.0, w, 0.0, 200.0)); c }
-    fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new().size(w, h)); ctx.end_node(); }
-    #[test] fn variants_have_expected_heights() { for (bar,h) in [(TopAppBar::new(|_| {}),64.),(TopAppBar::center_aligned(|_| {}),64.),(TopAppBar::medium(|_| {}),112.),(TopAppBar::large(|_| {}),152.)] { let c=layout(bar,400.); assert_eq!(c.arena_nodes()[c.layout_root_idx().unwrap()].measured_size.height,h); } }
+    use super::*;
+    use crate::runtime::composer::Composer;
+    fn layout(bar: TopAppBar, w: f32) -> Composer {
+        let mut c = Composer::new();
+        c.compose(|ctx| bar.build(ctx));
+        c.layout(Constraints::new(0.0, w, 0.0, 200.0));
+        c
+    }
+    fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) {
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new().size(w, h));
+        ctx.end_node();
+    }
+    #[test]
+    fn variants_have_expected_heights() {
+        for (bar, h) in [
+            (TopAppBar::new(|_| {}), 64.),
+            (TopAppBar::center_aligned(|_| {}), 64.),
+            (TopAppBar::medium(|_| {}), 112.),
+            (TopAppBar::large(|_| {}), 152.),
+        ] {
+            let c = layout(bar, 400.);
+            assert_eq!(
+                c.arena_nodes()[c.layout_root_idx().unwrap()]
+                    .measured_size
+                    .height,
+                h
+            );
+        }
+    }
 
     /// The flexible pair carry TWO expanded heights each and pick between them on the subtitle
     /// (`AppBar.kt:1938-1945` / `:1952-1959`). Measured on the laid-out bar, and the subtitle is a
     /// real child — putting one in without the taller box is the bug this pins.
-    #[test] fn the_flexible_variants_take_their_height_from_the_subtitle() {
+    #[test]
+    fn the_flexible_variants_take_their_height_from_the_subtitle() {
         // `TopAppBar` holds `FnOnce` title/subtitle slots, so it is not Clone: each case builds
         // its own bar.
         let heights = |bar: TopAppBar| {
@@ -435,7 +968,10 @@ mod tests {
             "a medium flexible bar without a subtitle"
         );
         assert_eq!(
-            heights(TopAppBar::medium_flexible(|ctx| leaf(ctx, 100.0, 20.0)).subtitle(|ctx| leaf(ctx, 80.0, 16.0))),
+            heights(
+                TopAppBar::medium_flexible(|ctx| leaf(ctx, 100.0, 20.0))
+                    .subtitle(|ctx| leaf(ctx, 80.0, 16.0))
+            ),
             TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT,
             "and with one it grows by exactly the 24 dp the subtitle row needs"
         );
@@ -445,42 +981,68 @@ mod tests {
             "a large flexible bar without a subtitle"
         );
         assert_eq!(
-            heights(TopAppBar::large_flexible(|ctx| leaf(ctx, 100.0, 20.0)).subtitle(|ctx| leaf(ctx, 80.0, 16.0))),
+            heights(
+                TopAppBar::large_flexible(|ctx| leaf(ctx, 100.0, 20.0))
+                    .subtitle(|ctx| leaf(ctx, 80.0, 16.0))
+            ),
             TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT,
             "and with one"
         );
         // Neither flexible height is a copy of its non-flexible sibling at the same tier.
         assert_ne!(TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT);
-        assert_ne!(TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT);
+        assert_ne!(
+            TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT,
+            TOP_APP_BAR_MEDIUM_HEIGHT
+        );
     }
 
     /// The four height constants themselves, against the tokens:
     /// `AppBarMediumFlexibleTokens.ContainerHeight` / `.LargeContainerHeight` (112 / 136) and
     /// `AppBarLargeFlexibleTokens` (120 / 152). The large bar's SUBTITLE height happens to equal the
     /// plain large bar's 152 and its plain height is 120 — neither is a copy of the other.
-    #[test] fn the_flexible_height_constants_are_the_tokens() {
+    #[test]
+    fn the_flexible_height_constants_are_the_tokens() {
         assert_eq!(
-            (TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT, TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT),
+            (
+                TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT,
+                TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT
+            ),
             (112.0, 136.0),
             "AppBarMediumFlexibleTokens ContainerHeight / LargeContainerHeight"
         );
         assert_eq!(
-            (TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT, TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT),
+            (
+                TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT,
+                TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT
+            ),
             (120.0, 152.0),
             "AppBarLargeFlexibleTokens ContainerHeight / LargeContainerHeight"
         );
         // And the helper agrees with each constant.
-        assert_eq!(expanded_height(TopAppBarVariant::MediumFlexible, false), 112.0);
-        assert_eq!(expanded_height(TopAppBarVariant::MediumFlexible, true), 136.0);
-        assert_eq!(expanded_height(TopAppBarVariant::LargeFlexible, false), 120.0);
-        assert_eq!(expanded_height(TopAppBarVariant::LargeFlexible, true), 152.0);
+        assert_eq!(
+            expanded_height(TopAppBarVariant::MediumFlexible, false),
+            112.0
+        );
+        assert_eq!(
+            expanded_height(TopAppBarVariant::MediumFlexible, true),
+            136.0
+        );
+        assert_eq!(
+            expanded_height(TopAppBarVariant::LargeFlexible, false),
+            120.0
+        );
+        assert_eq!(
+            expanded_height(TopAppBarVariant::LargeFlexible, true),
+            152.0
+        );
     }
 
     /// The text styles the flexible pair names — and they are NOT the ones their non-flexible
     /// siblings use. `MediumFlexibleTopAppBar` titles at `HeadlineMedium` (the plain Medium bar
     /// uses `HeadlineSmall`), and `LargeFlexibleTopAppBar` at `DisplaySmall` (the plain Large uses
     /// `HeadlineMedium`). Subtitles are `LabelLarge` / `TitleMedium` (`AppBar.kt:1076-1093`).
-    #[test] fn the_flexible_variants_take_their_own_text_styles() {
+    #[test]
+    fn the_flexible_variants_take_their_own_text_styles() {
         // `TextStyle` is not PartialEq, so compare the resolved styles by their debug form — the
         // function returns the typography token itself, so an exact match is the right assertion.
         let shown = |s: TextStyle| format!("{s:?}");
@@ -506,25 +1068,192 @@ mod tests {
             shown(expanded_title_style(TopAppBarVariant::Large)),
             "and the flexible large bar is not the plain large bar (DisplaySmall vs HeadlineMedium)"
         );
-        assert_eq!(shown(subtitle_style(TopAppBarVariant::MediumFlexible)), shown(t().label_large));
-        assert_eq!(shown(subtitle_style(TopAppBarVariant::LargeFlexible)), shown(t().title_medium));
+        assert_eq!(
+            shown(subtitle_style(TopAppBarVariant::MediumFlexible)),
+            shown(t().label_large)
+        );
+        assert_eq!(
+            shown(subtitle_style(TopAppBarVariant::LargeFlexible)),
+            shown(t().title_medium)
+        );
     }
 
     /// M3's `DefaultEffects` spring, not the 180 ms tween this used to be.
-    #[test] fn the_container_colour_spec_is_m3s_default_effects_spring() {
+    #[test]
+    fn the_container_colour_spec_is_m3s_default_effects_spring() {
         let spec = top_app_bar_container_spec();
         assert_eq!(spec, crate::animation::SpringSpec::effects_default());
         assert_eq!(spec.stiffness, 1600.0);
     }
-    #[test] fn scroll_behavior_clamps_fraction() { let s=ScrollState::new(); assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| TopAppBarScrollBehavior::new(s.clone(),63.))).is_err()); let b=TopAppBarScrollBehavior::new(s.clone(),152.); s.offset.set(44.); assert!((b.collapse_fraction() - 0.5).abs()< 0.001); assert_eq!(b.current_height(),108.); }
-    #[test] fn single_title_moves_to_collapsed_row_without_subtitle_offset() { let s=ScrollState::new(); s.offset.set(1000.); let with_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s.clone(),152.)),400.); let without_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let a=with_sub.layout_root_idx().unwrap(); let b=without_sub.layout_root_idx().unwrap(); let an=with_sub.arena_nodes(); let bn=without_sub.arena_nodes(); assert_eq!(an[a].measured_size.height,64.); assert_eq!(an[an[a].children[1]].position.y,22.); assert_eq!(an[an[a].children[1]].position.y,bn[bn[b].children[1]].position.y); assert_eq!(an[an[a].children[0]].position.y,8.); }
-    #[test] fn title_y_moves_continuously_at_mid_fraction() { let s=ScrollState::new(); s.offset.set(44.); let c=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let y=n[n[root].children[1]].position.y; assert!(y>22. && y<80.); assert_eq!(n[root].measured_size.height,108.); }
-    #[test] fn center_and_long_title_keep_safe_bounds() { let c=layout(TopAppBar::center_aligned(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),400.); let r=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let t=&n[n[r].children[1]]; assert!(((t.position.x+t.measured_size.width/2.)-200.).abs()< 0.01); let c=layout(TopAppBar::large(|ctx| crate::components::Text::new("A deliberately long title that must not cover actions").build(ctx)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),240.); let r=c.layout_root_idx().unwrap(); assert_eq!(c.arena_nodes()[r].measured_size.height,152.); }
-    #[test] fn colors_use_material_surface_tokens_and_compat_constructor() { let theme=crate::theme::ThemeColors::default_light(); let colors=TopAppBarColors::from_theme(&theme); assert_eq!(colors.container,theme.surface); assert_eq!(colors.scrolled_container,theme.surface_container); assert_eq!(colors.title,theme.on_surface); assert_eq!(colors.navigation,theme.on_surface); let custom=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE); assert_eq!(custom.scrolled_container,Color::RED); assert_eq!(custom.scrolled_container(Color::BLUE).scrolled_container,Color::BLUE); }
-    #[test] fn standard_scroll_color_is_independent_from_collapse_fraction() { let scroll=ScrollState::new(); let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE); assert_eq!(colors.container_color(TopAppBarVariant::Standard,0.,0.),Color::RED); assert_eq!(colors.container_color(TopAppBarVariant::Standard,1.,0.),Color::BLUE); let behavior=TopAppBarScrollBehavior::new(scroll,TOP_APP_BAR_HEIGHT); assert_eq!(behavior.collapse_fraction(),0.); }
-    #[test] fn collapsible_colors_interpolate_from_base_to_scrolled() { let colors=TopAppBarColors::new(Color::from_argb(255,0,0,0),Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::from_argb(255,200,100,0)); assert_eq!(colors.container_color(TopAppBarVariant::Large,0.,0.),colors.container); let middle=colors.container_color(TopAppBarVariant::Large,44.,0.5); assert!(middle.r>0 && middle.r<200); assert_eq!(colors.container_color(TopAppBarVariant::Large,88.,1.),colors.scrolled_container); }
-    #[test] fn nested_behavior_consumes_and_clamps_height_offset() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap(); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -60.0), NestedScrollSource::Drag); assert_eq!(consumed.y, -60.0); assert_eq!(state.height_offset.get(), -60.0); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, 100.0), NestedScrollSource::Drag); assert_eq!(consumed.y, 60.0); assert_eq!(state.height_offset.get(), 0.0); }
-    #[test] fn nested_state_derives_clamped_fractions() {
+    #[test]
+    fn scroll_behavior_clamps_fraction() {
+        let s = ScrollState::new();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                TopAppBarScrollBehavior::new(s.clone(), 63.)
+            }))
+            .is_err()
+        );
+        let b = TopAppBarScrollBehavior::new(s.clone(), 152.);
+        s.offset.set(44.);
+        assert!((b.collapse_fraction() - 0.5).abs() < 0.001);
+        assert_eq!(b.current_height(), 108.);
+    }
+    #[test]
+    fn single_title_moves_to_collapsed_row_without_subtitle_offset() {
+        let s = ScrollState::new();
+        s.offset.set(1000.);
+        let with_sub = layout(
+            TopAppBar::large(|ctx| leaf(ctx, 100., 20.))
+                .subtitle(|ctx| leaf(ctx, 80., 16.))
+                .navigation_icon(|ctx| leaf(ctx, 24., 24.))
+                .actions(|ctx| leaf(ctx, 72., 24.))
+                .scroll_behavior(TopAppBarScrollBehavior::new(s.clone(), 152.)),
+            400.,
+        );
+        let without_sub = layout(
+            TopAppBar::large(|ctx| leaf(ctx, 100., 20.))
+                .navigation_icon(|ctx| leaf(ctx, 24., 24.))
+                .actions(|ctx| leaf(ctx, 72., 24.))
+                .scroll_behavior(TopAppBarScrollBehavior::new(s, 152.)),
+            400.,
+        );
+        let a = with_sub.layout_root_idx().unwrap();
+        let b = without_sub.layout_root_idx().unwrap();
+        let an = with_sub.arena_nodes();
+        let bn = without_sub.arena_nodes();
+        assert_eq!(an[a].measured_size.height, 64.);
+        assert_eq!(an[an[a].children[1]].position.y, 22.);
+        assert_eq!(
+            an[an[a].children[1]].position.y,
+            bn[bn[b].children[1]].position.y
+        );
+        assert_eq!(an[an[a].children[0]].position.y, 8.);
+    }
+    #[test]
+    fn title_y_moves_continuously_at_mid_fraction() {
+        let s = ScrollState::new();
+        s.offset.set(44.);
+        let c = layout(
+            TopAppBar::large(|ctx| leaf(ctx, 100., 20.))
+                .subtitle(|ctx| leaf(ctx, 80., 16.))
+                .scroll_behavior(TopAppBarScrollBehavior::new(s, 152.)),
+            400.,
+        );
+        let root = c.layout_root_idx().unwrap();
+        let n = c.arena_nodes();
+        let y = n[n[root].children[1]].position.y;
+        assert!(y > 22. && y < 80.);
+        assert_eq!(n[root].measured_size.height, 108.);
+    }
+    #[test]
+    fn center_and_long_title_keep_safe_bounds() {
+        let c = layout(
+            TopAppBar::center_aligned(|ctx| leaf(ctx, 100., 20.))
+                .navigation_icon(|ctx| leaf(ctx, 24., 24.))
+                .actions(|ctx| leaf(ctx, 72., 24.)),
+            400.,
+        );
+        let r = c.layout_root_idx().unwrap();
+        let n = c.arena_nodes();
+        let t = &n[n[r].children[1]];
+        assert!(((t.position.x + t.measured_size.width / 2.) - 200.).abs() < 0.01);
+        let c = layout(
+            TopAppBar::large(|ctx| {
+                crate::components::Text::new(
+                    "A deliberately long title that must not cover actions",
+                )
+                .build(ctx)
+            })
+            .navigation_icon(|ctx| leaf(ctx, 24., 24.))
+            .actions(|ctx| leaf(ctx, 72., 24.)),
+            240.,
+        );
+        let r = c.layout_root_idx().unwrap();
+        assert_eq!(c.arena_nodes()[r].measured_size.height, 152.);
+    }
+    #[test]
+    fn colors_use_material_surface_tokens_and_compat_constructor() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let colors = TopAppBarColors::from_theme(&theme);
+        assert_eq!(colors.container, theme.surface);
+        assert_eq!(colors.scrolled_container, theme.surface_container);
+        assert_eq!(colors.title, theme.on_surface);
+        assert_eq!(colors.navigation, theme.on_surface);
+        let custom = TopAppBarColors::new(
+            Color::RED,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+        );
+        assert_eq!(custom.scrolled_container, Color::RED);
+        assert_eq!(
+            custom.scrolled_container(Color::BLUE).scrolled_container,
+            Color::BLUE
+        );
+    }
+    #[test]
+    fn standard_scroll_color_is_independent_from_collapse_fraction() {
+        let scroll = ScrollState::new();
+        let colors = TopAppBarColors::new(
+            Color::RED,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+        )
+        .scrolled_container(Color::BLUE);
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Standard, 0., 0.),
+            Color::RED
+        );
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Standard, 1., 0.),
+            Color::BLUE
+        );
+        let behavior = TopAppBarScrollBehavior::new(scroll, TOP_APP_BAR_HEIGHT);
+        assert_eq!(behavior.collapse_fraction(), 0.);
+    }
+    #[test]
+    fn collapsible_colors_interpolate_from_base_to_scrolled() {
+        let colors = TopAppBarColors::new(
+            Color::from_argb(255, 0, 0, 0),
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+        )
+        .scrolled_container(Color::from_argb(255, 200, 100, 0));
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Large, 0., 0.),
+            colors.container
+        );
+        let middle = colors.container_color(TopAppBarVariant::Large, 44., 0.5);
+        assert!(middle.r > 0 && middle.r < 200);
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Large, 88., 1.),
+            colors.scrolled_container
+        );
+    }
+    #[test]
+    fn nested_behavior_consumes_and_clamps_height_offset() {
+        let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+        let connection =
+            TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT)
+                .nested_scroll_connection()
+                .unwrap();
+        let consumed =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, -60.0), NestedScrollSource::Drag);
+        assert_eq!(consumed.y, -60.0);
+        assert_eq!(state.height_offset.get(), -60.0);
+        let consumed =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, 100.0), NestedScrollSource::Drag);
+        assert_eq!(consumed.y, 60.0);
+        assert_eq!(state.height_offset.get(), 0.0);
+    }
+    #[test]
+    fn nested_state_derives_clamped_fractions() {
         let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
         assert_eq!(state.height_offset_limit.get(), -88.0);
         state.height_offset.set(-44.0);
@@ -534,70 +1263,151 @@ mod tests {
         assert!(state.overlapped_fraction() > 0.0);
         state.height_offset.set(-200.0);
         assert_eq!(state.collapsed_fraction(), 1.0);
-        assert_eq!(state.current_height(TOP_APP_BAR_LARGE_HEIGHT), TOP_APP_BAR_HEIGHT);
+        assert_eq!(
+            state.current_height(TOP_APP_BAR_LARGE_HEIGHT),
+            TOP_APP_BAR_HEIGHT
+        );
     }
-    #[test] fn pinned_behavior_never_consumes_or_changes_height() {
+    #[test]
+    fn pinned_behavior_never_consumes_or_changes_height() {
         let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
-        let connection = TopAppBarScrollBehavior::pinned(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
-        let consumed = connection.on_pre_scroll(ScrollDelta::new(0.0, -80.0), NestedScrollSource::Drag);
+        let connection = TopAppBarScrollBehavior::pinned(state.clone(), TOP_APP_BAR_LARGE_HEIGHT)
+            .nested_scroll_connection()
+            .unwrap();
+        let consumed =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, -80.0), NestedScrollSource::Drag);
         assert_eq!(consumed, ScrollDelta::ZERO);
         assert_eq!(state.height_offset.get(), 0.0);
     }
-    #[test] fn exit_until_collapsed_expands_only_after_child_is_at_boundary() {
+    #[test]
+    fn exit_until_collapsed_expands_only_after_child_is_at_boundary() {
         let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
         state.height_offset.set(-60.0);
-        let connection = TopAppBarScrollBehavior::exit_until_collapsed(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
-        let consumed = connection.on_pre_scroll(ScrollDelta::new(0.0, 20.0), NestedScrollSource::Drag);
+        let connection =
+            TopAppBarScrollBehavior::exit_until_collapsed(state.clone(), TOP_APP_BAR_LARGE_HEIGHT)
+                .nested_scroll_connection()
+                .unwrap();
+        let consumed =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, 20.0), NestedScrollSource::Drag);
         assert_eq!(consumed.y, 20.0);
         assert_eq!(state.height_offset.get(), -40.0);
-        let consumed = connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::new(0.0, 40.0), NestedScrollSource::Drag);
+        let consumed = connection.on_post_scroll(
+            ScrollDelta::ZERO,
+            ScrollDelta::new(0.0, 40.0),
+            NestedScrollSource::Drag,
+        );
         assert_eq!(consumed.y, 40.0);
         assert_eq!(state.height_offset.get(), 0.0);
     }
-    #[test] fn nested_pre_fling_consumes_only_available_collapsible_range() {
+    #[test]
+    fn nested_pre_fling_consumes_only_available_collapsible_range() {
         let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
-        let connection = TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
+        let connection =
+            TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT)
+                .nested_scroll_connection()
+                .unwrap();
         let consumed = connection.on_pre_fling(ScrollVelocity { x: 0.0, y: -1800.0 });
         assert!(consumed.y < 0.0);
         assert!(consumed.y > -1800.0);
         assert_eq!(state.height_offset.get(), -30.0);
     }
-    #[test] fn nested_content_offset_triggers_scrolled_color() {
-        let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE);
+    #[test]
+    fn nested_content_offset_triggers_scrolled_color() {
+        let colors = TopAppBarColors::new(
+            Color::RED,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+        )
+        .scrolled_container(Color::BLUE);
         // nested scroll 的 content_offset 向下滚为负，也必须触发 scrolled 色
-        assert_eq!(colors.container_color(TopAppBarVariant::Standard, -1.0, 0.0), Color::BLUE);
-        assert_eq!(colors.container_color(TopAppBarVariant::Standard, 1.0, 0.0), Color::BLUE);
-        assert_eq!(colors.container_color(TopAppBarVariant::Standard, 0.0, 0.0), Color::RED);
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Standard, -1.0, 0.0),
+            Color::BLUE
+        );
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Standard, 1.0, 0.0),
+            Color::BLUE
+        );
+        assert_eq!(
+            colors.container_color(TopAppBarVariant::Standard, 0.0, 0.0),
+            Color::RED
+        );
     }
-    #[test] fn standard_nested_connection_tracks_content_offset_without_consuming() {
-        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT); // limit = 0，非折叠
-        let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT).nested_scroll_connection().unwrap();
-        let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
+    #[test]
+    fn standard_nested_connection_tracks_content_offset_without_consuming() {
+        let state = TopAppBarState::new(TOP_APP_BAR_HEIGHT); // limit = 0，非折叠
+        let connection = TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT)
+            .nested_scroll_connection()
+            .unwrap();
+        let consumed =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
         assert_eq!(consumed.y, 0.0, "Standard 不折叠高度，不应消费滚动");
         assert_eq!(state.height_offset.get(), 0.0);
         // content_offset 由 on_post_scroll 按子滚动实际消费量累计
-        connection.on_post_scroll(ScrollDelta::new(0.0, -40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
-        assert_eq!(state.content_offset.get(), -40.0, "应累计 content_offset 以触发滚动变色");
+        connection.on_post_scroll(
+            ScrollDelta::new(0.0, -40.0),
+            ScrollDelta::ZERO,
+            NestedScrollSource::Wheel,
+        );
+        assert_eq!(
+            state.content_offset.get(),
+            -40.0,
+            "应累计 content_offset 以触发滚动变色"
+        );
     }
-    #[test] fn standard_nested_content_offset_returns_to_zero_on_scroll_up() {
-        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT);
-        let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT).nested_scroll_connection().unwrap();
+    #[test]
+    fn standard_nested_content_offset_returns_to_zero_on_scroll_up() {
+        let state = TopAppBarState::new(TOP_APP_BAR_HEIGHT);
+        let connection = TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT)
+            .nested_scroll_connection()
+            .unwrap();
         connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
-        connection.on_post_scroll(ScrollDelta::new(0.0, -40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
+        connection.on_post_scroll(
+            ScrollDelta::new(0.0, -40.0),
+            ScrollDelta::ZERO,
+            NestedScrollSource::Wheel,
+        );
         assert_eq!(state.content_offset.get(), -40.0);
         connection.on_pre_scroll(ScrollDelta::new(0.0, 40.0), NestedScrollSource::Wheel);
-        connection.on_post_scroll(ScrollDelta::new(0.0, 40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
-        assert_eq!(state.content_offset.get(), 0.0, "向上滚回顶部后 content_offset 应回到 0");
+        connection.on_post_scroll(
+            ScrollDelta::new(0.0, 40.0),
+            ScrollDelta::ZERO,
+            NestedScrollSource::Wheel,
+        );
+        assert_eq!(
+            state.content_offset.get(),
+            0.0,
+            "向上滚回顶部后 content_offset 应回到 0"
+        );
     }
-    #[test] fn nested_connection_mirrors_child_scroll_offset_exactly() {
-        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT);
-        let scroll=ScrollState::new();
-        let connection=TopAppBarNestedConnection::with_scroll(state.clone(), TopAppBarScrollMode::EnterAlways, scroll.clone());
+    #[test]
+    fn nested_connection_mirrors_child_scroll_offset_exactly() {
+        let state = TopAppBarState::new(TOP_APP_BAR_HEIGHT);
+        let scroll = ScrollState::new();
+        let connection = TopAppBarNestedConnection::with_scroll(
+            state.clone(),
+            TopAppBarScrollMode::EnterAlways,
+            scroll.clone(),
+        );
         scroll.offset.set(120.0);
-        connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::ZERO, NestedScrollSource::Drag);
-        assert_eq!(state.content_offset.get(), 120.0, "应直接镜像子滚动 offset，而非累加 delta");
+        connection.on_post_scroll(
+            ScrollDelta::ZERO,
+            ScrollDelta::ZERO,
+            NestedScrollSource::Drag,
+        );
+        assert_eq!(
+            state.content_offset.get(),
+            120.0,
+            "应直接镜像子滚动 offset，而非累加 delta"
+        );
         scroll.offset.set(0.0);
-        connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::ZERO, NestedScrollSource::Drag);
+        connection.on_post_scroll(
+            ScrollDelta::ZERO,
+            ScrollDelta::ZERO,
+            NestedScrollSource::Drag,
+        );
         assert_eq!(state.content_offset.get(), 0.0);
     }
 
@@ -621,7 +1431,9 @@ mod tests {
         assert!(!flag.peek(), "an unscrolled bar is expanded");
         scroll.offset.set(44.0);
         assert!(!flag.peek(), "half way through the range is not collapsed");
-        scroll.offset.set(TOP_APP_BAR_LARGE_HEIGHT - TOP_APP_BAR_HEIGHT);
+        scroll
+            .offset
+            .set(TOP_APP_BAR_LARGE_HEIGHT - TOP_APP_BAR_HEIGHT);
         assert!(flag.peek(), "the end of the range is");
     }
 }

@@ -1,9 +1,15 @@
-use skia_safe::textlayout::paragraph::{ExtendedVisitorInfo, FontInfo, GlyphClusterInfo, GlyphInfo, Paragraph as SkParagraph, VisitorInfo};
-use skia_safe::textlayout::{Affinity, LineMetrics, ParagraphStyle, RectHeightStyle, RectWidthStyle, TextBox, TextRange, TextStyle};
-use skia_safe::{scalar, Canvas, Font, Path, Point, TextBlob, Unichar};
+use crate::text::{IndexBiMap, ParagraphBuilder};
+use skia_safe::textlayout::paragraph::{
+    ExtendedVisitorInfo, FontInfo, GlyphClusterInfo, GlyphInfo, Paragraph as SkParagraph,
+    VisitorInfo,
+};
+use skia_safe::textlayout::{
+    Affinity, LineMetrics, ParagraphStyle, RectHeightStyle, RectWidthStyle, TextBox, TextRange,
+    TextStyle,
+};
+use skia_safe::{Canvas, Font, Path, Point, TextBlob, Unichar, scalar};
 use std::collections::HashSet;
 use std::ops::Range;
-use crate::text::{IndexBiMap, ParagraphBuilder};
 
 /// Build a laid-out paragraph for one plain text run — the same construction `Text` goes through,
 /// exposed for the public drawing surface (`crate::components::draw_scope`'s `draw_text`) so canvas text is
@@ -95,7 +101,7 @@ impl Paragraph {
     pub fn inner_paragraph(&self) -> &SkParagraph {
         &self.paragraph
     }
-    
+
     pub fn is_line_break(&self, range: Range<usize>) -> bool {
         self.line_breaks.contains(&range)
     }
@@ -167,18 +173,28 @@ impl Paragraph {
         match self.display_span {
             None => self.text_len(),
             Some(span) => {
-                let tail = self.text_len().saturating_sub(span.head_bytes + span.marker_bytes);
+                let tail = self
+                    .text_len()
+                    .saturating_sub(span.head_bytes + span.marker_bytes);
                 span.tail_start_byte + tail
             }
         }
     }
     pub fn text_len(&self) -> usize {
-        self.paragraph_byte_to_real_indices.right_keys().last().copied().unwrap_or(0)
+        self.paragraph_byte_to_real_indices
+            .right_keys()
+            .last()
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Total length of the PARAGRAPH's own byte space (what Skia's clusters are reported in).
     pub(crate) fn paragraph_byte_len(&self) -> usize {
-        self.paragraph_byte_to_real_indices.left_keys().last().copied().unwrap_or(0)
+        self.paragraph_byte_to_real_indices
+            .left_keys()
+            .last()
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Map a REAL (content) byte index to the paragraph's byte space, clamping to the nearest
@@ -198,7 +214,9 @@ impl Paragraph {
             .iter()
             .zip(self.paragraph_byte_to_real_indices.right_keys().iter())
         {
-            if *right > real { break; }
+            if *right > real {
+                break;
+            }
             best = *left;
         }
         best
@@ -211,7 +229,10 @@ impl Paragraph {
     /// paragraph holds one U+FFFC while the content may hold a whole word. Callers that hit-test
     /// must never panic because a cluster boundary fell inside such a span.
     pub(crate) fn real_index_for_paragraph_byte(&self, paragraph_byte: usize) -> usize {
-        if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(&paragraph_byte) {
+        if let Some(mapped) = self
+            .paragraph_byte_to_real_indices
+            .get_by_left(&paragraph_byte)
+        {
             return *mapped;
         }
         // Walk back to the nearest mapped paragraph byte (monotonic insertion, so a reverse scan
@@ -223,7 +244,9 @@ impl Paragraph {
             .iter()
             .zip(self.paragraph_byte_to_real_indices.right_keys().iter())
         {
-            if *left > paragraph_byte { break; }
+            if *left > paragraph_byte {
+                break;
+            }
             best = *right;
         }
         best
@@ -232,7 +255,10 @@ impl Paragraph {
     fn get_utf16_index(&self, index: usize) -> Option<usize> {
         // An exact key.
         if let Some(paragraph_index) = self.paragraph_byte_to_real_indices.get_by_right(&index) {
-            return self.byte_to_utf16_indices.get_by_left(paragraph_index).copied();
+            return self
+                .byte_to_utf16_indices
+                .get_by_left(paragraph_index)
+                .copied();
         }
         // Otherwise walk back to the nearest mapped start byte, which is what an offset inside a
         // multi-byte character asks for.
@@ -247,43 +273,27 @@ impl Paragraph {
     }
 
     pub fn get_glyph_index(&self, index: usize) -> Option<usize> {
-        let paragraph_index = self
-            .paragraph_byte_to_real_indices
-            .get_by_right(&index)?;
-        let glyph_index = self
-            .byte_to_glyph_indices
-            .get_by_left(paragraph_index)?;
+        let paragraph_index = self.paragraph_byte_to_real_indices.get_by_right(&index)?;
+        let glyph_index = self.byte_to_glyph_indices.get_by_left(paragraph_index)?;
         Some(*glyph_index)
     }
-    
+
     pub fn prev_glyph_byte_index(&self, index: usize) -> Option<usize> {
-        let paragraph_index = self
-            .paragraph_byte_to_real_indices
-            .get_by_right(&index)?;
-        let glyph_index = self
-            .byte_to_glyph_indices
-            .get_by_left(paragraph_index)?;
+        let paragraph_index = self.paragraph_byte_to_real_indices.get_by_right(&index)?;
+        let glyph_index = self.byte_to_glyph_indices.get_by_left(paragraph_index)?;
         let prev_glyph_index = glyph_index.checked_sub(1)?;
-        let prev_byte_index = self
-            .byte_to_glyph_indices
-            .get_by_right(&prev_glyph_index)?;
+        let prev_byte_index = self.byte_to_glyph_indices.get_by_right(&prev_glyph_index)?;
         let prev_byte_index = self
             .paragraph_byte_to_real_indices
             .get_by_left(prev_byte_index)?;
         Some(*prev_byte_index)
     }
-    
+
     pub fn next_glyph_byte_index(&self, index: usize) -> Option<usize> {
-        let paragraph_index = self
-            .paragraph_byte_to_real_indices
-            .get_by_right(&index)?;
-        let glyph_index = self
-            .byte_to_glyph_indices
-            .get_by_left(paragraph_index)?;
+        let paragraph_index = self.paragraph_byte_to_real_indices.get_by_right(&index)?;
+        let glyph_index = self.byte_to_glyph_indices.get_by_left(paragraph_index)?;
         let next_glyph_index = glyph_index + 1;
-        let next_byte_index = self
-            .byte_to_glyph_indices
-            .get_by_right(&next_glyph_index)?;
+        let next_byte_index = self.byte_to_glyph_indices.get_by_right(&next_glyph_index)?;
         let next_byte_index = self
             .paragraph_byte_to_real_indices
             .get_by_left(next_byte_index)?;
@@ -301,9 +311,7 @@ impl Paragraph {
 
     /// Try to get the real byte index for a given UTF-16 index.
     pub fn try_get_index(&self, utf16_index: usize) -> Option<usize> {
-        let paragraph_index = self
-            .byte_to_utf16_indices
-            .get_by_right(&utf16_index)?;
+        let paragraph_index = self.byte_to_utf16_indices.get_by_right(&utf16_index)?;
         self.paragraph_byte_to_real_indices
             .get_by_left(paragraph_index)
             .copied()
@@ -369,8 +377,7 @@ impl Paragraph {
             .enumerate()
             .for_each(|(i, text_box)| {
                 if let Some(placeholder) = self.placeholders.get(i) {
-                    placeholder
-                        .draw(canvas, x + text_box.rect.left, y + text_box.rect.top);
+                    placeholder.draw(canvas, x + text_box.rect.left, y + text_box.rect.top);
                 }
             });
     }
@@ -383,11 +390,8 @@ impl Paragraph {
     ) -> Vec<TextBox> {
         let start = self.get_utf16_index(range.start).unwrap();
         let end = self.get_utf16_index(range.end).unwrap();
-        self.paragraph.get_rects_for_range(
-            start..end,
-            rect_height_style,
-            rect_width_style,
-        )
+        self.paragraph
+            .get_rects_for_range(start..end, rect_height_style, rect_width_style)
     }
 
     pub fn get_rects_for_placeholders(&self) -> Vec<TextBox> {
@@ -395,12 +399,10 @@ impl Paragraph {
     }
 
     pub fn get_glyph_position_at_coordinate(&self, p: impl Into<Point>) -> (usize, Affinity) {
-        let p_with_a = self
-            .paragraph
-            .get_glyph_position_at_coordinate(p);
+        let p_with_a = self.paragraph.get_glyph_position_at_coordinate(p);
         (
             self.get_index(p_with_a.position as usize),
-            p_with_a.affinity
+            p_with_a.affinity,
         )
     }
 
@@ -434,19 +436,21 @@ impl Paragraph {
         self.paragraph.unresolved_glyphs()
     }
 
-    pub fn unresolved_codepoints(&mut self) -> Vec<Unichar>{
+    pub fn unresolved_codepoints(&mut self) -> Vec<Unichar> {
         self.paragraph.unresolved_codepoints()
     }
 
     pub fn visit<'a, F>(&mut self, visitor: F)
     where
-        F: FnMut(usize, Option<&'a VisitorInfo>) {
+        F: FnMut(usize, Option<&'a VisitorInfo>),
+    {
         self.paragraph.visit(visitor);
     }
 
     pub fn extended_visit<'a, F>(&mut self, visitor: F)
     where
-        F: FnMut(usize, Option<&'a ExtendedVisitorInfo>) {
+        F: FnMut(usize, Option<&'a ExtendedVisitorInfo>),
+    {
         self.paragraph.extended_visit(visitor);
     }
 
@@ -458,10 +462,7 @@ impl Paragraph {
         self.paragraph.contains_emoji(text_blob)
     }
 
-    pub fn contains_color_font_or_bitmap(
-        &mut self,
-        text_blob: &mut TextBlob,
-    ) -> bool {
+    pub fn contains_color_font_or_bitmap(&mut self, text_blob: &mut TextBlob) -> bool {
         self.paragraph.contains_color_font_or_bitmap(text_blob)
     }
 
@@ -479,11 +480,7 @@ impl Paragraph {
         }
     }
 
-    pub fn get_actual_text_range(
-        &self,
-        line_number: usize,
-        include_spaces: bool,
-    ) -> TextRange {
+    pub fn get_actual_text_range(&self, line_number: usize, include_spaces: bool) -> TextRange {
         let mut text_range = self
             .paragraph
             .get_actual_text_range(line_number, include_spaces);
@@ -497,23 +494,19 @@ impl Paragraph {
         text_range
     }
 
-    pub fn get_glyph_cluster_at(
-        &self,
-        index: usize,
-    ) -> Option<GlyphClusterInfo> {
+    pub fn get_glyph_cluster_at(&self, index: usize) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_cluster_info) = self.paragraph.get_glyph_cluster_at(index) {
-            glyph_cluster_info.text_range.start = self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.start);
-            glyph_cluster_info.text_range.end = self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.end);
+            glyph_cluster_info.text_range.start =
+                self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.start);
+            glyph_cluster_info.text_range.end =
+                self.real_index_for_paragraph_byte(glyph_cluster_info.text_range.end);
             Some(glyph_cluster_info)
         } else {
             None
         }
     }
 
-    pub fn get_closest_glyph_cluster_at(
-        &self,
-        d: impl Into<Point>,
-    ) -> Option<GlyphClusterInfo> {
+    pub fn get_closest_glyph_cluster_at(&self, d: impl Into<Point>) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_info) = self.paragraph.get_closest_glyph_cluster_at(d) {
             // Skia reports the cluster in PARAGRAPH byte space, which differs from the real space
             // wherever a placeholder replaced shorter text: an inline image is one U+FFFC in the
@@ -524,35 +517,35 @@ impl Paragraph {
             // hit-test that runs on every pointer move must never panic. Mapping to the nearest
             // preceding real index keeps the caret inside the text and is what the caller's own
             // grapheme walk assumes anyway.
-            glyph_info.text_range.start = self.real_index_for_paragraph_byte(glyph_info.text_range.start);
-            glyph_info.text_range.end = self.real_index_for_paragraph_byte(glyph_info.text_range.end);
+            glyph_info.text_range.start =
+                self.real_index_for_paragraph_byte(glyph_info.text_range.start);
+            glyph_info.text_range.end =
+                self.real_index_for_paragraph_byte(glyph_info.text_range.end);
             Some(glyph_info)
         } else {
             None
         }
     }
 
-    pub fn get_glyph_info_at(
-        &mut self,
-        index: usize,
-    ) -> Option<GlyphInfo> {
+    pub fn get_glyph_info_at(&mut self, index: usize) -> Option<GlyphInfo> {
         let index = self.get_utf16_index(index).unwrap();
         if let Some(mut glyph_info) = self.paragraph.get_glyph_info_at_utf16_offset(index) {
-            glyph_info.grapheme_cluster_text_range.start = self.get_index(glyph_info.grapheme_cluster_text_range.start);
-            glyph_info.grapheme_cluster_text_range.end = self.get_index(glyph_info.grapheme_cluster_text_range.end);
+            glyph_info.grapheme_cluster_text_range.start =
+                self.get_index(glyph_info.grapheme_cluster_text_range.start);
+            glyph_info.grapheme_cluster_text_range.end =
+                self.get_index(glyph_info.grapheme_cluster_text_range.end);
             Some(glyph_info)
         } else {
             None
         }
     }
 
-    pub fn get_closest_glyph_info_at(
-        &mut self,
-        d: impl Into<Point>,
-    ) -> Option<GlyphInfo> {
+    pub fn get_closest_glyph_info_at(&mut self, d: impl Into<Point>) -> Option<GlyphInfo> {
         if let Some(mut glyph_info) = self.paragraph.get_closest_utf16_glyph_info_at(d) {
-            glyph_info.grapheme_cluster_text_range.start = self.get_index(glyph_info.grapheme_cluster_text_range.start);
-            glyph_info.grapheme_cluster_text_range.end = self.get_index(glyph_info.grapheme_cluster_text_range.end);
+            glyph_info.grapheme_cluster_text_range.start =
+                self.get_index(glyph_info.grapheme_cluster_text_range.start);
+            glyph_info.grapheme_cluster_text_range.end =
+                self.get_index(glyph_info.grapheme_cluster_text_range.end);
             Some(glyph_info)
         } else {
             None
@@ -576,21 +569,33 @@ mod paragraph_tests {
     fn the_display_mapping_round_trips_and_collapses_the_dropped_gap() {
         use crate::text::DisplaySpan;
         // start ellipsis of "0123456789" kept the last 4 bytes: display "…6789".
-        let span = DisplaySpan { head_bytes: 0, tail_start_byte: 6, marker_bytes: 3 };
+        let span = DisplaySpan {
+            head_bytes: 0,
+            tail_start_byte: 6,
+            marker_bytes: 3,
+        };
         // The visible tail maps back and forth.
         assert_eq!(span.content_offset(3), 6, "first visible tail byte");
         assert_eq!(span.content_offset(6), 9, "last visible byte");
         // A middle ellipsis: head "0123", marker, tail "89".
-        let middle = DisplaySpan { head_bytes: 4, tail_start_byte: 8, marker_bytes: 3 };
+        let middle = DisplaySpan {
+            head_bytes: 4,
+            tail_start_byte: 8,
+            marker_bytes: 3,
+        };
         assert_eq!(middle.content_offset(2), 2, "inside the head");
-        assert_eq!(middle.content_offset(4), 8, "the marker means the tail start");
+        assert_eq!(
+            middle.content_offset(4),
+            8,
+            "the marker means the tail start"
+        );
         assert_eq!(middle.content_offset(7), 8, "first tail byte");
         assert_eq!(middle.content_offset(9), 10, "last tail byte");
     }
 
+    use crate::text::ParagraphBuilder;
     use skia_safe::FontMgr;
     use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
-    use crate::text::ParagraphBuilder;
 
     /// The extra leading is centred instead of all sitting above the glyphs.
     ///
@@ -610,7 +615,10 @@ mod paragraph_tests {
         });
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
         let nodes = composer.arena_nodes();
-        let node = nodes.iter().find(|n| n.has_text_content).expect("a text node");
+        let node = nodes
+            .iter()
+            .find(|n| n.has_text_content)
+            .expect("a text node");
         let paragraph = node.cached_paragraph.borrow();
         let paragraph = paragraph.as_ref().expect("measured");
         let baseline = paragraph.alphabetic_baseline();
@@ -631,16 +639,26 @@ mod paragraph_tests {
     /// two 3-byte CJK glyphs then `ab` (8 content bytes): the raw call said 0..8, the wrapper 0..0.
     #[test]
     fn an_actual_text_range_is_reported_in_content_bytes() {
-        let mut p = crate::text::build_plain_paragraph("\u{4f60}\u{597d}ab", 16.0, crate::graphics::Color::BLACK, 400.0);
+        let mut p = crate::text::build_plain_paragraph(
+            "\u{4f60}\u{597d}ab",
+            16.0,
+            crate::graphics::Color::BLACK,
+            400.0,
+        );
         p.layout(400.0);
         let range = p.get_actual_text_range(0, false);
-        assert_eq!((range.start, range.end), (0, 8), "two 3-byte glyphs then ab is 8 bytes");
+        assert_eq!(
+            (range.start, range.end),
+            (0, 8),
+            "two 3-byte glyphs then ab is 8 bytes"
+        );
     }
 
     /// ASCII cannot tell the two units apart, so it must keep working.
     #[test]
     fn an_actual_text_range_of_ascii_matches_its_byte_length() {
-        let mut p = crate::text::build_plain_paragraph("hello", 16.0, crate::graphics::Color::BLACK, 400.0);
+        let mut p =
+            crate::text::build_plain_paragraph("hello", 16.0, crate::graphics::Color::BLACK, 400.0);
         p.layout(400.0);
         let range = p.get_actual_text_range(0, false);
         assert_eq!((range.start, range.end), (0, 5));
@@ -655,7 +673,9 @@ mod paragraph_tests {
         struct Box2;
         impl crate::text::InlineDrawable for Box2 {
             fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
-            fn size(&self) -> (f32, f32) { (20.0, 16.0) }
+            fn size(&self) -> (f32, f32) {
+                (20.0, 16.0)
+            }
         }
         let mut fc = FontCollection::new();
         fc.set_default_font_manager(FontMgr::default(), None);
@@ -665,7 +685,11 @@ mod paragraph_tests {
         ts.set_font_size(16.0);
         b.push_style(&ts);
         b.add_text("ab");
-        b.add_placeholder("XY", Arc::new(Box2), &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
+        b.add_placeholder(
+            "XY",
+            Arc::new(Box2),
+            &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)),
+        );
         b.add_text("cd");
         let mut p = b.build();
         p.layout(400.0);
@@ -691,7 +715,9 @@ mod paragraph_tests {
         struct Box2;
         impl crate::text::InlineDrawable for Box2 {
             fn draw(&self, _c: &skia_safe::Canvas, _x: f32, _y: f32) {}
-            fn size(&self) -> (f32, f32) { (20.0, 16.0) }
+            fn size(&self) -> (f32, f32) {
+                (20.0, 16.0)
+            }
         }
         let mut fc = FontCollection::new();
         fc.set_default_font_manager(FontMgr::default(), None);
@@ -703,7 +729,11 @@ mod paragraph_tests {
         b.add_text("ab");
         // Two content bytes against a 3-byte U+FFFC: the paragraph and real index spaces differ by
         // one near the placeholder, so paragraph byte 3 has no exact key.
-        b.add_placeholder("XY", Arc::new(Box2), &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
+        b.add_placeholder(
+            "XY",
+            Arc::new(Box2),
+            &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)),
+        );
         b.add_text("cd");
         let mut p = b.build();
         p.layout(200.0);
@@ -711,21 +741,46 @@ mod paragraph_tests {
         // at paragraph byte 2 / real byte 2, and the next text starts at paragraph byte 5 / real
         // byte 4. The old code indexed this with `.expect(...)`; the contract is a clamp to the
         // nearest preceding real index (2), never a panic.
-        assert_eq!(p.real_index_for_paragraph_byte(3), 2, "a hole clamps to the placeholder's start");
+        assert_eq!(
+            p.real_index_for_paragraph_byte(3),
+            2,
+            "a hole clamps to the placeholder's start"
+        );
         assert_eq!(p.real_index_for_paragraph_byte(4), 2);
-        assert_eq!(p.real_index_for_paragraph_byte(2), 2, "an exact key is unchanged");
-        assert_eq!(p.real_index_for_paragraph_byte(5), 4, "the text after the placeholder");
-        assert_eq!(p.real_index_for_paragraph_byte(99), 6, "past the end clamps to the last index");
+        assert_eq!(
+            p.real_index_for_paragraph_byte(2),
+            2,
+            "an exact key is unchanged"
+        );
+        assert_eq!(
+            p.real_index_for_paragraph_byte(5),
+            4,
+            "the text after the placeholder"
+        );
+        assert_eq!(
+            p.real_index_for_paragraph_byte(99),
+            6,
+            "past the end clamps to the last index"
+        );
         // And the public entry point stays inside the content for every x.
         let mut x = 0.0f32;
         while x < 80.0 {
             if let Some(info) = p.get_closest_glyph_cluster_at((x, 8.0)) {
-                assert!(info.text_range.start <= 6, "start out of range at x={x}: {:?}", info.text_range);
-                assert!(info.text_range.end <= 6, "end out of range at x={x}: {:?}", info.text_range);
+                assert!(
+                    info.text_range.start <= 6,
+                    "start out of range at x={x}: {:?}",
+                    info.text_range
+                );
+                assert!(
+                    info.text_range.end <= 6,
+                    "end out of range at x={x}: {:?}",
+                    info.text_range
+                );
             }
             x += 1.0;
         }
-    }    #[test]
+    }
+    #[test]
     fn test_paragraph_layout_and_hit_test() {
         let mut fc = FontCollection::new();
         fc.set_default_font_manager(FontMgr::default(), None);
@@ -743,7 +798,11 @@ mod paragraph_tests {
         let gc = p.get_closest_glyph_cluster_at((10.0, 5.0));
         assert!(gc.is_some());
         // get_rects_for_range returns rects
-        let rects = p.get_rects_for_range(0..5, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+        let rects = p.get_rects_for_range(
+            0..5,
+            skia_safe::textlayout::RectHeightStyle::Max,
+            skia_safe::textlayout::RectWidthStyle::Max,
+        );
         assert!(!rects.is_empty());
     }
 }

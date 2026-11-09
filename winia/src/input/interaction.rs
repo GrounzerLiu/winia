@@ -81,12 +81,24 @@ impl ComponentState {
     /// The disabled state (enabled=false — the component ignores interactions and is drawn
     /// de-emphasised).
     pub const fn disabled() -> Self {
-        Self { enabled: false, pressed: false, hovered: false, focused: false, dragged: false }
+        Self {
+            enabled: false,
+            pressed: false,
+            hovered: false,
+            focused: false,
+            dragged: false,
+        }
     }
 
     /// Enabled with no interaction active.
     pub const fn idle() -> Self {
-        Self { enabled: true, pressed: false, hovered: false, focused: false, dragged: false }
+        Self {
+            enabled: true,
+            pressed: false,
+            hovered: false,
+            focused: false,
+            dragged: false,
+        }
     }
 
     /// Whether the component is interactive (enabled and not visually disabled).
@@ -193,7 +205,9 @@ impl MutableInteractionSource {
     /// progress driven by the animation system (a 500ms Tween, as in the old ripple.rs) and stopping
     /// on its own when it completes.
     pub fn emit_press_at(&self, pos: (f32, f32)) {
-        let id = self.next_layer_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self
+            .next_layer_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.ripple_layers.lock().push(RippleLayer::new(id, pos));
         self.pressed.set(true);
         let progress = self.ripple_layers.lock().last().unwrap().progress.clone();
@@ -213,7 +227,8 @@ impl MutableInteractionSource {
     pub fn emit_release(&self) {
         let ids: Vec<u64> = {
             let mut layers = self.ripple_layers.lock();
-            layers.iter_mut()
+            layers
+                .iter_mut()
                 .filter(|l| !l.fading)
                 .map(|l| {
                     l.fading = true;
@@ -222,7 +237,10 @@ impl MutableInteractionSource {
                 .collect()
         };
         for id in ids {
-            let opacity = self.ripple_layers.lock().iter()
+            let opacity = self
+                .ripple_layers
+                .lock()
+                .iter()
                 .find(|l| l.id == id)
                 .map(|l| l.opacity.clone());
             if let Some(opacity) = opacity {
@@ -373,7 +391,6 @@ impl MutableInteractionSource {
         self.focused.peek()
     }
 
-
     /// Read all the state at once (matching material3's enabled/pressed/hovered/focused
     /// combination).
     pub fn state(&self, enabled: bool) -> ComponentState {
@@ -431,14 +448,20 @@ mod tests {
         });
         let src = holder.expect("compose should run once");
         src.emit_press(); // Change → notify → pending.
-        assert!(composer.has_pending_states(), "set should push into the composer pending queue");
+        assert!(
+            composer.has_pending_states(),
+            "set should push into the composer pending queue"
+        );
         let before = reads;
         composer.recompose(|ctx| {
             let src = ctx.remember(|| MutableInteractionSource::new()).get();
             let _ = src.is_pressed();
             reads += 1;
         });
-        assert!(reads > before, "the slot that read is_pressed should be marked dirty and re-run");
+        assert!(
+            reads > before,
+            "the slot that read is_pressed should be marked dirty and re-run"
+        );
         assert!(src.is_pressed());
     }
 
@@ -453,7 +476,11 @@ mod tests {
         let layers = s.ripple_layers();
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].center, (12.0, 34.0));
-        assert_eq!(layers[0].opacity.get(), RIPPLE_OPACITY, "ripple starts at opacity 0.10");
+        assert_eq!(
+            layers[0].opacity.get(),
+            RIPPLE_OPACITY,
+            "ripple starts at opacity 0.10"
+        );
         assert!(!layers[0].fading);
         assert!(s.has_active_ripples());
         // Release: fading starts (the progress/opacity animations are driven by the animation
@@ -471,14 +498,21 @@ mod tests {
         s.emit_press_at((1.0, 2.0));
         let id = s.ripple_layers()[0].id;
         s.remove_ripple_layer(id);
-        assert!(!s.has_active_ripples(), "the layer should be cleaned up once the fade completes");
+        assert!(
+            !s.has_active_ripples(),
+            "the layer should be cleaned up once the fade completes"
+        );
     }
 
     #[test]
     fn test_focus_indicator_alpha_api() {
         let s = MutableInteractionSource::new();
-        assert_eq!(s.focus_indicator_alpha_value(), 0.0, "no focus ring initially");
-        s.emit_focus();   // Starts the fade-in animation (the global animation system advances it).
+        assert_eq!(
+            s.focus_indicator_alpha_value(),
+            0.0,
+            "no focus ring initially"
+        );
+        s.emit_focus(); // Starts the fade-in animation (the global animation system advances it).
         s.emit_unfocus(); // Starts the fade-out animation.
     }
 }

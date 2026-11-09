@@ -45,8 +45,20 @@ pub struct FlingContext {
 impl FlingContext {
     /// Build the shape the framework hands [`FlingBehavior::plan`], so a strategy can be unit-tested
     /// outside this crate (the struct is `#[non_exhaustive]`, which rules out a literal).
-    pub fn new(offset: f32, velocity: f32, limit: f32, snap: Option<SnapInfo>, density: f32) -> Self {
-        Self { offset, velocity, limit, snap, density }
+    pub fn new(
+        offset: f32,
+        velocity: f32,
+        limit: f32,
+        snap: Option<SnapInfo>,
+        density: f32,
+    ) -> Self {
+        Self {
+            offset,
+            velocity,
+            limit,
+            snap,
+            density,
+        }
     }
 }
 
@@ -152,7 +164,10 @@ pub struct SnapFlingBehavior;
 
 impl FlingBehavior for SnapFlingBehavior {
     fn plan(&self, fling: FlingContext) -> FlingPlan {
-        let Some(snap) = fling.snap.filter(|snap| snap.step.is_finite() && snap.step > 0.0) else {
+        let Some(snap) = fling
+            .snap
+            .filter(|snap| snap.step.is_finite() && snap.step > 0.0)
+        else {
             return FlingPlan::Decay {
                 spec: crate::animation::exponential_decay(FLING_FRICTION),
             };
@@ -204,7 +219,11 @@ pub(crate) fn snap_target(current: f32, velocity: f32, snap: &SnapInfo, limit: f
             .round()
             .max(1.0);
         let pages = carried.min(snap.max_pages_per_fling.max(1) as f32) * step;
-        let target = if velocity > 0.0 { start + pages } else { (start - pages).max(0.0) };
+        let target = if velocity > 0.0 {
+            start + pages
+        } else {
+            (start - pages).max(0.0)
+        };
         target + snap.anchor
     };
     picked.clamp(0.0, limit.max(0.0))
@@ -226,7 +245,13 @@ mod tests {
     }
 
     fn ctx(offset: f32, velocity: f32, snap: Option<SnapInfo>) -> FlingContext {
-        FlingContext { offset, velocity, limit: 2000.0, snap, density: 1.0 }
+        FlingContext {
+            offset,
+            velocity,
+            limit: 2000.0,
+            snap,
+            density: 1.0,
+        }
     }
 
     /// Without a snap spec the built-in keeps the old momentum: a decay, at the tree's friction.
@@ -269,7 +294,10 @@ mod tests {
         let plan = FlingPlan::spring(10_000.0, SpringSpec::default());
         assert_eq!(
             plan,
-            FlingPlan::Spring { target: 10_000.0, spec: SpringSpec::default() }
+            FlingPlan::Spring {
+                target: 10_000.0,
+                spec: SpringSpec::default()
+            }
         );
     }
 }

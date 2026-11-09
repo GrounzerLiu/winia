@@ -11,8 +11,8 @@
 //! 提供程序化控制：`show`/`hide`/`expand`/`partial_expand`；拖拽增量经
 //! `drag_delta` 喂入，结束经 `settle`/`settle_with_velocity` 吸附。
 
-use crate::runtime::state::State;
 use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
+use crate::runtime::state::State;
 
 /// Sheet 值（对标 Compose `SheetValue`）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -107,8 +107,12 @@ impl SheetState {
     }
 
     /// 设置值变更确认回调（veto 时回滚）
-    pub fn set_confirm_value_change(&mut self, f: impl Fn(SheetValue) -> bool + Send + Sync + 'static) {
-        self.anchored.set_confirm_value_change(move |v: &SheetValue| f(*v));
+    pub fn set_confirm_value_change(
+        &mut self,
+        f: impl Fn(SheetValue) -> bool + Send + Sync + 'static,
+    ) {
+        self.anchored
+            .set_confirm_value_change(move |v: &SheetValue| f(*v));
     }
 
     /// 布局期更新锚点（`full_height` = 视口高，`sheet_height` = 面板内容高）。
@@ -150,17 +154,26 @@ impl SheetState {
     /// The three anchor positions in one snapshot, for comparing two anchor sets.
     fn positions(&self) -> [(SheetValue, f32); 3] {
         [
-            (SheetValue::Hidden, self.anchored.position_of(&SheetValue::Hidden)),
+            (
+                SheetValue::Hidden,
+                self.anchored.position_of(&SheetValue::Hidden),
+            ),
             (
                 SheetValue::PartiallyExpanded,
                 self.anchored.position_of(&SheetValue::PartiallyExpanded),
             ),
-            (SheetValue::Expanded, self.anchored.position_of(&SheetValue::Expanded)),
+            (
+                SheetValue::Expanded,
+                self.anchored.position_of(&SheetValue::Expanded),
+            ),
         ]
     }
 
     /// Whether a geometry change actually moved an anchor. NaN (an absent anchor) counts as equal to NaN.
-    fn anchors_moved(before: &[(SheetValue, f32); 3], after: &DraggableAnchors<SheetValue>) -> bool {
+    fn anchors_moved(
+        before: &[(SheetValue, f32); 3],
+        after: &DraggableAnchors<SheetValue>,
+    ) -> bool {
         let same = |a: f32, b: f32| (a.is_nan() && b.is_nan()) || (a - b).abs() < 0.01;
         before
             .iter()
@@ -199,7 +212,10 @@ impl SheetState {
             !self.skip_partially_expanded.get() && sheet_height > full_height / 2.0;
         if partially_available {
             let visible = full_height / 2.0; // 或 sheet_height 取小（防止 lift off 底部）
-            pairs.push((SheetValue::PartiallyExpanded, full_height - visible.min(sheet_height)));
+            pairs.push((
+                SheetValue::PartiallyExpanded,
+                full_height - visible.min(sheet_height),
+            ));
         }
         if sheet_height != 0.0 {
             pairs.push((SheetValue::Expanded, (full_height - sheet_height).max(0.0)));
@@ -295,7 +311,11 @@ impl SheetState {
         if !self.skip_hidden_state.get() {
             pairs.push((SheetValue::Hidden, layout_height));
         }
-        self.has_partially_expanded.set(pairs.iter().any(|(v, _)| *v == SheetValue::PartiallyExpanded));
+        self.has_partially_expanded.set(
+            pairs
+                .iter()
+                .any(|(v, _)| *v == SheetValue::PartiallyExpanded),
+        );
         // Expanded 在重合时仍视为可用（expand() 应可达），用 has_expanded_pos 而非 pairs 去重结果
         self.has_expanded.set(has_expanded_pos);
         let old_anchors = [self.positions()];
@@ -345,15 +365,19 @@ impl SheetState {
         // `:1620-1631`) — and for the coinciding case Compose never gets that far, because its scaffold does not
         // add the `Expanded` anchor when `sheetHeight == peekHeightPx` (`BottomSheetScaffold.kt:282`). winia adds
         // it on purpose (see `update_anchors_scaffold`) so `expand()` has a target.
-        [SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden]
-            .into_iter()
-            .filter(|v| !self.anchored.position_of(v).is_nan())
-            .min_by(|a, b| {
-                let da = (self.anchored.position_of(a) - offset).abs();
-                let db = (self.anchored.position_of(b) - offset).abs();
-                da.total_cmp(&db)
-            })
-            .unwrap_or_else(|| self.current_value())
+        [
+            SheetValue::PartiallyExpanded,
+            SheetValue::Expanded,
+            SheetValue::Hidden,
+        ]
+        .into_iter()
+        .filter(|v| !self.anchored.position_of(v).is_nan())
+        .min_by(|a, b| {
+            let da = (self.anchored.position_of(a) - offset).abs();
+            let db = (self.anchored.position_of(b) - offset).abs();
+            da.total_cmp(&db)
+        })
+        .unwrap_or_else(|| self.current_value())
     }
 
     pub fn settled_value(&self) -> SheetValue {
@@ -535,7 +559,10 @@ mod tests {
         let mut s = SheetState::new(SheetValue::Hidden);
         s.update_anchors(800.0, 600.0); // 内容 600 > 400 (半视口)
         assert!(s.has_partially_expanded_state());
-        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 400.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            400.0
+        );
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
     }
 
@@ -548,13 +575,18 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while crate::animation::update_animations() {
             std::thread::sleep(std::time::Duration::from_millis(8));
-            assert!(std::time::Instant::now() < deadline, "the sheet never settled");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sheet never settled"
+            );
         }
     }
 
     #[test]
     fn a_taller_window_moves_the_modal_sheet_to_the_new_anchor() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut s = SheetState::new(SheetValue::Hidden);
         s.update_anchors(800.0, 600.0);
@@ -569,9 +601,17 @@ mod tests {
             500.0,
             "the anchor follows the window"
         );
-        assert_eq!(s.target_value(), SheetValue::PartiallyExpanded, "the state is kept");
+        assert_eq!(
+            s.target_value(),
+            SheetValue::PartiallyExpanded,
+            "the state is kept"
+        );
         settle(&s);
-        assert_eq!(s.offset(), 500.0, "the sheet travels to the new position of that state");
+        assert_eq!(
+            s.offset(),
+            500.0,
+            "the sheet travels to the new position of that state"
+        );
     }
 
     /// When the anchor the sheet sits on DISAPPEARS, it falls back to the next state its own state machine
@@ -583,8 +623,9 @@ mod tests {
         // This test drives a real tween, so it holds the animation lock and clears the registry like every
         // other test that pushes an animation (a test that skipped this was cleared by a parallel test's
         // `clear_all_animations()` and failed whenever the crate's tests ran in parallel).
-        let _serial =
-            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let s = SheetState::new(SheetValue::PartiallyExpanded);
         s.update_anchors_scaffold(800.0, 96.0, 600.0);
@@ -593,10 +634,16 @@ mod tests {
         s.set_skip_partially_expanded(true);
         s.update_anchors_scaffold(800.0, 96.0, 600.0);
         assert!(
-            s.anchored.position_of(&SheetValue::PartiallyExpanded).is_nan(),
+            s.anchored
+                .position_of(&SheetValue::PartiallyExpanded)
+                .is_nan(),
             "the anchor is gone"
         );
-        assert_eq!(s.target_value(), SheetValue::Expanded, "the sheet falls back to Expanded");
+        assert_eq!(
+            s.target_value(),
+            SheetValue::Expanded,
+            "the sheet falls back to Expanded"
+        );
         // The move itself is a timed animation, so drive frames until it arrives.
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_millis(600) {
@@ -631,7 +678,10 @@ mod tests {
             s.anchored.position_of(&SheetValue::Hidden).is_nan(),
             "with the flag set there is no anchor to hide at"
         );
-        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            704.0
+        );
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
     }
 
@@ -640,12 +690,17 @@ mod tests {
     /// (`AnchoredDraggableState.updateIfNeeded`) and what the scaffold's snackbar rule and drag handle read.
     #[test]
     fn the_value_for_the_offset_lags_the_requested_target() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let s = SheetState::new(SheetValue::PartiallyExpanded);
         s.set_skip_hidden_state(true);
         s.update_anchors_scaffold(720.0, 96.0, 600.0);
-        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 624.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            624.0
+        );
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 120.0);
         s.anchored.offset_state().set(624.0);
         assert_eq!(s.value_for_offset(), SheetValue::PartiallyExpanded);
@@ -676,7 +731,9 @@ mod tests {
     #[test]
     fn a_slow_release_commits_after_the_positional_threshold() {
         // It pushes a settle animation, so it takes the same lock every other animation-driving test does.
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let s = SheetState::new(SheetValue::Expanded);
         // Anchors 200 px apart: Expanded at 200, PartiallyExpanded at 400, Hidden at 800.
@@ -687,7 +744,11 @@ mod tests {
         ]));
         s.anchored.offset_state().set(200.0);
         s.anchored.drag_delta(60.0);
-        assert_eq!(s.offset(), 260.0, "the finger moved the sheet 60 px towards the peek");
+        assert_eq!(
+            s.offset(),
+            260.0,
+            "the finger moved the sheet 60 px towards the peek"
+        );
         // A release must be MOVING for the positional rule to apply at all — both Compose and winia
         // short-circuit a dead-stop release to the nearest anchor (`computeTarget`'s `if (!isMoving)`), so
         // this is a slow-but-moving release, well under the 125 dp/s fling gate.
@@ -718,12 +779,20 @@ mod tests {
         assert!(s.anchored_draggable().is_dragging(), "the drag is live");
 
         s.update_anchors_scaffold(800.0, 96.0, 600.0);
-        assert_eq!(s.offset(), dragged, "unchanged anchors leave the drag alone");
+        assert_eq!(
+            s.offset(),
+            dragged,
+            "unchanged anchors leave the drag alone"
+        );
         assert!(!s.is_animation_running(), "and start no motion");
 
         // Even a REAL geometry change waits for the finger to lift.
         s.update_anchors_scaffold(1000.0, 96.0, 600.0);
-        assert_eq!(s.offset(), dragged, "a resize mid-drag does not snap the sheet either");
+        assert_eq!(
+            s.offset(),
+            dragged,
+            "a resize mid-drag does not snap the sheet either"
+        );
         assert!(!s.is_animation_running(), "still no motion behind the drag");
     }
 
@@ -731,11 +800,16 @@ mod tests {
     /// to move the collapsed sheet to the new peek line (`BottomSheetScaffold.kt:272-306`).
     #[test]
     fn a_taller_window_moves_the_docked_sheet_to_the_new_peek_line() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let s = SheetState::new(SheetValue::PartiallyExpanded);
         s.update_anchors_scaffold(800.0, 96.0, 600.0);
-        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            704.0
+        );
         s.anchored.offset_state().set(704.0);
         s.update_anchors_scaffold(1000.0, 96.0, 600.0);
         assert_eq!(

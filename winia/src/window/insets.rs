@@ -27,14 +27,29 @@ pub struct Insets {
 }
 
 impl Insets {
-    pub const ZERO: Self = Self { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 };
+    pub const ZERO: Self = Self {
+        left: 0.0,
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+    };
 
     pub const fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self { left, top, right, bottom }
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     pub const fn all(value: f32) -> Self {
-        Self { left: value, top: value, right: value, bottom: value }
+        Self {
+            left: value,
+            top: value,
+            right: value,
+            bottom: value,
+        }
     }
 
     /// The union of two insets — the larger value per side.
@@ -157,12 +172,16 @@ impl WindowInsets {
 
     /// The areas a system back/home gesture can start in.
     pub fn safe_gestures(&self) -> Insets {
-        self.system_bars().max(self.display_cutout).max(self.system_gestures)
+        self.system_bars()
+            .max(self.display_cutout)
+            .max(self.system_gestures)
     }
 
     /// Safe drawing, safe gestures and tappable elements — the broadest safe area.
     pub fn safe_content(&self) -> Insets {
-        self.safe_drawing().max(self.safe_gestures()).max(self.tappable_elements)
+        self.safe_drawing()
+            .max(self.safe_gestures())
+            .max(self.tappable_elements)
     }
 
     /// The part of the gesture area that the system always keeps for itself.
@@ -326,7 +345,10 @@ pub(crate) fn consumed() -> Consumed {
 pub(crate) fn remaining(kind: InsetsKind, window: WindowInsets, consumed: Consumed) -> Insets {
     let mut out = Insets::ZERO;
     for &source in kind.sources() {
-        out = out.max(kind.source_value(window, source).exclude(consumed.get(source)));
+        out = out.max(
+            kind.source_value(window, source)
+                .exclude(consumed.get(source)),
+        );
     }
     out
 }
@@ -378,7 +400,9 @@ pub struct WindowInsetsController {
 
 impl WindowInsetsController {
     pub fn new() -> Self {
-        Self { state: State::new(WindowInsets::default()) }
+        Self {
+            state: State::new(WindowInsets::default()),
+        }
     }
 
     pub fn current(&self) -> WindowInsets {
@@ -402,7 +426,9 @@ impl WindowInsetsController {
     pub fn set_status_bar_insets(&self, insets: Insets) {
         self.update(|window| {
             window.status_bars = insets;
-            window.visibility.set_source(Source::Status, !insets.is_zero());
+            window
+                .visibility
+                .set_source(Source::Status, !insets.is_zero());
         });
     }
 
@@ -482,8 +508,7 @@ impl std::fmt::Debug for WindowInsetsController {
 pub(crate) static INSET_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn fallback_controller() -> WindowInsetsController {
-    static FALLBACK: LazyLock<WindowInsetsController> =
-        LazyLock::new(WindowInsetsController::new);
+    static FALLBACK: LazyLock<WindowInsetsController> = LazyLock::new(WindowInsetsController::new);
     FALLBACK.clone()
 }
 
@@ -526,7 +551,11 @@ mod tests {
         let a = Insets::new(1.0, 5.0, 2.0, 0.0);
         let b = Insets::new(0.0, 3.0, 4.0, 8.0);
         assert_eq!(a.max(b), Insets::new(1.0, 5.0, 4.0, 8.0));
-        assert_eq!(b.exclude(a), Insets::new(0.0, 0.0, 2.0, 8.0), "never negative");
+        assert_eq!(
+            b.exclude(a),
+            Insets::new(0.0, 0.0, 2.0, 8.0),
+            "never negative"
+        );
         assert!(Insets::ZERO.is_zero());
     }
 

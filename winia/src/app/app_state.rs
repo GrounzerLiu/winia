@@ -33,10 +33,8 @@ pub(crate) struct AppState {
     pub(crate) was_animating: bool,
 }
 
-
 mod handlers;
 
 pub(crate) use handlers::try_selection_key;
 mod helpers;
 mod windows;
-

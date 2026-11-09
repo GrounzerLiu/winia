@@ -25,19 +25,19 @@
 //!   are not published as tokens for this component (the source carries its own TODO), so the spring
 //!   parameters here are ours while the behavior is the source's.
 
+use crate::components::text::ProvideTextStyle;
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::constraints::Constraints;
-use crate::layout::LayoutDirection;
-use crate::layout::node::{
-    measure_node, IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
-};
-use crate::unit::{Offset, Size};
-use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape, TransformOrigin};
 use crate::input::interaction::MutableInteractionSource;
-use crate::components::text::ProvideTextStyle;
+use crate::layout::LayoutDirection;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{
+    IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, measure_node,
+};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 /// Material Icons "check" (filled, 24 dp viewBox) — the icon an active segment shows by default.
@@ -46,7 +46,8 @@ use std::sync::Arc;
 /// `?icon.set=materialicons&icon.name=check` serves exactly this `d` and a `0 0 24 24` viewBox, which is
 /// the coordinate space [`crate::graphics::IconSource::svg_path`] assumes. (The same page serves the
 /// Material SYMBOLS variant in a `0 -960 960 960` box — unusable here without rescaling.)
-pub const CHECK_ICON_PATH: &str = "M19.69,5.23L8.96,15.96l-4.23-4.23L2.96,13.5l6,6L21.46,7L19.69,5.23z";
+pub const CHECK_ICON_PATH: &str =
+    "M19.69,5.23L8.96,15.96l-4.23-4.23L2.96,13.5l6,6L21.46,7L19.69,5.23z";
 
 /// The colors of a segmented button, by state (material3 `SegmentedButtonColors`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,10 +161,18 @@ impl SegmentedButtonDefaults {
 
     /// The four-state default colors (Compose's `defaultSegmentedButtonColors`).
     pub fn colors(theme: &ThemeColors) -> SegmentedButtonColors {
-        let disabled_content =
-            Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b);
-        let disabled_border =
-            Color::from_argb(31, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b);
+        let disabled_content = Color::from_argb(
+            97,
+            theme.on_surface.r,
+            theme.on_surface.g,
+            theme.on_surface.b,
+        );
+        let disabled_border = Color::from_argb(
+            31,
+            theme.on_surface.r,
+            theme.on_surface.g,
+            theme.on_surface.b,
+        );
         SegmentedButtonColors::new(
             theme.secondary_container,
             theme.on_secondary_container,
@@ -224,7 +233,10 @@ macro_rules! segmented_row {
 
         impl $name {
             pub fn new() -> Self {
-                Self { modifier: Modifier::new(), space: SegmentedButtonDefaults::BORDER_WIDTH }
+                Self {
+                    modifier: Modifier::new(),
+                    space: SegmentedButtonDefaults::BORDER_WIDTH,
+                }
             }
 
             pub fn modifier(mut self, m: Modifier) -> Self {
@@ -250,7 +262,14 @@ macro_rules! segmented_row {
                 ctx.changed(&direction);
                 let key = ctx.next_key();
                 let m = Modifier::new().fill_max_width().then(self.modifier);
-                match ctx.start_restartable_group(key, m, SegmentedRowPolicy { overlap: self.space, direction }) {
+                match ctx.start_restartable_group(
+                    key,
+                    m,
+                    SegmentedRowPolicy {
+                        overlap: self.space,
+                        direction,
+                    },
+                ) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => content(ctx),
                 }
@@ -510,7 +529,9 @@ impl SegmentedButton {
         ctx.changed(&direction);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| SegmentedButtonDefaults::colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| SegmentedButtonDefaults::colors(&theme));
         let shape = self.shape;
         let enabled = self.enabled;
         let active = self.selected;
@@ -518,8 +539,9 @@ impl SegmentedButton {
         let container = colors.container_color(enabled, active);
         let content_color = colors.content_color(enabled, active);
         let border_color = colors.border_color(enabled, active);
-        let (border_w, border_c) =
-            self.border.unwrap_or((SegmentedButtonDefaults::BORDER_WIDTH, border_color));
+        let (border_w, border_c) = self
+            .border
+            .unwrap_or((SegmentedButtonDefaults::BORDER_WIDTH, border_color));
         let (pad_h, pad_v) = self.content_padding.unwrap_or((
             SegmentedButtonDefaults::CONTENT_PADDING_H,
             SegmentedButtonDefaults::CONTENT_PADDING_V,
@@ -556,14 +578,15 @@ impl SegmentedButton {
             m = m.border(border_w, border_c, shape);
         }
         if enabled {
-            let click: Option<Arc<dyn Fn() + Send + Sync>> = match (&self.on_click, &self.on_checked_change) {
-                (Some(cb), _) => Some(cb.clone()),
-                (None, Some(cb)) => {
-                    let cb = cb.clone();
-                    Some(Arc::new(move || cb(!active)))
-                }
-                (None, None) => None,
-            };
+            let click: Option<Arc<dyn Fn() + Send + Sync>> =
+                match (&self.on_click, &self.on_checked_change) {
+                    (Some(cb), _) => Some(cb.clone()),
+                    (None, Some(cb)) => {
+                        let cb = cb.clone();
+                        Some(Arc::new(move || cb(!active)))
+                    }
+                    (None, None) => None,
+                };
             if let Some(cb) = click {
                 m = m
                     .clickable_with_source(&interaction, move || cb())
@@ -601,7 +624,11 @@ impl SegmentedButton {
         let crossfade = inactive_icon.is_some();
         // The slot is always composed (see the icon block below); the offset is what says whether the
         // label sits centred (icon invisible) or after the slot.
-        let target_offset = if active || crossfade { 0.0 } else { SegmentedButtonDefaults::LABEL_OFFSET_HIDDEN };
+        let target_offset = if active || crossfade {
+            0.0
+        } else {
+            SegmentedButtonDefaults::LABEL_OFFSET_HIDDEN
+        };
         let policy = SegmentedButtonContentPolicy {
             slot_offset: slot_offset.clone(),
             target_offset,
@@ -637,13 +664,18 @@ impl SegmentedButton {
                     crate::animation::push_animatable(
                         progress.clone(),
                         1.0,
-                        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+                        crate::animation::AnimationSpec::Spring(
+                            crate::animation::SpringSpec::default(),
+                        ),
                     );
                 }
                 let shown = active || crossfade;
                 let layer = progress.clone();
                 let icon_modifier = Modifier::new()
-                    .size(SegmentedButtonDefaults::ICON_SIZE, SegmentedButtonDefaults::ICON_SIZE)
+                    .size(
+                        SegmentedButtonDefaults::ICON_SIZE,
+                        SegmentedButtonDefaults::ICON_SIZE,
+                    )
                     .graphics_layer(move || {
                         // The crossfading pair fades through its OWN per-generation layer, so this
                         // one must stay out of the way at alpha 1 — a second fade here would multiply
@@ -672,7 +704,11 @@ impl SegmentedButton {
                     });
                 let icon_key = ctx.next_key();
                 WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    match ctx.start_restartable_group(icon_key, icon_modifier, crate::layout::BoxLayout::new()) {
+                    match ctx.start_restartable_group(
+                        icon_key,
+                        icon_modifier,
+                        crate::layout::BoxLayout::new(),
+                    ) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             if crossfade {
@@ -690,13 +726,19 @@ impl SegmentedButton {
                                 crate::components::crossfade::Crossfade::new(active_state)
                                     .animation(segmented_icon_crossfade_spec())
                                     .build(ctx, move |ctx, is_active| {
-                                        let chosen = if is_active { a_icon.clone() } else { i_icon.clone() };
+                                        let chosen = if is_active {
+                                            a_icon.clone()
+                                        } else {
+                                            i_icon.clone()
+                                        };
                                         let inner: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync> =
                                             chosen.unwrap_or_else(|| {
                                                 Arc::new(|ctx: &mut ComposeCtx| {
-                                                    crate::components::icon::Icon::svg_path(CHECK_ICON_PATH)
-                                                        .size(SegmentedButtonDefaults::ICON_SIZE)
-                                                        .build(ctx);
+                                                    crate::components::icon::Icon::svg_path(
+                                                        CHECK_ICON_PATH,
+                                                    )
+                                                    .size(SegmentedButtonDefaults::ICON_SIZE)
+                                                    .build(ctx);
                                                 })
                                             });
                                         inner(ctx);
@@ -706,9 +748,11 @@ impl SegmentedButton {
                                 let inner: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync> = chosen
                                     .unwrap_or_else(|| {
                                         Arc::new(|ctx: &mut ComposeCtx| {
-                                            crate::components::icon::Icon::svg_path(CHECK_ICON_PATH)
-                                                .size(SegmentedButtonDefaults::ICON_SIZE)
-                                                .build(ctx);
+                                            crate::components::icon::Icon::svg_path(
+                                                CHECK_ICON_PATH,
+                                            )
+                                            .size(SegmentedButtonDefaults::ICON_SIZE)
+                                            .build(ctx);
                                         })
                                     });
                                 inner(ctx);
@@ -722,7 +766,11 @@ impl SegmentedButton {
                     let mut text_style = WiniaTheme::typography().label_large;
                     text_style.color = Some(content_color);
                     ProvideTextStyle(text_style, ctx, |ctx| {
-                        match ctx.start_restartable_group(label_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                        match ctx.start_restartable_group(
+                            label_key,
+                            Modifier::new(),
+                            crate::layout::BoxLayout::new(),
+                        ) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => label(ctx),
                         }
@@ -842,14 +890,20 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         if self.has_icon {
             let (icon_size, _) = measure_node(nodes, policies, children[0], label_constraints);
             content_h = content_h.max(icon_size.height);
-            placements.push(Placement { size: icon_size, position: Offset::new(0.0, 0.0) });
+            placements.push(Placement {
+                size: icon_size,
+                position: Offset::new(0.0, 0.0),
+            });
         }
         let label_index = if self.has_icon { 1 } else { 0 };
         if let Some(&label_child) = children.get(label_index) {
             let (label_size, _) = measure_node(nodes, policies, label_child, label_constraints);
             content_h = content_h.max(label_size.height);
             label_w = label_size.width;
-            placements.push(Placement { size: label_size, position: Offset::new(0.0, 0.0) });
+            placements.push(Placement {
+                size: label_size,
+                position: Offset::new(0.0, 0.0),
+            });
         }
         // The icon and the label are one block of `slot + label`; Compose centres that block in the
         // container (`Box(contentAlignment = Center)`), which is what keeps a stretched item's content
@@ -862,23 +916,24 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         let block_w = SegmentedButtonDefaults::ICON_SLOT + label_w;
         let block_x = self.pad_h + ((inner_w - block_w) / 2.0).max(0.0);
         let rtl = self.direction == LayoutDirection::Rtl;
-        let mirrored = |x: f32, w: f32| if rtl { 2.0 * block_x + block_w - x - w } else { x };
+        let mirrored = |x: f32, w: f32| {
+            if rtl {
+                2.0 * block_x + block_w - x - w
+            } else {
+                x
+            }
+        };
         let cy = |h: f32| (content_h - h) / 2.0;
         if self.has_icon {
             let icon = placements[0].size;
-            placements[0].position = Offset::new(
-                mirrored(block_x, icon.width),
-                self.pad_v + cy(icon.height),
-            );
+            placements[0].position =
+                Offset::new(mirrored(block_x, icon.width), self.pad_v + cy(icon.height));
         }
         if let Some(p) = placements.get_mut(if self.has_icon { 1 } else { 0 }) {
             // The label's animated slot offset keeps its meaning: it slides AWAY from the icon as the
             // check appears, which is +x in LTR and −x in RTL.
             let x = block_x + SegmentedButtonDefaults::ICON_SLOT + offset;
-            p.position = Offset::new(
-                mirrored(x, p.size.width),
-                self.pad_v + cy(p.size.height),
-            );
+            p.position = Offset::new(mirrored(x, p.size.width), self.pad_v + cy(p.size.height));
         }
         (
             Size::new(block_w + 2.0 * self.pad_h, content_h + 2.0 * self.pad_v),
@@ -943,7 +998,6 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests;

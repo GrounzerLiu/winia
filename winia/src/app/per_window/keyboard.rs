@@ -1,8 +1,12 @@
 use super::*;
 
 pub(crate) fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
-    let Some(fid) = pw.focused_id else { return false };
-    let Some(r) = pw.composer.layout_root_idx() else { return false };
+    let Some(fid) = pw.focused_id else {
+        return false;
+    };
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return false;
+    };
     dispatch_key_in_arena(pw.composer.arena_nodes(), r, fid, ke)
 }
 
@@ -15,10 +19,16 @@ pub(crate) fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::input::KbEvent
     // would hand keys to a layer below the modal that is actually on top (an overlay keeps a
     // remembered focus now, see `claim_keyboard_for_overlay`), and falling through to lower surfaces
     // would double-handle a key the owner already acted on.
-    let Some(i) = keyboard_scope(pw) else { return false };
+    let Some(i) = keyboard_scope(pw) else {
+        return false;
+    };
     let ov = &pw.overlay.layers[i];
-    let Some(fid) = ov.focused_id else { return false };
-    let Some(r) = ov.composer.layout_root_idx() else { return false };
+    let Some(fid) = ov.focused_id else {
+        return false;
+    };
+    let Some(r) = ov.composer.layout_root_idx() else {
+        return false;
+    };
     // The owner did not consume — stop here.
     dispatch_key_in_arena(ov.composer.arena_nodes(), r, fid, ke)
 }
@@ -41,7 +51,9 @@ pub(crate) fn dispatch_key_in_arena(
             if let Some(anc) = crate::layout::node::find_node_by_id(nodes, r, id) {
                 path.push(anc);
                 pid = nodes[anc].parent_id;
-            } else { break; }
+            } else {
+                break;
+            }
         }
         path.reverse(); // path[0] == root, path[last] == focused
     }
@@ -50,30 +62,48 @@ pub(crate) fn dispatch_key_in_arena(
     // key node on the same node.
     for &ni in &path {
         for el in nodes[ni].modifier.elements() {
-            if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
-                if handler(ke) { return true; }
+            if let crate::modifier::ModifierElement::KbEvent {
+                on_pre_key: Some(handler),
+                ..
+            } = el
+            {
+                if handler(ke) {
+                    return true;
+                }
             }
         }
         for k in nodes[ni].modifier.key_nodes() {
-            if k.on_pre(ke) { return true; }
+            if k.on_pre(ke) {
+                return true;
+            }
         }
     }
     // Bubble: focused → root (matching `onKeyEvent`).
     for &ni in path.iter().rev() {
         for el in nodes[ni].modifier.elements().iter().rev() {
-            if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
-                if handler(ke) { return true; }
+            if let crate::modifier::ModifierElement::KbEvent {
+                on_key: Some(handler),
+                ..
+            } = el
+            {
+                if handler(ke) {
+                    return true;
+                }
             }
         }
         for k in nodes[ni].modifier.key_nodes() {
-            if k.on_event(ke) { return true; }
+            if k.on_event(ke) {
+                return true;
+            }
         }
     }
     // Keyboard activation of the focused component (Compose `clickable`: Enter/Space on the
     // focused node triggers onClick — only the focused node's own clickable responds, and it does
     // not bubble to ancestors).
-    let is_activate = matches!(&ke.key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
-        || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
+    let is_activate = matches!(
+        &ke.key,
+        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)
+    ) || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
     if ke.event_type == crate::input::KbEventType::KeyDown && !ke.repeat && is_activate {
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
             if let Some(on_click) = nodes[idx].modifier.on_click() {
@@ -103,11 +133,21 @@ pub(crate) fn parse_debug_key_with_modifiers(
     let (mut ctrl, mut shift, mut alt, mut meta) = (false, false, false, false);
     let mut rest = s;
     loop {
-        if let Some(r) = rest.strip_prefix("ctrl+") { ctrl = true; rest = r; }
-        else if let Some(r) = rest.strip_prefix("shift+") { shift = true; rest = r; }
-        else if let Some(r) = rest.strip_prefix("alt+") { alt = true; rest = r; }
-        else if let Some(r) = rest.strip_prefix("meta+") { meta = true; rest = r; }
-        else { break; }
+        if let Some(r) = rest.strip_prefix("ctrl+") {
+            ctrl = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("shift+") {
+            shift = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("alt+") {
+            alt = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("meta+") {
+            meta = true;
+            rest = r;
+        } else {
+            break;
+        }
     }
     parse_debug_key(rest).map(|key| (key, ctrl, shift, alt, meta))
 }
@@ -158,22 +198,36 @@ pub(crate) fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
 ///
 /// None means there is no locatable text at the click point (a click on empty space → no cursor,
 /// no drag-selection).
-pub(crate) fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innermost: usize) -> Option<usize> {
-    if let Some(&i) = path.iter().rev().find(|&&i| nodes[i].cached_paragraph.borrow().is_some()) {
+pub(crate) fn find_anchor_text_node(
+    nodes: &[LayoutNode],
+    path: &[usize],
+    innermost: usize,
+) -> Option<usize> {
+    if let Some(&i) = path
+        .iter()
+        .rev()
+        .find(|&&i| nodes[i].cached_paragraph.borrow().is_some())
+    {
         return Some(i);
     }
-    let is_tf_container = nodes[innermost].modifier.elements().iter()
+    let is_tf_container = nodes[innermost]
+        .modifier
+        .elements()
+        .iter()
         .any(|el| matches!(el, crate::modifier::ModifierElement::TextFieldVisual { .. }));
     if !is_tf_container {
         return None;
     }
     // Search downward: the input leaf inside the TextField container's subtree (both para and registrar).
     pub(crate) fn dfs(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
-        if nodes[idx].cached_paragraph.borrow().is_some() && nodes[idx].registrar.borrow().is_some() {
+        if nodes[idx].cached_paragraph.borrow().is_some() && nodes[idx].registrar.borrow().is_some()
+        {
             return Some(idx);
         }
         for &c in &nodes[idx].children {
-            if let Some(f) = dfs(nodes, c) { return Some(f); }
+            if let Some(f) = dfs(nodes, c) {
+                return Some(f);
+            }
         }
         None
     }
@@ -216,4 +270,3 @@ pub(crate) fn find_descendant_ime_callback(nodes: &[LayoutNode], idx: usize) -> 
     }
     None
 }
-

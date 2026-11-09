@@ -110,7 +110,7 @@ impl Slot {
             key,
             remembered: HashMap::new(),
             children: Vec::new(),
-            dirty: true, // 新创建的 slot 总是 dirty（首次必须执行）
+            dirty: true,       // 新创建的 slot 总是 dirty（首次必须执行）
             children_count: 1, // 自身
             is_scope: false,
             params: Vec::new(),
@@ -154,7 +154,6 @@ impl Slot {
         self.remembered.insert(slot_key, Box::new(handle.clone()));
         handle
     }
-
 }
 
 /// 可重启分组状态 — start_restartable_group() 返回
@@ -165,7 +164,6 @@ pub enum GroupStatus {
     /// 子树有变化 → 正常执行闭包
     Enter,
 }
-
 
 /// 槽位状态 — start_slot() 返回
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -305,7 +303,9 @@ impl SlotTable {
             let mut slot = &self.movable_store[&id];
             for (depth, &index) in self.path.iter().enumerate() {
                 slot = &slot.children[index];
-                if slot.is_scope { start = depth + 1; }
+                if slot.is_scope {
+                    start = depth + 1;
+                }
             }
         }
         // Compiler scopes inside a placement already own stable identities. Their statement positions
@@ -317,7 +317,6 @@ impl SlotTable {
         }
         h as u32
     }
-
 
     /// 当前活跃 slot 的 key（overlay 锚点用）
     pub(super) fn active_slot_key(&self) -> u64 {
@@ -348,7 +347,10 @@ impl SlotTable {
     /// The exchange (rather than an assignment) is what recycles: the returned vector goes back to
     /// `Composer::pending_params`, where the next `changed` calls overwrite its boxes in place
     /// (`ParamValue::set_from_any`) instead of allocating new ones.
-    pub(super) fn replace_current_params(&mut self, mut incoming: Vec<Box<dyn ParamValue>>) -> Vec<Box<dyn ParamValue>> {
+    pub(super) fn replace_current_params(
+        &mut self,
+        mut incoming: Vec<Box<dyn ParamValue>>,
+    ) -> Vec<Box<dyn ParamValue>> {
         std::mem::swap(&mut self.current_slot().params, &mut incoming);
         incoming
     }
@@ -401,7 +403,9 @@ impl SlotTable {
             ctx: &mut ClaimCtx,
             store: &mut std::collections::HashMap<u64, Slot>,
         ) {
-            if !slot.visited && !in_skip { return; }
+            if !slot.visited && !in_skip {
+                return;
+            }
             // A live reference inlines its placement. When the invoking host skipped, replay the
             // stored tree as a skipped subtree; never revive an unvisited reference from an entered
             // host or an uncomposed tail from a placement whose body ran.
@@ -409,7 +413,9 @@ impl SlotTable {
                 // Held out of the map across the walk so the recursion can keep its own `&mut` to the
                 // store (movable content inside movable content is not supported, so nothing else can
                 // reach for this same entry).
-                let Some(mut content) = store.remove(&id) else { return };
+                let Some(mut content) = store.remove(&id) else {
+                    return;
+                };
                 let replay = !content.visited;
                 for child in &mut content.children {
                     rec(child, out, replay, depth + 1, ctx, store);
@@ -488,7 +494,9 @@ impl SlotTable {
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
                     eprintln!(
                         "[collect] skip key={:x} kids={} claimed={:?}",
-                        slot.key, node.children.len(), claimed
+                        slot.key,
+                        node.children.len(),
+                        claimed
                     );
                 }
                 out.push(node);
@@ -643,13 +651,20 @@ impl SlotTable {
         // Lifecycle callbacks from slots this call drops; run at the END, once the tree and the
         // cursors are consistent again.
         let mut orphaned: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        #[cfg(debug_assertions)] {
+        #[cfg(debug_assertions)]
+        {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
-                eprintln!("[slot] key={} path={:?} dirty={}", key >> 32, self.path.clone(), is_dirty);
+                eprintln!(
+                    "[slot] key={} path={:?} dirty={}",
+                    key >> 32,
+                    self.path.clone(),
+                    is_dirty
+                );
             }
         }
         let parent = self.current_slot();
-        #[cfg(debug_assertions)] {
+        #[cfg(debug_assertions)]
+        {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
                 // Report the slot's OWN dirty flag as well as the key-set one: the two are different
                 // sources (path marking vs a state write) and only their combination decides Skip.
@@ -672,8 +687,8 @@ impl SlotTable {
         // key 匹配，或"同位置"（key 高位 = slot 路径哈希相同）——Enter/Skip 的
         // counter 漂移不改位置，按索引复用（更新 key 保持同步），避免 truncate
         // 重建 slot 导致 remember 的 State 丢失
-        let same_position = idx < parent.children.len()
-            && parent.children[idx].key >> 32 == key >> 32;
+        let same_position =
+            idx < parent.children.len() && parent.children[idx].key >> 32 == key >> 32;
         // A key that sits LATER among the siblings is a reorder — an explicit `ctx.key` list that
         // moved an item, since statement order cannot change on its own. Rotate that slot into the
         // current position instead of truncating from here: truncating would drop every sibling
@@ -683,9 +698,7 @@ impl SlotTable {
         // The search only fires when the index does not already match (below), and only among this
         // parent's direct children, so the unkeyed path is untouched: two unkeyed siblings have
         // different statement keys and neither is ever found elsewhere.
-        if !(idx < parent.children.len()
-            && (parent.children[idx].key == key || same_position))
-        {
+        if !(idx < parent.children.len() && (parent.children[idx].key == key || same_position)) {
             if let Some(found) = parent.children.iter().position(|c| c.key == key) {
                 if found > idx {
                     let moved = parent.children.remove(found);
@@ -712,7 +725,10 @@ impl SlotTable {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
                 let plen = parent.children.len();
                 let pkey = parent.key;
-                eprintln!("[slot-trunc] key={:x} parent={:x} idx={} len={}", key, pkey, idx, plen);
+                eprintln!(
+                    "[slot-trunc] key={:x} parent={:x} idx={} len={}",
+                    key, pkey, idx, plen
+                );
             }
             // Dropped slots take their lifecycle callbacks with them; run them after the
             // structural change so a callback that composes nothing sees a consistent tree.
@@ -723,18 +739,25 @@ impl SlotTable {
             parent.children.last_mut().unwrap().dirty = false;
             self.path.push(idx);
         }
-        if let Some(last) = self.child_counters.last_mut() { *last += 1; }
+        if let Some(last) = self.child_counters.last_mut() {
+            *last += 1;
+        }
         self.child_counters.push(0);
         // Last, not first: `parent.children` and `self.path` are already in their new shape, so a
         // panicking cleanup unwinds from a consistent composer instead of one missing the slot it
         // was about to create.
-        for f in orphaned { f(); }
+        for f in orphaned {
+            f();
+        }
         SlotStatus::Dirty
     }
 
     pub(super) fn end_slot(&mut self) {
         // 计算子树 slot 总数（自身 + 所有子 slot 的 children_count 之和）
-        let count = 1 + self.current_slot().children.iter()
+        let count = 1 + self
+            .current_slot()
+            .children
+            .iter()
             .map(|c| c.children_count)
             .sum::<usize>();
         self.current_slot().children_count = count;
@@ -813,14 +836,18 @@ impl SlotTable {
     pub(super) fn truncate(&mut self) {
         if let Some(&idx) = self.child_counters.first() {
             let orphaned = SlotTable::truncate_children(&mut self.root_slot.children, idx);
-            for f in orphaned { f(); }
+            for f in orphaned {
+                f();
+            }
         }
     }
 
     pub(super) fn dispose_unplaced_movable(&mut self) {
         fn clear_references(slot: &mut Slot) {
             slot.movable_ref = None;
-            for child in &mut slot.children { clear_references(child); }
+            for child in &mut slot.children {
+                clear_references(child);
+            }
         }
         fn references(slot: &mut Slot, in_skip: bool, live: &mut crate::layout::node::SlotKeySet) {
             if !slot.visited && !in_skip {
@@ -830,14 +857,22 @@ impl SlotTable {
                 return;
             }
             if let Some(id) = slot.movable_ref {
-                assert!(live.insert(id), "multiple live placements of one movable handle are not supported; use distinct handles");
+                assert!(
+                    live.insert(id),
+                    "multiple live placements of one movable handle are not supported; use distinct handles"
+                );
                 return;
             }
-            let child_skip = in_skip || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
-            for child in &mut slot.children { references(child, child_skip, live); }
+            let child_skip =
+                in_skip || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
+            for child in &mut slot.children {
+                references(child, child_skip, live);
+            }
         }
         let mut live = crate::layout::node::SlotKeySet::default();
-        for child in &mut self.root_slot.children { references(child, false, &mut live); }
+        for child in &mut self.root_slot.children {
+            references(child, false, &mut live);
+        }
         // A movable store that is going away can carry lifecycle callbacks (an effect placed inside
         // movable content). Its slots are dropped here, not truncated out of a parent, so collect
         // them explicitly — otherwise that cleanup would silently never run.
@@ -847,7 +882,9 @@ impl SlotTable {
                 SlotTable::collect_forgets(std::mem::replace(store, Slot::new(0)), &mut orphaned);
             }
         }
-        for f in orphaned { f(); }
+        for f in orphaned {
+            f();
+        }
         self.movable_store.retain(|id, _| live.contains(id));
         self.movable_frame.retain(|id, _| live.contains(id));
     }
@@ -875,7 +912,9 @@ impl SlotTable {
         for child in &mut slot.children {
             found |= SlotTable::mark_reference_path(child, id);
         }
-        if found { slot.dirty = true; }
+        if found {
+            slot.dirty = true;
+        }
         found
     }
 
@@ -935,9 +974,14 @@ impl SlotTable {
     ///
     /// Pair with [`SlotTable::end_movable`].
     pub(super) fn validate_movable(&self, id: u64) {
-        assert!(self.movable_composing.is_none(), "nested movable placement is not supported");
-        assert!(self.movable_frame.get(&id) != Some(&self.frame_no),
-            "multiple placements of one movable handle are not supported; use distinct handles");
+        assert!(
+            self.movable_composing.is_none(),
+            "nested movable placement is not supported"
+        );
+        assert!(
+            self.movable_frame.get(&id) != Some(&self.frame_no),
+            "multiple placements of one movable handle are not supported; use distinct handles"
+        );
     }
 
     pub(super) fn begin_movable(&mut self, key: u64, id: u64) {
@@ -981,7 +1025,10 @@ impl SlotTable {
 
     /// Stop composing movable content, back at the position that invoked it.
     pub(super) fn end_movable(&mut self) {
-        assert!(self.path.is_empty(), "unbalanced nodes inside movable content");
+        assert!(
+            self.path.is_empty(),
+            "unbalanced nodes inside movable content"
+        );
         let count = self.child_counters.first().copied().unwrap_or(0);
         // This root is not closed by end_restartable_group. Trim its uncomposed tail here, otherwise
         // descriptor replay resurrects removed conditional/list children.
@@ -989,19 +1036,28 @@ impl SlotTable {
             let slot = self.current_slot();
             SlotTable::truncate_children(&mut slot.children, count)
         };
-        for f in orphaned { f(); }
+        for f in orphaned {
+            f();
+        }
         self.movable_composing = None;
         self.path = std::mem::take(&mut self.movable_saved_path);
         self.child_counters = std::mem::take(&mut self.movable_saved_counters);
     }
 
     pub(super) fn abort_movable(&mut self) {
-        let id = self.movable_composing.take().expect("a movable placement is active");
+        let id = self
+            .movable_composing
+            .take()
+            .expect("a movable placement is active");
         self.movable_store.remove(&id);
         self.movable_frame.remove(&id);
         fn clear_reference(slot: &mut Slot, id: u64) {
-            if slot.movable_ref == Some(id) { slot.movable_ref = None; }
-            for child in &mut slot.children { clear_reference(child, id); }
+            if slot.movable_ref == Some(id) {
+                slot.movable_ref = None;
+            }
+            for child in &mut slot.children {
+                clear_reference(child, id);
+            }
         }
         clear_reference(&mut self.root_slot, id);
         self.path = std::mem::take(&mut self.movable_saved_path);
@@ -1084,12 +1140,14 @@ impl SlotTable {
                 if let Some(store) = stores.get(&id) {
                     let replay = !store.visited;
                     out.insert(store.key);
-                    for child in &store.children { visit(child, out, replay, skipped, stores); }
+                    for child in &store.children {
+                        visit(child, out, replay, skipped, stores);
+                    }
                 }
                 return;
             }
-            let child_in_skip = in_skip
-                || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
+            let child_in_skip =
+                in_skip || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
             for child in &slot.children {
                 visit(child, out, child_in_skip, skipped, stores);
             }

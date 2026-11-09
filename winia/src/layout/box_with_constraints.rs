@@ -50,11 +50,11 @@
 //! for — the box has no way to tell "the content would compose the same" and skip the work, where
 //! Compose's subcomposition is skipped when nothing it depends on changed.
 
-use crate::runtime::composer::ComposeCtx;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{Alignment, ContentAlignment, LayoutDirection, MeasurePolicy, Placement};
-use crate::unit::{Size};
 use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
+use crate::unit::Size;
 
 /// The scope handed to `BoxWithConstraints` content: what the box was measured with.
 ///
@@ -325,8 +325,8 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
     use crate::layout::node::MeasurePolicy;
+    use crate::runtime::composer::Composer;
     use crate::unit::Offset;
 
     /// The scope's own semantics: the four bounds, the dimension helpers, `is_measured`, and the `_dp`
@@ -334,13 +334,21 @@ mod tests {
     #[test]
     fn scope_reports_the_constraints_it_was_handed() {
         let unbounded = BoxWithConstraintsScope::new(Constraints::UNBOUNDED);
-        assert!(!unbounded.is_measured(), "the initial value is the unbounded one");
+        assert!(
+            !unbounded.is_measured(),
+            "the initial value is the unbounded one"
+        );
         assert_eq!(unbounded.max_width(), f32::INFINITY);
 
         let measured = BoxWithConstraintsScope::new(Constraints::new(100.0, 400.0, 50.0, 300.0));
         assert!(measured.is_measured());
         assert_eq!(
-            (measured.min_width(), measured.max_width(), measured.min_height(), measured.max_height()),
+            (
+                measured.min_width(),
+                measured.max_width(),
+                measured.min_height(),
+                measured.max_height()
+            ),
             (100.0, 400.0, 50.0, 300.0)
         );
         assert_eq!(measured.max_dimension(), 400.0, "the larger maximum");
@@ -379,17 +387,28 @@ mod tests {
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let runs = seen.lock().unwrap().clone();
-        assert_eq!(runs.len(), 1, "the content ran once (in the measure pass): {runs:?}");
+        assert_eq!(
+            runs.len(),
+            1,
+            "the content ran once (in the measure pass): {runs:?}"
+        );
         assert!(
             runs[0].2,
             "the scope was measured on the first run — no unbounded first frame: {runs:?}"
         );
-        assert!(runs[0].1.is_finite(), "and it carries a real maximum: {runs:?}");
+        assert!(
+            runs[0].1.is_finite(),
+            "and it carries a real maximum: {runs:?}"
+        );
 
         // The box lays out at its modifier's size, and its composed content is a child of it.
         let root = composer.arena.root.expect("root");
         let size = composer.arena_nodes()[root].measured_size;
-        assert_eq!((size.width, size.height), (120.0, 60.0), "the box takes its modifier's size");
+        assert_eq!(
+            (size.width, size.height),
+            (120.0, 60.0),
+            "the box takes its modifier's size"
+        );
         assert_eq!(
             composer.arena.nodes[root].children.len(),
             1,
@@ -415,12 +434,18 @@ mod tests {
         composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
         let root = composer.arena.root.expect("root");
         let size = composer.arena_nodes()[root].measured_size;
-        assert!(size.width > 0.0, "frame 1: the box is as wide as its content, got {size:?}");
+        assert!(
+            size.width > 0.0,
+            "frame 1: the box is as wide as its content, got {size:?}"
+        );
 
         composer.compose(build);
         composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
         let size2 = composer.arena_nodes()[root].measured_size;
-        assert!(size2.width > 0.0, "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}");
+        assert!(
+            size2.width > 0.0,
+            "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}"
+        );
     }
 
     /// An UNCHANGED box does not re-compose its content — the idle contract, and the reason a screen can
@@ -487,8 +512,15 @@ mod tests {
         composer.compose(build);
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let root = composer.arena.root.expect("root");
-        assert_eq!(composer.arena.nodes[root].children.len(), 1, "adopted on frame 1");
-        assert!(composer.arena.nodes[root].subcomposed, "the node is marked as subcomposing");
+        assert_eq!(
+            composer.arena.nodes[root].children.len(),
+            1,
+            "adopted on frame 1"
+        );
+        assert!(
+            composer.arena.nodes[root].subcomposed,
+            "the node is marked as subcomposing"
+        );
 
         // Frame 2: nothing dirty, same constraints — the box folds, and the child must still be there.
         composer.compose(build);
@@ -539,8 +571,11 @@ mod tests {
                     BoxWithConstraints::new()
                         .modifier(Modifier::new().max_width(cap.get()))
                         .build(ctx, |ctx, scope| {
-                            crate::components::Text::new(format!("BWC max {}", scope.max_width() as i32))
-                                .build(ctx);
+                            crate::components::Text::new(format!(
+                                "BWC max {}",
+                                scope.max_width() as i32
+                            ))
+                            .build(ctx);
                         });
                 });
             }
@@ -549,7 +584,11 @@ mod tests {
         let mut composer = Composer::new();
         composer.compose(build());
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(texts(&composer), ["BWC max 200"], "frame 1: the box caps the content");
+        assert_eq!(
+            texts(&composer),
+            ["BWC max 200"],
+            "frame 1: the box caps the content"
+        );
 
         setter.set(120.0);
         composer.compose(build());
@@ -563,7 +602,11 @@ mod tests {
         setter.set(200.0);
         composer.compose(build());
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        assert_eq!(texts(&composer), ["BWC max 200"], "and back — both directions");
+        assert_eq!(
+            texts(&composer),
+            ["BWC max 200"],
+            "and back — both directions"
+        );
     }
 
     /// A subcomposition belongs to its host's window: a clock captured inside `BoxWithConstraints`
@@ -586,7 +629,8 @@ mod tests {
                         crate::runtime::saveable::registry_in_scope(),
                         "the subcomposition must see the host registry"
                     );
-                    let _ = crate::runtime::saveable::remember_saveable(ctx, "inner.count", || 1i32);
+                    let _ =
+                        crate::runtime::saveable::remember_saveable(ctx, "inner.count", || 1i32);
                 });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -617,8 +661,7 @@ mod tests {
                 BoxWithConstraints::new()
                     .modifier(Modifier::new().size(120.0, 60.0))
                     .build(ctx, move |ctx, _scope| {
-                        let remembered: crate::runtime::state::State<i32> =
-                            ctx.remember(|| tag);
+                        let remembered: crate::runtime::state::State<i32> = ctx.remember(|| tag);
                         out.lock().unwrap().push(remembered.peek());
                         crate::components::Text::new("inside").build(ctx);
                     });
@@ -655,8 +698,13 @@ mod tests {
         });
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let root = composer.arena.root.expect("root");
-        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box was adopted");
-        let content = *composer.arena.nodes[host].children.first().expect("content under the box");
+        let host = composer.arena.nodes[root]
+            .subcomposed_child
+            .expect("the content box was adopted");
+        let content = *composer.arena.nodes[host]
+            .children
+            .first()
+            .expect("content under the box");
         assert_eq!(
             composer.arena.nodes[content].position,
             Offset::new(300.0, 350.0),
@@ -691,11 +739,16 @@ mod tests {
         let assert_corner = |composer: &Composer, frame: &str| {
             let root = composer.arena.root.expect("root");
             let nodes = composer.arena_nodes();
-            let host = nodes[root].subcomposed_child.expect("the content box is adopted");
+            let host = nodes[root]
+                .subcomposed_child
+                .expect("the content box is adopted");
             let content = *nodes[host].children.first().expect("content under the box");
             let abs_x = nodes[host].position.x + nodes[content].position.x;
             let abs_y = nodes[host].position.y + nodes[content].position.y;
-            let (w, h) = (nodes[root].measured_size.width, nodes[root].measured_size.height);
+            let (w, h) = (
+                nodes[root].measured_size.width,
+                nodes[root].measured_size.height,
+            );
             assert!(
                 (abs_x + nodes[content].measured_size.width + PAD - w).abs() < 0.5,
                 "{frame}: the content is PAD from the right edge (abs_x={abs_x}, box_w={w})"
@@ -743,7 +796,9 @@ mod tests {
             Size::new(120.0, 60.0),
             "the box is its content plus its padding"
         );
-        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box");
+        let host = composer.arena.nodes[root]
+            .subcomposed_child
+            .expect("the content box");
         assert_eq!(
             composer.arena.nodes[host].position,
             Offset::new(10.0, 10.0),
@@ -787,7 +842,11 @@ mod tests {
         composer.compose(crate::compose!(|ctx| {
             BoxWithConstraints::new()
                 .content_alignment(ContentAlignment::BOTTOM_END)
-                .modifier(Modifier::new().size(200.0, 100.0).layout_direction(LayoutDirection::Rtl))
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, 100.0)
+                        .layout_direction(LayoutDirection::Rtl),
+                )
                 .build(ctx, |ctx, _scope| {
                     crate::components::Text::new("x")
                         .modifier(Modifier::new().size(50.0, 20.0))
@@ -796,7 +855,9 @@ mod tests {
         }));
         composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
         let root = composer.arena.root.expect("root");
-        let host = composer.arena.nodes[root].subcomposed_child.expect("the content box");
+        let host = composer.arena.nodes[root]
+            .subcomposed_child
+            .expect("the content box");
         let content = composer.arena.nodes[host].children[0];
         assert_eq!(
             composer.arena.nodes[content].position,
@@ -843,7 +904,9 @@ mod tests {
             Size::new(50.0, 44.0),
             "20 dp of content plus the 24 dp top inset"
         );
-        let host = composer.arena.nodes[root].subcomposed_child.expect("content box");
+        let host = composer.arena.nodes[root]
+            .subcomposed_child
+            .expect("content box");
         assert_eq!(
             composer.arena_nodes()[host].position,
             Offset::new(0.0, 24.0),
@@ -875,17 +938,27 @@ mod tests {
             Size::new(50.0, 20.0),
             "the anchor defines the box"
         );
-        let host = composer.arena.nodes[root].subcomposed_child.expect("content box");
+        let host = composer.arena.nodes[root]
+            .subcomposed_child
+            .expect("content box");
         let content = &composer.arena.nodes[host];
-        assert_eq!(content.children.len(), 2, "the content box hosts both children");
+        assert_eq!(
+            content.children.len(),
+            2,
+            "the content box hosts both children"
+        );
         let anchor = content.children[0];
         let scrim = content.children[1];
         assert!(
-            !composer.arena_nodes()[anchor].modifier.is_match_parent_size(),
+            !composer.arena_nodes()[anchor]
+                .modifier
+                .is_match_parent_size(),
             "the first child is the anchor that sizes the box"
         );
         assert!(
-            composer.arena_nodes()[scrim].modifier.is_match_parent_size(),
+            composer.arena_nodes()[scrim]
+                .modifier
+                .is_match_parent_size(),
             "and the second is the scrim"
         );
         assert_eq!(

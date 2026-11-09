@@ -62,12 +62,15 @@
 //!   writes still notifies (verified: the demo's counter updates from a click), but work that must
 //!   not run during measure has no other hook here.
 
-use crate::animation::{push_animatable, AnimationSpec};
+use crate::animation::{AnimationSpec, push_animatable};
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{
+    Alignment, ContentAlignment, IntrinsicCtx, IntrinsicQuery, LayoutDirection, LayoutNode,
+    MeasurePolicy, Placement, max_child_intrinsic, measure_node,
+};
+use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::layout::constraints::Constraints;
-use crate::layout::node::{max_child_intrinsic, measure_node, Alignment, ContentAlignment, IntrinsicCtx, IntrinsicQuery, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
-use crate::modifier::Modifier;
 use crate::unit::{Offset, Size};
 
 /// Defaults matching Compose's `Modifier.animateContentSize` overloads.
@@ -139,10 +142,7 @@ impl AnimatedSize {
     /// Called with `(start size, target size)` once the size animation finishes, as Compose's
     /// `finishedListener` is (`AnimationModifier.kt:242-245`). Not called for the first measurement,
     /// which snaps rather than animating, and not called for a target the animation abandoned.
-    pub fn finished_listener(
-        mut self,
-        f: impl Fn(Size, Size) + Send + Sync + 'static,
-    ) -> Self {
+    pub fn finished_listener(mut self, f: impl Fn(Size, Size) + Send + Sync + 'static) -> Self {
         self.finished_listener = Some(std::sync::Arc::new(f));
         self
     }
@@ -191,7 +191,9 @@ impl AnimatedSize {
         // 60 → 400 dp grow with a 6 s spec: with the container at 142 dp, the pixel 91 dp beyond its
         // right edge was the child's own colour (`255 0 0`). The clip goes after the caller's
         // modifiers, which is where Compose puts it too.
-        let modifier = self.modifier.then(Modifier::new().clip(crate::graphics::Shape::Rectangle));
+        let modifier = self
+            .modifier
+            .then(Modifier::new().clip(crate::graphics::Shape::Rectangle));
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
@@ -293,7 +295,9 @@ impl MeasurePolicy for SizePolicy {
         // not enough either — but here it is the second half, so an animation that never ran (value
         // already at the target) still reports, and an interrupted one (retargeted before arrival)
         // reports nothing, the way `Finished`-only does upstream.
-        if let (Some(listener), Some(start)) = (&self.finished_listener, self.animation_start.peek()) {
+        if let (Some(listener), Some(start)) =
+            (&self.finished_listener, self.animation_start.peek())
+        {
             let arrived =
                 cur == goal && !crate::animation::is_animating_state(self.size.state_id());
             if arrived && self.notified.peek() != Some(goal) {
@@ -386,10 +390,10 @@ impl MeasurePolicy for SizePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
-    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
 
     /// 测试用叶子：宽度由外部 State 驱动（50 / 200）
     struct SizedLeaf {
@@ -411,7 +415,9 @@ mod tests {
 
     /// 查 AnimatedSize 容器节点（第一个非叶子）的测量宽度
     fn container_width(composer: &Composer) -> f32 {
-        let Some(root) = composer.layout_root_idx() else { return -1.0 };
+        let Some(root) = composer.layout_root_idx() else {
+            return -1.0;
+        };
         let nodes = composer.arena_nodes();
         fn first_container(nodes: &[LayoutNode], idx: usize) -> f32 {
             let n = &nodes[idx];
@@ -426,14 +432,21 @@ mod tests {
 
     /// The child of the AnimatedSize container, as (x, y, width, height).
     fn child_box(composer: &Composer) -> (f32, f32, f32, f32) {
-        let Some(root) = composer.layout_root_idx() else { return (-1.0, -1.0, -1.0, -1.0) };
+        let Some(root) = composer.layout_root_idx() else {
+            return (-1.0, -1.0, -1.0, -1.0);
+        };
         let nodes = composer.arena_nodes();
         let c = nodes[root].children.first().copied().unwrap_or(usize::MAX);
         if c == usize::MAX {
             return (-1.0, -1.0, -1.0, -1.0);
         }
         let n = &nodes[c];
-        (n.position.x, n.position.y, n.measured_size.width, n.measured_size.height)
+        (
+            n.position.x,
+            n.position.y,
+            n.measured_size.width,
+            n.measured_size.height,
+        )
     }
 
     /// A child is aligned inside the ANIMATED box, not at the origin — Compose's
@@ -444,7 +457,9 @@ mod tests {
     /// shrinks 400 -> 60 and reads the child's x while the box is still wide.
     #[test]
     fn animated_size_aligns_the_child_inside_the_animating_box() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
         let mut recompose = |composer: &mut Composer| {
@@ -458,7 +473,11 @@ mod tests {
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
                     // 10 tall against the box's 30: the vertical half has slack to work with.
-                    SizedLeaf { w: w.get(), h: if w.get() > 100.0 { 30.0 } else { 10.0 } }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: if w.get() > 100.0 { 30.0 } else { 10.0 },
+                    }
+                    .build(ctx);
                 });
             });
         };
@@ -472,8 +491,15 @@ mod tests {
 
         let (x, y, w, h) = child_box(&composer);
         let box_w = container_width(&composer);
-        assert_eq!((w, h), (60.0, 10.0), "the child keeps its own measured size");
-        assert!(box_w > 100.0, "the box is still wide while it shrinks (box_w={box_w})");
+        assert_eq!(
+            (w, h),
+            (60.0, 10.0),
+            "the child keeps its own measured size"
+        );
+        assert!(
+            box_w > 100.0,
+            "the box is still wide while it shrinks (box_w={box_w})"
+        );
         assert!(
             (x - (box_w - 60.0) / 2.0).abs() < 0.51,
             "the child is centred in the box, not at the origin (x={x}, box_w={box_w})"
@@ -489,7 +515,9 @@ mod tests {
     /// `Finished` — and never for the first measurement, which snaps (`AnimationModifier.kt:242-245`).
     #[test]
     fn animated_size_reports_the_size_it_animated_from_and_to() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
             Default::default();
@@ -506,14 +534,17 @@ mod tests {
                 .finished_listener({
                     let sink = sink.clone();
                     move |from: Size, to: Size| {
-                        sink.lock().unwrap().push((
-                            (from.width, from.height),
-                            (to.width, to.height),
-                        ));
+                        sink.lock()
+                            .unwrap()
+                            .push(((from.width, from.height), (to.width, to.height)));
                     }
                 })
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -529,7 +560,10 @@ mod tests {
         };
 
         recompose(&mut composer);
-        assert!(reported.lock().unwrap().is_empty(), "the first measurement snaps, so it reports nothing");
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "the first measurement snaps, so it reports nothing"
+        );
 
         let w = holder.borrow().as_ref().unwrap().clone();
         w.set(200.0);
@@ -549,8 +583,15 @@ mod tests {
     fn the_default_spec_is_compeses_spring() {
         match AnimatedSizeDefaults::size_spec() {
             crate::animation::AnimationSpec::Spring(s) => {
-                assert_eq!(s.stiffness, crate::animation::SpringSpec::STIFFNESS_MEDIUM_LOW, "StiffnessMediumLow is 400");
-                assert_eq!(s.damping_ratio, crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY);
+                assert_eq!(
+                    s.stiffness,
+                    crate::animation::SpringSpec::STIFFNESS_MEDIUM_LOW,
+                    "StiffnessMediumLow is 400"
+                );
+                assert_eq!(
+                    s.damping_ratio,
+                    crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY
+                );
                 assert_eq!(s.threshold, 1.0, "IntSize.VisibilityThreshold is one pixel");
                 assert_ne!(
                     s.stiffness,
@@ -570,7 +611,9 @@ mod tests {
     /// sibling after it is placed outside the parent.
     #[test]
     fn animated_size_reports_a_size_the_constraints_allow() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
         let mut recompose = |composer: &mut Composer| {
@@ -582,14 +625,22 @@ mod tests {
                     crate::animation::interpolator::Linear::new(),
                 ))
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
         };
 
         recompose(&mut composer);
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
-        assert_eq!(container_width(&composer), 50.0, "first frame jumps to the content size");
+        assert_eq!(
+            container_width(&composer),
+            50.0,
+            "first frame jumps to the content size"
+        );
 
         // Grow toward 400 while the parent allows it, and let it get PAST the width the parent is
         // about to allow — otherwise the clamp has nothing to do and the test passes either way
@@ -608,7 +659,10 @@ mod tests {
             composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
             mid = container_width(&composer);
         }
-        assert!(mid > 120.0, "the animation got past the limit the parent is about to set (mid={mid})");
+        assert!(
+            mid > 120.0,
+            "the animation got past the limit the parent is about to set (mid={mid})"
+        );
 
         // …and tighten the parent while it runs.
         composer.layout(Constraints::new(0.0, 100.0, 0.0, 400.0));
@@ -623,7 +677,9 @@ mod tests {
     fn animated_size_tracks_content_change() {
         // 动画注册表是进程级全局单例——必须持串行锁，否则并行测试的
         // clear_all_animations 会抹掉本测试在飞的动画（中途冻结偶发失败）
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         // 内容宽度 State 必须走 remember（owner queue——State::new 的 notify 不推送）
         let holder = std::cell::RefCell::new(None::<State<f32>>);
@@ -633,7 +689,11 @@ mod tests {
                 let w: State<f32> = ctx.remember(|| 50.0);
                 *holder.borrow_mut() = Some(w.clone());
                 AnimatedSize::new(crate::animation::TweenSpec::default()).build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -649,7 +709,11 @@ mod tests {
                     crate::animation::interpolator::Linear::new(),
                 ))
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -691,7 +755,9 @@ mod tests {
     /// 内容 State 变化但尺寸不变——不注册新动画（无重测风暴）
     #[test]
     fn animated_size_no_animation_when_size_unchanged() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
 
@@ -715,13 +781,21 @@ mod tests {
         let w = holder.borrow().as_ref().unwrap().clone();
         w.set(999.0);
         recompose(&mut composer);
-        assert_eq!(container_width(&composer), 80.0, "尺寸不变时容器不应有动画/跳变");
+        assert_eq!(
+            container_width(&composer),
+            80.0,
+            "尺寸不变时容器不应有动画/跳变"
+        );
         // 推进几帧——若错误注册了动画，宽度会短暂偏离 80
         for _ in 0..5 {
             crate::animation::update_animations();
             std::thread::sleep(std::time::Duration::from_millis(30));
             recompose(&mut composer);
-            assert_eq!(container_width(&composer), 80.0, "尺寸不变时动画推进不应改变宽度");
+            assert_eq!(
+                container_width(&composer),
+                80.0,
+                "尺寸不变时动画推进不应改变宽度"
+            );
         }
     }
 
@@ -735,7 +809,9 @@ mod tests {
     /// arrival AND "no longer animating", which is Compose's `Finished`.
     #[test]
     fn animated_size_reports_through_the_default_spring_too() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
         let reported = std::cell::RefCell::new(None::<State<u32>>);
@@ -750,10 +826,16 @@ mod tests {
                 AnimatedSize::default()
                     .finished_listener({
                         let calls = calls.clone();
-                        move |_from: Size, _to: Size| { calls.update(|v| *v += 1); }
+                        move |_from: Size, _to: Size| {
+                            calls.update(|v| *v += 1);
+                        }
                     })
                     .build(ctx, |ctx| {
-                        SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                        SizedLeaf {
+                            w: w.get(),
+                            h: 30.0,
+                        }
+                        .build(ctx);
                     });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -764,12 +846,18 @@ mod tests {
         w.set(200.0);
         recompose(&mut composer);
         for _ in 0..10_000 {
-            if !crate::animation::update_animations() { break; }
+            if !crate::animation::update_animations() {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(8));
             recompose(&mut composer);
         }
         recompose(&mut composer);
-        assert_eq!(container_width(&composer), 200.0, "the spring reached the target");
+        assert_eq!(
+            container_width(&composer),
+            200.0,
+            "the spring reached the target"
+        );
         assert_eq!(
             reported.borrow().as_ref().unwrap().peek(),
             1,
@@ -798,7 +886,11 @@ mod tests {
                 let w: State<f32> = ctx.remember(|| 50.0);
                 *holder.borrow_mut() = Some(w.clone());
                 AnimatedSize::default().build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -853,13 +945,18 @@ mod tests {
             "…and is not the tween the engine substitutes for a spring on a Size \
              (largest gap={max_tween_gap})"
         );
-        assert_eq!(container_width(&composer), 200.0, "the move ends exactly on the target");
+        assert_eq!(
+            container_width(&composer),
+            200.0,
+            "the move ends exactly on the target"
+        );
     }
 
     /// The wrapping-text shape, as a policy so the numbers are exact: one long line (200) when the
     /// width is unbounded, otherwise the width it is given, up to 60. An intrinsic probe therefore
     /// measures a different size than the frame's own layout does.
-    static UNBOUNDED_MEASURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static UNBOUNDED_MEASURES: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
 
     #[derive(Debug)]
     struct FillingLeaf;
@@ -881,7 +978,13 @@ mod tests {
             (Size::new(w, 40.0), Vec::new())
         }
 
-        fn place(&self, _nodes: &mut Vec<LayoutNode>, _children: &[usize], _placements: &[Placement]) {}
+        fn place(
+            &self,
+            _nodes: &mut Vec<LayoutNode>,
+            _children: &[usize],
+            _placements: &[Placement],
+        ) {
+        }
     }
 
     /// Compose's node extends `LayoutModifierNodeWithPassThroughIntrinsics`, so all four intrinsic
@@ -900,7 +1003,9 @@ mod tests {
     /// 199.999, the spring never finished, and only the incoming constraint (100) hid the value.
     #[test]
     fn an_intrinsic_query_does_not_move_the_box() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
             Default::default();
@@ -921,10 +1026,9 @@ mod tests {
                             .finished_listener({
                                 let sink = sink.clone();
                                 move |from: Size, to: Size| {
-                                    sink.lock().unwrap().push((
-                                        (from.width, from.height),
-                                        (to.width, to.height),
-                                    ));
+                                    sink.lock()
+                                        .unwrap()
+                                        .push(((from.width, from.height), (to.width, to.height)));
                                 }
                             })
                             .build(ctx, |ctx| {
@@ -991,7 +1095,9 @@ mod tests {
     /// stayed at 60. Nothing about the two trees should differ.
     #[test]
     fn an_intrinsic_query_through_a_plain_stack_does_not_move_the_box() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
         let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
@@ -1062,7 +1168,9 @@ mod tests {
     #[test]
     fn returning_to_a_previously_reported_target_reports_the_new_completion() {
         use std::time::{Duration, Instant};
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
             Default::default();
@@ -1078,10 +1186,16 @@ mod tests {
                     crate::animation::interpolator::Linear::new(),
                 ))
                 .finished_listener(move |from: Size, to: Size| {
-                    sink.lock().unwrap().push(((from.width, from.height), (to.width, to.height)));
+                    sink.lock()
+                        .unwrap()
+                        .push(((from.width, from.height), (to.width, to.height)));
                 })
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    SizedLeaf {
+                        w: w.get(),
+                        h: 30.0,
+                    }
+                    .build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));

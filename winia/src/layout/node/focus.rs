@@ -56,10 +56,14 @@ pub(crate) fn collect_focus_candidates_rec(
 
 /// Looks a node up by `id` and returns its arena index (immutable).
 pub fn find_node_by_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<usize> {
-    if nodes[root].id == id { return Some(root); }
+    if nodes[root].id == id {
+        return Some(root);
+    }
     let children = nodes[root].children.clone();
     for c in children {
-        if let Some(n) = find_node_by_id(nodes, c, id) { return Some(n); }
+        if let Some(n) = find_node_by_id(nodes, c, id) {
+            return Some(n);
+        }
     }
     None
 }
@@ -101,7 +105,9 @@ pub(crate) fn restore_focus_group_memory(
     candidate: u64,
     backwards: bool,
 ) -> u64 {
-    let Some(path) = path_to_id(nodes, root, candidate) else { return candidate };
+    let Some(path) = path_to_id(nodes, root, candidate) else {
+        return candidate;
+    };
     // OUTERMOST group first: Compose enters a group through its ACTIVE child, and every ancestor
     // group records the deepest focused id, so the outer group's memory already points inside any
     // nested group. Consulting only the NEAREST group loses that memory the moment focus moves
@@ -119,7 +125,11 @@ pub(crate) fn restore_focus_group_memory(
             .rev()
             .copied()
             .find(|id| path_to_id(nodes, group, *id).is_some());
-        let at_boundary = if backwards { Some(candidate) == last } else { Some(candidate) == first };
+        let at_boundary = if backwards {
+            Some(candidate) == last
+        } else {
+            Some(candidate) == first
+        };
         if !at_boundary {
             continue;
         }
@@ -139,9 +149,13 @@ pub fn focus_next(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
         collect_focusable_ids(nodes, root, &mut ids);
         ids
     };
-    if ids.is_empty() { return false; }
+    if ids.is_empty() {
+        return false;
+    }
     let current = ids.iter().position(|id| {
-        find_node_by_id(nodes, root, *id).map(|n| nodes[n].focused).unwrap_or(false)
+        find_node_by_id(nodes, root, *id)
+            .map(|n| nodes[n].focused)
+            .unwrap_or(false)
     });
     let next = match current {
         Some(i) if i + 1 < ids.len() => i + 1,
@@ -160,9 +174,13 @@ pub fn focus_prev(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
         collect_focusable_ids(nodes, root, &mut ids);
         ids
     };
-    if ids.is_empty() { return false; }
+    if ids.is_empty() {
+        return false;
+    }
     let current = ids.iter().position(|id| {
-        find_node_by_id(nodes, root, *id).map(|n| nodes[n].focused).unwrap_or(false)
+        find_node_by_id(nodes, root, *id)
+            .map(|n| nodes[n].focused)
+            .unwrap_or(false)
     });
     let prev = match current {
         Some(0) | None => ids.len() - 1,
@@ -215,8 +233,12 @@ pub fn clear_focus(nodes: &mut Vec<LayoutNode>, root: usize) {
 }
 
 pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64) -> bool {
-    let Some(path) = path_to_id(nodes, root, target_id) else { return false };
-    let Some(&target) = path.last() else { return false };
+    let Some(path) = path_to_id(nodes, root, target_id) else {
+        return false;
+    };
+    let Some(&target) = path.last() else {
+        return false;
+    };
     // `focusProperties { canFocus = false }`: a programmatic request is refused too.
     if nodes[target].modifier.focus_can_focus() == Some(false) {
         return false;
@@ -258,7 +280,11 @@ pub fn focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, focus_requester_id:
 }
 
 /// Internal: finds a node id by FocusRequesterId (arena flavour).
-pub fn find_node_id_by_focus_requester(nodes: &[LayoutNode], root: usize, requester_id: u64) -> Option<u64> {
+pub fn find_node_id_by_focus_requester(
+    nodes: &[LayoutNode],
+    root: usize,
+    requester_id: u64,
+) -> Option<u64> {
     if has_focus_id(&nodes[root], requester_id) {
         return Some(nodes[root].id);
     }
@@ -273,7 +299,9 @@ pub fn find_node_id_by_focus_requester(nodes: &[LayoutNode], root: usize, reques
 
 /// Finds a node id by slot_key (a slot_key is stable across recomposition).
 pub fn find_node_id_by_slot_key(nodes: &[LayoutNode], root: usize, slot_key: u64) -> Option<u64> {
-    if nodes[root].slot_key == slot_key { return Some(nodes[root].id); }
+    if nodes[root].slot_key == slot_key {
+        return Some(nodes[root].id);
+    }
     let children = nodes[root].children.clone();
     for c in children {
         if let Some(id) = find_node_id_by_slot_key(nodes, c, slot_key) {
@@ -300,5 +328,3 @@ pub fn get_focus_id(nodes: &[LayoutNode], root: usize) -> Option<u64> {
     }
     None
 }
-
-

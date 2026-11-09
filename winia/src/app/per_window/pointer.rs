@@ -4,7 +4,10 @@ use super::*;
 /// Shared by main-tree clicks and overlay clicks (no duplicated implementation).
 /// Dual track (exp/modifier-node): the enum Clickable wins (the old behaviour), and with none
 /// present it falls back to an open ClickNode (third-party custom clicks need no core change).
-pub(crate) fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usize]) -> bool {
+pub(crate) fn fire_click_along_path(
+    nodes: &[crate::layout::node::LayoutNode],
+    path: &[usize],
+) -> bool {
     for &i in path.iter().rev() {
         if let Some(cb) = nodes[i].modifier.on_click() {
             (cb)();
@@ -17,7 +20,6 @@ pub(crate) fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], p
     }
     false
 }
-
 
 /// Press: emit Press on the interaction source bound to the innermost clickable on the hit path
 /// (Compose clickable's `PressInteraction.Press`).
@@ -125,7 +127,11 @@ pub(crate) fn pointer_icon_for_path(
     // everything below it.
     for &idx in path.iter().rev() {
         for el in nodes[idx].modifier.elements().iter().rev() {
-            if let crate::modifier::ModifierElement::PointerHoverIcon { icon, override_descendants } = el {
+            if let crate::modifier::ModifierElement::PointerHoverIcon {
+                icon,
+                override_descendants,
+            } = el
+            {
                 if *override_descendants {
                     return *icon;
                 }
@@ -164,7 +170,9 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
         // Clear hover on the other (lower) overlays.
         for j in 0..pw.overlay.layers.len() {
-            if j == i { continue; }
+            if j == i {
+                continue;
+            }
             let olds: Vec<u64> = pw.overlay.layers[j].hovered_slots.drain().collect();
             for slot in olds {
                 overlay_exit_hover_at(&mut pw.overlay.layers[j], slot);
@@ -199,13 +207,30 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
     }
     // (slot, interaction) for every hoverable on the current path.
-    let (hit, icon): (Vec<(u64, crate::input::interaction::MutableInteractionSource)>, crate::input::PointerIcon) = {
+    let (hit, icon): (
+        Vec<(u64, crate::input::interaction::MutableInteractionSource)>,
+        crate::input::PointerIcon,
+    ) = {
         let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-        let hit = path.iter()
+        let Some(r) = pw.composer.layout_root_idx() else {
+            return;
+        };
+        let path = hit_test_with_flights(
+            nodes,
+            r,
+            pw.composer.transition_roots(),
+            scene_pos.0,
+            scene_pos.1,
+        );
+        let hit = path
+            .iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
-            .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
+            .filter_map(|&i| {
+                nodes[i]
+                    .modifier
+                    .hoverable_interaction()
+                    .map(|s| (nodes[i].slot_key, s.clone()))
+            })
             .collect();
         (hit, pointer_icon_for_path(nodes, &path))
     };
@@ -219,19 +244,25 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
     }
     // Left: emit Exit and drop the slot.
-    let gone: Vec<u64> = pw.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
+    let gone: Vec<u64> = pw
+        .hovered_slots
+        .iter()
+        .copied()
+        .filter(|s| !hit_slots.contains(s))
+        .collect();
     for slot in gone {
         pw.hovered_slots.remove(&slot);
         exit_hover_at(pw, slot);
     }
 }
 
-
 /// Emit Hover Exit for the node with the given slot (skipped when the node is gone — the hover
 /// state cleans itself up).
 pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
     let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return; };
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return;
+    };
     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
             if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
@@ -248,12 +279,16 @@ pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
 /// Escape uses that to stop before the focus/dialog dismissal, and an overlay that takes the press
 /// uses it to drop a menu the overlay is drawn over.
 pub(crate) fn begin_closing_selection_menu(pw: &mut PerWindow) -> bool {
-    let Some(menu) = pw.input.selection_menu.as_mut() else { return false };
+    let Some(menu) = pw.input.selection_menu.as_mut() else {
+        return false;
+    };
     if !menu.is_open() {
         return false;
     }
     menu.closing = Some(std::time::Instant::now());
-    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+    if let Some(ref sw) = pw.skia_window {
+        sw.request_redraw();
+    }
     true
 }
 
@@ -274,7 +309,13 @@ pub(crate) fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     if dist <= CLICK_SLOP && in_time {
         let nodes = pw.composer.arena_nodes();
         if let Some(r) = pw.composer.layout_root_idx() {
-            let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+            let path = hit_test_with_flights(
+                nodes,
+                r,
+                pw.composer.transition_roots(),
+                scene_pos.0,
+                scene_pos.1,
+            );
             let hit = down_slot
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
@@ -323,13 +364,13 @@ pub(crate) fn handle_pointer_down(
         let window = (pw.width, pw.height);
         if menu.is_open() {
             if let Some(row) = crate::render::selection_menu_row_at(&menu, window, scene_pos) {
-            if row == 0 {
-                if let Some(selection) = menu.registrar.build_selection() {
-                    crate::clipboard::request_text(selection.text());
+                if row == 0 {
+                    if let Some(selection) = menu.registrar.build_selection() {
+                        crate::clipboard::request_text(selection.text());
+                    }
+                } else if menu.registrar.select_all() {
+                    menu.registrar.fire_on_change();
                 }
-            } else if menu.registrar.select_all() {
-                menu.registrar.fire_on_change();
-            }
                 // A chosen row fades out like any other dismissal (the menu stops taking input
                 // immediately, because a closing menu is no longer open).
                 begin_closing_selection_menu(pw);
@@ -345,9 +386,19 @@ pub(crate) fn handle_pointer_down(
     }
 
     let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-    let Some(&innermost) = path.last() else { return false; };
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return false;
+    };
+    let path = hit_test_with_flights(
+        nodes,
+        r,
+        pw.composer.transition_roots(),
+        scene_pos.0,
+        scene_pos.1,
+    );
+    let Some(&innermost) = path.last() else {
+        return false;
+    };
 
     // Click counting for double/triple click. It lives on `GestureState` because the release clears
     // `down`, so the second press of a double click has nothing to compare against otherwise.
@@ -359,7 +410,11 @@ pub(crate) fn handle_pointer_down(
                 && (scene_pos.0 - at.0).abs() <= MULTI_CLICK_SLOP
                 && (scene_pos.1 - at.1).abs() <= MULTI_CLICK_SLOP =>
         {
-            if count >= 3 { 1 } else { count + 1 }
+            if count >= 3 {
+                1
+            } else {
+                count + 1
+            }
         }
         _ => 1,
     };
@@ -368,7 +423,12 @@ pub(crate) fn handle_pointer_down(
     // A secondary press over a selection opens the context menu at the press point. The menu is
     // window state (drawn by the render pass, hit-tested here) rather than a popup built under the
     // container: hosting one there broke selection in that container (measured, see the doc).
-    if matches!(kind, crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Secondary }) {
+    if matches!(
+        kind,
+        crate::input::PointerKind::Mouse {
+            button: crate::input::PointerButton::Secondary
+        }
+    ) {
         let target = path.iter().rev().find_map(|&i| {
             let reg = nodes[i].registrar.borrow().as_ref().cloned()?;
             reg.build_selection().is_some().then_some(reg)
@@ -385,7 +445,8 @@ pub(crate) fn handle_pointer_down(
             };
             // The menu hangs from the press point, so the pointer is already over its first row;
             // without this the menu opened with no highlight until the pointer moved.
-            menu.hovered = crate::render::selection_menu_row_at(&menu, (pw.width, pw.height), scene_pos);
+            menu.hovered =
+                crate::render::selection_menu_row_at(&menu, (pw.width, pw.height), scene_pos);
             pw.input.selection_menu = Some(menu);
             return true;
         }
@@ -414,8 +475,12 @@ pub(crate) fn handle_pointer_down(
     {
         let mut seen: Vec<crate::text::selection::SelectionRegistrar> = Vec::new();
         for &idx in path.iter() {
-            let Some(reg) = nodes[idx].registrar.borrow().as_ref().cloned() else { continue };
-            if seen.iter().any(|s| s.is_same(&reg)) { continue; }
+            let Some(reg) = nodes[idx].registrar.borrow().as_ref().cloned() else {
+                continue;
+            };
+            if seen.iter().any(|s| s.is_same(&reg)) {
+                continue;
+            }
             reg.clear_selection();
             seen.push(reg);
         }
@@ -435,15 +500,16 @@ pub(crate) fn handle_pointer_down(
             // text in the content area = node origin + padding; without the subtraction every click
             // position is off by the padding and the cursor jumps to the wrong place).
             let (pad_s, pad_t, pad_e, _) = nodes[ai].modifier.get_padding_sides();
-            let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+            let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl {
+                pad_e
+            } else {
+                pad_s
+            };
             let tl = crate::text::TextLayout::new(para);
             // A `textGeometricTransform` widens/leans the GLYPH run, and the paragraph is laid out in
             // its own space, so the pointer has to be mapped back into that space before the hit
             // test (`unmap_x` is the inverse of the paint matrix).
-            let local = (
-                scene_pos.0 - ax - pad_x,
-                scene_pos.1 - ay - pad_t,
-            );
+            let local = (scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t);
             let local = match crate::layout::node::text_transform(&nodes[ai]) {
                 Some(t) => (t.unmap_x(local.0, local.1), local.1),
                 None => local,
@@ -476,7 +542,8 @@ pub(crate) fn handle_pointer_down(
     let own_reg = anchor_node.and_then(|ai| nodes[ai].registrar.borrow().as_ref().cloned());
     let anchor_global = anchor.and_then(|a| {
         anchor_node.and_then(|ai| {
-            own_reg.as_ref()
+            own_reg
+                .as_ref()
                 .and_then(|reg| reg.segment_info(nodes[ai].slot_key).map(|(off, _)| off + a))
         })
     });
@@ -501,7 +568,7 @@ pub(crate) fn handle_pointer_down(
         let node = &nodes[i];
         (node.modifier.vertical_scroll_state().is_some()
             || node.modifier.horizontal_scroll_state().is_some())
-            .then_some(node.slot_key)
+        .then_some(node.slot_key)
     });
     // Keyboard selection keys act on the container this press landed in.
     pw.input.last_selection_registrar = own_reg.clone();
@@ -545,23 +612,52 @@ pub(crate) fn handle_pointer_down(
     // does not scroll — Compose lets the innermost `pointerInput` consume it).
     pw.input.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return None };
-        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+        let Some(r) = pw.composer.layout_root_idx() else {
+            return None;
+        };
+        let path = hit_test_with_flights(
+            nodes,
+            r,
+            pw.composer.transition_roots(),
+            scene_pos.0,
+            scene_pos.1,
+        );
         #[cfg(debug_assertions)]
         if drag_trace_enabled() {
-            eprintln!("[drag-down] scene=({},{}) path_len={} path={:?}",
-                scene_pos.0, scene_pos.1, path.len(),
-                path.iter().map(|&i| (i, nodes[i].slot_key, nodes[i].modifier.vertical_scroll_state().is_some())).collect::<Vec<_>>());
+            eprintln!(
+                "[drag-down] scene=({},{}) path_len={} path={:?}",
+                scene_pos.0,
+                scene_pos.1,
+                path.len(),
+                path.iter()
+                    .map(|&i| (
+                        i,
+                        nodes[i].slot_key,
+                        nodes[i].modifier.vertical_scroll_state().is_some()
+                    ))
+                    .collect::<Vec<_>>()
+            );
             for &i in &path {
                 let n = &nodes[i];
-                eprintln!("  [drag-node] idx={} pos=({},{}) size=({},{}) vp_h={} scroll={}",
-                    i, n.position.x, n.position.y, n.measured_size.width, n.measured_size.height,
+                eprintln!(
+                    "  [drag-node] idx={} pos=({},{}) size=({},{}) vp_h={} scroll={}",
+                    i,
+                    n.position.x,
+                    n.position.y,
+                    n.measured_size.width,
+                    n.measured_size.height,
                     n.scroll_viewport_height,
-                    n.modifier.vertical_scroll_state().is_some());
+                    n.modifier.vertical_scroll_state().is_some()
+                );
             }
         }
-        let Some(&_innermost) = path.last() else { return None };
-        let selecting = pw.input.down.as_ref()
+        let Some(&_innermost) = path.last() else {
+            return None;
+        };
+        let selecting = pw
+            .input
+            .down
+            .as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);
         // Inner gestures first, but **scrolling outranks an outer panel's drag** (Compose: a
@@ -640,7 +736,9 @@ pub(crate) fn handle_pointer_move(
         // row fill only appeared when something else happened to repaint (measured: no frame at all
         // while the menu sits settled).
         if menu.hovered != hovered {
-            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
         }
         if let Some(open) = pw.input.selection_menu.as_mut() {
             open.hovered = hovered;
@@ -655,17 +753,15 @@ pub(crate) fn handle_pointer_move(
     // the overlay's `screen_pos` plus the local offset).
     if pw.overlay.click.is_some() {
         let cancel = match pw.overlay.click {
-            Some((idx, local, _)) => {
-                match pw.overlay.layers.get(idx) {
-                    Some(ov) => {
-                        let down_screen = (ov.screen_pos.0 + local.0, ov.screen_pos.1 + local.1);
-                        let dx = scene_pos.0 - down_screen.0;
-                        let dy = scene_pos.1 - down_screen.1;
-                        (dx * dx + dy * dy).sqrt() > 18.0
-                    }
-                    None => false,
+            Some((idx, local, _)) => match pw.overlay.layers.get(idx) {
+                Some(ov) => {
+                    let down_screen = (ov.screen_pos.0 + local.0, ov.screen_pos.1 + local.1);
+                    let dx = scene_pos.0 - down_screen.0;
+                    let dy = scene_pos.1 - down_screen.1;
+                    (dx * dx + dy * dy).sqrt() > 18.0
                 }
-            }
+                None => false,
+            },
             None => false,
         };
         if cancel {
@@ -692,10 +788,18 @@ pub(crate) fn handle_pointer_move(
                             scene_pos.0 - pw.overlay.drag_origin.0,
                             scene_pos.1 - pw.overlay.drag_origin.1,
                         );
-                        fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragStart(local));
-                        fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragMove(local, (dx, dy)));
+                        fire_gesture_action(
+                            nodes,
+                            r,
+                            slot,
+                            crate::input::gesture::GestureAction::DragStart(local),
+                        );
+                        fire_gesture_action(
+                            nodes,
+                            r,
+                            slot,
+                            crate::input::gesture::GestureAction::DragMove(local, (dx, dy)),
+                        );
                     }
                 }
                 handled = true;
@@ -711,8 +815,12 @@ pub(crate) fn handle_pointer_move(
                         scene_pos.0 - pw.overlay.drag_origin.0,
                         scene_pos.1 - pw.overlay.drag_origin.1,
                     );
-                    fire_gesture_action(nodes, r, slot,
-                        crate::input::gesture::GestureAction::DragMove(local, inc));
+                    fire_gesture_action(
+                        nodes,
+                        r,
+                        slot,
+                        crate::input::gesture::GestureAction::DragMove(local, inc),
+                    );
                 }
             }
             handled = true;
@@ -750,16 +858,29 @@ pub(crate) fn handle_pointer_move(
                 let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
                 let ov = &pw.overlay.layers[ov_idx];
                 let nodes = ov.composer.arena_nodes();
-                if nodes[idx].modifier.vertical_scroll_state().is_some() { (0.0, dy) }
-                else if nodes[idx].modifier.horizontal_scroll_state().is_some() { (dx, 0.0) }
-                else { (0.0, 0.0) }
+                if nodes[idx].modifier.vertical_scroll_state().is_some() {
+                    (0.0, dy)
+                } else if nodes[idx].modifier.horizontal_scroll_state().is_some() {
+                    (dx, 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
             };
             if ax != 0.0 || ay != 0.0 {
                 let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
                 if let Some(ov) = pw.overlay.layers.get_mut(ov_idx) {
                     if let Some(root) = ov.composer.layout_root_idx() {
-                        let density = crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32);
-                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), root, idx, crate::nested_scroll::ScrollDelta::new(ax, ay), crate::nested_scroll::NestedScrollSource::Drag, density);
+                        let density = crate::runtime::density::density_with_system_font_scale(
+                            pw.scale_factor as f32,
+                        );
+                        let consumed = dispatch_nested_scroll_delta(
+                            ov.composer.arena_nodes_mut(),
+                            root,
+                            idx,
+                            crate::nested_scroll::ScrollDelta::new(ax, ay),
+                            crate::nested_scroll::NestedScrollSource::Drag,
+                            density,
+                        );
                         if consumed.x != 0.0 || consumed.y != 0.0 {
                             handled = true;
                         }
@@ -769,8 +890,11 @@ pub(crate) fn handle_pointer_move(
             let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
             if let Some(ov) = pw.overlay.layers.get(ov_idx) {
                 let nodes = ov.composer.arena_nodes();
-                if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() { ss.is_scroll_in_progress.set(true); }
-                else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() { ss.is_scroll_in_progress.set(true); }
+                if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+                    ss.is_scroll_in_progress.set(true);
+                } else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
+                    ss.is_scroll_in_progress.set(true);
+                }
             }
         }
     }
@@ -780,7 +904,9 @@ pub(crate) fn handle_pointer_move(
     if pw.input.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
             let nodes = pw.composer.arena_nodes();
-            let Some(r) = pw.composer.layout_root_idx() else { return None };
+            let Some(r) = pw.composer.layout_root_idx() else {
+                return None;
+            };
             let slot = pw.input.drag_scroll.as_ref().unwrap().slot;
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
@@ -801,11 +927,13 @@ pub(crate) fn handle_pointer_move(
             #[cfg(debug_assertions)]
             if drag_trace_enabled() {
                 let nodes = pw.composer.arena_nodes();
-                eprintln!("[drag-move] target_idx={} scroll_v={} scroll_h={} slot={:?}",
+                eprintln!(
+                    "[drag-move] target_idx={} scroll_v={} scroll_h={} slot={:?}",
                     idx,
                     nodes[idx].modifier.vertical_scroll_state().is_some(),
                     nodes[idx].modifier.horizontal_scroll_state().is_some(),
-                    pw.input.drag_scroll.as_ref().map(|d| d.slot));
+                    pw.input.drag_scroll.as_ref().map(|d| d.slot)
+                );
             }
             // Axis-aware: a vertical container takes dy and a horizontal one takes dx
             // (`apply_scroll_delta` picks by the node's axis).
@@ -821,14 +949,20 @@ pub(crate) fn handle_pointer_move(
             };
             if ax != 0.0 || ay != 0.0 {
                 let root = pw.composer.layout_root_idx();
-                let consumed = root.map(|root| dispatch_nested_scroll_delta(
-                    pw.composer.arena_nodes_mut(),
-                    root,
-                    idx,
-                    crate::nested_scroll::ScrollDelta::new(ax, ay),
-                    crate::nested_scroll::NestedScrollSource::Drag,
-                    crate::runtime::density::density_with_system_font_scale(pw.scale_factor as f32),
-                )).unwrap_or(crate::nested_scroll::ScrollDelta::ZERO);
+                let consumed = root
+                    .map(|root| {
+                        dispatch_nested_scroll_delta(
+                            pw.composer.arena_nodes_mut(),
+                            root,
+                            idx,
+                            crate::nested_scroll::ScrollDelta::new(ax, ay),
+                            crate::nested_scroll::NestedScrollSource::Drag,
+                            crate::runtime::density::density_with_system_font_scale(
+                                pw.scale_factor as f32,
+                            ),
+                        )
+                    })
+                    .unwrap_or(crate::nested_scroll::ScrollDelta::ZERO);
                 handled = consumed.x != 0.0 || consumed.y != 0.0;
             }
             // Mark the drag as in progress (`apply_scroll_delta` sets this false when it cancels a
@@ -857,8 +991,16 @@ pub(crate) fn handle_pointer_move(
         }
     }
     let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return false;
+    };
+    let path = hit_test_with_flights(
+        nodes,
+        r,
+        pw.composer.transition_roots(),
+        scene_pos.0,
+        scene_pos.1,
+    );
 
     // Drag-select text. Shared with the auto-scroll tick, which re-runs it every frame while the
     // pointer sits in a scroll container's edge band.
@@ -881,14 +1023,21 @@ pub(crate) fn handle_pointer_move(
     handled || consumed
 }
 
-
 /// Extend the text selection to `scene_pos` — the body of a selection drag, on its own so the
 /// auto-scroll tick can re-run it every frame without synthesising a pointer event.
 pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let mut handled = false;
     let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return false };
-    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
+    let Some(r) = pw.composer.layout_root_idx() else {
+        return false;
+    };
+    let path = hit_test_with_flights(
+        nodes,
+        r,
+        pw.composer.transition_roots(),
+        scene_pos.0,
+        scene_pos.1,
+    );
 
     // Drag-select text.
     if pw.input.down.is_some() {
@@ -900,7 +1049,11 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
         // on to y=200).
         let drag_node = match path.last().copied() {
             Some(innermost) => Some(innermost),
-            None => pw.input.down.as_ref().and_then(|d| d.anchor_text_node)
+            None => pw
+                .input
+                .down
+                .as_ref()
+                .and_then(|d| d.anchor_text_node)
                 .and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id)),
         };
         if let Some(innermost) = drag_node {
@@ -923,11 +1076,19 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
             // pointer moved on into the container's padding).
             let under_ok = nodes[innermost].cached_paragraph.borrow().is_some()
                 && nodes[innermost].registrar.borrow().is_some();
-            let anchor_text = if under_ok { None } else {
-                pw.input.down.as_ref().and_then(|d| d.anchor_text_node)
+            let anchor_text = if under_ok {
+                None
+            } else {
+                pw.input
+                    .down
+                    .as_ref()
+                    .and_then(|d| d.anchor_text_node)
                     .and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id))
             };
-            let sel_node = match anchor_text { Some(idx) => idx, None => innermost };
+            let sel_node = match anchor_text {
+                Some(idx) => idx,
+                None => innermost,
+            };
             if text_selection || (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[sel_node].id);
                 if let Ok(borrow) = nodes[sel_node].cached_paragraph.try_borrow() {
@@ -936,7 +1097,10 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
                         // box, and the selection highlight has to agree (mid-flight `measured_size` is
                         // the size the parent was told, review R3-F6).
                         let node_w = nodes[sel_node].content_box().width;
-                        let align = nodes[sel_node].modifier.align().unwrap_or(crate::text::TextAlign::Left);
+                        let align = nodes[sel_node]
+                            .modifier
+                            .align()
+                            .unwrap_or(crate::text::TextAlign::Left);
                         // The slack rule has to be the PAINT paths' rule, not a copy of the old
                         // one: a WRAPPED paragraph was laid out inside its box, so a negative
                         // slack would push it out of it — but an UNWRAPPED one
@@ -950,7 +1114,9 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
                             .elements()
                             .iter()
                             .find_map(|el| match el {
-                                crate::modifier::ModifierElement::TextContent { soft_wrap, .. } => Some(*soft_wrap),
+                                crate::modifier::ModifierElement::TextContent {
+                                    soft_wrap, ..
+                                } => Some(*soft_wrap),
                                 _ => None,
                             })
                             .unwrap_or(true);
@@ -968,35 +1134,60 @@ pub(crate) fn apply_text_selection_drag(pw: &mut PerWindow, scene_pos: (f32, f32
                         // renderer's content area — otherwise the dragged selection is off by the
                         // padding).
                         let (pad_s, pad_t, pad_e, _) = nodes[sel_node].modifier.get_padding_sides();
-                        let pad_x = if nodes[sel_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+                        let pad_x = if nodes[sel_node].layout_direction
+                            == crate::layout::LayoutDirection::Rtl
+                        {
+                            pad_e
+                        } else {
+                            pad_s
+                        };
                         let tl = crate::text::TextLayout::new(para);
                         {
                             let down = pw.input.down.as_ref().unwrap();
                             // A non-selectable node (not registered with any SelectionContainer) → do not
                             // update the selection (wrapped in `if let` rather than `else return`, because a
                             // return would skip `dispatch_ptr_event`/`request_redraw`).
-                            if let Some(reg) = nodes[sel_node].registrar.borrow().as_ref().cloned() {
-                                let current_index = tl.get_closest_grapheme_cluster_at(
-                                    skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
+                            if let Some(reg) = nodes[sel_node].registrar.borrow().as_ref().cloned()
+                            {
+                                let current_index =
+                                    tl.get_closest_grapheme_cluster_at(skia_safe::Point::new(
+                                        scene_pos.0 - x_off - pad_x,
+                                        scene_pos.1 - abs_y - pad_t,
+                                    ));
                                 // A truncated paragraph answers in display bytes (see `DisplaySpan`).
                                 let current_index = para.content_offset(current_index);
                                 // Display offset → editing offset (password masking / formatted input;
                                 // `TextFieldVisual` is on the container, so look upward).
-                                let current_index = crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
-                                    .map(|m| m.transformed_to_original(current_index))
-                                    .unwrap_or(current_index);
-                                let cur_off = reg.segment_info(nodes[sel_node].slot_key).map(|(off, _)| off);
-                                if let Some((target, s, e)) = crate::components::selection_container::compute_selection(
-                                    down.anchor_registrar.as_ref(), down.selection_anchor,
-                                    &reg, cur_off, current_index,
-                                    scene_pos.0, scene_pos.1, down.position.0, down.position.1,
-                                ) {
+                                let current_index =
+                                    crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
+                                        .map(|m| m.transformed_to_original(current_index))
+                                        .unwrap_or(current_index);
+                                let cur_off = reg
+                                    .segment_info(nodes[sel_node].slot_key)
+                                    .map(|(off, _)| off);
+                                if let Some((target, s, e)) =
+                                    crate::components::selection_container::compute_selection(
+                                        down.anchor_registrar.as_ref(),
+                                        down.selection_anchor,
+                                        &reg,
+                                        cur_off,
+                                        current_index,
+                                        scene_pos.0,
+                                        scene_pos.1,
+                                        down.position.0,
+                                        down.position.1,
+                                    )
+                                {
                                     // The range is in editing offsets (anchor/current were converted back);
                                     // the registrar's space is display offsets, so convert before writing the
                                     // selection.
-                                    let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, sel_node)
-                                        .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
-                                        .unwrap_or((s, e));
+                                    let (ts, te) = crate::text::field::offset_mapping_for_node(
+                                        nodes, r, sel_node,
+                                    )
+                                    .map(|m| {
+                                        (m.original_to_transformed(s), m.original_to_transformed(e))
+                                    })
+                                    .unwrap_or((s, e));
                                     target.set_selection(ts, te);
                                     handled = true;
                                 }
@@ -1047,17 +1238,27 @@ fn update_selection_autoscroll(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     };
     let (velocity, vertical) = {
         let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { pw.input.selection_autoscroll = None; return };
+        let Some(r) = pw.composer.layout_root_idx() else {
+            pw.input.selection_autoscroll = None;
+            return;
+        };
         let vertical = nodes[idx].modifier.vertical_scroll_state().is_some();
         let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[idx].id);
-        let (w, h) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
+        let (w, h) = (
+            nodes[idx].measured_size.width,
+            nodes[idx].measured_size.height,
+        );
         // The same sign a POINTER MOVE would have: pushing past the bottom edge is a downward
         // move (the content follows, so later text comes into view), pushing past the top edge is
         // an upward one.
         let depth = |pos: f32, start: f32, end: f32| -> f32 {
-            if pos < start + BAND { -(start + BAND - pos) / BAND }
-            else if pos > end - BAND { (pos - (end - BAND)) / BAND }
-            else { 0.0 }
+            if pos < start + BAND {
+                -(start + BAND - pos) / BAND
+            } else if pos > end - BAND {
+                (pos - (end - BAND)) / BAND
+            } else {
+                0.0
+            }
         };
         if vertical {
             let d = depth(scene_pos.1, abs_y, abs_y + h);
@@ -1090,8 +1291,11 @@ fn try_handle_drag(
     path: &[usize],
     scene_pos: (f32, f32),
 ) -> bool {
-    let Some(reg) = input.last_selection_registrar.clone() else { return false };
-    let Some(points) = crate::layout::selection_handles::selection_handle_points(nodes, root, &reg) else {
+    let Some(reg) = input.last_selection_registrar.clone() else {
+        return false;
+    };
+    let Some(points) = crate::layout::selection_handles::selection_handle_points(nodes, root, &reg)
+    else {
         return false;
     };
     let radius = crate::render::HANDLE_GRAB_RADIUS;
@@ -1100,12 +1304,22 @@ fn try_handle_drag(
         let (dx, dy) = (scene_pos.0 - centre.0, scene_pos.1 - centre.1);
         (dx * dx + dy * dy).sqrt() <= radius
     };
-    let grabbed = if hit(&points[0]) { Some(0usize) } else if hit(&points[1]) { Some(1) } else { None };
+    let grabbed = if hit(&points[0]) {
+        Some(0usize)
+    } else if hit(&points[1]) {
+        Some(1)
+    } else {
+        None
+    };
     let Some(which) = grabbed else { return false };
-    let Some((start, end)) = reg.selection_ends() else { return false };
+    let Some((start, end)) = reg.selection_ends() else {
+        return false;
+    };
     // The end that stays put becomes the anchor.
     let fixed = if which == 0 { end } else { start };
-    let Some(anchor_global) = reg.end_global(fixed.0, fixed.1) else { return false };
+    let Some(anchor_global) = reg.end_global(fixed.0, fixed.1) else {
+        return false;
+    };
     let anchor_text_node = crate::layout::node::find_node_id_by_slot_key(nodes, root, fixed.0)
         .and_then(|id| crate::layout::node::find_node_by_id(nodes, root, id))
         .map(|idx| nodes[idx].id);
@@ -1113,7 +1327,7 @@ fn try_handle_drag(
         let node = &nodes[i];
         (node.modifier.vertical_scroll_state().is_some()
             || node.modifier.horizontal_scroll_state().is_some())
-            .then_some(node.slot_key)
+        .then_some(node.slot_key)
     });
     let innermost = path.last().copied().unwrap_or(0);
     input.last_selection_registrar = Some(reg.clone());

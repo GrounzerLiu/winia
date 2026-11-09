@@ -28,7 +28,8 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
 }
 
 /// The set of window IDs created so far, globally.
-pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The declarative window builder.
@@ -46,7 +47,11 @@ pub struct WindowState {
 
 impl Default for WindowState {
     fn default() -> Self {
-        WindowState { width: 300.0, height: 200.0, title: String::new() }
+        WindowState {
+            width: 300.0,
+            height: 200.0,
+            title: String::new(),
+        }
     }
 }
 
@@ -88,32 +93,49 @@ impl Window {
     }
 
     /// Called at the end of compose to check whether a window asked to close.
-    pub(crate) fn process_detached(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
-                                   event_loop: &dyn winit::event_loop::ActiveEventLoop,
-                                   force_shutdown: &dyn Fn(),
-                                   saveable: &mut std::collections::HashMap<u64, std::collections::HashMap<String, crate::runtime::saveable::SavedValue>>) {
+    pub(crate) fn process_detached(
+        windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        force_shutdown: &dyn Fn(),
+        saveable: &mut std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
+        >,
+    ) {
         let pending: Vec<(winit::window::WindowId, u64)> = windows
             .iter()
             .filter_map(|(window_id, pw)| {
-                pw.composer.pending_window_close_id().map(|id| (*window_id, id))
+                pw.composer
+                    .pending_window_close_id()
+                    .map(|id| (*window_id, id))
             })
             .collect();
         for (owner_window_id, wid) in pending {
-            let Some(pw) = windows.get(&owner_window_id) else { continue };
+            let Some(pw) = windows.get(&owner_window_id) else {
+                continue;
+            };
             pw.composer.reset_pending_window_remove();
             Self::close_detached_window(windows, event_loop, force_shutdown, wid, saveable);
         }
     }
 
-    fn close_detached_window(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
-                             event_loop: &dyn winit::event_loop::ActiveEventLoop,
-                             force_shutdown: &dyn Fn(),
-                             wid: u64,
-                             saveable: &mut std::collections::HashMap<u64, std::collections::HashMap<String, crate::runtime::saveable::SavedValue>>) {
+    fn close_detached_window(
+        windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        force_shutdown: &dyn Fn(),
+        wid: u64,
+        saveable: &mut std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
+        >,
+    ) {
         // Window::build was not called for the Composer that owns this request.
-        if !CREATED.lock().unwrap().contains(&wid) { return; }
+        if !CREATED.lock().unwrap().contains(&wid) {
+            return;
+        }
         CREATED.lock().unwrap().remove(&wid);
-        let to_close: Vec<winit::window::WindowId> = windows.iter()
+        let to_close: Vec<winit::window::WindowId> = windows
+            .iter()
             .filter(|(_, pw)| pw.created_id() == Some(wid))
             .map(|(wid2, _)| *wid2)
             .collect();
@@ -133,11 +155,18 @@ impl Window {
                 // Drop the debug tree entry: a logical close never goes through winit's Destroyed, and a
                 // stale entry would confuse later checks.
                 crate::debug::remove_tree(w.into_raw() as u64);
-                if let Some(ref mut cb) = pw.on_close { cb(); }
-                for pw2 in windows.values() {
-                    if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }
+                if let Some(ref mut cb) = pw.on_close {
+                    cb();
                 }
-                if windows.is_empty() { force_shutdown(); event_loop.exit(); }
+                for pw2 in windows.values() {
+                    if let Some(ref sw) = pw2.skia_window {
+                        sw.request_redraw();
+                    }
+                }
+                if windows.is_empty() {
+                    force_shutdown();
+                    event_loop.exit();
+                }
             }
         }
     }
@@ -195,7 +224,7 @@ impl Window {
         let need_new = wid == 0 || !CREATED.lock().unwrap().contains(&wid);
 
         if need_new {
-                        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             created_id.as_raw().set_backchannel(id); // Backchannel: window-creation marker must not notify (would avalanche keys / collapse the tree mid-compose)
             CREATED.lock().unwrap().insert(id);
 
@@ -205,7 +234,9 @@ impl Window {
             let id_close = id;
             let wrapped: Option<Box<dyn FnMut() + Send>> = Some(Box::new(move || {
                 CREATED.lock().unwrap().remove(&id_close);
-                if let Some(ref mut f) = on_close { f(); }
+                if let Some(ref mut f) = on_close {
+                    f();
+                }
             }));
             // The content closure carries the CELL (a live handle), not a palette: a captured palette pinned
             // the window to its startup colors — the app's own theme switch flipped the surface behind the
@@ -213,9 +244,19 @@ impl Window {
             // content in it, so this stays a plain closure.
             // The saveable key is the DECLARATION SITE's salted key, not the freshly minted window id:
             // a re-opened window has to be matched against the site that declared it.
-            app::open_window_with_saveable_key(w, h, self.state.title.clone(), self.options, Some(Box::new(move |ctx| {
-                sub_window_content(ctx, &content);
-            })), wrapped, Some(id), Some(key), Some(theme));
+            app::open_window_with_saveable_key(
+                w,
+                h,
+                self.state.title.clone(),
+                self.options,
+                Some(Box::new(move |ctx| {
+                    sub_window_content(ctx, &content);
+                })),
+                wrapped,
+                Some(id),
+                Some(key),
+                Some(theme),
+            );
         }
 
         ctx.end_node();
@@ -223,6 +264,4 @@ impl Window {
         // After end_node: mark that Window::build has been called.
         lifecycle.mark_rebuilt();
     }
-
 }
-

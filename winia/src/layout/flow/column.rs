@@ -5,11 +5,11 @@ use crate::layout::{
     Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement,
     VerticalAxis,
 };
-use crate::unit::Size;
 use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
+use crate::unit::Size;
 
-use super::{measure::measure_flow, FlowOverflow};
+use super::{FlowOverflow, measure::measure_flow};
 
 /// The FlowColumn measure policy: a vertical main axis that wraps when a column is too tall.
 ///
@@ -60,23 +60,50 @@ impl FlowColumnLayout {
     }
 
     /// Sets the main-axis arrangement inside a column.
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
     /// Sets the default cross-axis alignment of an item inside its column.
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
     /// Sets the distribution of free cross-axis space between columns.
-    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self {
+        self.cross_arrangement = a;
+        self
+    }
     /// Sets the gap between items in one column.
-    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn main_spacing(mut self, s: f32) -> Self {
+        self.main_spacing = s;
+        self
+    }
     /// Sets the gap between columns.
-    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self {
+        self.cross_spacing = s;
+        self
+    }
     /// Sets the maximum number of items per column.
-    pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+    pub fn max_items_in_column(mut self, m: usize) -> Self {
+        self.max_items_in_column = m;
+        self
+    }
     /// Sets the maximum number of columns.
-    pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    pub fn max_lines(mut self, m: usize) -> Self {
+        self.max_lines = m;
+        self
+    }
     /// Selects the overflow policy.
-    pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    pub fn overflow(mut self, o: FlowOverflow) -> Self {
+        self.overflow = o;
+        self
+    }
     /// Sets the layout direction used for mirroring.
-    pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
+        self
+    }
 
     pub(crate) fn item_animations(
         mut self,
@@ -88,7 +115,9 @@ impl FlowColumnLayout {
 }
 
 impl Default for FlowColumnLayout {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MeasurePolicy for FlowColumnLayout {
@@ -228,7 +257,6 @@ impl MeasurePolicy for FlowColumnLayout {
     }
 }
 
-
 /// A flowing column: items run down the vertical main axis and wrap into a new column when the
 /// current one is full (menus, vertical tag lists, wrapping toolbars).
 ///
@@ -271,23 +299,50 @@ impl FlowColumn {
 
     /// Appends the caller's modifier. The modifier is placed on the flow container itself, so
     /// layout, paint and semantics attributes travel with the container.
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
     /// Sets the main-axis arrangement inside a column.
-    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self {
+        self.arrangement = a;
+        self
+    }
     /// Sets the default cross-axis alignment of an item inside its column; `align_self` overrides it.
-    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
     /// Sets the distribution of free cross-axis space between columns.
-    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self {
+        self.cross_arrangement = a;
+        self
+    }
     /// Sets the gap between items in one column.
-    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn main_spacing(mut self, s: f32) -> Self {
+        self.main_spacing = s;
+        self
+    }
     /// Sets the gap between columns.
-    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self {
+        self.cross_spacing = s;
+        self
+    }
     /// Sets the maximum number of items per column. Zero produces an empty flow.
-    pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+    pub fn max_items_in_column(mut self, m: usize) -> Self {
+        self.max_items_in_column = m;
+        self
+    }
     /// Sets the maximum number of columns. Zero produces an empty flow; Visible ignores the cap.
-    pub fn max_lines(mut self, m: usize) -> Self { self.max_lines = m; self }
+    pub fn max_lines(mut self, m: usize) -> Self {
+        self.max_lines = m;
+        self
+    }
     /// Selects the overflow policy.
-    pub fn overflow(mut self, o: FlowOverflow) -> Self { self.overflow = o; self }
+    pub fn overflow(mut self, o: FlowOverflow) -> Self {
+        self.overflow = o;
+        self
+    }
 
     /// Composes the column and its children.
     ///
@@ -304,7 +359,10 @@ impl FlowColumn {
         ctx.changed(&self.max_items_in_column);
         ctx.changed(&self.max_lines);
         ctx.changed(&self.overflow);
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let dir = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         // The host is cheap and always present; item state is only allocated for markers.
         // Per INSTANCE, as in FlowRow: position_key() is the enclosing group, not this container.
@@ -334,5 +392,7 @@ impl FlowColumn {
 }
 
 impl Default for FlowColumn {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -9,7 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::time::{sleep_until, Instant, Sleep};
+use tokio::time::{Instant, Sleep, sleep_until};
 
 /// The stream returned by [debounce].
 pub struct Debounce<S: Stream> {
@@ -165,13 +165,23 @@ mod tests {
             feed.push(1);
             feed.push(2);
             feed.push(3);
-            assert!(poll(&mut deb, &waker).is_pending(), "nothing is emitted yet");
+            assert!(
+                poll(&mut deb, &waker).is_pending(),
+                "nothing is emitted yet"
+            );
 
             tokio::time::advance(Duration::from_millis(50)).await;
-            assert!(poll(&mut deb, &waker).is_pending(), "still inside the period");
+            assert!(
+                poll(&mut deb, &waker).is_pending(),
+                "still inside the period"
+            );
 
             tokio::time::advance(Duration::from_millis(60)).await;
-            assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(3)), "the last value, once");
+            assert_eq!(
+                poll(&mut deb, &waker),
+                Poll::Ready(Some(3)),
+                "the last value, once"
+            );
             assert!(poll(&mut deb, &waker).is_pending(), "and nothing more");
         });
     }
@@ -193,7 +203,10 @@ mod tests {
             feed.push(2);
             assert!(poll(&mut deb, &waker).is_pending(), "the clock restarted");
             tokio::time::advance(Duration::from_millis(60)).await;
-            assert!(poll(&mut deb, &waker).is_pending(), "60 ms since value 2, not 120");
+            assert!(
+                poll(&mut deb, &waker).is_pending(),
+                "60 ms since value 2, not 120"
+            );
 
             tokio::time::advance(Duration::from_millis(60)).await;
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(2)));
@@ -211,11 +224,18 @@ mod tests {
 
             feed.push(7);
             feed.finish();
-            assert!(poll(&mut deb, &waker).is_pending(), "the period still has to run");
+            assert!(
+                poll(&mut deb, &waker).is_pending(),
+                "the period still has to run"
+            );
 
             tokio::time::advance(Duration::from_millis(40)).await;
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(7)));
-            assert_eq!(poll(&mut deb, &waker), Poll::Ready(None), "and then the stream ends");
+            assert_eq!(
+                poll(&mut deb, &waker),
+                Poll::Ready(None),
+                "and then the stream ends"
+            );
         });
     }
 
@@ -246,7 +266,10 @@ mod tests {
             let waker = futures_util::task::noop_waker();
             let mut deb = debounce(EndAfterOne { polls: 0 }, Duration::from_millis(10));
 
-            assert!(poll(&mut deb, &waker).is_pending(), "the value waits out the period");
+            assert!(
+                poll(&mut deb, &waker).is_pending(),
+                "the value waits out the period"
+            );
             tokio::time::advance(Duration::from_millis(20)).await;
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(7)));
             // The end, without touching the upstream again.

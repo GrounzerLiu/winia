@@ -4,7 +4,6 @@ use super::*;
 // Phase 2: flight visuals (render-side data)
 // ═══════════════════════════════════════════════════════════
 
-
 /// Quarter-ellipse arc center (Compose `ArcSpline.Arc` math): `X = Cx +
 /// A·sin θ`, `Y = Cy + B·cos θ`, θ swept 0→π/2 through an arc-length table
 /// so travel is uniform along the curve. Orientation follows travel
@@ -14,7 +13,6 @@ use super::*;
 /// Progress outside [0,1] (spring overshoot) pins the center at the nearer
 /// endpoint — a deliberate deviation from AOSP extrapolation: Winia
 /// overshoot rides scalar progress, and size/radii still overshoot visibly.
-
 
 /// Opacity a SCENE owns for a flight end, if that end belongs to one (see
 /// [`TransitionVisual::alpha`]): the visibility of the scene the end was composed in, read right
@@ -26,7 +24,11 @@ use super::*;
 /// ghost is rendered from the transition layer, where the scene's own layer fade no longer applies,
 /// so the flight carries that fade; a target that stays in tree is already faded by its scene's
 /// layer, so the flight keeps it opaque unless the scene host elevates it into the layer too.
-pub(crate) fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> Option<f32> {
+pub(crate) fn scene_alpha_for_end(
+    nodes: &[LayoutNode],
+    idx: usize,
+    leaving_end: bool,
+) -> Option<f32> {
     let marker = find_shared_marker(&nodes.get(idx)?.modifier)?;
     // Scene membership from the ANCESTOR chain, like the pairing path: the marker's own `scene` field is
     // captured when its modifier element is built and then reused across frames, so it freezes (measured:
@@ -46,7 +48,6 @@ pub(crate) fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end:
         Some(1.0)
     }
 }
-
 
 /// Per-frame layout instruction for a flight endpoint (Compose `ResizeMode` /
 /// `PlaceHolderSize`), shared by the Tier 0 and Tier 1 writers.
@@ -85,11 +86,9 @@ pub(crate) fn animated_size(
     crate::unit::Size::new(l.width, l.height)
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Phase 2: Tier-0 coordinator (compose/layout/app-loop hooks)
 // ═══════════════════════════════════════════════════════════
-
 
 /// Canvas scroll translation applied by a node's STRICT ancestors.
 ///
@@ -112,7 +111,9 @@ pub(crate) fn ancestor_scroll_sum(
     let mut sy = 0.0f32;
     let mut cur = idx;
     while let Some(pid) = nodes[cur].parent_id {
-        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let Some(&pidx) = id_to_idx.get(&pid) else {
+            break;
+        };
         let p = &nodes[pidx];
         for el in p.modifier.elements() {
             match el {
@@ -139,7 +140,6 @@ pub(crate) fn ancestor_scroll_sum(
     }
     (sx, sy)
 }
-
 
 /// Test-only: mark a scope as transitioning (or idle) without a real flight.
 ///
@@ -217,4 +217,3 @@ pub(crate) fn sync_scope_active_states(all: &[&Composer]) {
 pub(crate) fn flight_progress_done(a: &ActiveFlight) -> bool {
     a.is_done()
 }
-

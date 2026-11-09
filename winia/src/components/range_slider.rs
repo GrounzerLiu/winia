@@ -24,21 +24,21 @@
 //!   and what the plain [`crate::components::slider::Slider`] does too), so the keyboard reaches a thumb
 //!   through Tab alone.
 
+use crate::components::slider::{
+    SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH, SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT,
+    SliderColors, SliderDefaults, draw_thumb, draw_track_body, fraction_from_value, handle_key,
+    snap_value, value_at_x,
+};
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::input::KbEvent;
+use crate::input::interaction::MutableInteractionSource;
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
-use crate::unit::{Offset, Size};
-use crate::modifier::{Modifier};
-use crate::input::{KbEvent};
-use crate::input::interaction::MutableInteractionSource;
-use crate::components::slider::{
-    SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
-    SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, draw_thumb,
-    draw_track_body, fraction_from_value, handle_key, snap_value, value_at_x,
-};
+use crate::modifier::Modifier;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::WiniaTheme;
+use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
 /// A range value — the winia stand-in for Compose's `ClosedFloatingPointRange<Float>`.
@@ -64,7 +64,10 @@ impl RangeValue {
 
 impl From<(f32, f32)> for RangeValue {
     fn from(v: (f32, f32)) -> Self {
-        Self { start: v.0, end: v.1 }
+        Self {
+            start: v.0,
+            end: v.1,
+        }
     }
 }
 
@@ -91,7 +94,13 @@ pub fn thumb_center_x(value: f32, width: f32, min: f32, max: f32) -> f32 {
 /// nearer thumb wins, and on an exact tie the START thumb wins only if it sits to the RIGHT of the
 /// press — i.e. when the press is to its left. For the two degenerate cases that means the start
 /// thumb of a collapsed range pressed from its left, and otherwise the end thumb.
-pub fn nearest_thumb(local_x: f32, width: f32, value: RangeValue, min: f32, max: f32) -> RangeThumb {
+pub fn nearest_thumb(
+    local_x: f32,
+    width: f32,
+    value: RangeValue,
+    min: f32,
+    max: f32,
+) -> RangeThumb {
     let start_x = thumb_center_x(value.start, width, min, max);
     let end_x = thumb_center_x(value.end, width, min, max);
     let d_start = (local_x - start_x).abs();
@@ -118,8 +127,14 @@ pub fn range_with_moved_thumb(
 ) -> RangeValue {
     let v = new_value.clamp(min, max);
     match thumb {
-        RangeThumb::Start => RangeValue { start: v.min(value.end), end: value.end },
-        RangeThumb::End => RangeValue { start: value.start, end: v.max(value.start) },
+        RangeThumb::Start => RangeValue {
+            start: v.min(value.end),
+            end: value.end,
+        },
+        RangeThumb::End => RangeValue {
+            start: value.start,
+            end: v.max(value.start),
+        },
     }
 }
 
@@ -218,7 +233,9 @@ impl RangeSlider {
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| SliderDefaults::slider_colors(&theme));
         let start_source = self
             .start_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
@@ -226,15 +243,32 @@ impl RangeSlider {
             .end_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let (min, max) = self.value_range;
-        let (min, max) = if max > min { (min, max) } else { (min, min + 1.0) };
+        let (min, max) = if max > min {
+            (min, max)
+        } else {
+            (min, min + 1.0)
+        };
         let steps = self.steps;
         // As in `Slider`: with `steps` the component only ever SHOWS on-tick values (Compose snaps in
         // `RangeSliderState`'s setters), so a caller-supplied range is snapped as well — not just a
         // dragged one. Snapping the two ends independently can invert the pair, so normalise once
         // more afterwards; without `steps` this is the plain clamp.
-        let lo = snap_value(self.value.start.min(self.value.end).clamp(min, max), steps, min, max);
-        let hi = snap_value(self.value.start.max(self.value.end).clamp(min, max), steps, min, max);
-        let value = RangeValue { start: lo.min(hi), end: lo.max(hi) };
+        let lo = snap_value(
+            self.value.start.min(self.value.end).clamp(min, max),
+            steps,
+            min,
+            max,
+        );
+        let hi = snap_value(
+            self.value.start.max(self.value.end).clamp(min, max),
+            steps,
+            min,
+            max,
+        );
+        let value = RangeValue {
+            start: lo.min(hi),
+            end: lo.max(hi),
+        };
         let enabled = self.enabled;
 
         // Per-thumb interaction state: each thumb halves in width while its own gesture runs.
@@ -311,7 +345,9 @@ impl RangeSlider {
                     let nv = value_at_x(pos.0, tw_tap.get(), min, max, steps);
                     cb(range_with_moved_thumb(value, thumb, nv, min, max));
                 }
-                if let Some(cb) = &f_tap { cb(); }
+                if let Some(cb) = &f_tap {
+                    cb();
+                }
             });
 
             // Drag: the thumb resolved at press follows the pointer in ABSOLUTE position (Compose
@@ -352,7 +388,9 @@ impl RangeSlider {
                 }
                 src_s.emit_release();
                 src_e.emit_release();
-                if let Some(cb) = &f_de { cb(); }
+                if let Some(cb) = &f_de {
+                    cb();
+                }
             });
             let src_s = start_source.clone();
             let src_e = end_source.clone();
@@ -385,7 +423,11 @@ impl RangeSlider {
                         steps,
                     })
                     .then(gestures);
-                match ctx.start_restartable_group(track_key, track_mod, RangeSliderLayoutPolicy { value, min, max }) {
+                match ctx.start_restartable_group(
+                    track_key,
+                    track_mod,
+                    RangeSliderLayoutPolicy { value, min, max },
+                ) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         // The two thumbs, children of the track: each is its own focusable node with
@@ -393,7 +435,11 @@ impl RangeSlider {
                         // FOCUSED thumb; each draws its own capsule and focus ring above the body.
                         for thumb in [RangeThumb::Start, RangeThumb::End] {
                             let is_start = thumb == RangeThumb::Start;
-                            let source = if is_start { start_source.clone() } else { end_source.clone() };
+                            let source = if is_start {
+                                start_source.clone()
+                            } else {
+                                end_source.clone()
+                            };
                             let thumb_active = if is_start { start_active } else { end_active };
                             let mut tm = Modifier::new()
                                 .size(SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT)
@@ -410,18 +456,22 @@ impl RangeSlider {
                             if enabled {
                                 let v_key = set_value.clone();
                                 let f_key = finished.clone();
-                                tm = tm
-                                    .focusable_with_source(&source)
-                                    .on_key_event(move |ke: &KbEvent| {
-                                        let current = if is_start { value.start } else { value.end };
+                                tm = tm.focusable_with_source(&source).on_key_event(
+                                    move |ke: &KbEvent| {
+                                        let current =
+                                            if is_start { value.start } else { value.end };
                                         let cb = v_key.as_ref().map(|cb| {
                                             let cb = cb.clone();
                                             Arc::new(move |nv: f32| {
-                                                cb(range_with_moved_thumb(value, thumb, nv, min, max))
-                                            }) as Arc<dyn Fn(f32) + Send + Sync>
+                                                cb(range_with_moved_thumb(
+                                                    value, thumb, nv, min, max,
+                                                ))
+                                            })
+                                                as Arc<dyn Fn(f32) + Send + Sync>
                                         });
                                         handle_key(ke, current, min, max, steps, &cb, &f_key)
-                                    });
+                                    },
+                                );
                             }
                             let thumb_key = ctx.next_key();
                             ctx.start_leaf(thumb_key, tm);
@@ -567,7 +617,12 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
                 nodes,
                 policies,
                 children[i],
-                Constraints::new(SLIDER_THUMB_WIDTH, SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_HEIGHT),
+                Constraints::new(
+                    SLIDER_THUMB_WIDTH,
+                    SLIDER_THUMB_WIDTH,
+                    SLIDER_THUMB_HEIGHT,
+                    SLIDER_THUMB_HEIGHT,
+                ),
             );
             let x = thumb_center_x(*v, row_w, self.min, self.max) - SLIDER_THUMB_WIDTH / 2.0;
             placements.push(Placement {
@@ -587,7 +642,6 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests;
