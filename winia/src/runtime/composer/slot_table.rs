@@ -175,7 +175,6 @@ pub(crate) enum SlotStatus {
 }
 
 /// 槽位表 — 组合树的内部数据结构（树形嵌套）
-
 pub(crate) struct SlotTable {
     pub(super) path: Vec<usize>,
     pub(super) root_slot: Slot,

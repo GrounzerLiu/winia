@@ -229,8 +229,6 @@ pub struct Composer {
 }
 
 impl Composer {
-    /// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
-
     /// This composer's process-unique identity; see the `uid` field.
     pub(crate) fn uid(&self) -> u64 {
         self.uid

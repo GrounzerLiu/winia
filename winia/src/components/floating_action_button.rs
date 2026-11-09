@@ -507,10 +507,10 @@ mod tests;
 //
 // 对齐 androidx-main ExtendedFloatingActionButton：
 // - 高 56dp；收起态 56×56（同 FAB，仅图标居中）；展开态 min 宽 80dp，
-///  内容 [icon 前 16dp | icon | 图标-文本 12dp | text | 后 20dp]
+//  内容 [icon 前 16dp | icon | 图标-文本 12dp | text | 后 20dp]
 // - 形状 CornerLarge（16dp 圆角）；容器 PrimaryContainer、内容 OnPrimaryContainer
 // - 展开/收起：宽度与内容位置按进度插值（FastSpatial 近似 stiffness400），
-///  文本透明度随进度淡入淡出（FastEffects）
+//  文本透明度随进度淡入淡出（FastEffects）
 // - 高程默认 Level3 / hover Level4（同 FAB）——复用 FloatingActionButtonElevation
 
 /// 高度 = ExtendedFabPrimaryTokens.ContainerHeight

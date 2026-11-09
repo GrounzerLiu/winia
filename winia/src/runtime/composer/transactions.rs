@@ -51,8 +51,6 @@ impl Drop for ComposeRuntimeTransaction {
     }
 }
 
-/// State the claim walk needs while the slot tree is walked (`SlotTable::collect_desc_tree`).
-
 /// Snapshot of mutable Composer state touched by layout. A measurement policy
 /// can execute user code, so panic must preserve the last committed graph and
 /// the invalidation batch for a retry.
