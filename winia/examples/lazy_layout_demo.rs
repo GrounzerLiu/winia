@@ -27,13 +27,14 @@ mod settings;
 use kit::{ITEMS, accent, card, list_name, palette, tile};
 
 #[composable]
-fn lazy_layout_demo(ctx: &mut ComposeCtx) {
+fn lazy_layout_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let scroll = ctx.remember(ScrollState::new).get();
 
     Column::new()
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(scroll),
         )

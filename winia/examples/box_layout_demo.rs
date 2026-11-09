@@ -67,13 +67,16 @@ fn block(
 }
 
 #[composable]
-fn box_layout_demo(ctx: &mut ComposeCtx) {
+fn box_layout_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let scroll = ctx.remember(ScrollState::new).get();
 
     Column::new()
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                // The scaffold measures its content full-size and hands the bar height back here;
+                // the content root applies it, as `Scaffold::new`'s doc says.
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(scroll),
         )

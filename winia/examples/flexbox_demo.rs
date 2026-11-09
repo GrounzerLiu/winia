@@ -132,7 +132,7 @@ fn segmented(
 }
 
 #[composable]
-fn flexbox_demo(ctx: &mut ComposeCtx) {
+fn flexbox_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let direction = ctx.remember(|| State::new(0usize)).get();
     let wrap = ctx.remember(|| State::new(0usize)).get();
     let justify = ctx.remember(|| State::new(0usize)).get();
@@ -176,7 +176,12 @@ fn flexbox_demo(ctx: &mut ComposeCtx) {
     };
 
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(
+            Modifier::new()
+                .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
+                .padding(16.0),
+        )
         .spacing(10.0)
         .build(ctx, |ctx| {
             Text::new("FlexBox — CSS flex in winia")

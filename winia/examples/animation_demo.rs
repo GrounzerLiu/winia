@@ -583,13 +583,19 @@ fn main() {
                 .size(760.0, 1500.0)
                 .title("Animation demo")
                 .build(ctx, |ctx| {
-                    settings::shell("Animation", ctx, |ctx| {
+                    settings::shell("Animation", ctx, |ctx, scaffold| {
                         let page = ctx.remember(ScrollState::new).get();
                         Column::new()
                             .spacing(12.0)
                             .modifier(
                                 Modifier::new()
                                     .fill_max_size()
+                                    .padding_sides(
+                                        scaffold.start,
+                                        scaffold.top,
+                                        scaffold.end,
+                                        scaffold.bottom,
+                                    )
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )

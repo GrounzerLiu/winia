@@ -253,7 +253,7 @@ fn star() -> SvgDrawable {
 }
 
 #[composable]
-fn rich_text_demo(ctx: &mut ComposeCtx) {
+fn rich_text_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let scroll = ctx.remember(ScrollState::new).get();
     let k = Knobs::remember(ctx);
     let selected = ctx.remember(|| State::new(0usize)).get();
@@ -263,6 +263,7 @@ fn rich_text_demo(ctx: &mut ComposeCtx) {
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(scroll),
         )

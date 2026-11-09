@@ -93,7 +93,7 @@ fn alignment_of(index: u32) -> ContentAlignment {
 }
 
 #[composable]
-fn grid_demo(ctx: &mut ComposeCtx) {
+fn grid_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let preset = ctx.remember(|| State::new(0u32)).get();
     let gap = ctx.remember(|| State::new(8.0f32)).get();
     let flow = ctx.remember(|| State::new(0u32)).get();
@@ -104,7 +104,12 @@ fn grid_demo(ctx: &mut ComposeCtx) {
     let count = ctx.remember(|| State::new(12usize)).get();
 
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(
+            Modifier::new()
+                .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
+                .padding(16.0),
+        )
         .spacing(10.0)
         .build(ctx, |ctx| {
             Text::new("Grid — every knob live")

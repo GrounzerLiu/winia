@@ -366,13 +366,19 @@ fn main() {
                 .size(720.0, 1500.0)
                 .title("Scroll demo")
                 .build(ctx, |ctx| {
-                    settings::shell("Scroll", ctx, |ctx| {
+                    settings::shell("Scroll", ctx, |ctx, scaffold| {
                         let page = ctx.remember(ScrollState::new).get();
                         Column::new()
                             .spacing(12.0)
                             .modifier(
                                 Modifier::new()
                                     .fill_max_size()
+                                    .padding_sides(
+                                        scaffold.start,
+                                        scaffold.top,
+                                        scaffold.end,
+                                        scaffold.bottom,
+                                    )
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )

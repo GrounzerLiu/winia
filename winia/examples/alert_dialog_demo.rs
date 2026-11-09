@@ -35,14 +35,14 @@ pub fn main() {
                 .size(760.0, 900.0)
                 .title("Alert dialog demo")
                 .build(ctx, |ctx| {
-                    settings::shell("Alert dialog", ctx, |ctx| demo_body(ctx));
+                    settings::shell("Alert dialog", ctx, demo_body);
                 });
         });
     });
 }
 
 #[composable]
-fn demo_body(ctx: &mut ComposeCtx) {
+fn demo_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     // `ctx.remember(|| value)` already returns a `State`, so there is no nested handle here — see
     // docs/state-handles.md section 7.4.
     let open = ctx.remember(|| Open::None);
@@ -56,6 +56,7 @@ fn demo_body(ctx: &mut ComposeCtx) {
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .vertical_scroll(scroll)
                 .padding(16.0),
         )

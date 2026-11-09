@@ -16,6 +16,16 @@ use crate::window::insets::Insets;
 
 pub const SCAFFOLD_FAB_MARGIN: f32 = 16.0;
 
+// Compose's sibling paint order for the scaffold slots (`Scaffold.kt:373-377`). The content is
+// measured FULL-SIZE at (0,0) and therefore covers the top bar; without these the bar was both
+// painted under the content and, because the hit test walks paint order in reverse, unable to
+// receive a click — the settings button in `examples/common/settings.rs` could not be pressed.
+const SCAFFOLD_CONTENT_Z: f32 = 0.0;
+const SCAFFOLD_TOP_BAR_Z: f32 = 1.0;
+const SCAFFOLD_SNACKBAR_Z: f32 = 2.0;
+const SCAFFOLD_BOTTOM_BAR_Z: f32 = 3.0;
+const SCAFFOLD_FAB_Z: f32 = 4.0;
+
 /// Defaults for Scaffold, mirroring Compose's ScaffoldDefaults.
 pub struct ScaffoldDefaults;
 
@@ -169,29 +179,52 @@ impl Scaffold {
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                slot(ctx, Modifier::new(), Alignment::Start, |ctx| {
-                    if let Some(top) = top {
-                        top(ctx);
-                    }
-                });
-                slot(ctx, Modifier::new(), Alignment::Start, |ctx| {
-                    if let Some(bottom) = bottom {
-                        bottom(ctx);
-                    }
-                });
-                slot(ctx, Modifier::new(), Alignment::Start, |ctx| {
-                    content(ctx, content_padding.get())
-                });
-                slot(ctx, Modifier::new(), Alignment::Start, |ctx| {
-                    if let Some(fab) = fab {
-                        fab(ctx);
-                    }
-                });
-                slot(ctx, Modifier::new(), Alignment::Center, |ctx| {
-                    if let Some(snackbar) = snackbar {
-                        snackbar(ctx);
-                    }
-                });
+                slot(
+                    ctx,
+                    Modifier::new().z_index(SCAFFOLD_TOP_BAR_Z),
+                    Alignment::Start,
+                    |ctx| {
+                        if let Some(top) = top {
+                            top(ctx);
+                        }
+                    },
+                );
+                slot(
+                    ctx,
+                    Modifier::new().z_index(SCAFFOLD_BOTTOM_BAR_Z),
+                    Alignment::Start,
+                    |ctx| {
+                        if let Some(bottom) = bottom {
+                            bottom(ctx);
+                        }
+                    },
+                );
+                slot(
+                    ctx,
+                    Modifier::new().z_index(SCAFFOLD_CONTENT_Z),
+                    Alignment::Start,
+                    |ctx| content(ctx, content_padding.get()),
+                );
+                slot(
+                    ctx,
+                    Modifier::new().z_index(SCAFFOLD_FAB_Z),
+                    Alignment::Start,
+                    |ctx| {
+                        if let Some(fab) = fab {
+                            fab(ctx);
+                        }
+                    },
+                );
+                slot(
+                    ctx,
+                    Modifier::new().z_index(SCAFFOLD_SNACKBAR_Z),
+                    Alignment::Center,
+                    |ctx| {
+                        if let Some(snackbar) = snackbar {
+                            snackbar(ctx);
+                        }
+                    },
+                );
             }
         }
         ctx.end_restartable_group();
@@ -528,6 +561,74 @@ mod tests {
         assert_eq!(
             ln[ln[lr].children[3]].position.y,
             rn[rn[rr].children[3]].position.y
+        );
+    }
+
+    /// The content is measured full-size at (0,0), so it covers the top bar. Compose keeps the bar
+    /// on top with an explicit `zIndex` (`Scaffold.kt:279-280`), and without the same ordering here
+    /// the bar is painted under the content AND unreachable: the hit test walks paint order in
+    /// reverse, so a press inside the top bar lands on the content instead. That is what made the
+    /// settings button in `examples/common/settings.rs` unclickable.
+    #[test]
+    fn the_top_bar_paints_and_hits_above_the_full_size_content() {
+        let mut c = layout_with_insets(
+            Scaffold::new(|ctx, _| {
+                leaf(
+                    ctx,
+                    Modifier::new().fill_max_size().test_tag("scaffold-content"),
+                )
+            })
+            .top_bar(|ctx| {
+                leaf(
+                    ctx,
+                    Modifier::new().size(360.0, 64.0).test_tag("app-top-bar"),
+                )
+            })
+            .bottom_bar(|ctx| leaf(ctx, Modifier::new().size(360.0, 80.0))),
+            LayoutDirection::Ltr,
+            Insets::ZERO,
+        );
+        let root = c.layout_root_idx().unwrap();
+        let n = c.arena_nodes();
+        let children = n[root].children.clone();
+        // Find the top bar slot by the z it carries, not by tag: the tag rides the slot's child.
+        let top_slot = children
+            .iter()
+            .copied()
+            .find(|&i| n[i].modifier.get_z_index() == Some(SCAFFOLD_TOP_BAR_Z))
+            .expect("the top bar slot carries its z");
+        let order = crate::layout::node::paint_order(n, &children);
+        let zs: Vec<_> = order.iter().map(|&i| n[i].modifier.get_z_index()).collect();
+        // Compose's ladder for the slots that are present here: content 0, top bar 1, snackbar 2,
+        // bottom bar 3, fab 4. Paint order is ascending z, so the bar is painted after — i.e. above
+        // — the full-size content that covers it.
+        assert_eq!(
+            zs,
+            vec![
+                Some(SCAFFOLD_CONTENT_Z),
+                Some(SCAFFOLD_TOP_BAR_Z),
+                Some(SCAFFOLD_SNACKBAR_Z),
+                Some(SCAFFOLD_BOTTOM_BAR_Z),
+                Some(SCAFFOLD_FAB_Z)
+            ],
+            "slots must paint in Compose's z ladder"
+        );
+        let top_index = order.iter().position(|&i| i == top_slot).unwrap();
+        let content_index = children
+            .iter()
+            .position(|&i| n[i].modifier.get_z_index() == Some(SCAFFOLD_CONTENT_Z))
+            .and_then(|ci| order.iter().position(|&i| i == children[ci]))
+            .expect("the content slot paints");
+        assert!(
+            top_index > content_index,
+            "the top bar must paint after the content that covers it"
+        );
+        // The hit test walks paint order in reverse, so the same ordering is what lets a press in
+        // the bar reach it rather than the content underneath.
+        let inside_bar = crate::layout::node::hit_test(n, root, 100.0, 20.0);
+        assert!(
+            inside_bar.contains(&top_slot),
+            "a press inside the top bar must reach it, got {inside_bar:?}"
         );
     }
 }

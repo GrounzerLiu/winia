@@ -76,7 +76,7 @@ fn tile_height(pattern: u32, index: usize) -> f32 {
 }
 
 #[composable]
-fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
+fn lazy_staggered_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let scroll = ctx.remember(ScrollState::new).get();
     let lanes = ctx.remember(|| State::new(2u32)).get();
     let count = ctx.remember(|| State::new(40usize)).get();
@@ -86,7 +86,12 @@ fn lazy_staggered_demo(ctx: &mut ComposeCtx) {
     let rtl = ctx.remember(|| State::new(false)).get();
 
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(
+            Modifier::new()
+                .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
+                .padding(16.0),
+        )
         .spacing(10.0)
         .build(ctx, |ctx| {
             Text::new("Staggered grid — every knob live")

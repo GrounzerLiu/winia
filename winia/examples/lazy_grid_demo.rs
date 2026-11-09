@@ -85,7 +85,7 @@ fn hcell(ctx: &mut ComposeCtx, tag: String, color: Color) {
 }
 
 #[composable]
-fn lazy_grid_demo(ctx: &mut ComposeCtx) {
+fn lazy_grid_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let vertical = ctx.remember(LazyListState::new).get();
     let horizontal = ctx.remember(LazyListState::new).get();
     let cells = ctx.remember(|| State::new(3usize)).get();
@@ -95,7 +95,12 @@ fn lazy_grid_demo(ctx: &mut ComposeCtx) {
     let cross_gap = ctx.remember(|| State::new(8.0f32)).get();
 
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(
+            Modifier::new()
+                .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
+                .padding(16.0),
+        )
         .spacing(10.0)
         .build(ctx, |ctx| {
             Text::new("Lazy grids — every knob live")

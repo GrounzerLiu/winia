@@ -248,7 +248,7 @@ fn segmented(
 }
 
 #[composable]
-fn text_demo(ctx: &mut ComposeCtx) {
+fn text_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     // Remembered: a fresh ScrollState per build is a new identity every recomposition, so the page
     // could never Skip and the offset would reset on every frame.
     let scroll = ctx.remember(ScrollState::new).get();
@@ -266,6 +266,7 @@ fn text_demo(ctx: &mut ComposeCtx) {
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(scroll),
         )

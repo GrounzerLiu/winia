@@ -28,7 +28,7 @@ use kit::{INITIAL, PAGES, STEP, accent, action, card, list_name, palette, tile};
 /// It is a separate scenario (`lazy_ops`) rather than more cards on the long page: the UI test clicks
 /// these buttons, and a button below the fold cannot be clicked by coordinates.
 #[composable]
-fn lazy_ops_demo(ctx: &mut ComposeCtx) {
+fn lazy_ops_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let page_scroll = ctx.remember(ScrollState::new).get();
     // The data is the source of truth: keys are the item ids, so an insert at the head moves the
     // indices and leaves the anchor on the same ITEM.
@@ -44,6 +44,7 @@ fn lazy_ops_demo(ctx: &mut ComposeCtx) {
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(page_scroll),
         )

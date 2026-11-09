@@ -26,7 +26,7 @@ fn block(ctx: &mut ComposeCtx, tag: &'static str, w: f32, h: f32, color: Color, 
 }
 
 #[composable]
-fn flow_features(ctx: &mut ComposeCtx) {
+fn flow_features(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let scroll = ctx.remember(ScrollState::new).get();
     let columns = ctx.remember(|| 3usize);
 
@@ -34,6 +34,7 @@ fn flow_features(ctx: &mut ComposeCtx) {
         .modifier(
             Modifier::new()
                 .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
                 .padding(16.0)
                 .vertical_scroll(scroll),
         )

@@ -110,7 +110,7 @@ impl Direction {
 pub fn shell(
     title: &'static str,
     ctx: &mut ComposeCtx,
-    content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    content: impl FnOnce(&mut ComposeCtx, ScaffoldContentPadding) + Send + Sync + 'static,
 ) {
     let mode = ctx.remember(|| ThemeMode::Auto);
     let direction = ctx.remember(|| Direction::Ltr);
@@ -121,7 +121,7 @@ pub fn shell(
     // wrapper only pins the direction.
     let layout_direction = direction.get().layout();
     WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), layout_direction, ctx, |ctx| {
-        Scaffold::new(move |ctx, _padding| content(ctx))
+        Scaffold::new(move |ctx, padding| content(ctx, padding))
             .top_bar({
                 clone!(sheet_open);
                 move |ctx| {

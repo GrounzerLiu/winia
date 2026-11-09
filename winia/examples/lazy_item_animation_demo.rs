@@ -137,14 +137,19 @@ fn card(
 }
 
 #[composable]
-fn lazy_item_animation_demo(ctx: &mut ComposeCtx) {
+fn lazy_item_animation_demo(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let keys = ctx.remember(|| (0u64..INITIAL).collect::<Vec<u64>>());
     let next_key = ctx.remember(|| INITIAL);
     let mode = ctx.remember(|| SpecMode::Default);
     let list_state = ctx.remember(LazyListState::new).get();
 
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(
+            Modifier::new()
+                .fill_max_size()
+                .padding_sides(scaffold.start, scaffold.top, scaffold.end, scaffold.bottom)
+                .padding(16.0),
+        )
         .spacing(10.0)
         .build(ctx, |ctx| {
             Text::new("Lazy item animation").font_size(20.0).build(ctx);
