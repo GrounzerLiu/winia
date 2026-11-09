@@ -61,7 +61,9 @@ fn demo_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
                 .padding(16.0),
         )
         .build(ctx, |ctx| {
-            Text::new("Alert dialog").font_size(22.0).build(ctx);
+            Text::new("Two dialogs, one page")
+                .font_size(22.0)
+                .build(ctx);
             Text::new(
                 "The M3 alert dialog puts an optional icon above a title, a body, and one or two \
                  text buttons. The action row flips its layout direction so the confirm action \
