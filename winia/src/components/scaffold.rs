@@ -591,6 +591,13 @@ mod tests {
         let root = c.layout_root_idx().unwrap();
         let n = c.arena_nodes();
         let children = n[root].children.clone();
+        // The renderer and the hit test only order siblings when this flag is set, and the flag is
+        // computed by the measure pass from the children's modifiers. Assert it here: a test that
+        // hand-set the flag would pass even if the measure pass never looked at the z at all.
+        assert!(
+            n[root].children_have_z,
+            "the measure pass must notice the slots carry a z"
+        );
         // Find the top bar slot by the z it carries, not by tag: the tag rides the slot's child.
         let top_slot = children
             .iter()
