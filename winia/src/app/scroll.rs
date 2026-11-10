@@ -140,7 +140,18 @@ fn nested_scroll_delta(
         }
     }
     let child_consumed = if consume_target {
-        apply_scroll_delta_inner(nodes, target, remaining.x, remaining.y, density, false)
+        // `pull_leftover = false`: the post chain below still offers whatever the target could not
+        // use to the ancestors (the bottom sheet's collapse gesture), and pulling it here would take
+        // it out of their hands.
+        apply_scroll_delta_inner(
+            nodes,
+            target,
+            remaining.x,
+            remaining.y,
+            density,
+            false,
+            false,
+        )
     } else {
         crate::nested_scroll::ScrollDelta::ZERO
     };
@@ -157,6 +168,42 @@ fn nested_scroll_delta(
                 .clamp_to(remaining);
             total = total + part;
             remaining = remaining - part;
+        }
+    }
+    // LAST, and only for what nobody claimed: the overscroll effect. Compose runs it this way round
+    // — `applyToScroll` calls `performScroll` FIRST, which is what dispatches pre/self/post, and only
+    // then pulls `leftForOverscroll = leftForDelta - consumedByDelta`
+    // (`AndroidOverscroll.android.kt:627-690`), returning `consumedOffset + consumedByDelta` so the
+    // pull never counts as scroll consumption.
+    //
+    // The order is load-bearing for the bottom sheet. The panel's collapse gesture is a DOWNWARD drag
+    // while the list inside it sits at its top: the list consumes nothing, and the sheet must receive
+    // the whole delta in `on_post_scroll`. Pulling before the post chain handed it to the rubber band
+    // instead — measured: a 10 px downward drag at the top gave `consumed.y = 10` and the ancestor saw
+    // `0.0`, which is the reported "expanded sheet, list scrolled to the top, cannot drag it down".
+    // An upward drag never showed it because that path goes through `on_pre_scroll`.
+    if consume_target && (remaining.x != 0.0 || remaining.y != 0.0) {
+        let pullable = nodes
+            .get(target)
+            .filter(|node| !node.scroll_reverse)
+            .and_then(|node| node.modifier.overscroll_effect().cloned());
+        if let Some(effect) = pullable {
+            // `remaining` is in DELTA space and `pull` works in OFFSET space; the two point opposite
+            // ways (`consumed = current - new`, `leftover = raw - new`). The effect absorbs the whole
+            // remainder, so it counts as consumed exactly as the pre-fix code did — the only change
+            // is WHEN it happens. Each axis is pulled on its own, the way Compose reaches
+            // `pullTop`/`pullBottom` and `pullLeft`/`pullRight` separately, so a diagonal drag that
+            // only overscrolls vertically does not bend the horizontal edge.
+            if remaining.y != 0.0 {
+                let absorbed = -effect.pull(-remaining.y);
+                total.y += absorbed;
+                remaining.y -= absorbed;
+            }
+            if remaining.x != 0.0 {
+                let absorbed = -effect.pull(-remaining.x);
+                total.x += absorbed;
+                remaining.x -= absorbed;
+            }
         }
     }
     total
@@ -339,7 +386,9 @@ pub(crate) fn apply_scroll_delta(
     dy: f32,
     density: crate::unit::Density,
 ) -> crate::nested_scroll::ScrollDelta {
-    apply_scroll_delta_inner(nodes, idx, dx, dy, density, true)
+    // No nested-scroll ancestors on this path: the overscroll effect is the end of the line, so a
+    // leftover it pulls counts as consumed.
+    apply_scroll_delta_inner(nodes, idx, dx, dy, density, true, true)
 }
 
 /// The implementation of `apply_scroll_delta`. With `recursive=true`, a node that consumed nothing
@@ -349,6 +398,12 @@ pub(crate) fn apply_scroll_delta(
 /// target that cannot scroll leaves the delta to the post chain's ancestor connections, and must
 /// **not** quietly scroll a child (otherwise "drag down while the outer list is at its top" scrolled
 /// the inner list, the user-reported bug).
+///
+/// `pull_leftover` decides who owns the delta the target could not use. `true` means the overscroll
+/// effect is the end of the line (a plain wheel/drag with no nested-scroll ancestors): it pulls the
+/// remainder and reports it as consumed. `false` means a nested-scroll chain is still going to offer
+/// that remainder to the ancestors first, so pulling here would swallow it — see
+/// `nested_scroll_delta`, which pulls only what nobody took.
 fn apply_scroll_delta_inner(
     nodes: &mut [LayoutNode],
     idx: usize,
@@ -356,6 +411,7 @@ fn apply_scroll_delta_inner(
     dy: f32,
     density: crate::unit::Density,
     recursive: bool,
+    pull_leftover: bool,
 ) -> crate::nested_scroll::ScrollDelta {
     let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
     {
@@ -431,7 +487,8 @@ fn apply_scroll_delta_inner(
             // through to an ancestor. `reverse` mirrors the offset, so a signed pull would point
             // the wrong way — those containers skip it.
             let leftover = raw - new;
-            if leftover != 0.0
+            if pull_leftover
+                && leftover != 0.0
                 && !node.scroll_reverse
                 && let Some(effect) = node.modifier.overscroll_effect()
             {
@@ -487,7 +544,8 @@ fn apply_scroll_delta_inner(
             state.offset.set(new);
             consumed.x = current - new;
             let leftover = raw - new;
-            if leftover != 0.0
+            if pull_leftover
+                && leftover != 0.0
                 && !node.scroll_reverse
                 && let Some(effect) = node.modifier.overscroll_effect()
             {
@@ -507,7 +565,7 @@ fn apply_scroll_delta_inner(
     // Children (clone the indices first, so the recursion does not fight nodes' mutable borrow).
     let children: Vec<usize> = nodes[idx].children.clone();
     for c in children {
-        let child = apply_scroll_delta_inner(nodes, c, dx, dy, density, true);
+        let child = apply_scroll_delta_inner(nodes, c, dx, dy, density, true, pull_leftover);
         if child.x != 0.0 || child.y != 0.0 {
             return child;
         }
@@ -932,8 +990,18 @@ mod nested_scroll_chain_tests {
         }
     }
 
+    /// The ancestor is offered the leftover BEFORE the overscroll effect takes it.
+    ///
+    /// This is Compose's order: `applyToScroll` runs `performScroll` first — which is what dispatches
+    /// pre/self/post — and only then pulls `leftForOverscroll = leftForDelta - consumedByDelta`
+    /// (`AndroidOverscroll.android.kt:627-690`). It matters because a bottom sheet's collapse gesture
+    /// is exactly this case: the list inside an expanded panel is at its top, so the list consumes
+    /// nothing and the panel must receive the delta in `on_post_scroll`.
+    ///
+    /// The pull still happens — the effect is the end of the line when nobody claims the remainder —
+    /// and it still counts as consumed, so the gesture is fully accounted for.
     #[test]
-    fn an_overscrolled_target_reaches_its_ancestor_with_nothing_left() {
+    fn an_overscrolled_target_offers_the_delta_to_its_ancestor_first() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -982,15 +1050,86 @@ mod nested_scroll_chain_tests {
             crate::unit::Density::from_density(1.0),
         );
         assert_eq!(consumed.y, -10.0, "the whole gesture is accounted for");
-        assert!(
-            (effect.stretch() - 9.6).abs() < 0.3,
-            "and it became the (damped) rubber-band pull, got {}",
-            effect.stretch()
-        );
         assert_eq!(
             mailbox.lock().unwrap().y,
+            -10.0,
+            "the ancestor is offered the leftover BEFORE the effect pulls it"
+        );
+        assert!(
+            (effect.stretch() - 9.6).abs() < 0.3,
+            "and having claimed nothing, the ancestor leaves it to the (damped) rubber band, got {}",
+            effect.stretch()
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// The reported bug, at the bottom-sheet level: expanded panel, list scrolled to its top, drag
+    /// DOWN. The sheet's connection must see the delta.
+    ///
+    /// Before the fix the rubber band took it first (`consumed.y = 10`, ancestor saw `0.0`), so a
+    /// downward drag did nothing — an UPWARD one was fine because that path is `on_pre_scroll`, which
+    /// never went through the effect.
+    #[test]
+    fn a_downward_drag_at_the_lists_top_reaches_the_sheet() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::animation::clear_all_animations();
+        /// A stand-in for the sheet's `SheetNested`: records what it was offered and takes all of it,
+        /// the way `SheetState::scroll_delta` moves the panel.
+        struct SheetTap(std::sync::Arc<std::sync::Mutex<ScrollDelta>>);
+        impl NestedScrollConnection for SheetTap {
+            fn on_post_scroll(
+                &self,
+                _child_consumed: ScrollDelta,
+                available: ScrollDelta,
+                _source: NestedScrollSource,
+            ) -> ScrollDelta {
+                *self.0.lock().unwrap() = available;
+                available
+            }
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(ScrollDelta::ZERO));
+        let effect = crate::overscroll::OverscrollEffect::new();
+        let scroll = ScrollState::new();
+        scroll.offset.set(0.0); // THE TOP — the case the report is about
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .nested_scroll(SheetTap(seen.clone()))
+                    .size(400.0, 400.0),
+            ),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .overscroll(&effect)
+                    .size(100.0, 100.0),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(400.0, 400.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].scroll_viewport_height = 100.0;
+        nodes[1].scroll_content_height = 300.0;
+        nodes[0].children.push(1);
+
+        let consumed = dispatch_nested_scroll_delta(
+            &mut nodes,
+            0,
+            1,
+            ScrollDelta::new(0.0, 10.0), // DOWNWARD
+            NestedScrollSource::Drag,
+            crate::unit::Density::from_density(1.0),
+        );
+        assert_eq!(
+            seen.lock().unwrap().y,
+            10.0,
+            "the sheet must be offered the whole downward delta"
+        );
+        assert_eq!(consumed.y, 10.0, "and taking it accounts for the gesture");
+        assert_eq!(
+            effect.stretch(),
             0.0,
-            "the ancestor must not see the absorbed pull (nor its opposite)"
+            "with the sheet claiming it, the list does not rubber-band as well"
         );
         crate::animation::clear_all_animations();
     }
