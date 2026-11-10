@@ -44,8 +44,10 @@
 
 ## Differences from Compose
 
-- winia has no `BoxScope` receiver: the three child behaviours are ordinary modifiers, read only by
-  this policy (a `Row`/`Column` ignores them).
+- `BoxScope` exists: `Stack::build` hands the content lambda a scope that derefs to `ComposeCtx`,
+  with `align(ContentAlignment)` (the 2-D form), `align_symmetric(Alignment)` and
+  `match_parent_size()`. They forward to the ordinary modifiers, which the box policy reads and a
+  `Row`/`Column` ignores.
 - `Alignment::Stretch` is winia's own cross-axis value; a Box skips it in the `align_self` fallback
   instead of resizing the child on both axes.
 - a match-parent child that overflows the box is placed at its measured size and centred; Compose

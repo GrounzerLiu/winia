@@ -86,7 +86,8 @@ BadgedBox::new(|ctx| { Badge::new().build(ctx); })   // 对标 badge 参数
 - `BadgeTopRuler` / `BadgeEndRuler`（导航栏边界钳制——徽章不超出导航栏）；
   winia 无 NavigationBar 组件，徽章按锚点定位（若后续实现导航栏需补）；
 - **content 的 `RowScope` 接收者**：Compose 是 `@Composable (RowScope.() -> Unit)?`，
-  winia 是 `Box<dyn FnOnce(&mut ComposeCtx)>`——winia 没有 `RowScope` 类型（`Row`
-  也没有 `weight`），内容无法使用 Row 作用域能力。这是缺失的整个 scopes 体系，非 badge 局部；
+  winia 是 `Box<dyn FnOnce(&mut ComposeCtx)>`。`layout::RowScope` 现在存在（`Row::build`
+  交给内容的是解引用到 `ComposeCtx` 的 scope，可用 `scope.weight(...)`），但 `Badge::content`
+  的签名仍收裸闭包，所以要给徽章内容加权需要自己在内容里再套一层 `Row` 拿 scope；
 - `ProvideContentColorTextStyle` 的 textStyle 下传（LabelSmall）已近似实现；
 - 无障碍语义（badge 内容朗读）——winia 暂无 semantics 系统。

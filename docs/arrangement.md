@@ -58,8 +58,12 @@ Two details worth knowing:
   covers the same thing on either axis.
 - **The enum is closed**, so an application cannot supply its own distribution. Compose allows a
   custom `Arrangement.Horizontal`/`Vertical` implementation.
-- `RowScope`/`ColumnScope` do not exist, so a misplaced `layout_weight`/`align_self` is silently
-  ignored rather than a compile error.
+- `RowScope`/`ColumnScope` exist as of the scope change: `Row::build`/`Column::build` hand the
+  content lambda a scope that derefs to `ComposeCtx`, so `scope.weight(2.0)` and
+  `scope.align(Alignment::Center)` are reachable from inside the container. They forward to the
+  ordinary `layout_weight`/`align_self` modifiers, so a modifier written on the WRONG container's
+  child is still silently ignored rather than a compile error — the scope constrains where you can
+  SAY it, not what the policy reads.
 
 ## Tests
 
