@@ -104,8 +104,12 @@ target** for everything it reads.
   it. With a scope in between it registers on the container instead, the parent Skips, and the
   change never re-runs the content - that is how the checkbox demo's select-all stopped
   propagating. Every other component that composes a restartable group IS `#[composable]` (39 of
-  the 45 that do, measured), because its content is composed by the component, not passed through. The full
-  rule and the current exclusion list are in `docs/key-system-design.md` section 7.1-7.2.
+  the 45 component files that do, measured by grepping for a real attribute line, not a mention in a
+  comment), because its content is composed by the component, not passed through. The six without
+  the attribute are the four animation containers (`animated_visibility`, `animated_size`,
+  `animated_content`, `crossfade`), which that document's exclusion list names, plus `chip` and
+  `split_button`, which it does not. The full rule and the list are in
+  `docs/key-system-design.md` section 7.1-7.2.
 
 The distinction is about the closure, not the shape: a container that passes the caller's closure
 through unchanged must not insert a scope; a container that composes its children itself (and
@@ -117,10 +121,24 @@ therefore has to declare its own parameters) takes one.
 | --- | --- |
 | `impl Fn(&mut ComposeCtx)` | content may be composed more than once (rows, items, repeated slots) |
 | `impl FnOnce(&mut ComposeCtx)` | exactly once, and the closure consumes a builder |
-| `impl Fn(&mut ComposeCtx, T)` | the container hands the content a scope value (a `RowScope`-like context, the measured constraints) |
+| `impl FnOnce(&mut RowScope<'_, '_>)` | the container hands the content a RECEIVER — `Row`/`Column`/`Stack` do this, and the scope derefs to `ComposeCtx` so a `\|ctx\| …` closure still compiles |
+| `impl Fn(&mut ComposeCtx, T)` | the container hands the content a separate scope VALUE, not a receiver — `BoxWithConstraints` (the measured constraints) and `AnimatedContent` (the target) |
 | `impl Fn(&mut ComposeCtx) + Send + 'static` | the content crosses into a window's own composer |
 
 **MUST** take the narrowest one that works: `FnOnce` documents that the content is not retained.
+
+The receiver form and the separate-value form are NOT interchangeable, and the difference is what
+the caller can name. A receiver (`RowScope`) is reached through the closure's own parameter, which is
+why it can deref to `ComposeCtx` and leave every existing `|ctx| …` site unchanged; a separate value
+(`T`) is a second argument the closure must destructure, so those call sites always name both. Reach
+for the receiver when the scope only carries child-facing modifiers, and for the separate value when
+it carries DATA the content reads (`BoxWithConstraintsScope`'s constraints, `AnimatedContent`'s
+target).
+
+**A container that changes its content signature to a receiver must update the sites that forward a
+stored closure**, because a `fn(&mut ComposeCtx)` cannot coerce to `FnOnce(&mut RowScope)`. Those
+sites wrap it (`|scope| content(scope)`); the row/column/stack change measured 19 of them (12 in
+`winia/src`, 7 under `examples/`).
 
 ## 2. Parameters
 
@@ -153,8 +171,11 @@ let modifier = Modifier::new()
     .then(self.modifier);   // the caller's last, so it can override
 ```
 
-**MUST** append `self.modifier` at the end of the component's APPEARANCE chain. Two documented
-exceptions, both about what the component still has to add afterwards:
+**MUST** append `self.modifier` at the end of the component's APPEARANCE chain, so a caller's own
+`background`/`border` paints over the component's (measured: caller-last puts the caller's colour on
+top, caller-first puts the component's). Four documented exceptions — three about what the component
+still has to add afterwards, one about an element whose meaning depends on the constraints it
+receives:
 
 - **semantics** - a role declared before `then(user_modifier)` survives a caller adding their own
   description, which is why `docs/semantics.md` states that ordering as a rule.
@@ -166,6 +187,15 @@ exceptions, both about what the component still has to add afterwards:
   payload is a DRAW element, so a caller's `background` has to stay earlier in the chain and paint
   beneath the glyphs. Pinned by
   `render_snapshot.rs::a_caller_background_paints_beneath_the_text`.
+- **`default_min_size` (and every `default*Size` element)** - it applies ONLY where the incoming
+  minimum is still 0 (`layout/node/measure/engine.rs`, `SizeStep::DefaultMin`), so a caller's
+  `Modifier::width(2.0)` placed after it is ignored and the component's floor wins. Compose chains
+  `modifier.defaultMinSize(size).background(...)`, i.e. the caller's modifier OUTERMOST, which is
+  what makes `Badge(modifier = Modifier.width(2.dp))` measure 2. Measured both ways: floor-then-caller
+  gives 6, caller-then-floor gives 2. `Badge` is the component that takes this exception
+  (`components/badge.rs`), and it is the reason its chain reads `self.modifier.then(m)` — the price
+  is that a caller's `background` paints BENEATH the badge's rather than over it. A component that
+  wants both properties cannot have them from one chain order: pick the one its callers need.
 
 ### 2.4 An animatable parameter: pick the carrier by the phase that reads it
 
@@ -592,8 +622,8 @@ re-exported from there and from the prelude. Steps 2-3 are the same obligation, 
 ## 12. Documentation
 
 Every NEW component ships `docs/<component>.md` with these sections, in this order (existing docs are
-converted when they are edited for another reason - 2 of the 106 docs have all six, measured
-2026-11-02: `docs/pager.md` and `docs/text.md`).
+converted when they are edited for another reason - 4 of the 110 docs have all six, measured
+2026-11-10: `docs/alert-dialog.md`, `docs/pager.md`, `docs/scrollbar.md` and `docs/text.md`).
 Layout primitives (`Column`, `Row`, `Stack`, `FlowRow`, `FlowColumn`) are not components in this
 sense, and neither are the container families built on them (the lazy lists, `docs/lazy-column.md`):
 their docs use the shorter Sources / API and semantics / Differences / Tests shape, of which
