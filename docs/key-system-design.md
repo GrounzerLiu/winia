@@ -239,7 +239,7 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 
 **经验教训**：容器类组件（有 content 闭包、内部状态依赖需冒泡给父）**不能宏化**；叶子/自包含组件（内部状态只自己消费）**宏化收益大**。已宏化的 16 组件 + effect + overlay 均满足两条件。
 
-**实测计数**：`components/` 下含 restartable group 的文件 45 个，其中 39 个 `#[composable]`；不宏化的 6 个是四个动画容器 + `chip` + `split_button`（按真实属性行统计，不认注释里的提及）。布局容器 Column/Row/Stack 不在此统计内——它们在 `layout/` 下。`docs/component-authoring.md` §1.2 记的是同一组数字。
+**实测计数**（按**文件**计，与上一行按**组件**点的 16 不是同一口径——一个文件可含多个带宏函数）：`components/` 下含 restartable group 的文件 45 个，其中 39 个 `#[composable]`；不宏化的 6 个是四个动画容器 + `chip` + `split_button`（按真实属性行统计，不认注释里的提及）。布局容器 Column/Row/Stack 不在此统计内——它们在 `layout/` 下。`docs/component-authoring.md` §1.2 记的是同一组数字。
 
 **`start_restartable_group` 不是 scope**：它只 `push` 一个 key 分组并 `set_current_scope(false)`（`runtime/composer/engine.rs`），不建立组合 scope。所以上表后三行的组件即使内部有 `remember`/`animate_*`，"组件自己消费的内部状态"与"闭包的依赖注册目标"仍是两回事——补 `#[composable]` 会凭空插入后者所禁止的那层 scope。
 
