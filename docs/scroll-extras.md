@@ -71,11 +71,18 @@ Two consequences worth knowing:
 `OverscrollEffect` (hoist it with `remember`) turns the delta a container cannot consume into a
 rubber-band:
 
-- `apply_scroll_delta` computes the unclamped target and the leftover past the start/end, feeds the
-  leftover into `OverscrollEffect::pull`, and counts it as CONSUMED — so the gesture does not fall
-  through to an ancestor scroll container (`app/scroll.rs`). The pull is measured in offset space
-  while the consumed delta points the other way, so the absorbed amount is SUBTRACTED from the
-  consumed delta; adding it would tell the ancestor the gesture went the other way, twice as far;
+- `apply_scroll_delta` computes the unclamped target and the leftover past the start/end. With no
+  nested-scroll ancestors (a plain wheel or drag) the leftover goes straight into
+  `OverscrollEffect::pull` and counts as CONSUMED, so the gesture is fully accounted for. With a
+  nested-scroll chain the ancestors are offered the leftover FIRST, and only what nobody claims
+  reaches the effect — Compose's order, where `applyToScroll` runs `performScroll` (which dispatches
+  pre/self/post) and only then pulls `leftForOverscroll = leftForDelta - consumedByDelta`
+  (`AndroidOverscroll.android.kt:627-690`, `app/scroll.rs`). Getting that order wrong is what broke
+  the bottom sheet's collapse gesture: an expanded panel whose list sits at its top must receive the
+  downward delta in `on_post_scroll`, and pulling it into the rubber band first left the ancestor
+  with nothing. The pull is measured in offset space while the consumed delta points the other way,
+  so the absorbed amount is SUBTRACTED from the consumed delta; adding it would tell the ancestor
+  the gesture went the other way, twice as far;
 - the renderer translates the content by the accumulated pull along the scroll axis;
 - every pull re-arms a 60 ms-delayed 220 ms tween back to 0, so releasing returns the content and
   rapid input keeps the tension. A pull that arrives while the 120 px cap is already reached re-arms
@@ -94,8 +101,9 @@ The pull is DAMPED, not linear: the effect accumulates the RAW finger travel and
 every further pixel buys less, and the cap is an ASYMPTOTE - no drag reaches it, which is what makes
 the edge feel like rubber instead of a wall with a hard stop. `max_pull` (default 120 px) and `reach`
 (default `max_pull`; smaller = stiffer) are builder knobs, so the feel can be tuned per app without a
-recompile. `pull` still returns the WHOLE leftover, so an ancestor never sees the gesture; only the
-displayed shift is damped.
+recompile. `pull` still returns the WHOLE leftover it is given, so once the effect does run nothing
+falls past it; only the displayed shift is damped. Which leftover it is given is the subject of the
+first bullet above: a nested-scroll ancestor gets first refusal.
 
 Deliberate scope: the content SHIFTS past the edge (there is no content scaling and no platform
 glow), the pull is capped at 120 logical px, and containers with `reverseLayout` skip the effect
