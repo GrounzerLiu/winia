@@ -43,6 +43,9 @@ fn demo_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
     let gestures = ctx.remember(|| true);
     let half_stop = ctx.remember(|| false);
     let scroll = ctx.remember(ScrollState::new).get();
+    // The sheet's list state lives on the page, not inside the sheet: the sheet's content is an
+    // `Fn` that runs every frame it is up, and the scroll position has to survive those runs.
+    let list_state = ctx.remember(LazyListState::new).get();
 
     Column::new()
         .spacing(16.0)
@@ -73,7 +76,7 @@ fn demo_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
         });
 
     // Composed unconditionally: `visible` decides whether the overlay is registered.
-    sheet(ctx, open, gestures, half_stop);
+    sheet(ctx, open, gestures, half_stop, list_state);
 }
 
 /// The open button plus the two switches, so the page shows the state it is driving.
@@ -235,16 +238,27 @@ fn dismissal_card(ctx: &mut ComposeCtx) {
     });
 }
 
-/// The sheet itself. Content is long enough to exceed half the window, which is what makes the
-/// `PartiallyExpanded` anchor available in the first place.
+/// The sheet itself. Its content is a LAZY list, which is the case the drag routing is about: an
+/// upward delta expands the sheet first, and only what the sheet cannot use reaches the list. The
+/// list is also tall enough to make the sheet exceed half the window, which is what gives the
+/// `PartiallyExpanded` anchor something to sit at.
 #[composable]
-fn sheet(ctx: &mut ComposeCtx, open: State<bool>, gestures: State<bool>, half_stop: State<bool>) {
+fn sheet(
+    ctx: &mut ComposeCtx,
+    open: State<bool>,
+    gestures: State<bool>,
+    half_stop: State<bool>,
+    list_state: LazyListState,
+) {
     let close = open.clone();
+    // The sheet's content closure is an `Fn` — it runs on every frame the sheet is up — so the
+    // list state is cloned per call rather than moved into it.
+    let list = list_state.clone();
     ModalBottomSheet::new(open.get())
         .on_dismiss_request(move || close.set(false))
         .sheet_gestures_enabled(gestures.get())
         .skip_partially_expanded(half_stop.get())
-        .build(ctx, |ctx| {
+        .build(ctx, move |ctx| {
             let theme = WiniaTheme::colors();
             let label_color = theme.on_surface_variant;
             Column::new()
@@ -260,14 +274,52 @@ fn sheet(ctx: &mut ComposeCtx, open: State<bool>, gestures: State<bool>, half_st
                     .color(label_color)
                     .build(ctx);
                     Divider::horizontal().build(ctx);
-                    for index in 1..=8 {
-                        Text::new(format!(
-                            "Row {index} — enough content to make the sheet taller than half the \
-                             window, so the half-expanded stop exists while it is allowed."
-                        ))
-                        .font_size(14.0)
-                        .build(ctx);
-                    }
+                    // A FIXED-height viewport: a lazy list has no intrinsic height, and this sheet's
+                    // own height is measured from its content (that measurement is what feeds the
+                    // anchors), so the list has to be bounded for the panel to have a size at all.
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .fill_max_width()
+                                .height(400.0)
+                                .clip(Shape::rounded(12.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            LazyColumn::new()
+                                .state(list.clone())
+                                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                                .spacing(6.0)
+                                .items(
+                                    40,
+                                    |index| index as u64,
+                                    |ctx, index| {
+                                        // Row fill and text come from the theme: a hardcoded light
+                                        // grey reads right in light mode and glares in dark.
+                                        let colors = WiniaTheme::colors();
+                                        Text::new(format!("Lazy row {index}"))
+                                            .font_size(14.0)
+                                            .color(colors.on_surface)
+                                            .modifier(
+                                                Modifier::new()
+                                                    .fill_max_width()
+                                                    .padding(10.0)
+                                                    .background(
+                                                        colors.surface_container_high,
+                                                        Shape::rounded(10.0),
+                                                    ),
+                                            )
+                                            .build(ctx);
+                                    },
+                                )
+                                .build(ctx);
+                        });
+                    Text::new(
+                        "The list scrolls on its own: an upward drag expands the sheet to its \
+                         expanded anchor first, then the leftover reaches these rows.",
+                    )
+                    .font_size(14.0)
+                    .color(label_color)
+                    .build(ctx);
                     Text::new(
                         "With `skip partially expanded` on, the anchors are only Hidden and \
                          Expanded: a downward drag no longer stops half way.",
