@@ -53,7 +53,8 @@ fn demo_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
                 .padding(16.0),
         )
         .build(ctx, |ctx| {
-            Text::new("Badges").font_size(22.0).build(ctx);
+            // No page heading here: `settings::shell` already puts this demo's name in the top app
+            // bar, and a second large title directly under it read as a duplicated heading.
             Text::new(
                 "A badge is the small status marker Material hangs on an icon: a bare dot when \
                  there is only \"something\", or a short label when there is a count. `BadgedBox` \
