@@ -107,8 +107,14 @@ target** for everything it reads.
   the 45 component files that do, measured by grepping for a real attribute line, not a mention in a
   comment), because its content is composed by the component, not passed through. The six without
   the attribute are the four animation containers (`animated_visibility`, `animated_size`,
-  `animated_content`, `crossfade`), which that document's exclusion list names, plus `chip` and
-  `split_button`, which it does not. The full rule and the list are in
+  `animated_content`, `crossfade`) plus `chip` and `split_button`, and all six are on that
+  document's exclusion list. Chip and split_button earn their place there on this bullet's own
+  ground: their `label` / `leading` / `trailing` closures come from the caller and are passed
+  through to the theme scope unchanged, so a `State::get()` at the top of one of them has to
+  register on the parent container to re-run. The `remember`/`animate_*` state they do keep is the
+  component's own and is consumed by the component. `start_restartable_group` opens a key group,
+  not a composition scope - it calls `set_current_scope(false)` - so adding the attribute would
+  interpose exactly the scope this bullet forbids. The full rule and the list are in
   `docs/key-system-design.md` section 7.1-7.2.
 
 The distinction is about the closure, not the shape: a container that passes the caller's closure
