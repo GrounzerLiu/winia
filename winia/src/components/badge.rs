@@ -36,8 +36,8 @@ pub const BADGE_CONTENT_OFFSET_X: f32 = 12.0;
 /// 有内容徽章垂直偏移（Compose `BadgeWithContentVerticalOffset = 14dp`——
 /// 徽章底边距锚点顶边 14dp）
 pub const BADGE_CONTENT_OFFSET_Y: f32 = 14.0;
-/// 徽章文本字号（`TypographyKeyTokens.LabelSmall = 11sp`）
-pub const BADGE_LABEL_FONT_SIZE: f32 = 11.0;
+/// Namespace for the backchannel that remembers this badge's last content colour — see `build`.
+const BADGE_CONTENT_COLOUR_NAMESPACE: u64 = 0x7769_6E69_6162_6467; // "winia badge"
 
 /// Badge 组件 Builder（对标 material3 `Badge(containerColor, contentColor,
 /// content)`）——无内容 = 小圆点；`.content()` 后 = 大徽章（数字/短文本）。
@@ -83,8 +83,6 @@ impl Badge {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        ctx.changed(&self.container_color);
-        ctx.changed(&self.content_color);
         let has_content = self.content.is_some();
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.error);
@@ -95,6 +93,12 @@ impl Badge {
             .content_color
             .or_else(|| theme.content_color_for(container))
             .unwrap_or_else(WiniaTheme::content_color);
+        // Declare the RESOLVED values, not the raw `Option<Color>`s — the rule `button.rs` states
+        // ("resolve BEFORE declaring parameters: the resolved set is itself a parameter"). The two
+        // options compare equal while the derived content colour moves with the container, so a Clean
+        // slot kept painting the old label on a background that had already repainted.
+        ctx.changed(&container);
+        ctx.changed(&content_color);
         let size = if has_content {
             BADGE_LARGE_SIZE
         } else {
@@ -106,22 +110,42 @@ impl Badge {
             BADGE_CORNER
         });
 
-        // 容器：min 尺寸 + 背景（CornerFull 形状）+ 内容水平 padding
-        //（背景在 padding 前——画整个节点 rect 含 padding 区，Compose 同序）
+        // Container: default min size + background (CornerFull shape) + content horizontal padding,
+        // with the CALLER's modifier OUTERMOST — Compose's chain is
+        // `modifier.defaultMinSize(size).background(color, shape).padding(horizontal)`, so a caller's
+        // own padding sits outside the badge's background and its own size wins over the token floor.
+        // Both halves of that matter together: `default_min_size` only applies where the incoming
+        // minimum is still 0, so a caller's `width(2.dp)` must be resolved BEFORE this element — put
+        // the caller last (the way winia used to) and the floor would win, pinning the badge at its
+        // token size no matter what the caller asked for.
         let mut m = Modifier::new()
-            .min_width(size)
-            .min_height(size)
+            .default_min_size(size, size)
             .background(container, shape);
         if has_content {
             m = m.padding_horizontal(BADGE_CONTENT_PADDING);
         }
-        m = m.then(self.modifier);
+        m = self.modifier.then(m);
 
         let key = ctx.next_key();
         let content = self.content;
         match ctx.start_restartable_group(key, m, BoxLayout::new().alignment(Alignment::Center)) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
+                // Entering this group is NOT enough to repaint the label: the inner `Row` declares
+                // only its arrangement/alignment/spacing, so it stays Clean and Skips, and
+                // `with_content_color` below never runs again — a white `onError` label outlived a
+                // switch to `surfaceContainerHigh` (measured). A `CompositionLocal` does not
+                // invalidate its readers, which is the same defect `WiniaTheme::provide_resolved`
+                // records for a theme switch; this is the same fix: remember the last value in a
+                // backchannel (no notification) and dirty the subtree when it moved.
+                let prev = ctx.remember_backchannel_at_key(
+                    ctx.position_key(BADGE_CONTENT_COLOUR_NAMESPACE),
+                    || crate::runtime::state::Backchannel::new(content_color),
+                );
+                if prev.get() != content_color {
+                    prev.set(content_color);
+                    ctx.mark_subtree_dirty();
+                }
                 if let Some(content) = content {
                     // 内容色下传 + 默认 LabelSmall 样式（Compose
                     // `ProvideContentColorTextStyle(LargeLabelTextFont)`）
@@ -833,6 +857,165 @@ mod tests {
         assert!(
             close(a, (200, 200, 200)),
             "anchor 内容应正常渲染（实际 {a:?}）"
+        );
+    }
+
+    // ── 回归：标签内容色必须跟随运行时移动的容器色 ──
+
+    /// Declaring the raw `Option<Color>`s as parameters is not enough. Two options can compare EQUAL
+    /// while the derived content colour moves with the container, and the inner `Row` declares no
+    /// parameters at all — so it stayed Clean, `with_content_color` never ran again, and the label
+    /// kept the old colour. Measured before the fix: a white `onError` label outlived a switch to
+    /// `surfaceContainerHigh`, whose paired content colour (`onSurface`) is dark.
+    #[test]
+    fn the_label_follows_a_container_colour_that_moves_at_runtime() {
+        let theme = light_theme();
+        assert_ne!(
+            theme.on_error, theme.on_surface,
+            "the two answers must be distinguishable for this test to mean anything"
+        );
+        let colour: crate::runtime::state::State<Color> =
+            crate::runtime::state::State::new(theme.error);
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<Color>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let scene = |colour: crate::runtime::state::State<Color>,
+                     seen: std::sync::Arc<std::sync::Mutex<Vec<Color>>>| {
+            let theme = theme.clone();
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    // Read in the OUTER scope: the badge is handed a new container colour, it does not
+                    // read the state itself.
+                    let container = colour.get();
+                    Badge::new()
+                        .container_color(container)
+                        .content(move |ctx| {
+                            seen.lock().unwrap().push(WiniaTheme::content_color());
+                            crate::components::Text::new("3").build(ctx);
+                        })
+                        .build(ctx);
+                });
+            }
+        };
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(scene(colour.clone(), seen.clone()));
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!(
+            seen.lock().unwrap().last().copied(),
+            Some(theme.on_error),
+            "an error container starts with its paired onError label"
+        );
+
+        colour.set(theme.surface_container_high);
+        let ran = composer.recompose(scene(colour.clone(), seen.clone()));
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            ran,
+            "the container colour change must trigger a recomposition"
+        );
+        assert_eq!(
+            seen.lock().unwrap().last().copied(),
+            Some(theme.on_surface),
+            "the label must pick up the new container's paired content colour (it kept onError before)"
+        );
+    }
+
+    /// An EXPLICIT content colour must re-enter too — it is a declared parameter, but the group that
+    /// provides it is the inner `Row`, which declares none.
+    #[test]
+    fn an_explicit_content_colour_that_moves_reaches_the_label() {
+        let theme = light_theme();
+        let colour: crate::runtime::state::State<Color> =
+            crate::runtime::state::State::new(Color::from_argb(255, 11, 11, 11));
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<Color>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let scene = |colour: crate::runtime::state::State<Color>,
+                     seen: std::sync::Arc<std::sync::Mutex<Vec<Color>>>| {
+            let theme = theme.clone();
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let c = colour.get();
+                    Badge::new()
+                        .content_color(c)
+                        .content(move |ctx| {
+                            seen.lock().unwrap().push(WiniaTheme::content_color());
+                            crate::components::Text::new("3").build(ctx);
+                        })
+                        .build(ctx);
+                });
+            }
+        };
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(scene(colour.clone(), seen.clone()));
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+
+        colour.set(Color::from_argb(255, 99, 99, 99));
+        composer.recompose(scene(colour.clone(), seen.clone()));
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!(
+            seen.lock().unwrap().last().copied(),
+            Some(Color::from_argb(255, 99, 99, 99)),
+            "an explicit content colour that changed must reach the label"
+        );
+    }
+
+    /// Compose chains `defaultMinSize`, not a hard floor: `defaultMinSize` yields to a minimum the
+    /// CALLER already set, so `Badge(modifier = Modifier.width(2.dp))` measures 2dp wide. A
+    /// `min_width` floor wins the other way and pins the badge at its token size.
+    #[test]
+    fn a_caller_can_shrink_the_badge_below_its_token_size() {
+        let theme = light_theme();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                Badge::new().modifier(Modifier::new().width(2.0)).build(ctx);
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("root");
+        assert_eq!(
+            nodes[root].measured_size.width, 2.0,
+            "the caller's width wins over the badge's own floor (Compose's `defaultMinSize`)"
+        );
+    }
+
+    /// And with no caller override the token size still applies — both axes.
+    #[test]
+    fn the_token_size_still_applies_without_a_caller_override() {
+        let theme = light_theme();
+        let measure = |content: bool| {
+            let theme = theme.clone();
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let badge = Badge::new();
+                    let badge = if content {
+                        badge.content(|ctx| {
+                            crate::components::Text::new("3").build(ctx);
+                        })
+                    } else {
+                        badge
+                    };
+                    badge.build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("root");
+            (
+                nodes[root].measured_size.width,
+                nodes[root].measured_size.height,
+            )
+        };
+        assert_eq!(measure(false), (BADGE_SIZE, BADGE_SIZE), "小徽章 6×6");
+        assert_eq!(
+            measure(true),
+            (BADGE_LARGE_SIZE, BADGE_LARGE_SIZE),
+            "单字符大徽章 16×16"
         );
     }
 }
