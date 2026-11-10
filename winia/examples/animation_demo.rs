@@ -85,7 +85,7 @@ fn track(ctx: &mut ComposeCtx, height: f32, body: impl FnOnce(&mut ComposeCtx)) 
                 .background(TRACK_BG, Shape::rounded(8.0))
                 .padding_sides(8.0, 8.0, 8.0, 8.0),
         )
-        .build(ctx, body);
+        .build(ctx, |scope| body(scope));
 }
 
 /// A round dot of `size` px.
@@ -599,7 +599,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, animation_demo);
+                            .build(ctx, |scope| animation_demo(scope));
                     });
                 });
         });

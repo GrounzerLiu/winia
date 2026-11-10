@@ -779,7 +779,11 @@ impl DrawerSheet {
         }
         let modifier = modifier.then(self.modifier);
         WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-            Column::new().modifier(modifier).build(ctx, content);
+            // The sheet's content is a stored `FnOnce(&mut ComposeCtx)`; the column hands its
+            // scope, which derefs to `ComposeCtx`, so forward it.
+            Column::new()
+                .modifier(modifier)
+                .build(ctx, |scope| content(scope));
         });
     }
 }
@@ -944,7 +948,9 @@ impl ModalNavigationDrawer {
                         .absolute_offset(state.offset_state(), 0.0);
                     Stack::new()
                         .modifier(sheet_modifier)
-                        .build(ctx, drawer_content);
+                        // The drawer's content is a stored `FnOnce(&mut ComposeCtx)`; forward the
+                        // box's scope through its `Deref`.
+                        .build(ctx, |scope| drawer_content(scope));
                 }
             });
     }
@@ -1077,14 +1083,16 @@ impl DismissibleNavigationDrawer {
                 match drawer_content {
                     Some(drawer_content) => Stack::new()
                         .modifier(sheet_modifier)
-                        .build(ctx, drawer_content),
+                        // Stored `FnOnce(&mut ComposeCtx)`; forward the box's scope via `Deref`.
+                        .build(ctx, |scope| drawer_content(scope)),
                     // The policy reads `children[0]` as the sheet, so the slot stays even when the
                     // caller gave none — it is simply never seen.
                     None => Stack::new().modifier(sheet_modifier).build(ctx, |_| {}),
                 }
                 Stack::new()
                     .modifier(Modifier::new().fill_max_size())
-                    .build(ctx, content);
+                    // Stored `FnOnce(&mut ComposeCtx)`; forward the box's scope via `Deref`.
+                    .build(ctx, |scope| content(scope));
             }
         }
         ctx.end_restartable_group();
@@ -1205,7 +1213,8 @@ impl PermanentNavigationDrawer {
             if let Some(drawer_content) = drawer_content {
                 drawer_content(ctx);
             }
-            Stack::new().build(ctx, content);
+            // Stored `FnOnce(&mut ComposeCtx)`; forward the box's scope via `Deref`.
+            Stack::new().build(ctx, |scope| content(scope));
         });
     }
 }

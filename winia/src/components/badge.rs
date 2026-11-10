@@ -155,7 +155,9 @@ impl Badge {
                         crate::components::text::ProvideTextStyle(text_style, ctx, |ctx| {
                             crate::layout::components::Row::new()
                                 .alignment(Alignment::Center)
-                                .build(ctx, content);
+                                // The stored content is a `FnOnce(&mut ComposeCtx)`; the row hands
+                                // its scope, which derefs to `ComposeCtx`, so forward it.
+                                .build(ctx, |scope| content(scope));
                         });
                     });
                 }

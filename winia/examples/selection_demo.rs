@@ -118,7 +118,7 @@ pub fn main() {
                                     .vertical_scroll(scroll)
                                     .padding(16.0),
                             )
-                            .build(ctx, selection_demo);
+                            .build(ctx, |scope| selection_demo(scope));
                     });
                 });
         });

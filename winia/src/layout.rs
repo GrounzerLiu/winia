@@ -43,10 +43,10 @@ pub use axis::{Axis, HorizontalAxis, VerticalAxis};
 pub use constraints::Constraints;
 // The layout primitives re-exported at the layer root: `Row`/`Column`/`Stack` are how a caller names
 // the layout, not which file they live in.
-pub use box_layout::Stack;
-pub use column::Column;
+pub use box_layout::{BoxScope, Stack};
+pub use column::{Column, ColumnScope};
 pub use flow::{FlowColumn, FlowOverflow, FlowRow};
-pub use row::Row;
+pub use row::{Row, RowScope};
 pub use spacer::Spacer;
 // Compose's `Layout`: a container with a caller-supplied measure policy.
 pub use adaptive::{HeightSizeClass, WidthSizeClass, set_window_size, window_size};

@@ -259,7 +259,9 @@ impl PullToRefreshBox {
                             ..Default::default()
                         }
                     }))
-                    .build(ctx, content);
+                    // `content` is a `FnOnce(&mut ComposeCtx)`; the column hands its scope, which
+                    // derefs to `ComposeCtx`, so forward it.
+                    .build(ctx, |scope| content(scope));
 
                 if refreshing {
                     // The LoadingIndicator's indeterminate form, exactly as examples/

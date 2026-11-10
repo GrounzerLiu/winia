@@ -2580,7 +2580,9 @@ fn mixed_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &
 fn shell(ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     Column::new()
         .modifier(Modifier::new().fill_max_size())
-        .build(ctx, content);
+        // `content` is a `FnOnce(&mut ComposeCtx)`; the column hands its scope, which derefs to
+        // `ComposeCtx`, so forward it.
+        .build(ctx, |scope| content(scope));
 }
 
 /// Two-composer app-loop mirror (same canvas): compose + layout + polls,

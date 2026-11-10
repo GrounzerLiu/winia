@@ -623,7 +623,9 @@ fn alert_dialog_content(
         }
         Stack::new()
             .modifier(modifier.padding_bottom(padding_bottom).align_self(align))
-            .build(ctx, content);
+            // `content` is a `FnOnce(&mut ComposeCtx)`; the box hands its scope, which derefs to
+            // `ComposeCtx`, so forward it.
+            .build(ctx, |scope| content(scope));
     }
 
     if let Some(icon) = &slots.icon {

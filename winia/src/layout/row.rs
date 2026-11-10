@@ -17,6 +17,68 @@ use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::unit::Size;
 
+/// Compose's `RowScope` — the receiver a `Row`'s content lambda gets.
+///
+/// It exists to host the child-facing modifiers that are only meaningful inside a row
+/// (`Modifier.weight`, `Modifier.align`, `Modifier.alignBy` in Compose). winia already HAS those as
+/// ordinary modifiers, so nothing new is possible here — what the scope adds is the same thing
+/// Compose's adds: they can only be reached from a `Row`'s content, which is what tells a reader
+/// that `weight(2.0)` means "share this row's leftover width" rather than something a `Column`
+/// would interpret on its other axis.
+///
+/// It derefs to `ComposeCtx`, so a content lambda that never needs the scope (`|ctx| …`, every
+/// existing call site) keeps working unchanged.
+pub struct RowScope<'a, 'b> {
+    ctx: &'a mut ComposeCtx<'b>,
+}
+
+impl<'a, 'b> RowScope<'a, 'b> {
+    /// This child's proportional share of the width left over after the unweighted siblings —
+    /// Compose's `RowScope.weight(weight, fill = true)`.
+    pub fn weight(&self, weight: f32) -> Modifier {
+        Modifier::new().layout_weight(weight)
+    }
+
+    /// Compose's `RowScope.weight(weight, fill)`: with `fill = false` the share is the child's
+    /// MAXIMUM main-axis size, so a child smaller than its share lets the row be smaller too.
+    pub fn weight_fill(&self, weight: f32, fill: bool) -> Modifier {
+        Modifier::new().layout_weight_fill(weight, fill)
+    }
+
+    /// This child's cross-axis (vertical) alignment inside the row — Compose's `RowScope.align`.
+    pub fn align(&self, alignment: Alignment) -> Modifier {
+        Modifier::new().align_self(alignment)
+    }
+
+    /// Align this child by one of its own alignment lines — Compose's `RowScope.alignBy`.
+    pub fn align_by(&self, line: crate::layout::AlignmentLine) -> Modifier {
+        Modifier::new().align_by(line)
+    }
+
+    /// Align this child by its first baseline — Compose's `RowScope.alignByBaseline`.
+    pub fn align_by_baseline(&self) -> Modifier {
+        Modifier::new().align_by_baseline()
+    }
+
+    /// The composition context, for a content lambda that wants to name it explicitly.
+    pub fn ctx(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::Deref for RowScope<'a, 'b> {
+    type Target = ComposeCtx<'b>;
+    fn deref(&self) -> &ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::DerefMut for RowScope<'a, 'b> {
+    fn deref_mut(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
 /// Row's layout policy.
 #[derive(Debug, Clone)]
 pub struct RowLayout {
@@ -1216,6 +1278,74 @@ mod tests {
             "LastBaseline merges with ::max — the last line of the lowest child"
         );
     }
+
+    /// The scope's methods must reach the SAME parent data the ordinary modifiers write. A scope
+    /// that merely returned a fresh `Modifier` and dropped the weight would compile and change
+    /// nothing, so the assertion is on the measured split: 2:1 of 90 is 60/30.
+    #[test]
+    fn the_scope_weight_shares_the_row_width() {
+        use crate::components::text::Text;
+        use crate::layout::components::Row;
+        use crate::modifier::Modifier;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Row::new()
+                .modifier(Modifier::new().width(90.0))
+                .build(ctx, |scope| {
+                    let two = scope.weight(2.0);
+                    Text::new("A").modifier(two).build(scope);
+                    let one = scope.weight(1.0);
+                    Text::new("B").modifier(one).build(scope);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let row = (0..nodes.len())
+            .find(|&i| nodes[i].children.len() == 2 && nodes[i].measured_size.width == 90.0)
+            .expect("the row is 90 wide with two children");
+        let widths: Vec<f32> = nodes[row]
+            .children
+            .iter()
+            .map(|&c| nodes[c].measured_size.width)
+            .collect();
+        assert_eq!(
+            widths,
+            vec![60.0, 30.0],
+            "scope.weight(2) / scope.weight(1) split the row 2:1, as Modifier::layout_weight does"
+        );
+    }
+
+    /// `RowScope::align` is the cross-axis one — `align_self`, which the Row's own policy reads.
+    #[test]
+    fn the_scope_align_places_a_child() {
+        use crate::layout::components::Row;
+        use crate::modifier::Modifier;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Row::new()
+                .modifier(Modifier::new().height(100.0))
+                .build(ctx, |scope| {
+                    let tall = scope.align(Alignment::End);
+                    let k = scope.next_key();
+                    scope.start_leaf(k, Modifier::new().size(20.0, 20.0).then(tall));
+                    scope.end_node();
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        // The ROW is the 100-tall node with exactly one child; the leaf alone is ambiguous because
+        // the row is as wide as its only child (20).
+        let row = (0..nodes.len())
+            .find(|&i| nodes[i].measured_size.height == 100.0 && nodes[i].children.len() == 1)
+            .expect("the 100-tall row composed");
+        let leaf = nodes[row].children[0];
+        assert_eq!(
+            nodes[leaf].position.y, 80.0,
+            "Alignment::End in a 100-tall row puts the 20-tall child at y=80"
+        );
+    }
 }
 pub struct Row {
     modifier: Modifier,
@@ -1251,7 +1381,7 @@ impl Row {
         self
     }
 
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    pub fn build(self, ctx: &mut ComposeCtx<'_>, content: impl FnOnce(&mut RowScope<'_, '_>)) {
         // Record the parameters: equal ones Skip, as in Column.
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
@@ -1271,7 +1401,7 @@ impl Row {
                 .alignment(self.alignment)
                 .spacing(self.spacing)
                 .direction(dir),
-            content,
+            |ctx| content(&mut RowScope { ctx }),
         );
     }
 }

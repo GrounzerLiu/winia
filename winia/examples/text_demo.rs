@@ -192,7 +192,9 @@ fn labelled(ctx: &mut ComposeCtx, title: &str, control: impl FnOnce(&mut Compose
                 });
             Stack::new()
                 .modifier(Modifier::new().layout_weight(1.0))
-                .build(ctx, control);
+                // `control` is a `FnOnce(&mut ComposeCtx)`; the box hands its scope, which derefs
+                // to `ComposeCtx`, so forward it.
+                .build(ctx, |scope| control(scope));
         });
 }
 

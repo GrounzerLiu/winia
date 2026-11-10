@@ -316,7 +316,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, scrollbar_demo);
+                            .build(ctx, |scope| scrollbar_demo(scope));
                     });
                 });
         });

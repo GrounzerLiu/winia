@@ -976,7 +976,9 @@ impl Button {
                                 crate::layout::Row::new()
                                     .alignment(crate::layout::Alignment::Center)
                                     .spacing(self.size_variant.icon_label_space())
-                                    .build(ctx, content);
+                                    // The caller's content is a `FnOnce(&mut ComposeCtx)`; forward the
+                                    // row's scope through its `Deref`.
+                                    .build(ctx, |scope| content(scope));
                             });
                         });
                     }

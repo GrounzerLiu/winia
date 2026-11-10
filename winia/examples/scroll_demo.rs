@@ -382,7 +382,7 @@ fn main() {
                                     .vertical_scroll(page)
                                     .padding(16.0),
                             )
-                            .build(ctx, scroll_demo);
+                            .build(ctx, |scope| scroll_demo(scope));
                     });
                 });
         });

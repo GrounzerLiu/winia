@@ -542,7 +542,9 @@ impl NavigationSuiteScaffold {
                                             + NAVIGATION_BAR_HEIGHT * anim.get().clamp(0.0, 1.0))
                                     })),
                                 ))
-                                .build(ctx, primary_action);
+                                // `primary_action` is a boxed `FnOnce(&mut ComposeCtx)`; forward the
+                                // box's scope through its `Deref`.
+                                .build(ctx, |scope| primary_action(scope));
                         }
                     });
             }

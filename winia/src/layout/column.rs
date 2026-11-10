@@ -17,6 +17,67 @@ use crate::modifier::Modifier;
 use crate::runtime::composer::ComposeCtx;
 use crate::unit::Size;
 
+/// Compose's `ColumnScope` — the receiver a `Column`'s content lambda gets.
+///
+/// Counterpart of [`crate::layout::RowScope`]: the same child-facing modifiers, reached from
+/// inside the column's content. `weight`'s share is of the leftover HEIGHT here and `align`'s
+/// cross axis is horizontal, because the two containers differ only in which axis is the main one —
+/// the modifiers themselves are the same ones and the parent's measure policy reads them.
+///
+/// It derefs to `ComposeCtx`, so a content lambda that never needs the scope (`|ctx| …`, every
+/// existing call site) keeps working unchanged.
+pub struct ColumnScope<'a, 'b> {
+    ctx: &'a mut ComposeCtx<'b>,
+}
+
+impl<'a, 'b> ColumnScope<'a, 'b> {
+    /// This child's proportional share of the HEIGHT left over after the unweighted siblings —
+    /// Compose's `ColumnScope.weight(weight, fill = true)`.
+    pub fn weight(&self, weight: f32) -> Modifier {
+        Modifier::new().layout_weight(weight)
+    }
+
+    /// Compose's `ColumnScope.weight(weight, fill)`: with `fill = false` the share is the child's
+    /// MAXIMUM main-axis size, so a child shorter than its share lets the column be shorter too.
+    pub fn weight_fill(&self, weight: f32, fill: bool) -> Modifier {
+        Modifier::new().layout_weight_fill(weight, fill)
+    }
+
+    /// This child's cross-axis (horizontal) alignment inside the column — Compose's
+    /// `ColumnScope.align`.
+    pub fn align(&self, alignment: Alignment) -> Modifier {
+        Modifier::new().align_self(alignment)
+    }
+
+    /// Align this child by one of its own alignment lines — Compose's `ColumnScope.alignBy`.
+    pub fn align_by(&self, line: crate::layout::AlignmentLine) -> Modifier {
+        Modifier::new().align_by(line)
+    }
+
+    /// Align this child by its first baseline — Compose's `ColumnScope.alignByBaseline`.
+    pub fn align_by_baseline(&self) -> Modifier {
+        Modifier::new().align_by_baseline()
+    }
+
+    /// The composition context, for a content lambda that wants to name it explicitly.
+    pub fn ctx(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::Deref for ColumnScope<'a, 'b> {
+    type Target = ComposeCtx<'b>;
+    fn deref(&self) -> &ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::DerefMut for ColumnScope<'a, 'b> {
+    fn deref_mut(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
 /// Column's layout policy.
 #[derive(Debug, Clone)]
 pub struct ColumnLayout {
@@ -481,6 +542,42 @@ mod tests {
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
     }
+
+    /// The scope's `weight` must reach the same parent data as `Modifier::layout_weight`, on the
+    /// COLUMN's main axis — the leftover HEIGHT, 2:1 of 90 is 60/30. A scope that only forwarded to
+    /// `Modifier` but got the axis wrong would fail this while still compiling.
+    #[test]
+    fn the_scope_weight_shares_the_column_height() {
+        use crate::components::text::Text;
+        use crate::modifier::Modifier;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().height(90.0))
+                .build(ctx, |scope| {
+                    let two = scope.weight(2.0);
+                    Text::new("A").modifier(two).build(scope);
+                    let one = scope.weight(1.0);
+                    Text::new("B").modifier(one).build(scope);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let column = (0..nodes.len())
+            .find(|&i| nodes[i].children.len() == 2 && nodes[i].measured_size.height == 90.0)
+            .expect("the column is 90 tall with two children");
+        let heights: Vec<f32> = nodes[column]
+            .children
+            .iter()
+            .map(|&c| nodes[c].measured_size.height)
+            .collect();
+        assert_eq!(
+            heights,
+            vec![60.0, 30.0],
+            "scope.weight(2) / scope.weight(1) split the column's HEIGHT 2:1"
+        );
+    }
 }
 pub struct Column {
     modifier: Modifier,
@@ -520,7 +617,7 @@ impl Column {
     /// NOT a macro, on purpose: a macro would open an inner scope, the content's top-level
     /// `State::get()` would register on THAT scope, the parent would never learn about it and the
     /// content would stop re-running (the coupling dies).
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    pub fn build(self, ctx: &mut ComposeCtx<'_>, content: impl FnOnce(&mut ColumnScope<'_, '_>)) {
         // Record the parameters: a later frame compares them against `slot.params` — unchanged
         // spacing/arrangement/alignment means the container Skips (the content does not re-run), a
         // change means Enter (it does; this closes the "parameter changed but the old value stayed"
@@ -541,7 +638,7 @@ impl Column {
                 .alignment(self.alignment)
                 .spacing(self.spacing)
                 .direction(dir),
-            content,
+            |ctx| content(&mut ColumnScope { ctx }),
         );
     }
 }

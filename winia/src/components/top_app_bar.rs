@@ -656,7 +656,9 @@ impl TopAppBar {
                     |ctx| {
                         if let Some(actions) = actions {
                             WiniaTheme::with_content_color(colors.actions, ctx, |ctx| {
-                                crate::layout::Row::new().build(ctx, actions);
+                                // `actions` is a boxed `FnOnce(&mut ComposeCtx)`; forward the row's
+                                // scope through its `Deref`.
+                                crate::layout::Row::new().build(ctx, |scope| actions(scope));
                             });
                         }
                     },

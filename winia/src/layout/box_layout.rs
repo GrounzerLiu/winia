@@ -1057,6 +1057,123 @@ mod tests {
             "TOP_START beats the match-parent default of Centre (-50, 20)"
         );
     }
+
+    /// The scope must reach the SAME parent data the ordinary modifiers write. A scope that
+    /// returned a `Modifier` which never made it onto the node would compile and do nothing, so the
+    /// assertion is on the measured size: a `match_parent_size` child covers the box instead of
+    /// sizing it.
+    #[test]
+    fn the_scope_match_parent_size_covers_the_box() {
+        use crate::runtime::composer::Composer;
+
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().size(100.0, 100.0))
+                .build(ctx, |scope| {
+                    let k = scope.next_key();
+                    scope.start_leaf(k, Modifier::new().size(40.0, 40.0));
+                    scope.end_node();
+                    let cover = scope.match_parent_size();
+                    let k2 = scope.next_key();
+                    scope.start_leaf(k2, cover);
+                    scope.end_node();
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let box_idx = (0..nodes.len())
+            .find(|&i| nodes[i].children.len() == 2 && nodes[i].measured_size.width == 100.0)
+            .expect("the 100x100 box with two children");
+        let cover = nodes[box_idx].children[1];
+        assert_eq!(
+            nodes[cover].measured_size,
+            Size::new(100.0, 100.0),
+            "scope.match_parent_size() covers the box; without it the box would be 40x40"
+        );
+    }
+
+    /// `BoxScope::align` is the 2-D one — it must land the child in the corner it names, which the
+    /// one-axis `align_symmetric` cannot express.
+    #[test]
+    fn the_scope_align_places_a_child_in_a_corner() {
+        use crate::runtime::composer::Composer;
+
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Stack::new()
+                .modifier(Modifier::new().size(100.0, 100.0))
+                .build(ctx, |scope| {
+                    let corner = scope.align(ContentAlignment::BOTTOM_END);
+                    let k = scope.next_key();
+                    scope.start_leaf(k, Modifier::new().size(20.0, 20.0).then(corner));
+                    scope.end_node();
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let box_idx = (0..nodes.len())
+            .find(|&i| nodes[i].children.len() == 1 && nodes[i].measured_size.width == 100.0)
+            .expect("the 100x100 box with one child");
+        let child = nodes[box_idx].children[0];
+        assert_eq!(
+            nodes[child].position,
+            Offset::new(80.0, 80.0),
+            "scope.align(BOTTOM_END) puts a 20x20 child at (80, 80) in a 100x100 box"
+        );
+    }
+}
+
+/// Compose's `BoxScope` — the receiver a `Stack`'s content lambda gets.
+///
+/// The box's child-facing modifiers: a child's own 2-D placement, and `match_parent_size` (take the
+/// box's size WITHOUT helping to determine it, Compose's `BoxScope.matchParentSize`). Both already
+/// exist as ordinary modifiers; what the scope adds is that they are reachable only from inside a
+/// box, where they mean something.
+///
+/// It derefs to `ComposeCtx`, so a content lambda that never needs the scope (`|ctx| …`, every
+/// existing call site) keeps working unchanged.
+pub struct BoxScope<'a, 'b> {
+    ctx: &'a mut ComposeCtx<'b>,
+}
+
+impl<'a, 'b> BoxScope<'a, 'b> {
+    /// Place this child on both axes — Compose's `BoxScope.align(Alignment.TopEnd)`. Wins over the
+    /// box's own `content_alignment`/`alignment` for this child.
+    pub fn align(&self, alignment: ContentAlignment) -> Modifier {
+        Modifier::new().content_align_self(alignment)
+    }
+
+    /// One axis-symmetric value on both axes — the `Alignment` form, where `Start` means TopStart
+    /// and `End` means BottomEnd.
+    pub fn align_symmetric(&self, alignment: Alignment) -> Modifier {
+        Modifier::new().align_self(alignment)
+    }
+
+    /// Take the box's size WITHOUT taking part in it — Compose's
+    /// `BoxScope.Modifier.matchParentSize()`. What a scrim or a background uses so it covers the box
+    /// without forcing the box to fill its own parent.
+    pub fn match_parent_size(&self) -> Modifier {
+        Modifier::new().match_parent_size()
+    }
+
+    /// The composition context, for a content lambda that wants to name it explicitly.
+    pub fn ctx(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::Deref for BoxScope<'a, 'b> {
+    type Target = ComposeCtx<'b>;
+    fn deref(&self) -> &ComposeCtx<'b> {
+        self.ctx
+    }
+}
+
+impl<'a, 'b> std::ops::DerefMut for BoxScope<'a, 'b> {
+    fn deref_mut(&mut self) -> &mut ComposeCtx<'b> {
+        self.ctx
+    }
 }
 
 /// The public `Box`/`Stack` builder — the container the `Box`-shaped components are built from.
@@ -1113,7 +1230,7 @@ impl Stack {
 
     /// Compose the box: publish the parameters, resolve the direction, and hand the rest to
     /// `build_container` — the content closure becomes the box's composition scope.
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    pub fn build(self, ctx: &mut ComposeCtx<'_>, content: impl FnOnce(&mut BoxScope<'_, '_>)) {
         // Publish the parameters first: a clean slot skips the subtree, as in Column.
         ctx.changed(&self.alignment);
         ctx.changed(&self.content_alignment);
@@ -1130,7 +1247,9 @@ impl Stack {
             None => BoxLayout::new().alignment(self.alignment).direction(dir),
         };
         policy = policy.propagate_min_constraints(self.propagate_min_constraints);
-        build_container(ctx, self.modifier, policy, content);
+        build_container(ctx, self.modifier, policy, |ctx| {
+            content(&mut BoxScope { ctx })
+        });
     }
 }
 
