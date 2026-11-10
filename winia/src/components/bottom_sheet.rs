@@ -175,13 +175,24 @@ impl ModalBottomSheet {
             return;
         }
         // SheetState：外部传入或内部 remember（holder 在上方已稳定 remember）
+        let caller_supplied_state = self.sheet_state.is_some();
         let sheet_state = match self.sheet_state {
             Some(s) => s,
             None => holder.get(),
         };
         // 应用 skipPartiallyExpanded（每次 build 刷新——方便外部在 show 前设置；
         // SheetState.set_skip_partially_expanded 是在 update_anchors 时生效）
-        sheet_state.set_skip_partially_expanded(self.skip_partially_expanded);
+        //
+        // Only when the caller did not supply a state. With an external `sheet_state` the flag belongs
+        // to THAT state — Compose has no `skipPartiallyExpanded` parameter on `ModalBottomSheet` at
+        // all; it is fixed when the state is built (`rememberModalBottomSheetState(skipPartiallyExpanded)`,
+        // `ModalBottomSheet.kt:241-252`). Writing the builder's `false` default unconditionally made
+        // `state.set_skip_partially_expanded(true)` before the sheet silent: measured with a caller
+        // state that had the flag on, `has_partially_expanded_state()` was true again after `build`,
+        // i.e. the half-expanded anchor the caller removed came back.
+        if !caller_supplied_state {
+            sheet_state.set_skip_partially_expanded(self.skip_partially_expanded);
+        }
         if should_show {
             sheet_state.show();
         }
@@ -491,31 +502,53 @@ impl ModalBottomSheet {
                         // 面板任意位置可拖（对齐 Compose anchoredDraggable——整个面板 Surface 可拖，
                         // 不只把手）。背景/顶部文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
                         //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
-                        let pd = drag_st.clone();
-                        let pe = drag_st.clone();
-                        let panel_mod_with_panel_drag = panel_mod_with_gesture
-                            .on_drag(move |_pos, (_dx, dy)| pd.drag_delta(dy))
-                            .on_drag_end(move || {
-                                pe.settle_with_velocity(pe.last_velocity());
-                            });
+                        //
+                        // `gestures` gates this, not only the nested-scroll connection above. Compose
+                        // puts BOTH behind one flag — `Modifier.nestedScroll(..)` is skipped and
+                        // `anchoredDraggable(enabled = gesturesEnabled && currentValue != Hidden)`
+                        // (`BottomSheet.kt:282,332`) — so a sheet built with gestures turned off cannot
+                        // be dragged at all. Measured before this: `sheet_gestures_enabled(false)` and
+                        // `true` both produced 2 drag-handler nodes in the tree, i.e. the flag only
+                        // switched off the list-to-sheet routing while a finger on the panel still
+                        // moved and collapsed it.
+                        let panel_mod_with_panel_drag = if gestures {
+                            let pd = drag_st.clone();
+                            let pe = drag_st.clone();
+                            panel_mod_with_gesture
+                                .on_drag(move |_pos, (_dx, dy)| pd.drag_delta(dy))
+                                .on_drag_end(move || {
+                                    pe.settle_with_velocity(pe.last_velocity());
+                                })
+                        } else {
+                            panel_mod_with_gesture
+                        };
                         crate::layout::components::Column::new()
                             .modifier(panel_mod_with_panel_drag)
                             .build(ctx, |ctx| {
                                 if drag_handle {
-                                    let d = drag_st.clone();
-                                    let e = drag_st.clone();
-                                    crate::layout::components::Row::new()
-                                        .modifier(
-                                            Modifier::new()
-                                                .fill_max_width()
-                                                .padding_vertical(
-                                                    BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING,
-                                                )
-                                                .on_drag(move |_pos, (_dx, dy)| d.drag_delta(dy))
-                                                .on_drag_end(move || {
-                                                    e.settle_with_velocity(e.last_velocity());
-                                                }),
+                                    // The handle is a drag affordance, so it follows the same flag as the
+                                    // panel: with gestures off Compose has no `anchoredDraggable` at all
+                                    // (`BottomSheet.kt:332`), and a handle that still moved the sheet
+                                    // would be the only way left to drag it.
+                                    let handle_mod = if gestures {
+                                        let d = drag_st.clone();
+                                        let e = drag_st.clone();
+                                        Modifier::new()
+                                            .fill_max_width()
+                                            .padding_vertical(
+                                                BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING,
+                                            )
+                                            .on_drag(move |_pos, (_dx, dy)| d.drag_delta(dy))
+                                            .on_drag_end(move || {
+                                                e.settle_with_velocity(e.last_velocity());
+                                            })
+                                    } else {
+                                        Modifier::new().fill_max_width().padding_vertical(
+                                            BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING,
                                         )
+                                    };
+                                    crate::layout::components::Row::new()
+                                        .modifier(handle_mod)
                                         .arrangement(crate::layout::Arrangement::Center)
                                         .build(ctx, |ctx| {
                                             crate::layout::components::Stack::new()
@@ -671,6 +704,87 @@ mod tests {
             sheet_panel_geometry(None, 500.0),
             (500.0, 0.0),
             "Unspecified (no maximum) fills"
+        );
+    }
+
+    /// Counts the nodes in a composed+laid-out sheet's overlay tree that declare a drag handler.
+    fn drag_nodes_in_sheet(gestures: bool) -> usize {
+        let mut c = crate::runtime::composer::Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            ModalBottomSheet::new(true)
+                .sheet_gestures_enabled(gestures)
+                .build(ctx, |ctx| {
+                    crate::layout::components::Stack::new()
+                        .modifier(Modifier::new().size(100.0, 400.0))
+                        .build(ctx, |_| {});
+                });
+        });
+        let overlays = c.take_overlays();
+        assert_eq!(overlays.len(), 1, "a visible sheet registers one overlay");
+        let content = &overlays[0].content;
+        // An overlay composes in its own Composer, the way `sync_overlays` does it.
+        let mut inner = crate::runtime::composer::Composer::new();
+        inner.compose(|ctx| content(ctx));
+        inner.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 600.0));
+        inner
+            .arena_nodes()
+            .iter()
+            .filter(|n| n.modifier.has_drag_gesture())
+            .count()
+    }
+
+    /// `sheet_gestures_enabled(false)` removes every drag handler, the handle's included.
+    ///
+    /// Compose gates both halves of the gesture behind that one flag: the nested-scroll connection is
+    /// skipped, and `anchoredDraggable(enabled = gesturesEnabled && currentValue != Hidden)`
+    /// (`BottomSheet.kt:282,332`) turns the drag off. winia's `if gestures` block covered only the
+    /// nested-scroll connection, so the flag disabled the list-to-sheet routing while a finger on the
+    /// panel — or on its handle — still dragged and collapsed the sheet. Measured before the fix:
+    /// both builds produced 2 drag-handler nodes.
+    #[test]
+    fn turning_gestures_off_removes_every_drag_handler() {
+        assert_eq!(
+            drag_nodes_in_sheet(false),
+            0,
+            "gestures off: neither the panel nor the handle may declare a drag handler"
+        );
+        assert!(
+            drag_nodes_in_sheet(true) > 0,
+            "gestures on: the panel and the handle are draggable"
+        );
+    }
+
+    /// A caller-supplied `SheetState` keeps its own `skip_partially_expanded`.
+    ///
+    /// Compose has no `skipPartiallyExpanded` parameter on `ModalBottomSheet` at all — the flag is
+    /// fixed when the state is built (`rememberModalBottomSheetState(skipPartiallyExpanded)`,
+    /// `ModalBottomSheet.kt:241-252`). winia wrote the builder's `false` default over the state on
+    /// every build, so `state.set_skip_partially_expanded(true)` before showing the sheet was a silent
+    /// no-op: measured with a caller state that had the flag on, the half-expanded anchor came back.
+    #[test]
+    fn a_caller_supplied_state_keeps_its_skip_partially_expanded() {
+        let state = SheetState::new(SheetValue::Hidden);
+        state.set_skip_partially_expanded(true);
+        let supplied = state.clone();
+        let mut c = crate::runtime::composer::Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            ModalBottomSheet::new(true)
+                .sheet_state(supplied.clone())
+                .build(ctx, |ctx| {
+                    crate::layout::components::Stack::new()
+                        .modifier(Modifier::new().size(100.0, 400.0))
+                        .build(ctx, |_| {});
+                });
+        });
+        // Anchors are rebuilt on the next layout pass. This panel is TALLER than half the window
+        // (600 of 800), which is exactly the case that acquires a partially-expanded anchor — so the
+        // assertion below only holds if the caller's flag survived the build.
+        state.update_anchors(800.0, 600.0);
+        assert!(
+            !state.has_partially_expanded_state(),
+            "the caller's skip flag must survive the build"
         );
     }
 }
