@@ -1,13 +1,15 @@
-//! Badge / BadgedBox 组件 — 对标 material3 `Badge` / `BadgedBox`
+//! Badge / BadgedBox — material3's `Badge` / `BadgedBox`.
 //!
-//! M3 实现要点（对齐项）：
-//! - 小徽章（无内容）：6×6、CornerFull（3dp 圆角）、Error 底色；
-//! - 大徽章（有内容）：min 16×16、CornerFull（8dp 圆角）、水平 padding 4dp、
-//!   文本 LabelSmall（11sp/Medium）+ OnError 内容色；
-//! - BadgedBox：自定义布局（anchor + badge 双子），badge 定位锚点右上角——
-//!   无内容偏移 6×6（徽章左下角距锚点右上角），有内容偏移 12×14
-//!   （Compose BadgeOffset / BadgeWithContent*Offset）；
-//! - 徽章宽 > 6dp 视为有内容（Compose `badgePlaceable.width > BadgeTokens.Size`）。
+//! The M3 details it reproduces:
+//! - small badge (no content): 6×6, CornerFull (3dp corner), Error container;
+//! - large badge (with content): min 16×16, CornerFull (8dp corner), 4dp horizontal padding,
+//!   LabelSmall text (11sp/Medium) with the container's paired content colour;
+//! - BadgedBox: a custom layout (anchor + badge children) that places the badge at the anchor's
+//!   top-trailing corner — offset 6×6 with no content (the badge's bottom-leading corner from the
+//!   anchor's top-trailing one) and 12×14 with content
+//!   (Compose's `BadgeOffset` / `BadgeWithContent*Offset`);
+//! - a badge wider than 6dp counts as "has content"
+//!   (Compose: `badgePlaceable.width > BadgeTokens.Size`).
 
 use crate::composable;
 use crate::graphics::{Color, Shape};
@@ -19,28 +21,29 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::WiniaTheme;
 use crate::unit::{Offset, Size};
 
-/// 小徽章尺寸（`BadgeTokens.Size = 6dp`）
+/// The small badge's size (`BadgeTokens.Size = 6dp`).
 pub const BADGE_SIZE: f32 = 6.0;
-/// 大徽章最小尺寸（`BadgeTokens.LargeSize = 16dp`——单字符数字）
+/// The large badge's minimum size (`BadgeTokens.LargeSize = 16dp` — one digit).
 pub const BADGE_LARGE_SIZE: f32 = 16.0;
-/// 小徽章圆角（`BadgeTokens.Shape = CornerFull`——6/2 = 3dp）
+/// The small badge's corner (`BadgeTokens.Shape = CornerFull` — 6/2 = 3dp).
 pub const BADGE_CORNER: f32 = 3.0;
-/// 大徽章圆角（`BadgeTokens.LargeShape = CornerFull`——16/2 = 8dp）
+/// The large badge's corner (`BadgeTokens.LargeShape = CornerFull` — 16/2 = 8dp).
 pub const BADGE_LARGE_CORNER: f32 = 8.0;
-/// 大徽章水平 padding（Compose `BadgeWithContentHorizontalPadding = 4dp`）
+/// The large badge's horizontal padding (Compose `BadgeWithContentHorizontalPadding = 4dp`).
 pub const BADGE_CONTENT_PADDING: f32 = 4.0;
-/// 无内容徽章偏移（Compose `BadgeOffset = 6dp`——徽章左下角距锚点右上角 6×6）
+/// The no-content badge's offset (Compose `BadgeOffset = 6dp` — the badge's bottom-leading corner
+/// 6×6 from the anchor's top-trailing one).
 pub const BADGE_OFFSET: f32 = 6.0;
-/// 有内容徽章水平偏移（Compose `BadgeWithContentHorizontalOffset = 12dp`）
+/// The with-content badge's horizontal offset (Compose `BadgeWithContentHorizontalOffset = 12dp`).
 pub const BADGE_CONTENT_OFFSET_X: f32 = 12.0;
-/// 有内容徽章垂直偏移（Compose `BadgeWithContentVerticalOffset = 14dp`——
-/// 徽章底边距锚点顶边 14dp）
+/// The with-content badge's vertical offset (Compose `BadgeWithContentVerticalOffset = 14dp` — the
+/// badge's bottom edge 14dp from the anchor's top edge).
 pub const BADGE_CONTENT_OFFSET_Y: f32 = 14.0;
 /// Namespace for the backchannel that remembers this badge's last content colour — see `build`.
 const BADGE_CONTENT_COLOUR_NAMESPACE: u64 = 0x7769_6E69_6162_6467; // "winia badge"
 
-/// Badge 组件 Builder（对标 material3 `Badge(containerColor, contentColor,
-/// content)`）——无内容 = 小圆点；`.content()` 后 = 大徽章（数字/短文本）。
+/// The `Badge` builder (material3's `Badge(containerColor, contentColor, content)`) — no content
+/// means a small dot; `.content()` makes it a large badge (a number or a short label).
 pub struct Badge {
     container_color: Option<Color>,
     content_color: Option<Color>,
@@ -58,19 +61,21 @@ impl Badge {
         }
     }
 
-    /// 徽章内容（数字/短文本等）——设置后为大徽章（min 16×16、圆角 8、padding 4）
+    /// The badge's content (a number or a short label) — setting it makes this a large badge
+    /// (min 16×16, corner 8, padding 4).
     pub fn content(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         self.content = Some(Box::new(f));
         self
     }
 
-    /// 容器色（默认 `BadgeTokens.Color = Error`）
+    /// The container colour (default `BadgeTokens.Color = Error`).
     pub fn container_color(mut self, c: Color) -> Self {
         self.container_color = Some(c);
         self
     }
 
-    /// 内容色（默认 `BadgeTokens.LargeLabelTextColor = OnError`）
+    /// The content colour (default: `contentColorFor(containerColor)`, which is OnError for the
+    /// default Error container — Compose's `Badge.kt:135`).
     pub fn content_color(mut self, c: Color) -> Self {
         self.content_color = Some(c);
         self
@@ -147,8 +152,8 @@ impl Badge {
                     ctx.mark_subtree_dirty();
                 }
                 if let Some(content) = content {
-                    // 内容色下传 + 默认 LabelSmall 样式（Compose
-                    // `ProvideContentColorTextStyle(LargeLabelTextFont)`）
+                    // Push the content colour down together with the default LabelSmall style
+                    // (Compose's `ProvideContentColorTextStyle(LargeLabelTextFont)`).
                     WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                         let mut text_style = WiniaTheme::typography().label_small;
                         text_style.color = Some(content_color);
@@ -173,10 +178,13 @@ impl Default for Badge {
     }
 }
 
-/// BadgedBox 布局策略：anchor（子 0）全约束测量 + badge（子 1）宽松高度测量；
-/// 尺寸 = anchor 尺寸；badge 定位锚点右上角（偏移按徽章宽度推断有无内容）。
-/// 对标 Compose `BadgedBox` 的 Layout 实现（无 BadgeEndRuler/BadgeTopRuler
-/// 导航栏边界钳制——winia 无对应概念，文档注明差距）。
+/// The BadgedBox layout policy: the anchor (child 0) is measured with the full constraints and the
+/// badge (child 1) with a loosened height; the size is the anchor's; the badge sits at the anchor's
+/// top-trailing corner (the offset is picked from the badge's width, which is how "has content" is
+/// inferred).
+///
+/// This is Compose's `BadgedBox` layout without the `BadgeEndRuler`/`BadgeTopRuler` navigation-bar
+/// clamping — winia has no such concept; `docs/badge.md` records the gap.
 #[derive(Debug, Clone)]
 struct BadgedBoxPolicy {
     /// The direction the badge mirrors under — Compose places both children with `placeRelative`, so the
@@ -195,18 +203,18 @@ impl MeasurePolicy for BadgedBoxPolicy {
         debug_assert_eq!(
             children.len(),
             2,
-            "BadgedBox 需要 anchor + badge 两个子节点"
+            "BadgedBox needs exactly two children: the anchor and the badge"
         );
         if children.len() < 2 {
             return (Size::ZERO, Vec::new());
         }
-        // badge 先测（宽松高度——文本不占多余空间，Compose copy(minHeight = 0)）；
-        // anchor 全约束
+        // The badge is measured first, with a loosened height so its text does not claim more space
+        // than it needs (Compose's `copy(minHeight = 0)`); the anchor gets the full constraints.
         let (badge_size, _) =
             measure_node(nodes, policies, children[1], constraints.loosen_height());
         let (anchor_size, _) = measure_node(nodes, policies, children[0], constraints);
 
-        // 用徽章宽度推断有无内容（Compose：width > BadgeTokens.Size）
+        // The badge's WIDTH is what says whether it has content (Compose: `width > BadgeTokens.Size`).
         let has_content = badge_size.width > BADGE_SIZE;
         let (off_x, off_y) = if has_content {
             (BADGE_CONTENT_OFFSET_X, BADGE_CONTENT_OFFSET_Y)
@@ -267,16 +275,17 @@ impl MeasurePolicy for BadgedBoxPolicy {
     }
 }
 
-/// BadgedBox 组件 Builder（对标 material3 `BadgedBox(badge, modifier, content)`）
-/// ——anchor（content）与 badge 组合，badge 定位锚点右上角。
-/// 典型用法：图标右上角挂数字徽章（导航栏/消息图标）。
+/// The `BadgedBox` builder (material3's `BadgedBox(badge, modifier, content)`) — pairs the anchor
+/// (the build content) with a badge it places at the anchor's top-trailing corner.
+///
+/// The usual case: a status count hung on an icon (a navigation bar item, a message icon).
 pub struct BadgedBox {
     badge: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
     modifier: Modifier,
 }
 
 impl BadgedBox {
-    /// badge 内容闭包（通常放 `Badge` 组件）
+    /// The badge's content closure (usually a `Badge`).
     pub fn new(badge: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         Self {
             badge: Box::new(badge),
@@ -289,7 +298,7 @@ impl BadgedBox {
         self
     }
 
-    /// build 的内容闭包 = anchor（徽章挂载的主体）
+    /// The build content is the ANCHOR — the thing the badge hangs on.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
@@ -300,9 +309,9 @@ impl BadgedBox {
             .modifier
             .get_layout_direction()
             .unwrap_or_else(crate::layout::direction::current);
-        // 容器节点：自定义布局策略（anchor + badge 双子）
+        // The container node: a custom layout policy over the two children.
         ctx.start_container(key, self.modifier, BadgedBoxPolicy { direction });
-        // 子 1：anchor（居中——anchor 内容即用户 content）
+        // Child 1: the anchor, centred — its content is the caller's `content`.
         let ak = ctx.next_key();
         match ctx.start_restartable_group(
             ak,
@@ -315,7 +324,7 @@ impl BadgedBox {
             }
         }
         ctx.end_restartable_group();
-        // 子 2：badge
+        // Child 2: the badge.
         let bk = ctx.next_key();
         match ctx.start_restartable_group(
             bk,
@@ -540,12 +549,15 @@ mod tests {
     #[test]
     fn badge_default_colors_from_theme() {
         let theme = light_theme();
-        assert_ne!(theme.error, theme.on_error, "error/on_error 应有区分");
+        assert_ne!(
+            theme.error, theme.on_error,
+            "error and on_error must be distinguishable"
+        );
     }
 
-    // ── 结构测试：BadgedBox 的 badge 定位 ──
-    // 约定：anchor 24×24（右上角 (24,0)），badge 无内容 6×6 → 位置
-    // (24-6, -6+6) = (18, 0)；有内容 16×16 → (24-12, -16+14) = (12, -2)
+    // ── Structural tests: where BadgedBox places the badge ──
+    // The convention: anchor 24×24 (its top-trailing corner at (24,0)); a 6×6 dot badge lands at
+    // (24-6, -6+6) = (18, 0); a 16×16 content badge at (24-12, -16+14) = (12, -2).
     struct BadgeScene {
         anchor: (f32, f32, f32, f32),
         badge: (f32, f32, f32, f32),
@@ -594,8 +606,8 @@ mod tests {
         composer.compose(scene);
         composer.compose(scene);
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
-        // BadgedBox 容器（尺寸 24×24 且 children=2）→ children[0]=anchor 组、
-        // children[1]=badge 组（位置由 BadgedBoxPolicy 放置）
+        // The BadgedBox container (24×24 with two children) → children[0] is the anchor group and
+        // children[1] the badge group, placed by `BadgedBoxPolicy`.
         let nodes = composer.arena_nodes();
         let mut anchor = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let mut badge = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -623,7 +635,7 @@ mod tests {
         }
         assert!(
             badge.2 != 0.0 || badge.3 != 0.0,
-            "未找到 BadgedBox 容器（24×24 ch=2）"
+            "no BadgedBox container found (24×24 with two children)"
         );
         BadgeScene { anchor, badge }
     }
@@ -631,37 +643,48 @@ mod tests {
     #[test]
     fn badged_box_positions_small_badge() {
         let s = render_badged_box(false);
-        assert_eq!((s.anchor.0, s.anchor.1), (0.0, 0.0), "anchor 应位于原点");
+        assert_eq!(
+            (s.anchor.0, s.anchor.1),
+            (0.0, 0.0),
+            "the anchor sits at the origin"
+        );
         assert_eq!(
             (s.badge.0, s.badge.1),
             (18.0, 0.0),
-            "小徽章应位于 (18,0)——左下角距锚点右上角 6×6（实际 {:?}）",
+            "the dot badge sits at (18,0) — its bottom-leading corner 6×6 from the anchor's \
+             top-trailing one (actual {:?})",
             s.badge
         );
-        assert_eq!((s.badge.2, s.badge.3), (6.0, 6.0), "小徽章 6×6");
+        assert_eq!((s.badge.2, s.badge.3), (6.0, 6.0), "the dot badge is 6×6");
     }
 
     #[test]
     fn badged_box_positions_large_badge() {
         let s = render_badged_box(true);
-        assert_eq!((s.anchor.0, s.anchor.1), (0.0, 0.0), "anchor 应位于原点");
+        assert_eq!(
+            (s.anchor.0, s.anchor.1),
+            (0.0, 0.0),
+            "the anchor sits at the origin"
+        );
         assert_eq!(
             s.badge.0, 12.0,
-            "大徽章水平：左缘距锚点右缘 12dp（实际 {:?}）",
+            "the large badge's leading edge is 12dp from the anchor's trailing edge (actual {:?})",
             s.badge
         );
         assert_eq!(
             s.badge.1, -2.0,
-            "大徽章垂直：底边距锚点顶 14dp → y = -h+14 = -2（实际 {:?}）",
+            "the large badge's bottom edge is 14dp from the anchor's top edge → y = -h+14 = -2 \
+             (actual {:?})",
             s.badge
         );
     }
 
-    // ── 徽章内容响应式（Compose 惯用法：在使用的最近作用域内读 State）──
+    // ── Badge content reactivity (Compose's idiom: read a State in the nearest scope that uses it)
 
-    /// 正确模式：State::get 在 badge content 闭包**内**调用——依赖注册到
-    /// 徽章内容组（最内层 scope），set 后 mark_dirty 直达该组 + 祖先传播，
-    /// 重组必然穿透 Badge 内部组重执行内容。
+    /// The correct pattern: `State::get` is called INSIDE the badge content closure, so the
+    /// dependency registers on the badge content group (the innermost scope). A `set` then marks
+    /// that group dirty directly, plus its ancestors, so the recomposition necessarily reaches the
+    /// content through the groups Badge itself owns.
     #[test]
     fn badge_content_recomposes_when_state_read_inside_content_closure() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -678,7 +701,9 @@ mod tests {
                         Badge::new()
                             .content(move |ctx| {
                                 hits.fetch_add(1, Ordering::SeqCst);
-                                let n = count.get(); // ← 读在最内层：依赖挂徽章内容组
+                                // Read in the INNERMOST scope: the dependency hangs on the badge
+                                // content group.
+                                let n = count.get();
                                 crate::components::Text::new(n.to_string()).build(ctx);
                             })
                             .build(ctx);
@@ -694,24 +719,29 @@ mod tests {
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(make_scene(count.clone(), hits.clone(), theme.clone()));
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "首次组合执行一次");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the first composition runs it once"
+        );
 
         count.set(4);
         let ran = composer.recompose(make_scene(count.clone(), hits.clone(), theme));
-        assert!(ran, "状态变化应触发重组");
+        assert!(ran, "a state change must trigger a recomposition");
         assert_eq!(
             hits.load(Ordering::SeqCst),
             2,
-            "徽章内容组应随状态变化重执行"
+            "the badge content group must re-run when the state moves"
         );
     }
 
-    // 注：读在 content 闭包外（容器组层）的模式在隔离结构下实测也能传播
-    // （mark_dirty 祖先标记 + 容器重执行传入新闭包），但真实组件树层级更深，
-    // 组合依赖落在哪一层随结构变化。Compose 惯用法是**在使用的最近作用域内读**
-    // ——导航栏计数徽章务必采用上面测试锁定的模式。
+    // Note: reading OUTSIDE the content closure (at the container group) also propagates in the
+    // isolated harness above (the ancestor is marked dirty and the container re-runs with the new
+    // closure), but a real component tree is deeper and which layer a composition dependency lands
+    // on moves with the structure. Compose's idiom is to read in the NEAREST scope that uses the
+    // value — a navigation-bar count badge must use the pattern the test above pins down.
 
-    // ── 像素测试：Badge 渲染 ──
+    // ── Pixel tests: what Badge renders ──
     fn render_badge_px(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = light_theme();
@@ -719,7 +749,7 @@ mod tests {
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
-        // scene 捕获 FnOnce（build）——只能 compose 一次
+        // `scene` captures a FnOnce (`build`), so it can only be composed once.
         composer.compose(scene);
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
         let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
@@ -748,7 +778,7 @@ mod tests {
         let (px, w) = render_badge_px(|ctx| {
             Badge::new().build(ctx);
         });
-        // 小点 6×6 在 (0,0)——中心 (3,3) 应为 Error 色
+        // The 6×6 dot sits at (0,0), so its centre (3,3) is the Error colour.
         let c = at(&px, w, 3.0, 3.0);
         assert!(
             close(
@@ -759,7 +789,7 @@ mod tests {
                     theme.error.b as i32
                 )
             ),
-            "小徽章中心应为 Error 色（实际 {c:?}，期望 {:?}）",
+            "the dot badge's centre is the Error colour (actual {c:?}, expected {:?})",
             (theme.error.r, theme.error.g, theme.error.b)
         );
     }
@@ -774,8 +804,9 @@ mod tests {
                 })
                 .build(ctx);
         });
-        // 16×16 徽章区域统计：Error 底色像素应占多数（容器背景），
-        // 同时存在 OnError 文字像素（"3" 覆盖中心——避免单点采样命中文字）
+        // Statistics over the 16×16 badge: the Error container colour should dominate (it is the
+        // background), and OnError label pixels must be present too ("3" sits over the centre, so a
+        // single-point sample could land on text instead of background).
         let error_target = (
             theme.error.r as i32,
             theme.error.g as i32,
@@ -789,24 +820,25 @@ mod tests {
                 if close(p, error_target) {
                     error_px += 1;
                 } else if !(p.0 > 245 && p.1 > 245 && p.2 > 245) {
-                    // 非白且非 Error——文字像素（on_error 为近白色系）
+                    // Neither white nor Error — a label pixel (on_error is near-white).
                     label_px += 1;
                 }
             }
         }
         assert!(
             error_px > 100,
-            "大徽章底色应为 Error（16×16 内实际 {error_px} 像素）"
+            "the large badge's container is the Error colour ({error_px} pixels in the 16×16 area)"
         );
         assert!(
             label_px > 5,
-            "大徽章内应有 OnError 文字像素（实际 {label_px}）"
+            "the large badge has OnError label pixels (actual {label_px})"
         );
     }
 
     #[test]
     fn badged_box_badge_visible_on_render() {
-        // 渲染级验证：BadgedBox 的徽章确实画出来（右上角有 Error 像素）
+        // Render-level proof that BadgedBox actually DRAWS the badge (Error pixels in the
+        // top-trailing corner).
         let theme = light_theme();
         let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
@@ -841,7 +873,7 @@ mod tests {
             let p = px[(y as usize) * 300 + (x as usize)];
             (p[2] as i32, p[1] as i32, p[0] as i32)
         };
-        // 徽章中心 (21,3)（(18,0) 起 6×6）应为 Error 色
+        // The badge's centre (21,3) — a 6×6 box starting at (18,0) — is the Error colour.
         let c = at(21.0, 3.0);
         assert!(
             close(
@@ -852,17 +884,17 @@ mod tests {
                     theme.error.b as i32
                 )
             ),
-            "BadgedBox 徽章区域应有 Error 像素（实际 {c:?}）"
+            "the BadgedBox badge area is the Error colour (actual {c:?})"
         );
-        // anchor 内部 (12,12) 为灰色（anchor 内容）
+        // Inside the anchor (12,12) is grey — the anchor's own content.
         let a = at(12.0, 12.0);
         assert!(
             close(a, (200, 200, 200)),
-            "anchor 内容应正常渲染（实际 {a:?}）"
+            "the anchor's content renders normally (actual {a:?})"
         );
     }
 
-    // ── 回归：标签内容色必须跟随运行时移动的容器色 ──
+    // ── Regression: the label must follow a container colour that moves at runtime ──
 
     /// Declaring the raw `Option<Color>`s as parameters is not enough. Two options can compare EQUAL
     /// while the derived content colour moves with the container, and the inner `Row` declares no
@@ -1013,11 +1045,15 @@ mod tests {
                 nodes[root].measured_size.height,
             )
         };
-        assert_eq!(measure(false), (BADGE_SIZE, BADGE_SIZE), "小徽章 6×6");
+        assert_eq!(
+            measure(false),
+            (BADGE_SIZE, BADGE_SIZE),
+            "the dot badge is 6×6"
+        );
         assert_eq!(
             measure(true),
             (BADGE_LARGE_SIZE, BADGE_LARGE_SIZE),
-            "单字符大徽章 16×16"
+            "a one-digit large badge is 16×16"
         );
     }
 }
