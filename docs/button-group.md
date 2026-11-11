@@ -193,7 +193,7 @@ has the same one-pass lag in `ButtonGroupOverflowState`.
 `menuContent`, and deliberately `Fn` rather than `FnOnce` because a menu is an overlay that
 recomposes every frame it is up.
 
-## The label is single-line, and that is the ITEM's rule
+## The label is single-line, and the GROUP provides that
 
 An item's label must not wrap. Upstream's `ClickableButtonGroupItem` says so explicitly
 (`ButtonGroup.kt:1118-1124`):
@@ -202,26 +202,34 @@ An item's label must not wrap. Upstream's `ClickableButtonGroupItem` says so exp
 Text(text = label, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
 ```
 
-`Button` does NOT force it — not in material3 and not here. A wrapped label makes the item taller
-than its siblings (the row takes the tallest item), and because a pressed item narrows its
-neighbours, a wrapping label would reflow in the middle of a press.
-
-**All four settings belong to the rule, and a hand-built item needs all four.** `clickable` /
-`toggleable` set them for the caller; a caller composing its own item repeats them itself:
+Four settings, and winia supplies all four from ONE place:
+`ButtonGroupDefaults::item_label_style()`, which `ButtonGroup::build` passes to
+`ProvideTextStyle` around the whole row:
 
 ```rust
-Text::new(label)
+TextStyle::new()
     .max_lines(1)
     .soft_wrap(false)
     .overflow(TextOverflow::Visible)
     .align(TextAlign::Center)
 ```
 
-Leaving `overflow` off is the easy mistake, and it is visible rather than subtle: the default is
-`TextOverflow::Clip`, so the instant a press squeezes a neighbour the word is cut. Measured in
-`button_group_demo`'s connected row, "Week" rendered as "We" while the plain row beside it kept the
-whole word — the two rows differ only in that one uses `clickable` (which sets overflow) and the
-other composes its item by hand (which did not).
+So a `Text` composed inside an item inherits them — the group's own `clickable` / `toggleable`
+included, and a caller's hand-built `customItem` too, without either repeating anything. `Text`
+resolves `self.field.or(style.field)` (`text.rs`), so an explicit `.max_lines(…)` on a label still
+wins.
+
+The inheritance is not fragile. `Button::build` provides the theme's `label_large` INSIDE this one,
+and `merge_text_styles` keeps the outer value wherever the inner style says nothing
+(`override_.overflow.or(base.overflow)`). `label_large` sets only size, line height, letter
+spacing, weight and colour, so all four survive: measured, a 22-character label in a 90 dp item went
+from a 116 dp two-line box to a single 48 dp one.
+
+Before the provider existed each site set what it remembered to, and the two drifted apart:
+`clickable` set all four on its own `Text`, while a hand-built item in `button_group_demo` set only
+`max_lines` and `soft_wrap`. The default `TextOverflow::Clip` then re-laid the paragraph out at the
+NARROWED node width, so pressing a neighbour cut "Week" to "We" in the connected row while the
+plain row beside it kept the whole word.
 
 `TextOverflow::Visible` (`winia/src/text/style.rs`): the paragraph is laid out at its intrinsic
 width and the paint path no longer re-lays it out at the node's width, which is what used to cut

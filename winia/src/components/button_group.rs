@@ -39,6 +39,7 @@ use crate::layout::{Alignment, Arrangement, Constraints, LayoutDirection, comput
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::Backchannel;
+use crate::text::style::{TextAlign, TextOverflow, TextStyle};
 use crate::unit::{Offset, Size};
 use std::sync::Arc;
 
@@ -160,6 +161,36 @@ impl ButtonGroupDefaults {
         } else {
             Self::connected_middle_shapes()
         }
+    }
+
+    /// The text style every item's label inherits — material3's four settings for a
+    /// button-group label (`ButtonGroup.kt:1118-1127`).
+    ///
+    /// `ButtonGroup::build` provides this around the items, so a `Text` composed inside an item —
+    /// by the group's own `clickable` / `toggleable`, or by a caller's `customItem` closure — gets
+    /// all four without asking. An explicit `.max_lines(…)` / `.overflow(…)` on the `Text` still
+    /// wins, because `Text` resolves `self.field.or(style.field)` (`text.rs`).
+    ///
+    /// Why each one:
+    ///
+    /// - `max_lines(1)` and `soft_wrap(false)`: a wrapped label would make the item taller than
+    ///   its siblings, and a press NARROWS the item, so it would reflow in the middle of a press.
+    /// - `overflow(TextOverflow::Visible)`: the default is `Clip`, which re-lays the paragraph out
+    ///   at the NARROWED node width and cuts the word — measured on this component's demo, "Week"
+    ///   rendered as "We" the moment a press squeezed it. `Visible` lays the paragraph out at its
+    ///   intrinsic width and paints past the box, so the word survives the squeeze.
+    /// - `align(TextAlign::Center)`: so a label narrower than its squeezed container stays
+    ///   centred instead of sticking to the leading edge.
+    ///
+    /// The inherited style carries ONLY these: `font_size`, `font_weight`, `line_height` and the
+    /// rest come from the button's own `label_large` and the theme, which `Button` provides INSIDE
+    /// this one and wins field by field.
+    pub fn item_label_style() -> TextStyle {
+        TextStyle::new()
+            .max_lines(1)
+            .soft_wrap(false)
+            .overflow(TextOverflow::Visible)
+            .align(TextAlign::Center)
     }
 
     /// `Icons.Filled.MoreVert` — a VERTICAL ellipsis, which is what upstream's indicator shows.
@@ -356,15 +387,12 @@ impl LabelItem {
             if let Some(icon) = &icon {
                 icon(ctx);
             }
-            // `maxLines = 1, softWrap = false, overflow = Visible` (`ButtonGroup.kt:1122-1127`):
-            // a wrapped label would make the item taller than the row, and a press NARROWS the
-            // item, so it would reflow mid-press.
-            crate::components::text::Text::new(label)
-                .max_lines(1)
-                .soft_wrap(false)
-                .overflow(crate::text::style::TextOverflow::Visible)
-                .align(crate::text::style::TextAlign::Center)
-                .build(ctx);
+            // NO per-`Text` settings: `ButtonGroup::build` provides
+            // `ButtonGroupDefaults::item_label_style()` around the whole row, so the four
+            // material3 settings (`maxLines = 1, softWrap = false, overflow = Visible`,
+            // `ButtonGroup.kt:1122-1127`) arrive by inheritance and a CUSTOM item gets them too,
+            // without having to remember any of them.
+            crate::components::text::Text::new(label).build(ctx);
         });
     }
 
@@ -844,39 +872,63 @@ impl ButtonGroup {
                 // the equivalent here is to wrap each item in a layer whose alpha reads the
                 // count back: 0 for the ones in the menu. The alpha is evaluated at RENDER time
                 // (`graphics_layer` takes a closure), so it is last measure's answer.
-                for (index, child) in children.drain(..).enumerate() {
-                    let source = sources[index].clone();
-                    match child.kind {
-                        ItemKind::Custom(item) => {
-                            if has_indicator {
-                                let shown = visible.clone();
-                                let alpha = Modifier::new().graphics_layer(move || {
-                                    crate::graphics::GraphicsLayerParams {
-                                        alpha: if index < shown.peek() { 1.0 } else { 0.0 },
-                                        ..Default::default()
+                // ONE provide for the whole row: every label composed inside an item — the
+                // group's own `clickable` / `toggleable` and a caller's `customItem` closure
+                // alike — inherits material3's four label settings without repeating them.
+                //
+                // This is what makes the rule hold for a CUSTOM item. Before it, `clickable` set
+                // the four on its own `Text` and a hand-built item set whatever it remembered to,
+                // so the two drifted apart: the demo's connected row (hand-built) kept the default
+                // `TextOverflow::Clip` and had "Week" cut to "We" under a press while the plain row
+                // beside it (from `clickable`) kept the whole word.
+                //
+                // The inheritance is not fragile: `Button::build` provides `label_large` INSIDE
+                // this one, and `merge_text_styles` keeps the outer value wherever the inner style
+                // says nothing (`override_.overflow.or(base.overflow)`). `label_large` sets only
+                // size, line height, spacing, weight and colour, so all four survive — measured,
+                // a long label in a 90 dp item went from a 116 dp two-line box to a single 48 dp
+                // one.
+                crate::components::text::ProvideTextStyle(
+                    ButtonGroupDefaults::item_label_style(),
+                    ctx,
+                    |ctx| {
+                        for (index, child) in children.drain(..).enumerate() {
+                            let source = sources[index].clone();
+                            match child.kind {
+                                ItemKind::Custom(item) => {
+                                    if has_indicator {
+                                        let shown = visible.clone();
+                                        let alpha = Modifier::new().graphics_layer(move || {
+                                            crate::graphics::GraphicsLayerParams {
+                                                alpha: if index < shown.peek() { 1.0 } else { 0.0 },
+                                                ..Default::default()
+                                            }
+                                        });
+                                        wrap_item(ctx, alpha, |ctx| item(ctx, source));
+                                    } else {
+                                        item(ctx, source);
                                     }
-                                });
-                                wrap_item(ctx, alpha, |ctx| item(ctx, source));
-                            } else {
-                                item(ctx, source);
+                                }
+                                ItemKind::Label(label) => {
+                                    if has_indicator {
+                                        let shown = visible.clone();
+                                        let alpha = Modifier::new().graphics_layer(move || {
+                                            crate::graphics::GraphicsLayerParams {
+                                                alpha: if index < shown.peek() { 1.0 } else { 0.0 },
+                                                ..Default::default()
+                                            }
+                                        });
+                                        wrap_item(ctx, alpha, |ctx| {
+                                            label.compose_button(ctx, source)
+                                        });
+                                    } else {
+                                        label.compose_button(ctx, source);
+                                    }
+                                }
                             }
                         }
-                        ItemKind::Label(label) => {
-                            if has_indicator {
-                                let shown = visible.clone();
-                                let alpha = Modifier::new().graphics_layer(move || {
-                                    crate::graphics::GraphicsLayerParams {
-                                        alpha: if index < shown.peek() { 1.0 } else { 0.0 },
-                                        ..Default::default()
-                                    }
-                                });
-                                wrap_item(ctx, alpha, |ctx| label.compose_button(ctx, source));
-                            } else {
-                                label.compose_button(ctx, source);
-                            }
-                        }
-                    }
-                }
+                    },
+                );
                 if let Some(indicator) = overflow {
                     indicator(ctx, menu_state.clone());
                 }

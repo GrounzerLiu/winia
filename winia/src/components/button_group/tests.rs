@@ -1351,3 +1351,75 @@ fn a_labelled_item_builds_its_own_button() {
         nodes[root].measured_size.height
     );
 }
+
+/// EVERY ITEM'S LABEL INHERITS THE ROW'S FOUR SETTINGS — a hand-built item included.
+///
+/// `ButtonGroup::build` provides `ButtonGroupDefaults::item_label_style()` around the items, so a
+/// `Text` composed inside an item carries material3's four settings without asking for any of them
+/// (`ButtonGroup.kt:1118-1127`).
+///
+/// This is exactly what a per-`Text` approach could NOT do. `clickable` set the four on its own
+/// `Text` and a custom item set whatever its author remembered to — the two drifted apart, and the
+/// demo's connected row (hand-built) kept the default `TextOverflow::Clip` and had "Week" cut to
+/// "We" under a press while the plain row beside it (from `clickable`) kept the whole word.
+///
+/// The difference is measurable: without `soft_wrap(false)` + `max_lines(1)` the long label wraps
+/// and the item grows to several lines. Both arms below compose NO settings on the `Text` at all,
+/// so equal heights means the provider reached both.
+#[test]
+fn a_label_inherits_the_rows_text_style_whether_built_in_or_by_hand() {
+    const LONG: &str = "Expanded Options Label";
+
+    // `(row height, item height)` for a 90 dp group — narrower than the label, so a wrapping
+    // label would show up as extra height.
+    let measure = |built_in: bool| -> (f32, f32) {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            crate::theme::WiniaTheme::with_theme(
+                crate::theme::ThemeColors::light_from_seed(0x6750A4),
+                ctx,
+                |ctx| {
+                    let group = ButtonGroup::new().modifier(Modifier::new().width(90.0));
+                    let group = if built_in {
+                        group.add(ButtonGroupItem::clickable(LONG, || {}))
+                    } else {
+                        // A custom item that composes a bare `Text` — no `max_lines`, no
+                        // `soft_wrap`, no `overflow`, no `align`.
+                        group.add(ButtonGroupItem::new(|ctx, _source| {
+                            crate::components::button::Button::filled()
+                                .on_click(|| {})
+                                .build(ctx, |ctx| {
+                                    crate::components::text::Text::new(LONG).build(ctx);
+                                });
+                        }))
+                    };
+                    group.build(ctx);
+                },
+            );
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let item = nodes[root].children[0];
+        (
+            nodes[root].measured_size.height,
+            nodes[item].measured_size.height,
+        )
+    };
+
+    let (row_built_in, item_built_in) = measure(true);
+    let (row_custom, item_custom) = measure(false);
+
+    assert_eq!(
+        (row_custom, item_custom),
+        (row_built_in, item_built_in),
+        "a hand-built item's label must inherit the same four settings — \
+         built in: {row_built_in}/{item_built_in}, custom: {row_custom}/{item_custom}"
+    );
+    // And the settings really are the single-line ones: a wrapped 22-character label in a 90 dp
+    // item measured 116 dp tall before the provider reached it.
+    assert!(
+        item_custom < 80.0,
+        "the label must not wrap, got a {item_custom} dp item"
+    );
+}
