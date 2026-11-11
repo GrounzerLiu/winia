@@ -11,12 +11,29 @@ below are the token files', not the spec's prose.
 
 | | value | token |
 |---|---|---|
-| container height | 40 | `ButtonGroupSmallTokens.ContainerHeight` (and `Connected...`, the two agree) |
+| container height (a BUTTON size, not the row's — see below) | 40 | `ButtonGroupSmallTokens.ContainerHeight` (and `Connected...`, the two agree) |
 | between-space, plain | 12 | `ButtonGroupSmallTokens.BetweenSpace` |
 | between-space, connected | 2 | `ConnectedButtonGroupSmallTokens.BetweenSpace` |
 | expanded ratio | 0.15 | `ButtonGroupDefaults.ExpandedRatio` |
 | inner corner | 8 | `InnerCornerCornerSize` = `CornerValueSmall` |
 | pressed inner corner | 4 | `PressedInnerCornerCornerSize` = `CornerValueExtraSmall` |
+
+### The row has no height of its own
+
+`ContainerHeight` is a BUTTON size. `ButtonGroup.kt` never reads it — the token appears only in
+`tokens/ButtonGroupSmallTokens.kt`, while the layout size is
+
+```kotlin
+val height = placeables.fastMaxBy { it.height }?.height ?: constraints.minHeight   // :795
+```
+
+so the row is as tall as its tallest item. This used to apply `Modifier.height(40)` to the whole
+group, which SQUASHED anything taller: measured, an item declared 56 dp inside a 40 dp group came
+back 40 dp tall. A group of `ButtonSize::Medium` buttons was unrepresentable.
+
+`verticalAlignment` (upstream's parameter) decides where a SHORTER item sits on the cross axis —
+`Start` by default, which is Compose's `Alignment.Top`. An item's own `ButtonGroupItem::align`
+overrides it, the way `Modifier.align(Alignment.Vertical)` does upstream (`:799-802`, `:853-859`).
 
 ## The connected shape set
 
@@ -45,8 +62,10 @@ precedence: pressed beats checked beats resting.
 
 Implemented: the constants above, the connected shape set (including the RTL mirror and the checked
 stadium), `item_shapes`, weighted items, the press growth, the overflow indicator with its menu,
-and `ButtonGroup` — a row that spaces its items by the token for the form it is in and is the
-token's height.
+`clickable` / `toggleable` items with their own overflow rows, and `ButtonGroup` — a row that
+spaces its items by the token for the form it is in, is as tall as its tallest item, honours the
+incoming minimum width, mirrors under RTL and distributes its leftover space through
+`horizontalArrangement`.
 
 ## Weighted items
 
@@ -130,18 +149,26 @@ anchored above it. winia's `Tooltip` is the same thing with the same defaults �
 `overflowIndicator` slot, except winia makes it optional: a group without one simply never
 overflows.
 
-The layout reproduces upstream's (`ButtonGroup.kt:695-711`):
+The layout reproduces upstream's (`ButtonGroup.kt:682-711`):
 
 0. With NO indicator there is no fitting at all: every item is laid out however narrow the row
    is, which is what a plain Row does. Fitting without one is not just pointless, it is wrong —
    a WEIGHTED item's width is derived from the budget, so the widths plus the gaps sum to exactly
    it and `widths[i] <= remaining` becomes a floating-point coin flip on the last item. The row
    dropped it at some widths and kept it at others, so it blinked while the window was resized.
-1. The indicator is measured FIRST, because it is what leaves room for the items.
-2. The items fill what is left greedily, from the start, until one does not fit.
+1. `desiredWidth` (every item plus the gaps) is compared against the row BEFORE the indicator is
+   measured. If it fits — or the row is unbounded, as inside a scroll — every item is shown and the
+   indicator is not shown at all, never measured into the layout.
+2. Only once that test FAILS is the indicator measured; it takes its width first, and the items
+   then fill what is left greedily, from the start, until one does not fit.
 3. The ones that did not fit are parked OUTSIDE the row at their NATURAL size (`max_w + 1000`)
    and are in the menu instead — never at zero width, and never at the origin — and the
    indicator is placed one spacing after the last item that did fit.
+
+Step 1 is the one that used to be missing, and it was visible: the indicator was measured first and
+placed unconditionally, so a group that called `overflow_indicator()` wore a "more" button with
+nothing to hide. Three 100 dp items and a 40 dp indicator fit in a 340 dp row (324) and still came
+back 264 dp wide with the indicator at x=224.
 
 Upstream expresses the two content sets as a `MultiContentMeasurePolicy`. winia has no
 multi-content layout, so the indicator is the group's LAST child and the policy knows how many
@@ -175,26 +202,48 @@ An item's label must not wrap. Upstream's `ClickableButtonGroupItem` says so exp
 Text(text = label, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
 ```
 
-`Button` does NOT force it — not in material3 and not here. A wrapped label makes the item
-taller than the 40 dp the group lays out, and because a pressed item narrows its neighbours, a
-wrapping label would reflow in the middle of a press. A caller composing its own item sets
-`max_lines(1)` and `soft_wrap(false)` on its label; the demo's items do.
+`Button` does NOT force it — not in material3 and not here. A wrapped label makes the item taller
+than its siblings (the row takes the tallest item), and because a pressed item narrows its
+neighbours, a wrapping label would reflow in the middle of a press. `ButtonGroupItem::clickable` /
+`toggleable` set it for the caller; a caller composing its own item sets `max_lines(1)` and
+`soft_wrap(false)` on its label itself.
 
-The demo's items also set `overflow(TextOverflow::Visible)` and `align(TextAlign::Center)`, which
-is the second half of what material3 asks for: an item that a press has narrowed is narrower than
-its own label, and the label must neither be cut nor jump off-centre while that happens.
+`clickable` / `toggleable` also set `overflow(TextOverflow::Visible)` and `align(TextAlign::Center)`,
+which is the second half of what material3 asks for: an item that a press has narrowed is narrower
+than its own label, and the label must neither be cut nor jump off-centre while that happens.
 `TextOverflow::Visible` is new (`winia/src/text/style.rs`): the paragraph is laid out at its
 intrinsic width and the paint path no longer re-lays it out at the node's width, which is what used
 to cut it, and the centring offset is allowed to go negative so an overflowing label still centres.
 
+## The item constructors
+
+Upstream's scope offers three (`ButtonGroup.kt:870-907`); winia mirrors them as constructors on
+`ButtonGroupItem`:
+
+| upstream | winia |
+|---|---|
+| `clickableItem(onClick, label, icon, weight, enabled)` | `ButtonGroupItem::clickable(label, on_click)` + `.icon(…)` `.weight(…)` `.enabled(…)` |
+| `toggleableItem(checked, label, onCheckedChange, icon, weight, enabled)` | `ButtonGroupItem::toggleable(label, checked, on_checked_change)` + the same modifiers |
+| `customItem(buttonGroupContent, menuContent)` | `ButtonGroupItem::new(closure)` + `.menu(…)` |
+
+The labelled forms build their own `Button` — padding from `ButtonDefaults`, the single-line label
+above, and a `DropdownMenuItem` overflow row that runs the action and then dismisses the menu
+(`ButtonGroup.kt:1131-1142`, `:1205-1216`). A toggled item paints `primary` while checked and
+`surfaceContainer` while not (`FilledButtonTokens.SelectedContainerColor` /
+`UnselectedContainerColor`).
+
+`ButtonGroupDefaults::overflow_indicator` is upstream's default indicator: a `FilledIconButton`
+showing `Icons.Filled.MoreVert` whose click TOGGLES the menu, inside a tooltip reading "More
+options" (`ButtonGroup.kt:294-333`). Pass it straight to `overflow_indicator(…)`.
+
 ## What is still open
 
-- **The item constructors.** Upstream's scope offers `clickableItem` / `toggleableItem` /
-  `customItem`; winia takes `ButtonGroupItem`s and leaves the button to the caller, so an item is
-  a `Button` / `IconToggleButton` that the caller gives the right shape.
-- **The distribution of the row's leftover space when nothing is weighted.** Upstream arranges
-  through `Arrangement.Horizontal` (`Arrangement.spacedBy(12)` by default), which also decides
-  what happens to space no item claims; winia lays the items out from the start edge.
-- **The menu items' styling.** Upstream's `OverflowIndicator` is a `FilledIconButton` and the menu
-  rows are material3 `DropdownMenuItem`s; winia leaves the indicator to the caller and renders
-  whatever the caller's `menu(...)` closure composes.
+- **Saved overflow state.** Upstream's `ButtonGroupOverflowState` is a `rememberSaveable`, so the
+  visible/​total counts survive a configuration change; winia keeps them in a `Backchannel`, which
+  is not saved.
+- **`Arrangement.spacedBy(space, alignment)`.** winia keeps the gap on the group (`spacing`) and
+  takes only the distribution from `arrangement`, so the per-arrangement alignment half of
+  `spacedBy` is expressed as `Arrangement::Aligned` instead.
+- **The menu items' styling.** Upstream's menu rows are material3 `DropdownMenuItem`s rendered by
+  the item itself; winia's labelled items do the same, but a custom item still renders whatever its
+  `menu(…)` closure composes.

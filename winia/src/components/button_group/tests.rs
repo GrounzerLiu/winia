@@ -381,10 +381,57 @@ fn a_pressed_item_grows_by_squeezing_its_neighbours() {
     );
 }
 
-/// The overflow: the indicator is measured first and the items fill what is left of the row,
-/// greedily, from the start — upstream's loop at `ButtonGroup.kt:695-711`. Three 100 dp items
-/// and a 40 dp indicator in a 340 dp row leave `340 - 40 - 12 = 288` for the items, which
-/// holds two of them (100, then 100 out of the 176 left) and not the third.
+/// The overflow's SHORT CIRCUIT: when every item fits, the indicator is not shown at all.
+///
+/// Upstream asks `desiredWidth <= mainAxisMax` first and, when it holds, sets `lastItem` to the
+/// full count, `mainSpace` to `desiredWidth`, and leaves `overflowPlaceables` NULL — the overflow
+/// slot is never even measured (`ButtonGroup.kt:682-689`). This policy used to measure the
+/// indicator first and place it unconditionally, so a group that supplied `overflow_indicator()`
+/// wore a "more" button with nothing to hide: three 100 dp items and a 40 dp indicator in a
+/// 340 dp row fit (324) and still came back 264 dp wide with the indicator at x=224.
+#[test]
+fn the_indicator_is_not_shown_when_every_item_fits() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        ButtonGroup::new()
+            .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+            .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+            .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+            .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
+            .build(ctx);
+    });
+    composer.layout(Constraints::new(0.0, 340.0, 0.0, 400.0));
+    let root = composer.layout_root_idx().unwrap();
+    let nodes = composer.arena_nodes();
+    let children = nodes[root].children.clone();
+    assert_eq!(children.len(), 4, "three items and the indicator");
+
+    assert_eq!(nodes[children[0]].position.x, 0.0);
+    assert_eq!(
+        nodes[children[1]].position.x, 112.0,
+        "the second item follows the first + 12"
+    );
+    assert_eq!(
+        nodes[children[2]].position.x, 224.0,
+        "all three fit, so the third stays in the row"
+    );
+    assert_eq!(
+        nodes[root].measured_size.width, 324.0,
+        "the row is the three items and their two gaps — no room taken by the indicator"
+    );
+    assert!(
+        nodes[children[3]].position.x > 340.0,
+        "and the indicator is parked out of the row, got x={}",
+        nodes[children[3]].position.x
+    );
+}
+
+/// The overflow itself: the indicator takes its room first and the items fill what is left,
+/// greedily, from the start — upstream's loop at `ButtonGroup.kt:696-705`.
+///
+/// Three 100 dp items and a 40 dp indicator in a 300 dp row: `desiredWidth` (324) exceeds the row,
+/// so the indicator is measured, `remaining` becomes `300 - 40 = 260`, and two items fit (100, then
+/// 100 out of the 148 left). The third is in the menu instead.
 #[test]
 fn the_overflow_fits_as_many_items_as_the_indicator_leaves_room_for() {
     let mut composer = crate::runtime::composer::Composer::new();
@@ -396,7 +443,7 @@ fn the_overflow_fits_as_many_items_as_the_indicator_leaves_room_for() {
             .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
             .build(ctx);
     });
-    composer.layout(Constraints::new(0.0, 340.0, 0.0, 400.0));
+    composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
     let root = composer.layout_root_idx().unwrap();
     let nodes = composer.arena_nodes();
     let children = nodes[root].children.clone();
@@ -417,7 +464,7 @@ fn the_overflow_fits_as_many_items_as_the_indicator_leaves_room_for() {
         "the item that did not fit keeps its natural width"
     );
     assert!(
-        nodes[children[2]].position.x >= 340.0,
+        nodes[children[2]].position.x >= 300.0,
         "and it is parked outside the row, got x={}",
         nodes[children[2]].position.x
     );
@@ -1000,5 +1047,307 @@ fn an_icon_item_in_an_overflow_group_is_steered_through_the_wrapper() {
     assert_eq!(
         left, 4.0,
         "and it holds its trailing edge: the press is on its leading side"
+    );
+}
+
+/// THE ROW IS AS TALL AS ITS TALLEST ITEM, never a token.
+///
+/// Upstream never sets a height: `height = placeables.fastMaxBy { it.height }?.height
+/// ?: constraints.minHeight` (`ButtonGroup.kt:795`). The group used to apply
+/// `Modifier.height(ContainerHeight)` (40), which SQUASHED anything taller — measured, a 56 dp
+/// item inside a 40 dp group came back 40 dp tall.
+#[test]
+fn the_row_is_as_tall_as_its_tallest_item() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        ButtonGroup::new()
+            .item(|ctx, _source| leaf(ctx, 100.0, 56.0))
+            .item(|ctx, _source| leaf(ctx, 100.0, 32.0))
+            .build(ctx);
+    });
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+    let root = composer.layout_root_idx().unwrap();
+    let nodes = composer.arena_nodes();
+    let children = nodes[root].children.clone();
+    assert_eq!(
+        nodes[root].measured_size.height, 56.0,
+        "the row takes the tallest item's height"
+    );
+    assert_eq!(
+        nodes[children[0]].measured_size.height, 56.0,
+        "and the tall item is not squashed"
+    );
+    assert_eq!(nodes[children[1]].measured_size.height, 32.0);
+    assert_eq!(
+        nodes[children[1]].position.y, 0.0,
+        "a short item sits at the top — `verticalAlignment` defaults to Top"
+    );
+}
+
+/// `verticalAlignment = Center` / `End` place a short item on the cross axis, and an item's own
+/// `Modifier.align` overrides the group's (`ButtonGroup.kt:799-802`, `:853-859`).
+#[test]
+fn vertical_alignment_places_a_short_item() {
+    let y_of = |group_align: Alignment, item_align: Option<Alignment>| -> f32 {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let mut item = ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 20.0));
+            if let Some(a) = item_align {
+                item = item.align(a);
+            }
+            ButtonGroup::new()
+                .vertical_alignment(group_align)
+                .item(|ctx, _source| leaf(ctx, 100.0, 60.0))
+                .add(item)
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        nodes[children[1]].position.y
+    };
+
+    assert_eq!(y_of(Alignment::Start, None), 0.0);
+    assert_eq!(
+        y_of(Alignment::Center, None),
+        20.0,
+        "(60 - 20) / 2 — centred against the tall item"
+    );
+    assert_eq!(
+        y_of(Alignment::End, None),
+        40.0,
+        "60 - 20 — flush with the row's bottom"
+    );
+    assert_eq!(
+        y_of(Alignment::End, Some(Alignment::Start)),
+        0.0,
+        "the ITEM's own align wins over the group's"
+    );
+}
+
+/// The row is floored by the incoming MINIMUM width — upstream's
+/// `mainAxisLayoutSize = max(mainSpace, mainAxisMin)` (`ButtonGroup.kt:783`).
+///
+/// The minimum was ignored, so a group given a fixed-width slot collapsed to its content.
+#[test]
+fn the_row_honours_the_incoming_minimum_width() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        ButtonGroup::new()
+            .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+            .build(ctx);
+    });
+    composer.layout(Constraints::new(300.0, 300.0, 0.0, 400.0));
+    let root = composer.layout_root_idx().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[root].measured_size.width,
+        300.0,
+        "the row fills the minimum it was given"
+    );
+}
+
+/// `horizontalArrangement` distributes the leftover main-axis space (`ButtonGroup.kt:536-543`).
+///
+/// Without it the row always packed from the leading edge, so `End`/`Center` were unreachable.
+#[test]
+fn the_arrangement_distributes_the_leftover() {
+    let first_x = |arrangement: Arrangement| -> f32 {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            ButtonGroup::new()
+                .arrangement(arrangement)
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(300.0, 300.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        nodes[children[0]].position.x
+    };
+
+    // 300 of room, 212 of content (100 + 12 + 100): 88 left over.
+    assert_eq!(first_x(Arrangement::Start), 0.0);
+    assert_eq!(first_x(Arrangement::End), 88.0, "packed to the far edge");
+    assert_eq!(
+        first_x(Arrangement::Center),
+        44.0,
+        "half the leftover each side"
+    );
+}
+
+/// UNDER RTL THE POSITIONS MIRROR.
+///
+/// The connected shapes are already direction-resolved (`item_shapes` puts the rounded START
+/// corners on the right under RTL), so the placements have to mirror too. They did not: the
+/// corners said right-to-left while the row ran left-to-right, and the two disagreed about which
+/// end of the group an item was on.
+#[test]
+fn the_row_mirrors_under_rtl() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    crate::layout::direction::provides(LayoutDirection::Rtl, || {
+        composer.compose(|ctx| {
+            ButtonGroup::new()
+                .modifier(Modifier::new().layout_direction(LayoutDirection::Rtl))
+                .item(|ctx, _source| leaf(ctx, 50.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 30.0, 40.0))
+                .build(ctx);
+        });
+    });
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+    let root = composer.layout_root_idx().unwrap();
+    let nodes = composer.arena_nodes();
+    let children = nodes[root].children.clone();
+    assert_eq!(nodes[root].measured_size.width, 92.0);
+    assert_eq!(
+        nodes[children[1]].position.x, 0.0,
+        "the SECOND item is at the start edge under RTL"
+    );
+    assert_eq!(
+        nodes[children[0]].position.x, 42.0,
+        "and the first one is to its right"
+    );
+}
+
+/// Changing an item's WEIGHT re-enters the group even though the item count is unchanged.
+///
+/// The Skip contract is a whitelist and only `children.len()` was declared, so a Clean slot skipped
+/// past new weights: measured, a 1:1 row changed to 3:1 kept BOTH items at 194 dp.
+#[test]
+fn a_changed_weight_re_lays_out_the_row() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    let widths = |composer: &crate::runtime::composer::Composer| -> (f32, f32) {
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        (
+            nodes[children[0]].measured_size.width,
+            nodes[children[1]].measured_size.width,
+        )
+    };
+    for round in 0..2 {
+        let first = if round == 0 { 1.0 } else { 3.0 };
+        composer.compose(move |ctx| {
+            ButtonGroup::new()
+                .weighted_item(first, |ctx, _source| leaf(ctx, 60.0, 40.0))
+                .weighted_item(1.0, |ctx, _source| leaf(ctx, 60.0, 40.0))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let got = widths(&composer);
+        if round == 0 {
+            assert_eq!(got, (194.0, 194.0), "1:1 splits the 388 left after the gap");
+        } else {
+            assert_eq!(
+                got,
+                (291.0, 97.0),
+                "3:1 must take effect, not be skipped past"
+            );
+        }
+    }
+}
+
+/// `expandedRatio = 0` disables the press growth, and a larger one grows further
+/// (`ButtonGroup.kt:116-122`, `:132`).
+#[test]
+fn the_expanded_ratio_is_configurable() {
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let grown = |ratio: f32| -> f32 {
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                ButtonGroup::new()
+                    .expanded_ratio(ratio)
+                    .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                    .add(
+                        ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                            .press_source(pressed.clone()),
+                    )
+                    .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        nodes[children[1]].measured_size.width
+    };
+
+    assert_eq!(
+        grown(0.0),
+        100.0,
+        "a zero ratio means the pressed item does not grow at all"
+    );
+    // 0.3 * 100 / 2 = 15 per side, under the 24 dp compression cap.
+    let wide = grown(0.3);
+    assert!(
+        (wide - 130.0).abs() < 0.5,
+        "0.3 grows the middle item by 2 x 15, got {wide}"
+    );
+}
+
+/// `weight(0)` PANICS rather than quietly becoming a natural-width item, which is upstream's
+/// `require(weight > 0.0)` (`ButtonGroup.kt:1402`).
+#[test]
+#[should_panic(expected = "invalid weight")]
+fn a_zero_weight_is_rejected() {
+    let _ = ButtonGroupItem::new(|ctx, _source| leaf(ctx, 10.0, 10.0)).weight(0.0);
+}
+
+/// `clickable` / `toggleable` build the button themselves, which is what upstream's
+/// `ClickableButtonGroupItem` / `ToggleableButtonGroupItem` do (`ButtonGroup.kt:1075-1217`).
+#[test]
+fn a_labelled_item_builds_its_own_button() {
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        crate::theme::WiniaTheme::with_theme(
+            crate::theme::ThemeColors::light_from_seed(0x6750A4),
+            ctx,
+            |ctx| {
+                ButtonGroup::new()
+                    .add(ButtonGroupItem::clickable("One", || {}))
+                    .add(ButtonGroupItem::toggleable("Two", false, |_| {}))
+                    .build(ctx);
+            },
+        );
+    });
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+    let root = composer.layout_root_idx().unwrap();
+    let nodes = composer.arena_nodes();
+    let children = nodes[root].children.clone();
+    assert_eq!(children.len(), 2, "two items");
+    let mut tallest = 0.0f32;
+    for (i, &c) in children.iter().enumerate() {
+        assert!(
+            nodes[c].measured_size.width > 0.0,
+            "item {i} laid out with a real width"
+        );
+        assert!(nodes[c].measured_size.height > 0.0, "and a real height");
+        tallest = tallest.max(nodes[c].measured_size.height);
+    }
+    // The row takes the tallest item — no hardcoded token height. A default `Button` measures at
+    // its 48 dp touch target, and the group must report that rather than squashing it to 40.
+    assert_eq!(
+        nodes[root].measured_size.height, tallest,
+        "the row is as tall as its tallest item, got {} vs {tallest}",
+        nodes[root].measured_size.height
     );
 }
