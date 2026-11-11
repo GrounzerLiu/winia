@@ -77,9 +77,12 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
 - **尺寸变体**：`ButtonSize`（XSmall 32 / Small 40 / Medium 56 / Large 96 /
   XLarge 136，`.size(...)` 设置，默认 Small）。随尺寸联动：min-height =
-  容器高、水平 padding 16/24/24/48/64、图标间距 8/8/8/12/16、
-  Outlined 边框宽 1/1/1/2/3、建议图标尺寸 20/20/24/32/40
+  容器高、水平 padding 16/16/24/48/64、垂直 padding 6/10/16/32/48、
+  图标间距 8/8/8/12/16、Outlined 边框宽 1/1/1/2/3、建议图标尺寸 20/20/24/32/40
   （`icon_size()`）；`ButtonDefaults::content_padding_for(size, style)`。
+  - 垂直 padding 必须按尺寸取（`ButtonSize::vertical_padding()`）：每档恰好留下该尺寸
+    的图标高度（6×2+20=32、10×2+20=40、16×2+24=56、32×2+32=96、48×2+40=136）。
+    曾统一用 8，XSmall 的 32 dp 容器只剩 16 dp 装不下 20 dp 内容，实测被撑到 36。
 
 - **内容 = 居中 Row**（对标 M3：图标/文字并排）；内容色经
   `WiniaTheme::content_color()` 下传——`Icon::tint(Auto)` 取按钮内容色
@@ -159,8 +162,16 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 - **独立 composable**：M3 的 `ElevatedButton` / `FilledTonalButton` /
   `OutlinedButton` / `TextButton` 是独立函数；winia 用构造变体近似，签名与
   `Button` 相同（后续可拆成独立组件，API 不变）。
-- **`IconButton` / `FilledIconButton` / `OutlinedIconButton` /
-  `TextButton` icon-only 形态**：未实现（无独立 `Icon` 组件）。
+- **`IconButton` / `FilledIconButton` / `OutlinedIconButton`**：不是独立
+  composable，而是 `IconButton` 的 `IconButtonStyle`（Standard / Filled /
+  FilledTonal / Outlined）——与 Button 一族同一套做法（`components/icon_button.rs`）。
+  专用 `Icon` 组件是有的（`components/icon.rs`），`IconToggleButton` 同理
+  （`::new` / `::filled` / `::filled_tonal` / `::outlined`）。
+  真正缺的是 **`TextButton` 的 icon-only 形态**。
+- **`ButtonDefaults.shapes()` / `ButtonShapes`**：winia 的按下形变由
+  `ButtonSize::pressed_container_radius()` + `Shape::PillToRounded` 表达，
+  没有 `ButtonShapes(shape, pressedShape)` 这个公开载体，也没有各尺寸的
+  `squareShape` / `pressedShape` 常量。
 - **`BorderStroke`**：仅 width + color；无 Brush/渐变/虚线。
 - **`ButtonDefaults.buttonColors(...)` 逐状态参数**：winia 以
   `ButtonColors::new(4 色)` 覆盖；没有 M3 的 `containerColor/contentColor/

@@ -87,6 +87,28 @@ impl ButtonSize {
         }
     }
 
+    /// Vertical padding per size: 6/10/16/32/48.
+    ///
+    /// Compose derives it from the height rather than storing one number
+    /// (`smallVerticalPadding` 10, `MediumVerticalPadding` 16, `LargeVerticalPadding` 32,
+    /// `ExtraSmallContentPadding` 6, `ExtraLargeContentPadding` 48 — `Button.kt:958-1010`,
+    /// `:1652-1663`), and each value leaves exactly that size's icon height in the box:
+    /// 6+6+20=32, 10+10+20=40, 16+16+24=56, 32+32+32=96, 48+48+40=136.
+    ///
+    /// One shared 8 could not work for the smallest size: XSmall's 32 dp container had only 16 dp
+    /// left after 8+8, less than the 20 dp a label or an icon needs, so the box grew to 36 and the
+    /// token stopped being the height. Measured before this existed, at 400x400: XSmall 36.0 against
+    /// `ButtonXSmallTokens.ContainerHeight` 32.0, every other size exact.
+    pub fn vertical_padding(self) -> f32 {
+        match self {
+            ButtonSize::XSmall => 6.0,
+            ButtonSize::Small => 10.0,
+            ButtonSize::Medium => 16.0,
+            ButtonSize::Large => 32.0,
+            ButtonSize::XLarge => 48.0,
+        }
+    }
+
     /// `PressedContainerShape` as a corner radius — the shape the container morphs to while it is
     /// pressed. `ButtonXSmallTokens`/`ButtonSmallTokens` say CornerSmall (8), `ButtonMediumTokens`
     /// CornerMedium (12), `ButtonLargeTokens`/`ButtonXLargeTokens` CornerLarge (16).
@@ -504,8 +526,12 @@ impl ButtonDefaults {
         (12.0.into(), 8.0.into(), 16.0.into(), 8.0.into())
     }
 
-    /// 按尺寸取默认内容 padding：水平 = 尺寸 Leading/Trailing，垂直 8；
+    /// 按尺寸取默认内容 padding：水平 = 尺寸 Leading/Trailing，垂直 = 该尺寸的 token；
     /// Text 按钮固定 12/8/12/8（紧凑）
+    ///
+    /// The vertical value is per size (`ButtonSize::vertical_padding`) because it is what keeps the
+    /// box at `ContainerHeight`: one shared 8 gave XSmall's 32 dp container only 16 dp of content
+    /// room, less than the 20 dp a label needs, and the box measured 36 instead.
     pub fn content_padding_for(
         size: ButtonSize,
         style: ButtonStyle,
@@ -514,7 +540,8 @@ impl ButtonDefaults {
             return (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into());
         }
         let h = size.horizontal_padding();
-        (h.into(), 8.0.into(), h.into(), 8.0.into())
+        let v = size.vertical_padding();
+        (h.into(), v.into(), h.into(), v.into())
     }
 }
 

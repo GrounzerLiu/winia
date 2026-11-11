@@ -212,6 +212,44 @@ fn button_size_dimensions() {
     assert!(matches!(p.0, crate::layout::Dimension::Fixed(24.0)));
     let pt = ButtonDefaults::content_padding_for(ButtonSize::XLarge, ButtonStyle::Text);
     assert!(matches!(pt.0, crate::layout::Dimension::Fixed(12.0)));
+
+    // Vertical padding is per size and is what keeps the box at `ContainerHeight`: each value
+    // leaves exactly that size's icon height in the content box.
+    assert_eq!(ButtonSize::XSmall.vertical_padding(), 6.0);
+    assert_eq!(ButtonSize::Small.vertical_padding(), 10.0);
+    assert_eq!(ButtonSize::Medium.vertical_padding(), 16.0);
+    assert_eq!(ButtonSize::Large.vertical_padding(), 32.0);
+    assert_eq!(ButtonSize::XLarge.vertical_padding(), 48.0);
+    for size in [
+        ButtonSize::XSmall,
+        ButtonSize::Small,
+        ButtonSize::Medium,
+        ButtonSize::Large,
+        ButtonSize::XLarge,
+    ] {
+        assert!(
+            (size.vertical_padding() * 2.0 + size.icon_size() - size.container_height()).abs()
+                < 0.01,
+            "{size:?}: 2 * vertical_padding + icon_size must equal ContainerHeight, got \
+             {} + {} = {} against {}",
+            size.vertical_padding() * 2.0,
+            size.icon_size(),
+            size.vertical_padding() * 2.0 + size.icon_size(),
+            size.container_height(),
+        );
+
+        // And `content_padding_for` has to actually USE that value — the assertion above only
+        // relates two constants, so it would keep passing if the builder went back to a flat 8.
+        // That is exactly the bug: `Button::build` takes the padding from here.
+        let (_, top, _, bottom) = ButtonDefaults::content_padding_for(size, ButtonStyle::Filled);
+        for (edge, value) in [("top", top), ("bottom", bottom)] {
+            assert!(
+                matches!(value, crate::layout::Dimension::Fixed(v) if (v - size.vertical_padding()).abs() < 0.01),
+                "{size:?}: content_padding_for's {edge} must be vertical_padding() ({}), got {value:?}",
+                size.vertical_padding(),
+            );
+        }
+    }
 }
 
 #[test]
