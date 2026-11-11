@@ -9,20 +9,20 @@ fn test_button_defaults() {
     assert_eq!(
         btn.get_shape(),
         Shape::pill(),
-        "默认形状对齐 CornerFull 胶囊"
+        "the default shape is the CornerFull pill"
     );
     assert!(
         btn.get_content_padding().is_none(),
-        "content_padding 默认按 style 取"
+        "content_padding defaults per style"
     );
     assert!(
         btn.get_min_size().0.is_none() && btn.get_min_size().1.is_none(),
-        "min 尺寸默认取 ButtonDefaults"
+        "min size defaults to ButtonDefaults"
     );
     assert_eq!(
         btn.get_border(),
         None,
-        "border 默认按 style（Outlined 才有）"
+        "border defaults per style (only Outlined has one)"
     );
     assert_eq!(btn.get_modifier().elements().len(), 0);
 }
@@ -33,7 +33,7 @@ fn test_button_defaults_values() {
     assert_eq!(ButtonDefaults::min_width(), 58.0);
     assert_eq!(ButtonDefaults::min_height(), 40.0);
     assert_eq!(ButtonDefaults::icon_spacing(), 8.0, "IconLabelSpace");
-    // 颜色工厂与 from_theme 一致（薄包装语义对标 Compose buttonColors()）
+    // The colour factory agrees with `from_theme` — a thin wrapper, as Compose's `buttonColors()` is.
     let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
     assert_eq!(
         ButtonDefaults::button_colors(&theme, ButtonStyle::Filled),
@@ -71,20 +71,23 @@ fn test_button_border() {
 
 #[test]
 fn test_outlined_border_uses_theme_outline() {
-    // 对标 M3：OutlinedButton 边框 = OutlineVariant（非 outline/primary）
+    // material3's OutlinedButton border is `OutlineVariant` (not `outline` or `primary`).
     let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
     let enabled = ButtonBorder::outlined(&theme, true);
     assert_eq!(enabled.width, 1.0);
     assert_eq!(
         enabled.color, theme.outline_variant,
-        "启用态边框 = OutlineVariant"
+        "an enabled border is OutlineVariant"
     );
-    assert_ne!(enabled.color, theme.primary, "不能误用内容色 primary");
+    assert_ne!(
+        enabled.color, theme.primary,
+        "it must not reuse the content colour"
+    );
     let disabled = ButtonBorder::outlined(&theme, false);
     assert_eq!(
         disabled.color.a,
         (theme.outline_variant.a as f32 * 0.10) as u8,
-        "禁用态 = OutlineVariant @ DisabledContainerOpacity(0.1)"
+        "disabled is OutlineVariant at DisabledContainerOpacity (0.1)"
     );
 }
 
@@ -111,19 +114,22 @@ fn button_default_colors_match_m3_tokens() {
     assert_eq!(
         t.disabled_container,
         alpha(theme.on_surface, 0.12),
-        "Tonal 禁用容器 12%"
+        "Tonal's disabled container is 12%"
     );
     assert_eq!(t.disabled_content, alpha(theme.on_surface, 0.38));
     let o = ButtonColors::from_theme(&theme, ButtonStyle::Outlined);
-    assert_eq!(o.container.a, 0, "Outlined 容器透明");
+    assert_eq!(o.container.a, 0, "the Outlined container is transparent");
     assert_eq!(
         o.content, theme.on_surface_variant,
-        "Outlined 内容 = OnSurfaceVariant"
+        "Outlined content is OnSurfaceVariant"
     );
     assert_eq!(o.disabled_container.a, 0);
     assert_eq!(o.disabled_content, alpha(theme.on_surface_variant, 0.38));
     let tx = ButtonColors::from_theme(&theme, ButtonStyle::Text);
-    assert_eq!(tx.content, theme.primary, "Text 内容 = Primary（M3 实现）");
+    assert_eq!(
+        tx.content, theme.primary,
+        "Text content is Primary (which is what M3 does)"
+    );
     assert_eq!(tx.disabled_content, alpha(theme.on_surface_variant, 0.38));
 }
 
@@ -137,7 +143,7 @@ fn test_button_dynamic_padding_and_min_size() {
     let (p, (mw, mh)) = (btn.get_content_padding().unwrap(), btn.get_min_size());
     assert!(
         matches!(&p.0, Dimension::Dynamic(_)),
-        "State 引用 → 动态（动画可驱动）"
+        "a State reference becomes Dynamic, so an animation can drive it"
     );
     assert!(matches!(&p.1, Dimension::Fixed(_)));
     assert!(matches!(&mw.unwrap(), Dimension::Dynamic(_)));
@@ -159,12 +165,12 @@ fn test_button_builder() {
     assert_eq!(btn.get_style(), ButtonStyle::Outlined);
     assert_eq!(btn.get_modifier().elements().len(), 1);
 
-    // 由于 on_click 被移动到 Button 中，测试完成后 drop
+    // `on_click` is moved into the Button now, so it drops with the builder.
 }
 
 #[test]
 fn test_button_variant_constructors() {
-    // 对标 material3 各变体独立 composable 的默认参数差异
+    // material3's each-variant-is-a-composable difference, expressed as default parameters.
     assert_eq!(Button::filled().get_style(), ButtonStyle::Filled);
     assert_eq!(Button::elevated().get_style(), ButtonStyle::Elevated);
     assert_eq!(
@@ -207,7 +213,7 @@ fn button_size_dimensions() {
     assert_eq!(ButtonSize::Medium.outline_width(), 1.0);
     assert_eq!(ButtonSize::Medium.horizontal_padding(), 24.0);
     assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
-    // content_padding_for：按尺寸水平 padding、Text 固定 12
+    // `content_padding_for`: horizontal from the size, and Text keeps a fixed 12
     let p = ButtonDefaults::content_padding_for(ButtonSize::Medium, ButtonStyle::Filled);
     assert!(matches!(p.0, crate::layout::Dimension::Fixed(24.0)));
     let pt = ButtonDefaults::content_padding_for(ButtonSize::XLarge, ButtonStyle::Text);
@@ -254,7 +260,7 @@ fn button_size_dimensions() {
 
 #[test]
 fn outlined_border_width_follows_size_variant() {
-    // 端到端：XLarge Outlined 按钮物化节点的 Border 宽度应为 3
+    // End to end: the materialized node of an XLarge Outlined button carries a 3 dp Border.
     let mut composer = crate::runtime::composer::Composer::new();
     composer.compose(|ctx| {
         Button::outlined()
@@ -273,7 +279,7 @@ fn outlined_border_width_follows_size_variant() {
             }
         }
     }
-    assert_eq!(width, 3.0, "XLarge Outlined 边框 3dp");
+    assert_eq!(width, 3.0, "an XLarge Outlined border is 3 dp");
 }
 
 #[test]
@@ -283,17 +289,17 @@ fn test_button_composition() {
     composer.compose(|ctx| {
         let _btn = Button::new().modifier(Modifier::new().size(100.0, 40.0));
 
-        // 模拟 build 过程：Button 是容器
+        // Simulate the build: Button is the container.
         let key = ctx.next_key();
         ctx.start_container(key, Modifier::new().size(100.0, 40.0), BoxLayout::new());
-        // 子内容（模拟 Text）
+        // The child content (a stand-in for Text).
         let text_key = ctx.next_key();
         ctx.start_leaf(text_key, Modifier::new());
         ctx.end_node();
         ctx.end_node();
     });
 
-    // 组合树应该正确构建
+    // The composition tree is built.
     assert!(composer.layout_root().is_some());
 }
 
@@ -591,13 +597,14 @@ fn test_button_colors_state_resolution() {
         Color::from_argb(100, 100, 100, 100),
         Color::from_argb(80, 200, 200, 200),
     );
-    // disabled 优先
+    // disabled wins
     assert_eq!(
         colors.container_color_for(&ComponentState::disabled()),
         colors.disabled_container
     );
-    // 容器色仅区分 enabled/disabled（与 material3 ButtonColors 一致——
-    // hover/focus/press 状态层由 ripple indication 绘制，不叠加在容器色上）
+    // The container colour distinguishes enabled/disabled only, as material3's `ButtonColors` does —
+    // the hover/focus/press state layer is painted by the ripple indication instead, never stacked
+    // on the container colour.
     assert_eq!(
         colors.container_color_for(&ComponentState::idle()),
         colors.container
@@ -610,7 +617,7 @@ fn test_button_colors_state_resolution() {
         }),
         colors.container,
     );
-    // 内容色只区分 enabled/disabled（与 material3 ButtonColors 一致）
+    // The content colour distinguishes enabled/disabled only, as material3's `ButtonColors` does.
     assert_eq!(
         colors.content_color_for(&ComponentState::idle()),
         colors.content
@@ -668,7 +675,7 @@ fn test_button_elevation_priority() {
         }),
         8.0
     );
-    // pressed < hovered 时，按下按官方语义取 pressed，不抬高到 hover
+    // When pressed < hovered, a press takes `pressed` per the spec instead of climbing to hover.
     let low_press = ButtonElevation::new(1.0, 1.0, 1.0, 3.0, 0.0);
     assert_eq!(
         low_press.for_state(&ComponentState {
@@ -677,7 +684,7 @@ fn test_button_elevation_priority() {
             ..ComponentState::idle()
         }),
         1.0,
-        "按下使用 pressed elevation"
+        "a press uses the pressed elevation"
     );
     // ElevatedButton tokens, in dp: rest 1 / pressed 1 / focused 1 / hovered Level2 = 3 / disabled 0
     assert_eq!(
@@ -704,7 +711,7 @@ fn test_button_elevation_priority() {
         }),
         1.0
     );
-    // 触屏场景：pressed-only 与官方 token 相同
+    // Touch screens: a press-ONLY state matches the official token.
     assert_eq!(
         ButtonElevation::elevated().for_state(&ComponentState {
             pressed: true,

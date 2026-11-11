@@ -1,6 +1,6 @@
-//! Button 组件 — 可点击按钮
+//! Button — a clickable button.
 //!
-//! 用法:
+//! Usage:
 //! ```ignore
 //! Button::new()
 //!     .on_click(|| println!("clicked"))
@@ -20,23 +20,23 @@ use crate::runtime::composer::ComposeCtx;
 use std::fmt;
 use std::sync::Arc;
 
-/// Button 变体风格
+/// The button variants — M3's five composables, differing only in defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonStyle {
-    /// 实心填充按钮（主要操作）
+    /// Filled: the high-emphasis default (`Button`).
     #[default]
     Filled,
-    /// 悬浮按钮（对标 `ElevatedButton`）——SurfaceContainerLow 容器 + primary 内容
+    /// Elevated: `SurfaceContainerLow` container with `primary` content (`ElevatedButton`).
     Elevated,
-    /// 轮廓按钮（次要操作）
+    /// Outlined: transparent with a 1 dp border (`OutlinedButton`).
     Outlined,
-    /// 纯文本按钮（最低强调）
+    /// Text: transparent, no border, tight padding (`TextButton`).
     Text,
-    /// 带浅色背景的填充按钮
+    /// Tonal: `SecondaryContainer` fill (`FilledTonalButton`).
     Tonal,
 }
 
-/// Button 尺寸变体（对标 material3 ButtonTokens 系列，v0_11_0）
+/// The size variants — material3's `ButtonTokens` family (v0_11_0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonSize {
     XSmall,
@@ -47,7 +47,7 @@ pub enum ButtonSize {
 }
 
 impl ButtonSize {
-    /// 容器高度（ContainerHeight：32/40/56/96/136）
+    /// `ContainerHeight`: 32/40/56/96/136.
     pub fn container_height(self) -> f32 {
         match self {
             ButtonSize::XSmall => 32.0,
@@ -58,7 +58,7 @@ impl ButtonSize {
         }
     }
 
-    /// 建议图标尺寸（IconSize：20/20/24/32/40）
+    /// Recommended icon size, `IconSize`: 20/20/24/32/40.
     pub fn icon_size(self) -> f32 {
         match self {
             ButtonSize::XSmall | ButtonSize::Small => 20.0,
@@ -68,7 +68,7 @@ impl ButtonSize {
         }
     }
 
-    /// 图标/文字间距（IconLabelSpace：8/8/8/12/16）
+    /// Gap between an icon and its label, `IconLabelSpace`: 8/8/8/12/16.
     pub fn icon_label_space(self) -> f32 {
         match self {
             ButtonSize::XSmall | ButtonSize::Small | ButtonSize::Medium => 8.0,
@@ -120,7 +120,7 @@ impl ButtonSize {
         }
     }
 
-    /// Outlined 边框宽度（OutlinedOutlineWidth：1/1/1/2/3）
+    /// Outlined border width, `OutlinedOutlineWidth`: 1/1/1/2/3.
     pub fn outline_width(self) -> f32 {
         match self {
             ButtonSize::XSmall | ButtonSize::Small | ButtonSize::Medium => 1.0,
@@ -130,9 +130,10 @@ impl ButtonSize {
     }
 }
 
-/// 按钮颜色集（对标 material3 `ButtonColors`）——container/content 各含
-/// enabled/disabled 变体；`container_color(enabled)` / `content_color(enabled)`
-/// 按状态取色（禁用：M3 token——容器 OnSurface@10/12%、内容 OnSurface(Variant)@38%）。
+/// A button's colour set — material3's `ButtonColors`. Container and content each carry an
+/// enabled and a disabled value; `container_color(enabled)` / `content_color(enabled)` resolve by
+/// state. Disabled follows the M3 tokens: container `OnSurface` at 10% (12% for Tonal), content
+/// `OnSurfaceVariant` at 38%.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonColors {
     pub container: crate::graphics::Color,
@@ -156,7 +157,7 @@ impl ButtonColors {
         }
     }
 
-    /// 按启用状态取容器色
+    /// The container colour for an enabled/disabled pair.
     pub fn container_color(&self, enabled: bool) -> crate::graphics::Color {
         self.container_color_for(&ComponentState {
             enabled,
@@ -164,7 +165,7 @@ impl ButtonColors {
         })
     }
 
-    /// 按启用状态取内容（文字）色
+    /// The content (label) colour for an enabled/disabled pair.
     pub fn content_color(&self, enabled: bool) -> crate::graphics::Color {
         self.content_color_for(&ComponentState {
             enabled,
@@ -172,8 +173,9 @@ impl ButtonColors {
         })
     }
 
-    /// 状态化容器色——仅区分 enabled/disabled（与 material3 ButtonColors 一致；
-    /// hover/focus/press 视觉由 indication（ripple）状态层绘制，避免双重叠加）。
+    /// The state-aware container colour. It distinguishes enabled from disabled ONLY, which is
+    /// material3's `ButtonColors` contract: hover, focus and press are drawn by the ripple state
+    /// layer instead, so the two never stack.
     pub fn container_color_for(&self, state: &ComponentState) -> crate::graphics::Color {
         if !state.enabled {
             self.disabled_container
@@ -182,7 +184,7 @@ impl ButtonColors {
         }
     }
 
-    /// 状态化内容色（内容色仅区分 enabled/disabled——与 material3 ButtonColors 一致）
+    /// The state-aware content colour — enabled/disabled only, as above.
     pub fn content_color_for(&self, state: &ComponentState) -> crate::graphics::Color {
         if state.enabled {
             self.content
@@ -191,7 +193,8 @@ impl ButtonColors {
         }
     }
 
-    /// 从主题按 style 生成默认色（Compose ButtonDefaults.buttonColors 对标）
+    /// The default colours for a style, derived from the theme (material3's
+    /// `ButtonDefaults.buttonColors()`).
     pub fn from_theme(theme: &crate::theme::ThemeColors, style: ButtonStyle) -> Self {
         use crate::graphics::Color;
         let (container, content) = match style {
@@ -201,8 +204,8 @@ impl ButtonColors {
             ButtonStyle::Outlined => (Color::from_argb(0, 0, 0, 0), theme.on_surface_variant),
             ButtonStyle::Text => (Color::from_argb(0, 0, 0, 0), theme.primary),
         };
-        // M3 token：Filled/Elevated 禁用容器 OnSurface@10%、FilledTonal 12%、
-        // Outlined/Text 容器透明；禁用内容 OnSurface(Variant)@38%
+        // The M3 tokens: Filled/Elevated disable the container to OnSurface at 10%, Tonal at 12%,
+        // Outlined/Text keep it transparent; every disabled label is OnSurfaceVariant at 38%.
         let transparent = Color::from_argb(0, 0, 0, 0);
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
         let (disabled_container, disabled_content) = match style {
@@ -322,8 +325,8 @@ impl Default for ButtonElevation {
     }
 }
 
-/// 按钮边框（对标 material3 `BorderStroke`）——宽度 + 颜色；
-/// 形状由 [`Button::shape`] 决定（画在容器形状边缘）。
+/// A button's border — material3's `BorderStroke`: width plus colour. The SHAPE comes from
+/// [`Button::shape`], because the border is drawn on the container's edge.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonBorder {
     pub width: f32,
@@ -335,8 +338,8 @@ impl ButtonBorder {
         Self { width, color }
     }
 
-    /// OutlinedButton 默认边框（对标 material3：1dp + `OutlineVariant`；
-    /// disabled 为 OutlineVariant @ DisabledContainerOpacity(0.1)）
+    /// The OutlinedButton default border: 1 dp of `OutlineVariant`, or `OutlineVariant` at
+    /// `DisabledContainerOpacity` (0.1) when disabled.
     fn outlined(theme: &crate::theme::ThemeColors, enabled: bool) -> Self {
         // OutlinedButtonTokens.OutlineColor = OutlineVariant
         let c = theme.outline_variant;
@@ -349,7 +352,7 @@ impl ButtonBorder {
     }
 }
 
-/// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
+/// The button defaults — material3's `ButtonDefaults`, over the M3 small-button tokens.
 pub struct ButtonDefaults;
 
 /// The mutable view a [`ButtonStyling`] writes into.
@@ -447,13 +450,13 @@ pub fn button_colors_with_styles(
 }
 
 impl ButtonDefaults {
-    /// 默认形状：胶囊（对标 `ButtonSmallTokens.ContainerShapeRound` = CornerFull）
+    /// The default shape: the pill (`ButtonSmallTokens.ContainerShapeRound` = CornerFull).
     pub fn shape() -> Shape {
         Shape::pill()
     }
 
-    /// 默认按钮颜色（对标 material3 `ButtonDefaults.buttonColors()`——
-    /// 从主题色板按 style 推导容器/内容色）
+    /// The default button colours (material3's `ButtonDefaults.buttonColors()`): container and
+    /// content derived from the theme's roles for this style.
     pub fn button_colors(theme: &crate::theme::ThemeColors, style: ButtonStyle) -> ButtonColors {
         ButtonColors::from_theme(theme, style)
     }
@@ -464,7 +467,7 @@ impl ButtonDefaults {
         ButtonElevation::default_elevation()
     }
 
-    /// ElevatedButton 默认阴影（对标 `ButtonDefaults.elevatedButtonElevation()`）
+    /// The ElevatedButton default shadow (`ButtonDefaults.elevatedButtonElevation()`).
     pub fn elevated_button_elevation() -> ButtonElevation {
         ButtonElevation::elevated()
     }
@@ -478,12 +481,12 @@ impl ButtonDefaults {
         ButtonElevation::new(0.0, 0.0, 0.0, 1.0, 0.0)
     }
 
-    /// 默认最小宽度（对标 `ButtonDefaults.MinWidth` 58.dp）
+    /// The default minimum width (`ButtonDefaults.MinWidth`, 58 dp).
     pub fn min_width() -> f32 {
         58.0
     }
 
-    /// 默认最小高度（对标 `ButtonDefaults.MinHeight` 40.dp——ContainerHeight）
+    /// The default minimum height (`ButtonDefaults.MinHeight`, 40 dp — `ContainerHeight`).
     pub fn min_height() -> f32 {
         ButtonSize::Small.container_height()
     }
@@ -492,9 +495,9 @@ impl ButtonDefaults {
         size.container_height()
     }
 
-    /// 默认内容 padding `(start, top, end, bottom)`——Button 系 24/8/24/8，
-    /// Text 按钮 12/8/12/8（对标 `ButtonDefaults.ContentPadding` /
-    /// `TextButtonContentPadding`）；`SizeValue`——支持动画
+    /// The default content padding `(start, top, end, bottom)`: 24/8/24/8 for the button family,
+    /// 12/8/12/8 for Text (`ButtonDefaults.ContentPadding` / `TextButtonContentPadding`). Every
+    /// edge is a `Dimension`, so it can animate.
     pub fn content_padding(style: ButtonStyle) -> (Dimension, Dimension, Dimension, Dimension) {
         match style {
             ButtonStyle::Text => (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into()),
@@ -502,10 +505,10 @@ impl ButtonDefaults {
         }
     }
 
-    /// 图标与文字间距（对标 `ButtonDefaults.IconSpacing` =
-    /// ButtonSmallTokens.IconLabelSpace，8dp）——M3 不自动应用，
-    /// 本框架在内容 Row 内自动应用；内部 Row 的 spacing 无法从外部覆盖，
-    /// 自定义间距时给 Icon/Text 加 padding 或自排内容
+    /// The icon/label gap (`ButtonDefaults.IconSpacing` = `ButtonSmallTokens.IconLabelSpace`,
+    /// 8 dp). M3 leaves this to the caller's Row; winia applies it inside the content Row. That
+    /// spacing is not reachable from outside, so a caller wanting a different gap pads the Icon/Text
+    /// or lays the content out itself.
     pub fn icon_spacing() -> f32 {
         ButtonSize::Small.icon_label_space()
     }
@@ -514,20 +517,20 @@ impl ButtonDefaults {
         size.icon_label_space()
     }
 
-    /// 带图标的 Button 内容 padding（对标 `ButtonDefaults.ButtonWithIconContentPadding`：
-    /// 左 16 / 右 24——图标贴近边缘，文字保持标准右边距）
+    /// The content padding for a button WITH an icon (`ButtonDefaults.ButtonWithIconContentPadding`):
+    /// 16 start, 24 end — the icon sits tight against the edge while the label keeps its 24 dp.
     pub fn button_with_icon_content_padding() -> (Dimension, Dimension, Dimension, Dimension) {
         (16.0.into(), 8.0.into(), 24.0.into(), 8.0.into())
     }
 
-    /// 带图标的 Text 按钮内容 padding（对标
-    /// `ButtonDefaults.TextButtonWithIconContentPadding`：左 12 / 右 16）
+    /// The content padding for a Text button WITH an icon
+    /// (`ButtonDefaults.TextButtonWithIconContentPadding`): 12 start, 16 end.
     pub fn text_button_with_icon_content_padding() -> (Dimension, Dimension, Dimension, Dimension) {
         (12.0.into(), 8.0.into(), 16.0.into(), 8.0.into())
     }
 
-    /// 按尺寸取默认内容 padding：水平 = 尺寸 Leading/Trailing，垂直 = 该尺寸的 token；
-    /// Text 按钮固定 12/8/12/8（紧凑）
+    /// The default content padding for a size: horizontal from that size's `Leading`/`Trailing`
+    /// token, vertical from its own token; Text keeps a fixed 12/8/12/8.
     ///
     /// The vertical value is per size (`ButtonSize::vertical_padding`) because it is what keeps the
     /// box at `ContainerHeight`: one shared 8 gave XSmall's 32 dp container only 16 dp of content
@@ -545,12 +548,12 @@ impl ButtonDefaults {
     }
 }
 
-/// Button 组件 Builder
+/// The `Button` builder.
 ///
-/// 声明式按钮组件。通过链式方法配置点击行为、样式、状态等。
-/// 子内容通过 `build(ctx, |ctx| { ... })` 传入（通常是 Text + Icon）。
+/// A declarative button: the callback, style and enabled state are chainable methods, and the
+/// content is passed to `build(ctx, |ctx| { ... })` (usually a Text plus an Icon).
 ///
-/// # 示例
+/// # Example
 /// ```ignore
 /// Button::new()
 ///     .style(ButtonStyle::Filled)
@@ -566,38 +569,39 @@ impl ButtonDefaults {
 /// ```
 #[derive(Clone)]
 pub struct Button {
-    /// 点击回调
+    /// The click callback.
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// 是否启用
+    /// Whether the button responds to input.
     enabled: bool,
-    /// 按钮风格
+    /// The visual variant.
     style: ButtonStyle,
-    /// 颜色集（None = 从主题按 style 默认）
+    /// The colour set; `None` derives it from the theme for this style.
     colors: Option<ButtonColors>,
-    /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
+    /// The interaction source; `None` remembers one inside `build` — Compose's optional injection.
     interaction_source: Option<MutableInteractionSource>,
     /// Shadow elevation (`None` = the style's token default — see `Button::build`)
     elevation: Option<ButtonElevation>,
-    /// 容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
+    /// The container/border/shadow shape (material3's `Button(shape = ...)`; the pill by default).
     shape: Shape,
-    /// 内容 padding (start, top, end, bottom)——None = 按 style 默认；
-    /// `SizeValue` 支持动态（动画 State/闭包——measure 期求值，只重测不重组）
+    /// Content padding `(start, top, end, bottom)`; `None` takes the style's default. Each edge is a
+    /// `Dimension`, so an animating value is evaluated at measure time — a re-measure, never a
+    /// recompose.
     content_padding: Option<(Dimension, Dimension, Dimension, Dimension)>,
-    /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight；支持动画）
+    /// Minimum-size overrides; `None` takes `ButtonDefaults`' `MinWidth`/`MinHeight`. Both animate.
     min_width: Option<Dimension>,
     min_height: Option<Dimension>,
-    /// 边框（None = 按 style 默认——Outlined 有 1px 主题色边框，其余无）
+    /// The border; `None` takes the style's default — Outlined has a 1 dp border, the rest none.
     border: Option<ButtonBorder>,
-    /// 尺寸变体（默认 Small）
+    /// The size variant (Small by default).
     size_variant: ButtonSize,
     /// `true` when the caller named a size — only then do that size's tokens decide the horizontal padding.
     size_named: bool,
-    /// 修饰符链（尺寸、颜色、形状等）
+    /// The caller's own modifier chain (size, colour, shape and so on).
     modifier: Modifier,
 }
 
 impl Button {
-    /// 创建新的 Button 组件
+    /// A new button, with the M3 defaults (Filled).
     pub fn new() -> Self {
         Button {
             on_click: None,
@@ -617,41 +621,41 @@ impl Button {
         }
     }
 
-    /// 实心按钮（对标 material3 `Button`）——默认 Filled 样式
+    /// A filled button (material3's `Button`) — the Filled style.
     pub fn filled() -> Self {
         Self::new()
     }
 
-    /// 悬浮按钮（对标 material3 `ElevatedButton`）——Elevated 样式（
-    /// SurfaceContainerLow 容器 + primary 内容）+ 默认阴影
+    /// An elevated button (material3's `ElevatedButton`): the Elevated style — a
+    /// `SurfaceContainerLow` container with `primary` content — plus its default shadow.
     pub fn elevated() -> Self {
         Self::new()
             .style(ButtonStyle::Elevated)
             .elevation(ButtonElevation::elevated())
     }
 
-    /// 柔和按钮（对标 material3 `FilledTonalButton`）——SecondaryContainer 色
+    /// A tonal button (material3's `FilledTonalButton`) — `SecondaryContainer`.
     pub fn filled_tonal() -> Self {
         Self::new().style(ButtonStyle::Tonal)
     }
 
-    /// 轮廓按钮（对标 material3 `OutlinedButton`）——透明底 + 1px 主题色边框
+    /// An outlined button (material3's `OutlinedButton`) — transparent, with a 1 dp border.
     pub fn outlined() -> Self {
         Self::new().style(ButtonStyle::Outlined)
     }
 
-    /// 文本按钮（对标 material3 `TextButton`）——透明底、紧凑内边距
+    /// A text button (material3's `TextButton`) — transparent and tightly padded.
     pub fn text() -> Self {
         Self::new().style(ButtonStyle::Text)
     }
 
-    /// 设置点击回调
+    /// Set the click callback.
     pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_click = Some(Arc::new(f));
         self
     }
 
-    /// 设置修饰符链（追加到已有 modifier）
+    /// Set the caller's modifier chain, appended to the one already held.
     ///
     /// Immediately after the action, as Compose orders its parameters (`docs/component-authoring.md`
     /// section 2.1): a caller skimming the builder finds it where Compose puts it. Builder methods are
@@ -661,46 +665,46 @@ impl Button {
         self
     }
 
-    /// 设置启用状态
+    /// Set whether the button responds to input.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
-    /// 设置按钮风格
+    /// Set the visual variant.
     pub fn style(mut self, style: ButtonStyle) -> Self {
         self.style = style;
         self
     }
 
-    /// 设置颜色集（覆盖主题默认——对标 material3 `Button(colors = ...)`）
+    /// Set the colour set, overriding the theme's default (material3's `Button(colors = ...)`).
     pub fn colors(mut self, colors: ButtonColors) -> Self {
         self.colors = Some(colors);
         self
     }
 
-    /// 注入交互源（hoist——Button 的 press/hover/focus 状态发射到此源；
-    /// 不传则内部 remember 一个）
+    /// Hoist the interaction source: the button's press/hover/focus states are emitted into it. Left
+    /// out, the button remembers one of its own.
     pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
 
-    /// 设置阴影高度（各状态取值见 [`ButtonElevation::for_state`]）
+    /// Set the shadow elevation — see [`ButtonElevation::for_state`] for the per-state values.
     pub fn elevation(mut self, elevation: ButtonElevation) -> Self {
         self.elevation = Some(elevation);
         self
     }
 
-    /// 设置容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
+    /// Set the container/border/shadow shape (material3's `Button(shape = ...)`; the pill by default).
     pub fn shape(mut self, shape: Shape) -> Self {
         self.shape = shape;
         self
     }
 
-    /// 设置内容 padding (start, top, end, bottom)——不设置则按 style 取
-    /// [`ButtonDefaults::content_padding`]；每边支持动态 `SizeValue`
-    /// （`&State<f32>` / `State<f32>` / 闭包——动画可作用于内边距）
+    /// Set the content padding `(start, top, end, bottom)`; [`ButtonDefaults::content_padding`] is
+    /// the default. Each edge is a `Dimension`, so `&State<f32>` / `State<f32>` / a closure all work —
+    /// an animation there costs a re-measure, not a recompose.
     pub fn content_padding<
         A: Into<Dimension>,
         B: Into<Dimension>,
@@ -719,8 +723,9 @@ impl Button {
         self
     }
 
-    /// 覆盖默认最小宽度（对标 material3 内部 `defaultMinSize(MinWidth, MinHeight)`——
-    /// 默认 58/40，用户可经此或 `Modifier::min_width` 覆盖；支持动态 `SizeValue`）
+    /// Override the default minimum size (material3's internal `defaultMinSize(MinWidth, MinHeight)`
+    /// — 58/40 by default; a caller can override it here or with `Modifier::min_width`). Both edges
+    /// are `Dimension`s, so they animate.
     pub fn min_size<A: Into<Dimension>, B: Into<Dimension>>(
         mut self,
         min_width: A,
@@ -731,14 +736,14 @@ impl Button {
         self
     }
 
-    /// 设置边框（对标 material3 `Button(border = BorderStroke(...))`）——
-    /// 显式传入后覆盖 style 默认（Outlined 的 1px 主题色边框），形状跟随 shape
+    /// Set the border (material3's `Button(border = BorderStroke(...))`). An explicit border
+    /// overrides the style's default — the Outlined variant's 1 dp one — and follows `shape`.
     pub fn border(mut self, border: ButtonBorder) -> Self {
         self.border = Some(border);
         self
     }
 
-    /// 尺寸变体（XSmall/Small/Medium/Large/XLarge，默认 Small）
+    /// The size variant (XSmall/Small/Medium/Large/XLarge; Small by default).
     ///
     /// Naming a size switches the horizontal padding to that size's token: `ButtonSmallTokens.LeadingSpace`
     /// is 16 dp, while the DEFAULT button (no `.size()` call) keeps `ButtonDefaults.ContentPadding`'s 24 dp,
@@ -750,8 +755,8 @@ impl Button {
         self
     }
 
-    /// 注册到组合树并执行子内容。
-    /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
+    /// Register the button in the composition tree and run its content.
+    /// The default colours come from `WiniaTheme` by style; a caller's modifier can override them.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
@@ -761,7 +766,8 @@ impl Button {
         // border it built on the previous pass while only the background (a live closure) updates.
         let visual = button_visual_with_styles(&theme, self.style);
         let colors = self.colors.unwrap_or(visual.colors);
-        // 参数暂存（参数相等跳过——style/enabled/解析出的颜色未变 → 容器 Skip）
+        // Parameter staging: equal parameters Skip the container — style, enabled and the resolved
+        // colours unchanged means the content does not need to run again.
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
         ctx.changed(&self.colors);
@@ -775,16 +781,18 @@ impl Button {
         // changes with it and the group Enters anyway. That is an accident of the token set, not a
         // guarantee - declaring it is what makes the dependency real rather than incidental.
         ctx.changed(&self.size_variant);
-        // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
+        // The interaction source: injected from outside, or remembered here (Compose's
+        // `interactionSource` parameter).
         let interaction = self
             .interaction_source
             .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
-        // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
+        // State-aware colours: reading them registers the dependency, so a press/hover/focus change
+        // recomposes the button on its own.
         let state = interaction.state(self.enabled);
         let container = colors.container_color_for(&state);
         let text_color = colors.content_color_for(&state);
-        // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
-        // 平滑过渡——悬停时阴影逐渐升高、移出后逐渐回落，不跳变。
+        // The shadow animates on every interaction change, entering and leaving, so hovering raises it
+        // and moving away lowers it rather than jumping.
         //
         // The spec is Compose's, and Compose keys it on the interaction PAIR (`ButtonElevation::spec_for`), so
         // the build remembers the interaction kind the last target came from in a backchannel — reading it
@@ -819,8 +827,8 @@ impl Button {
             Some(ctx.animate_float_as_state(target, spec))
         };
 
-        // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
-        // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
+        // material3's Button: the inner Row is `defaultMinSize(58, 40)` plus the content padding, and
+        // the container/border/shadow all take the same `shape` (the pill, CornerFull, by default).
         //
         // The shape MORPHS on press, as upstream's does: `ButtonShapes(shape, pressedShape)`
         // through `shapeByInteraction(shapes, pressed, spec)` (`material3/Button.kt:1922-1939`),
@@ -895,7 +903,7 @@ impl Button {
             .min_width(min_w)
             .min_height(min_h)
             .padding_sides(pad_s, pad_t, pad_e, pad_b);
-        // 背景按 style（Filled/Tonal 有容器色，Outlined 无）；
+        // The background follows the style: Filled/Tonal paint a container, Outlined does not.
         // The Text style's shape, carried without a clip:
         //
         // The Text style has neither a background nor a border to carry its shape, and the ripple plus the
@@ -916,8 +924,8 @@ impl Button {
                 shape.clone(),
             ),
         };
-        // 边框：显式 border 优先，否则 Outlined 默认 1px outline 色
-        // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, OutlineVariant))）
+        // The border: an explicit one wins, otherwise Outlined takes the 1 dp `outline` colour
+        // (material3's `OutlinedButton = Button(border = BorderStroke(1.dp, OutlineVariant))`).
         let border = self.border.or_else(|| {
             if self.style == ButtonStyle::Outlined {
                 let mut b = ButtonBorder::outlined(&theme, self.enabled);
@@ -935,8 +943,9 @@ impl Button {
             modifier = modifier.border(b.width, b.color, shape.clone());
         }
 
-        // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
-        // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Button shape）
+        // The shadow renders through a `graphics_layer` closure: `shadow_elevation` is read per frame
+        // without triggering a recompose — Compose's layer-shadow semantics. The shape follows
+        // `Button::shape`.
         if let Some(anim) = elevation_anim {
             let shape = shape.clone();
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
@@ -956,19 +965,19 @@ impl Button {
                 .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
         );
 
-        // 追加用户 modifier（在外层，可覆盖默认样式）
+        // Append the caller's modifier — outermost, so it can override the default styling.
         modifier = modifier.then(self.modifier);
 
         if self.enabled
             && let Some(on_click) = &self.on_click
         {
             let cb = on_click.clone();
-            // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
-            // clickable 默认 indication=ripple；颜色用内容色）
+            // `clickable` (press/focus/hover interaction) plus the ripple — Compose's default
+            // indication, tinted with the content colour.
             modifier = modifier
                 .clickable_with_source(&interaction, move || cb())
-                // 显式传容器 shape——Outlined/Text 无 Background 元素，
-                // 若让波纹自行推断会回退成矩形裁剪（超出胶囊范围）
+                // The container shape is passed explicitly: Outlined/Text have no Background
+                // element, and letting the ripple infer one falls back to a rectangular clip.
                 .ripple_with_shape(&interaction, text_color, true, shape);
         }
 
@@ -997,7 +1006,7 @@ impl Button {
                 .alignment(crate::layout::Alignment::Center)
                 .propagate_min_constraints(true),
             |ctx| {
-                // content 闭包自动成为组合 scope（与 Column 一致）
+                // The content closure becomes its own composition scope, as a Column's does.
                 match ctx.start_restartable_group(
                     key,
                     modifier,
@@ -1005,9 +1014,10 @@ impl Button {
                 ) {
                     crate::runtime::composer::GroupStatus::Skip => {}
                     crate::runtime::composer::GroupStatus::Enter => {
-                        // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
-                        // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
-                        // 取按钮内容色（如 Filled 内图标自动 on_primary）
+                        // material3's content: a centred Row (icon and label side by side), with the
+                        // content colour handed down — the `LocalContentColor` equivalent, so an
+                        // `Icon` with `tint(Auto)` picks up the button's colour (inside a Filled
+                        // button it becomes `on_primary`).
                         crate::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
                             let mut text_style = crate::theme::WiniaTheme::typography().label_large;
                             text_style.color = Some(text_color);
@@ -1022,14 +1032,15 @@ impl Button {
                         });
                     }
                 }
-                // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
+                // The focus ring colour: the theme's primary, captured during composition because
+                // the render phase can no longer read the CompositionLocal.
                 ctx.set_current_node_focus_color(theme.primary);
                 ctx.end_restartable_group();
             },
         );
     }
 
-    // ── Getters（测试用）──
+    // ── Getters (for tests) ──
     pub fn get_enabled(&self) -> bool {
         self.enabled
     }
