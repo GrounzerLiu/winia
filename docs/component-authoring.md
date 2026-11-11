@@ -545,7 +545,8 @@ changes and the text inside it does not.
 One caveat, the same one every `CompositionLocal` has: providing a NEW set does not invalidate
 readers that were composed before it. A styling that changes at runtime (a user switching to a brand
 palette) has to be driven by a `State` read inside the subtree, the way `WiniaTheme::auto` follows the
-system theme - otherwise the components keep the colours they composed with.
+system theme - otherwise the components keep the colours they composed with. Section 13.4 is the
+general rule, with the two steps such a provider has to take.
 
 ## 7. Slots
 
@@ -560,6 +561,9 @@ has in Compose (touch slot, inset, alignment) instead of letting the content dec
   or `Text` inside inherits it.
 - A slot that changes how much space another slot gets (a `subtitle` that changes the expanded height)
   is a **parameter**, not a hidden consequence: it has to be part of the `ctx.changed` list.
+- A slot that needs any OTHER ambient value (density, direction, a motion scheme, a custom local)
+  **SHOULD** get it from a provider too. Section 13 is the catalogue, the merge vs replace rule, and
+  the one way a provider silently stops working.
 
 ## 8. Interaction and focus
 
@@ -670,7 +674,144 @@ their docs use the shorter Sources / API and semantics / Differences / Tests sha
 5. **Differences from Compose** - deliberate ones, with the reason. Silence here is a claim of parity.
 6. **Tests** - the commands to run it, and the fixture scenario name.
 
-## 13. Checklist
+## 13. Providers: `ProvideTextStyle`, `CompositionLocal`, and the rest
+
+A component that composes CALLER content usually owes that content some context: a text style, a
+content colour, a density, a direction. Pushing it down is what a provider is for, and "set it on my
+own leaf instead" is the mistake this section exists to prevent — the caller's content is composed
+inside the component, so the component already knows what its labels should look like and the
+caller does not.
+
+**MUST** provide context rather than restating it per leaf. The failure is silent and only shows up
+in the combination: `ButtonGroupItem::clickable` set material3's four label settings on its own
+`Text`, and a hand-built item set only the two its author remembered. They drifted, and pressing a
+neighbour cut "Week" to "We" in one row while the identical label beside it stayed whole
+(`docs/button-group.md`).
+
+Two things follow, and the rest of this section is those two:
+
+1. **Use an existing provider when one fits** — §13.1 is the catalogue, and `ProvideTextStyle` is
+   the one a component reaches for most.
+2. **Write a `CompositionLocal` when none does** — §13.3. A component MAY own a local of its own
+   (a chip's density, a list's row height, a card's tonal step); what it MUST NOT do is thread the
+   value through every leaf's parameter list instead, because the leaf is often the CALLER's.
+
+### 13.1 The providers that already exist
+
+Reach for one of these before writing anything new:
+
+| Provider | Provides | Notes |
+| --- | --- | --- |
+| `ProvideTextStyle(style, ctx, \|ctx\| …)` | the subtree's `TextStyle` | **MERGED**, not replaced (§13.2) |
+| `WiniaTheme::with_content_color(color, ctx, \|ctx\| …)` | `LocalContentColor` | what an `Icon` / `Text` inherits |
+| `WiniaTheme::with_theme*` (four overloads) | colours + typography + direction | see the warning in §13.4 |
+| `WiniaTheme::with_typography(type, ctx, \|ctx\| …)` | the type scale only | leaves colours and direction alone |
+| `WiniaTheme::with_motion_scheme(scheme, ctx, \|ctx\| …)` | the springs | how an app switches every animation at once |
+| `WiniaTheme::with_tonal_elevation_enabled(bool, ctx, \|ctx\| …)` | `Surface`'s tonal overlay | |
+| `with_component_styles(styles, \|…\|)` | the per-class styling registry | `_when_changed` / `_arc` variants in §13.5 |
+| `with_density(density, \|…\|)` | `Density` | no `ctx` — a plain closure |
+| `layout::direction::provides(direction, \|…\|)` | `LayoutDirection` | no `ctx` either |
+
+**SHOULD** wrap a text slot in `ProvideTextStyle(...)` so the style is the COMPONENT's and the caller
+can still override it, rather than baking the settings into the content's own `Text`. **SHOULD** wrap
+a colour-carrying slot in `WiniaTheme::with_content_color(...)` for the same reason.
+
+### 13.2 `ProvideTextStyle` merges; most providers replace
+
+`ProvideTextStyle` is Compose's `ProvideTextStyle`, which **merges field by field** with what it
+inherits:
+
+```rust
+let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
+LOCAL_TEXT_STYLE.provides(merged, || content(ctx));
+```
+
+Every field resolves `override_.field.or(base.field)`, so a nested provider that names only
+`letter_spacing` keeps the outer size, weight, alignment and so on. That is what makes the layering
+work: a component provides the label RULES, and `Button` inside it provides the theme's
+`label_large` (size, line height, spacing, weight, colour) without erasing them. A `Text` then
+resolves `self.field.or(style.field)` (`winia/src/components/text.rs`), so an explicit
+`.max_lines(2)` on one label still beats the provided value.
+
+Every OTHER `CompositionLocal` provider replaces wholesale — `provides(value, …)` pushes a value and
+`current()` returns the innermost one. There is no field-level merge unless the value's own type
+does it: `TextStyle` does (§13.2 above) and `ComponentStyles` does it per COMPONENT CLASS
+(`merge` puts `other`'s entry on top and keeps every other class), while a bare `Color` cannot.
+
+### 13.3 Writing a new one
+
+```rust
+use std::sync::LazyLock;
+use crate::runtime::composition_local::CompositionLocal;
+
+// 1. ONE static per local. `CompositionLocal::new` allocates a unique id, so calling it twice
+//    makes two DIFFERENT locals that never see each other's values.
+pub(crate) static LOCAL_FOO: LazyLock<CompositionLocal<Foo>> =
+    LazyLock::new(|| CompositionLocal::new(Foo::default));
+
+// 2. A provider function, named after Compose's, taking the content closure LAST.
+pub fn with_foo(foo: Foo, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    LOCAL_FOO.provides(foo, || content(ctx));
+}
+
+// 3. A reader. `current()` falls back to the default; `try_current()` returns Option and does NOT
+//    call the default — use it when "nobody provided" must be distinguishable from "provided the
+//    default" (Text's selection registrar does exactly that).
+pub fn current_foo() -> Foo { LOCAL_FOO.current() }
+```
+
+**MUST** hold the local in a `LazyLock` (or a `static`). A `CompositionLocal` created per call gets
+a fresh id every time, so the provider and the reader end up on different locals and the value never
+arrives — with no compile error and no panic.
+
+**MUST** give the provider the `ctx`-then-content shape when the content is composed in this
+composition (`impl FnOnce(&mut ComposeCtx)`), and the `ctx`-less shape (`impl FnOnce() -> R`) for a
+pure value provider such as `with_density`. Do not mix the two in one family.
+
+### 13.4 `provides` does NOT invalidate its readers — the one that breaks at runtime
+
+This is the whole trap, quoted from `CompositionLocal::provides`:
+
+> A reader picks the local up again only when the group it sits in is re-entered, and a group that
+> declared nothing about itself is Skipped and keeps what it composed with.
+
+So a provider whose value comes from a `State` has to do BOTH:
+
+1. **read the state inside a scope** — a `#[composable]` function or a container's restartable
+   group. A read at the root of a window's content has no scope to register against, so nothing
+   marks the provider to re-run. `examples/common/settings.rs` hit exactly this: it reads the
+   direction and hands it to `with_theme_and_direction`, and because that read landed at the
+   content root, the sheet flipped while the page behind it kept the old direction. The
+   `#[composable]` on `shell` is load-bearing, not decoration.
+2. **dirty the subtree when the value actually moves** — `ctx.mark_subtree_dirty()`, which is what
+   re-enters every reader inside it. `WiniaTheme::provide_resolved` is the worked example: it
+   remembers what it last provided and dirties only when the resolved palette, typography or
+   direction differs.
+
+`with_component_styles_when_changed` is the same pattern for a styling set (§13.5). **MUST NOT**
+assume a fresh `provides` call reaches a reader that composed before it: the reader keeps the value
+it composed with, forever, unless one of the two steps above happens.
+
+**One more trap, specific to `WiniaTheme::with_theme`:** it forwards to
+`with_theme_typography_and_direction(colors, Typography::default(), LayoutDirection::Ltr, …)`, so
+nesting it inside a themed subtree RESETS the typography and the direction to the defaults. Wrap a
+component that needs its own palette in `with_theme_and_direction` (passing the direction through),
+or change the colours some other way.
+
+### 13.5 A provider that has to be cheap to re-provide
+
+`with_component_styles_when_changed` is worth reading as the model for a "value may change at
+runtime" provider:
+
+- it keys its memory with `ctx.position_key(NAMESPACE)` rather than a call-site key, so two
+  providers in one composer do not share what they last provided;
+- it compares with `Arc::ptr_eq` — IDENTITY, not equality — so the caller must rebuild the set only
+  when it really changes. A set reconstructed every frame is a different set every frame, and will
+  re-compose the subtree every frame;
+- it seeds the remembered value with what it is providing, so the first frame does not dirty itself
+  for nothing.
+
+## 14. Checklist
 
 Copy this into the pull request and tick it there:
 
@@ -691,6 +832,10 @@ Copy this into the pull request and tick it there:
      (enforced: components::conventions::no_component_spawns_its_own_task)
 [ ] hoisted state + remember_x_state when the caller must drive it
 [ ] remember_derived_state for a threshold over a continuous source
+[ ] coloured / styled slots get their context from a PROVIDER (ProvideTextStyle, with_content_color,
+     a CompositionLocal) rather than from each leaf's own parameters (section 13)
+[ ] a provider whose value comes from State reads it inside a scope AND dirties the subtree
+     (section 13.4 - provides does not invalidate readers)
 [ ] self.modifier appended last, semantics declared before it
 [ ] colours and text styles from WiniaTheme; token constants named after the Compose token
 [ ] M3 geometry: 48dp touch targets, insets, RTL mirroring
@@ -701,7 +846,7 @@ Copy this into the pull request and tick it there:
 [ ] registered in components.rs and the prelude
 ```
 
-## 14. The three failures this document exists to prevent
+## 15. The three failures this document exists to prevent
 
 1. **A parameter that never reaches the content.** Missing `ctx.changed` -> the container Skips past
    the change forever, and it looks like a broken State chain (section 3.2).
