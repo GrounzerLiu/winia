@@ -204,16 +204,28 @@ Text(text = label, maxLines = 1, softWrap = false, overflow = TextOverflow.Visib
 
 `Button` does NOT force it — not in material3 and not here. A wrapped label makes the item taller
 than its siblings (the row takes the tallest item), and because a pressed item narrows its
-neighbours, a wrapping label would reflow in the middle of a press. `ButtonGroupItem::clickable` /
-`toggleable` set it for the caller; a caller composing its own item sets `max_lines(1)` and
-`soft_wrap(false)` on its label itself.
+neighbours, a wrapping label would reflow in the middle of a press.
 
-`clickable` / `toggleable` also set `overflow(TextOverflow::Visible)` and `align(TextAlign::Center)`,
-which is the second half of what material3 asks for: an item that a press has narrowed is narrower
-than its own label, and the label must neither be cut nor jump off-centre while that happens.
-`TextOverflow::Visible` is new (`winia/src/text/style.rs`): the paragraph is laid out at its
-intrinsic width and the paint path no longer re-lays it out at the node's width, which is what used
-to cut it, and the centring offset is allowed to go negative so an overflowing label still centres.
+**All four settings belong to the rule, and a hand-built item needs all four.** `clickable` /
+`toggleable` set them for the caller; a caller composing its own item repeats them itself:
+
+```rust
+Text::new(label)
+    .max_lines(1)
+    .soft_wrap(false)
+    .overflow(TextOverflow::Visible)
+    .align(TextAlign::Center)
+```
+
+Leaving `overflow` off is the easy mistake, and it is visible rather than subtle: the default is
+`TextOverflow::Clip`, so the instant a press squeezes a neighbour the word is cut. Measured in
+`button_group_demo`'s connected row, "Week" rendered as "We" while the plain row beside it kept the
+whole word — the two rows differ only in that one uses `clickable` (which sets overflow) and the
+other composes its item by hand (which did not).
+
+`TextOverflow::Visible` (`winia/src/text/style.rs`): the paragraph is laid out at its intrinsic
+width and the paint path no longer re-lays it out at the node's width, which is what used to cut
+it, and the centring offset is allowed to go negative so an overflowing label still centres.
 
 ## The item constructors
 

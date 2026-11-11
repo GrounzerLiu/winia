@@ -113,6 +113,32 @@ fn caption(ctx: &mut ComposeCtx, text: &'static str) {
         .build(ctx);
 }
 
+/// An item's label, with the four settings material3 gives it
+/// (`ButtonGroup.kt:1118-1127`).
+///
+/// All four are load-bearing, and `overflow` is the easy one to forget:
+///
+/// - `max_lines(1)` and `soft_wrap(false)`: a wrapped label would make the item taller than its
+///   siblings, and a press NARROWS the item, so it would reflow in the middle of a press;
+/// - `overflow(TextOverflow::Visible)`: WITHOUT this the default is `Clip`, so the moment a press
+///   squeezes a neighbour the word is cut — measured in this very demo, "Week" rendered as "We"
+///   in the connected row while the plain row (whose label comes from
+///   `ButtonGroupItem::clickable`, which sets it) kept the whole word;
+/// - `align(TextAlign::Center)`: the second half of the same rule, so a label narrower than its
+///   squeezed container neither jumps off-centre nor gets cut.
+///
+/// A caller composing its own item has to repeat these — `Button` does not force them, not in
+/// material3 and not here.
+#[composable]
+fn item_label(ctx: &mut ComposeCtx, label: &str) {
+    Text::new(label)
+        .max_lines(1)
+        .soft_wrap(false)
+        .overflow(TextOverflow::Visible)
+        .align(TextAlign::Center)
+        .build(ctx);
+}
+
 /// The plain form, the connected form, and the connected form with a selection.
 #[composable]
 fn forms_card(ctx: &mut ComposeCtx) {
@@ -167,12 +193,7 @@ fn connected_row(ctx: &mut ComposeCtx) {
                 .shape(shapes.shape_for(pressed, false))
                 .interaction_source(source)
                 .on_click(|| {})
-                .build(ctx, |ctx| {
-                    Text::new(CONNECTED_LABELS[index])
-                        .max_lines(1)
-                        .soft_wrap(false)
-                        .build(ctx);
-                });
+                .build(ctx, |ctx| item_label(ctx, CONNECTED_LABELS[index]));
         }));
     }
     group.build(ctx);
@@ -199,12 +220,7 @@ fn connected_selectable_row(ctx: &mut ComposeCtx) {
                     clone!(picked);
                     move || picked.set(index)
                 })
-                .build(ctx, |ctx| {
-                    Text::new(CONNECTED_LABELS[index])
-                        .max_lines(1)
-                        .soft_wrap(false)
-                        .build(ctx);
-                });
+                .build(ctx, |ctx| item_label(ctx, CONNECTED_LABELS[index]));
         }));
     }
     group.build(ctx);
@@ -232,9 +248,7 @@ fn grouped_button(ctx: &mut ComposeCtx, source: MutableInteractionSource, label:
     Button::filled()
         .interaction_source(source)
         .on_click(|| {})
-        .build(ctx, |ctx| {
-            Text::new(label).max_lines(1).soft_wrap(false).build(ctx);
-        });
+        .build(ctx, |ctx| item_label(ctx, label));
 }
 
 /// The press growth, with `expandedRatio` on a slider.
@@ -393,9 +407,7 @@ fn sized_button(
         .size(size)
         .interaction_source(source)
         .on_click(|| {})
-        .build(ctx, |ctx| {
-            Text::new(label).max_lines(1).soft_wrap(false).build(ctx);
-        });
+        .build(ctx, |ctx| item_label(ctx, label));
 }
 
 fn arrangement_label(arrangement: Arrangement) -> &'static str {
