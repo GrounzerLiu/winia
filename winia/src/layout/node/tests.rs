@@ -2033,3 +2033,49 @@ fn a_text_parameter_change_re_measures_without_a_content_change() {
         "the leaf re-entered and re-measured: h20={h20} h40={h40}"
     );
 }
+
+/// A scroll container's own padding is part of its hit area.
+///
+/// `scroll_viewport_height` is the CONTENT box: the engine records `inner_constraints` after the
+/// padding step. The node's outer box (`measured_size`, and therefore `content_box()`) includes
+/// that padding. Clamping the hit rect to the viewport alone carved the padding out of the
+/// container — the shape below is what a real scrolling column produced, measured with a probe on
+/// three padding values: the strip at the bottom that painted but took no input was exactly
+/// `2 * pad` (pad 0 -> none, pad 16 -> 32 px, pad 40 -> 80 px). A user hit it as "the bottom of
+/// the page does not respond", which is why this is worth a test rather than a comment.
+#[test]
+fn a_scroll_containers_padding_stays_hittable() {
+    let scroll = crate::modifier::ScrollState::new();
+    let mut nodes = vec![LayoutNode::leaf(
+        Modifier::new().size(400.0, 600.0).vertical_scroll(scroll),
+    )];
+    nodes[0].measured_size = Size::new(400.0, 600.0);
+    // 12/16 padding on a 400x600 outer box: the CONTENT box the engine records is 376x568.
+    nodes[0].resolved_padding = (12.0, 16.0, 12.0, 16.0);
+    nodes[0].scroll_viewport_width = 376.0;
+    nodes[0].scroll_viewport_height = 568.0;
+    nodes[0].scroll_content_height = 2000.0; // taller than the viewport, so it really scrolls
+
+    for (x, y, why) in [
+        (200.0, 300.0, "the middle"),
+        (200.0, 584.0, "inside the bottom padding"),
+        (200.0, 595.0, "the last painted row"),
+        (6.0, 300.0, "inside the start padding"),
+        (394.0, 300.0, "inside the end padding"),
+    ] {
+        assert_eq!(
+            hit_test(&nodes, 0, x, y),
+            vec![0],
+            "{why} at ({x}, {y}) is inside the container's box and must be hit"
+        );
+    }
+    for (x, y, why) in [
+        (200.0, 601.0, "below the box"),
+        (401.0, 300.0, "past the end edge"),
+    ] {
+        assert!(
+            hit_test(&nodes, 0, x, y).is_empty(),
+            "{why} at ({x}, {y}) is outside the box and must miss"
+        );
+    }
+}

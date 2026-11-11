@@ -197,13 +197,17 @@ pub(crate) fn hit_through_ghost(
         let tn = &nodes[target_idx];
         // Content box when the target has no explicit scroll viewport.
         let cb = tn.content_box();
+        // Same padding correction as `hit_test_recursive`: `scroll_viewport_*` is the CONTENT box
+        // (recorded after the padding step), `content_box()` is the OUTER one. Without it a
+        // scrolled target's own padding becomes a dead strip at its edges.
+        let (pad_start, pad_top, pad_end, pad_bottom) = tn.resolved_padding;
         let vw = if tn.scroll_viewport_width > 0.0 {
-            tn.scroll_viewport_width
+            tn.scroll_viewport_width + pad_start + pad_end
         } else {
             cb.width
         };
         let vh = if tn.scroll_viewport_height > 0.0 {
-            tn.scroll_viewport_height
+            tn.scroll_viewport_height + pad_top + pad_bottom
         } else {
             cb.height
         };
@@ -267,11 +271,15 @@ pub(crate) fn hit_through_elevated(
     // escaped (a scrollable hero must not take input outside its viewport).
     let mut nw = w;
     let mut nh = h;
+    // Same padding correction as `hit_test_recursive`: `scroll_viewport_*` is the CONTENT box,
+    // `content_box()` is the OUTER one. See the note there for the measurement.
     if node.scroll_viewport_width > 0.0 {
-        nw = node.scroll_viewport_width;
+        let (pad_start, _, pad_end, _) = node.resolved_padding;
+        nw = node.scroll_viewport_width + pad_start + pad_end;
     }
     if node.scroll_viewport_height > 0.0 {
-        nh = node.scroll_viewport_height;
+        let (_, pad_top, _, pad_bottom) = node.resolved_padding;
+        nh = node.scroll_viewport_height + pad_top + pad_bottom;
     }
     if lx < tb.x || lx > tb.x + nw || ly < tb.y || ly > tb.y + nh {
         return None;
@@ -320,11 +328,20 @@ pub(crate) fn hit_test_recursive(
     // A scroll container is hit over its VISIBLE viewport: measured_size is the full content height,
     // and using it would let scrolled-out content swallow clicks and wheel events meant for the
     // siblings that follow.
+    //
+    // ⚠ `scroll_viewport_*` is the CONTENT box (the engine records `inner_constraints` AFTER the
+    // padding step), while this rect is measured in the OUTER box that `content_box()` gives. Using
+    // the viewport alone therefore drops the container's own padding out of its hit area: measured
+    // on a scrolling column with `padding(pad)`, the bottom strip that painted but took no input was
+    // exactly `2 * pad` (pad 16 -> 32 px dead, pad 40 -> 80 px dead, pad 0 -> none). Put the padding
+    // back.
     if node.scroll_viewport_height > 0.0 {
-        nh = node.scroll_viewport_height;
+        let (_, pad_top, _, pad_bottom) = node.resolved_padding;
+        nh = node.scroll_viewport_height + pad_top + pad_bottom;
     }
     if node.scroll_viewport_width > 0.0 {
-        nw = node.scroll_viewport_width;
+        let (pad_start, _, pad_end, _) = node.resolved_padding;
+        nw = node.scroll_viewport_width + pad_start + pad_end;
     }
 
     // Flight remap (Phase 3): transitioning endpoints test their lerped
