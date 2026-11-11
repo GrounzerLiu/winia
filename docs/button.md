@@ -1,232 +1,181 @@
-# Button 组件：API、实现细节与未实现项
+# Button
 
-> 目标：对标 Jetpack Compose material3 1.4.0 的 `Button` 一族
-> （`Button` / `ElevatedButton` / `FilledTonalButton` / `OutlinedButton` /
-> `TextButton`），在 winia 上提供等价的声明式 API 与接近的视觉/交互语义。
-> 本文档随实现演进，改动 API 或行为时同步更新。
+M3 buttons: `winia/src/components/button.rs`.
 
-## 1. API 总览
+## Sources
 
-### 1.1 构造变体
+Compose paths are relative to
+`reference/compose/material3-1.5.0-beta01/commonMain/androidx/compose/material3/`.
 
-winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder 的构造函数表达：
+| Compose | Settles |
+| --- | --- |
+| `Button.kt` | the five public overloads (`Button`, `ElevatedButton`, `FilledTonalButton`, `OutlinedButton`, `TextButton`), `ButtonDefaults` in full, `ButtonShapes` and the press morph (`shapeByInteraction`, `:1922-1939`), and the icon/content paddings |
+| `tokens/ButtonXSmallTokens.kt` … `ButtonXLargeTokens.kt` | `ContainerHeight` (32/40/56/96/136), `LeadingSpace`/`TrailingSpace` (16/16/24/48/64), `IconSize` (20/20/24/32/40), `IconLabelSpace` (8/8/8/12/16), `OutlinedOutlineWidth` (1/1/1/2/3), `PressedContainerShape` (CornerSmall/Small/Medium/Large/Large) |
+| `tokens/BaselineButtonTokens.kt` | the 24 dp `LeadingSpace` a button with NO size named uses — different from Small's 16 at the same 40 dp height |
+| `tokens/{Filled,Elevated,FilledTonal,Outlined,Text}ButtonTokens.kt` | per-state elevation and the five colour roles |
+| `InteractiveComponentSize.kt` | `minimumInteractiveComponentSize()`, the 48 dp touch target |
+| `ComposeMaterial3Flags.kt` | `isPrecisionPointerComponentSizingEnabled`, default `false`; it gates the 36 dp `MinHeight` and the 8 dp `smallVerticalPadding` alternatives, neither of which winia models |
 
-| 构造 | 等价 material3 | 差异点 |
-|---|---|---|
-| `Button::filled()`（同 `new()`） | `Button` | 默认 Filled 样式 |
-| `Button::elevated()` | `ElevatedButton` | `ButtonStyle::Elevated`（SurfaceContainerLow 容器 + primary 内容）+ `ButtonElevation::elevated()` |
-| `Button::filled_tonal()` | `FilledTonalButton` | `ButtonStyle::Tonal` |
-| `Button::outlined()` | `OutlinedButton` | `ButtonStyle::Outlined`（透明底 + 1px outline 边框） |
-| `Button::text()` | `TextButton` | `ButtonStyle::Text`（透明底、紧凑内边距） |
+## Variants
 
-### 1.2 链式参数（`Button` builder）
+winia keeps ONE type and names the variants as constructors — the five overloads differ only in
+defaults.
 
-| 方法 | 对标 | 说明 |
-|---|---|---|
-| `on_click(Fn())` | `onClick` | 点击回调（`Send + Sync + 'static`） |
-| `enabled(bool)` | `enabled` | 禁用：容器/内容色切换 + 不注册 clickable/ripple（不可聚焦） |
-| `style(ButtonStyle)` | —— | Filled / Tonal / Outlined / Text |
-| `colors(ButtonColors)` | `colors: ButtonColors` | 默认由 `ButtonDefaults::button_colors(theme, style)` 生成 |
-| `elevation(ButtonElevation)` | `elevation: ButtonElevation` | 阴影高度按交互状态取值，经 180ms 动画过渡 |
-| `interaction_source(...)` | `interactionSource` | hoist 交互源；未传则内部 `remember` |
-| `shape(Shape)` | `shape` | 容器/边框/阴影/焦点环/波纹统一形状；默认胶囊 |
-| `content_padding((s,t,e,b))` | `contentPadding` | 每边支持动态 `SizeValue`；默认按 style（24/8 或 12/8） |
-| `min_size(w,h)` | M3 内部 `defaultMinSize` | 默认 58×40；支持动态 `SizeValue` |
-| `border(ButtonBorder)` | `border: BorderStroke` | 覆盖 style 默认边框 |
-| `modifier(Modifier)` | `modifier` | 追加在外层，可覆盖默认样式 |
+| Constructor | Compose | Container / content | Elevation | When |
+| --- | --- | --- | --- | --- |
+| `Button::filled()` (same as `new()`) | `Button` | `primary` / `on_primary` | `0 / 0 / 0 / 1 / 0` | the important, final action |
+| `Button::elevated()` | `ElevatedButton` | `surface_container_low` / `primary` | `1 / 1 / 1 / 3 / 0` | a filled button that needs to float |
+| `Button::filled_tonal()` | `FilledTonalButton` | `secondary_container` / `on_secondary_container` | `0 / 0 / 0 / 1 / 0` | middle emphasis |
+| `Button::outlined()` | `OutlinedButton` | transparent / `on_surface_variant` | none | secondary action, 1 dp border |
+| `Button::text()` | `TextButton` | transparent / `primary` | none | lowest emphasis |
 
-### 1.3 值类型与默认值
+Elevation tuples are `(default, pressed, focused, hovered, disabled)`. The Filled and Tonal defaults
+are `Level0` in every state except HOVER — not all-zero, which is why they carry a layer at all.
 
-- `ButtonStyle`：Filled / Tonal / Outlined / Text。
-- `ButtonColors`：`container / content / disabled_container / disabled_content`。
-- `ButtonElevation`：`default / pressed / focused / hovered / disabled`。
-  - `default_elevation()`：全 0（Filled 系）。
-  - `elevated()`：`1 / 4 / 1 / 3 / 0`（基础对齐 M3 1.4.0 `ElevatedButtonTokens`：
-    rest/focus = Level1、hover = Level2、disabled = Level0；**pressed 有意偏离 M3 的
-    Level1 回落**——M3"按下压下去"隐喻依赖 hover，触屏无 hover，按下不升高则
-    Elevated 按钮在触屏上无阴影反馈。本框架语义：按下升高（1<3<4）、释放降低，
-    鼠标与触屏一致）。
-  - 按下分支取 `max(pressed, hovered)`：自定义配置 press < hover 时按下也不回落。
-- `ButtonBorder`：`width + color`（对标 `BorderStroke`）。
-- `ButtonDefaults`：
-  - `shape()` = 胶囊（对标 `CornerFull`）；
-  - `min_width() = 58`、`min_height() = 40`；
-  - `content_padding(style)`：非 Text 24/8/24/8，Text 12/8/12/8；
-  - `button_colors(theme, style)`、`button_elevation()`、`elevated_button_elevation()`。
+`.style(ButtonStyle)` reaches the same place after construction; `ButtonStyle` is the enum the
+constructors set.
 
-## 2. 实现细节
+## Layout
 
-### 2.1 build 流程与 modifier 链顺序
+`build` puts the content in a centred `Row` carrying `defaultMinSize(58, 40)` plus the content
+padding, then wraps the whole thing in the 48 dp touch-target node:
 
-`Button::build` 每帧执行：
+```
+minimumInteractiveComponentSize(48)        ← own node, so the touch area survives the visual box
+  └─ min_width(58) · min_height(40|size) · padding(contentPadding) · background/border
+       └─ Row(center, spacing = icon_label_space)
+            └─ [caller's content]
+```
 
-1. `ctx.changed(&self.style)` / `ctx.changed(&self.enabled)` 声明 Skip 参数；
-2. 取主题与颜色（`ButtonDefaults::button_colors`），读交互状态；
-3. 构造阴影动画 State（`ctx.animate_float_as_state`，180ms EaseOutCubic）；
-4. 组装默认 modifier：`min_size → padding_sides → background/border/clip`；
-5. 阴影经 `graphics_layer` 动态闭包（渲染期读动画值，不触发重组）；
-6. `modifier.then(用户 modifier)`（用户外层可覆盖）；
-7. enabled 时追加 `clickable_with_source` + `ripple_with_shape`；
-8. `start_restartable_group`（Skip 时 content 不执行，但新 modifier 经
-   `set_skip_modifier` 应用到节点——因此 shape/elevation/border 等变化
-   即使 Skip 也生效，不需要全部声明进 `changed()`）；
-9. `set_current_node_focus_color(theme.primary)` 写入 desc 通道。
+The wrapper exists because winia decides a size across the WHOLE chain: `min_height(40)` clamps a
+48 away, in either chain order. It is `Box(propagateMinConstraints = true)`, as `Surface` is
+(`Surface.kt:219`), so a parent that forces a width gets a painted box that width rather than a 48 dp
+box with the visual inset inside it.
 
-链顺序（内→外）：min → padding → 容器(background/border/clip) →
-shadow(graphics_layer) → 用户 modifier → clickable/ripple。
+**`ButtonSize` drives five things at once.** Naming a size selects that size's tokens; naming none
+keeps the baseline button:
 
-- **尺寸变体**：`ButtonSize`（XSmall 32 / Small 40 / Medium 56 / Large 96 /
-  XLarge 136，`.size(...)` 设置，默认 Small）。随尺寸联动：min-height =
-  容器高、水平 padding 16/16/24/48/64、垂直 padding 6/10/16/32/48、
-  图标间距 8/8/8/12/16、Outlined 边框宽 1/1/1/2/3、建议图标尺寸 20/20/24/32/40
-  （`icon_size()`）；`ButtonDefaults::content_padding_for(size, style)`。
-  - 垂直 padding 必须按尺寸取（`ButtonSize::vertical_padding()`）：每档恰好留下该尺寸
-    的图标高度（6×2+20=32、10×2+20=40、16×2+24=56、32×2+32=96、48×2+40=136）。
-    曾统一用 8，XSmall 的 32 dp 容器只剩 16 dp 装不下 20 dp 内容，实测被撑到 36。
+| Size | Height | H-Padding | V-Padding | Icon | Icon gap | Outline |
+| --- | --- | --- | --- | --- | --- | --- |
+| XSmall | 32 | 16 | 6 | 20 | 8 | 1 |
+| Small | 40 | 16 | 10 | 20 | 8 | 1 |
+| Medium | 56 | 24 | 16 | 24 | 8 | 1 |
+| Large | 96 | 48 | 32 | 32 | 12 | 2 |
+| XLarge | 136 | 64 | 48 | 40 | 16 | 3 |
+| *(none named)* | 40 | **24** | 8 | — | 8 | 1 |
 
-- **内容 = 居中 Row**（对标 M3：图标/文字并排）；内容色经
-  `WiniaTheme::content_color()` 下传——`Icon::tint(Auto)` 取按钮内容色
-  （如 Filled 内图标自动 on_primary）。
-- **图标间距**：内部 Row 自动应用 8dp（对标 IconLabelSpace；M3 需手动
-  spacing，本框架自动）。
-- **带图标 padding**：`ButtonDefaults::button_with_icon_content_padding()`
-  （左 16/右 24）与 `text_button_with_icon_content_padding()`（左 12/右 16），
-  对标 M3 同名常量——带图标按钮请传入，否则默认 24/8/24/8。
-- **内容统一包在 Row 内**：`fill_max_width`/`weight` 等子节点在内部 Row
-  上下文中解析（与 M3 内容即 Row 一致）；自定义排布可自建 Row 作为内容。
+The vertical padding is per size because it is what keeps the box at its `ContainerHeight`: each
+value leaves exactly that size's icon height in the content box — `2 * vertical_padding + icon_size ==
+container_height` for all five. One shared 8 dp did not: XSmall's 32 dp container had only 16 dp of
+content room, less than the 20 dp a label or an icon needs, so the box measured **36** instead. Every
+other size was already exact under both rules.
 
-### 2.2 状态与取色
+`.content_padding((s, t, e, b))` and `.min_size(w, h)` take `impl Into<Dimension>` per edge, so a
+literal, a `State<f32>`, an `Animating<f32>` or a closure all work; the value is read during measure,
+which costs a re-measure rather than a recomposition.
 
-- 容器/内容色只区分 enabled/disabled（M3 `ButtonColors` 语义）；
-  hover/press/focus 的视觉反馈由 ripple 状态层绘制，不叠加在背景色上。
-- M3 token 配色（1.4.0）：Filled = Primary/OnPrimary；Elevated =
-  SurfaceContainerLow/Primary；Tonal = SecondaryContainer/OnSecondaryContainer；
-  Outlined = 透明/OnSurfaceVariant；Text = 透明/Primary（M3 实现如此，
-  token 标注待修正）。
-- 禁用：Filled/Elevated 容器 OnSurface@10%、Tonal 容器 OnSurface@12%、
-  Outlined/Text 容器透明；内容 OnSurface(Variant)@38%。
-- Outlined 边框：`OutlineVariant`（非 outline），disabled 为
-  OutlineVariant @ DisabledContainerOpacity(0.1)；
-  宽度随尺寸变体 1/1/1/2/3。
+RTL: padding uses `start`/`end` and the measure pass mirrors them (`engine.rs` shifts children by
+`pad_end` under `Rtl`), so a button mirrors without any component code.
 
-### 2.3 阴影（hover 升高动画）
+## Behaviour
 
-- 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡。
-  Filled 默认全 0；Elevated 对齐 M3 token：悬停 2 / 聚焦 1 / 按下 1 / rest 1 / disabled 0，
-  移出后回落。graphics-layer 阴影使用 Skia 原生 ambient/spot 光源，默认颜色约为
-  ambient 12.5% 黑（`0x20`）、spot 31% 黑（`0x50`）。这是为增强原生 Skia 阴影
-  清晰度的微调；若视觉过重，可在 `modifier.rs` 将默认值恢复为 ambient 10%（`0x19`）/
-  spot 25%（`0x40`）。阴影颜色也可通过 `Modifier::ambient_shadow_color` /
-  `spot_shadow_color` 覆盖。
-- 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
-- `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
+**Colours resolve on enabled/disabled only.** Hover, press and focus are drawn by the ripple state
+layer, not painted into the container — which is M3's `ButtonColors` contract. Disabled values:
 
-### 2.4 波纹与裁剪
+| Style | Disabled container | Disabled content |
+| --- | --- | --- |
+| Filled / Elevated | `on_surface` @10% | `on_surface_variant` @38% |
+| Tonal | `on_surface` @12% | `on_surface` @38% |
+| Outlined / Text | transparent | `on_surface_variant` @38% |
 
-- `ripple_with_shape(interaction, contentColor, bounded, shape)`：显式容器形状，
-  Outlined/Text 无 Background 元素时波纹仍按胶囊裁剪（不再回退矩形）。
-- 通用 `ripple()` 不传 shape 时从链上最近的 Background/Border 推断。
+**The container morphs while pressed.** Upstream carries `ButtonShapes(shape, pressedShape)` and
+interpolates the two on `MotionSchemeKeyTokens.DefaultEffects` (`Button.kt:248-252`, whose comment
+reads "intentional here to prevent any bounce"). winia carries it as `Shape::PillToRounded { corner_radius, t }`:
+`t = 0` is the pill, `t = 1` is `Shape::rounded(pressed_container_radius)`. The two ends are different
+UNITS — a percent corner at rest, a fixed radius pressed — which is why the transition shape carries
+both instead of a single number. At exactly 0 or 1 the plain shape comes back, so a button that was
+never pressed carries the very shape its caller asked for. The value is read with `peek()` in the
+paint closures, so pressing does not recompose the button per frame.
 
-### 2.5 焦点系统
+A caller-supplied fixed-radius `shape(..)` interpolates directly to the pressed radius; per-corner,
+top-only and rectangle shapes are returned unchanged and do not morph.
 
-- 焦点环：宽 3、完全外置（内侧距组件 2）、颜色 = 主题 primary（组合期经
-  desc 通道捕获，渲染期 CompositionLocal 已退出）、180ms 淡入淡出
-  （1.15× 大环收缩到贴合，组件中心锚点）。
-- 焦点环形状：从 modifier 最近的 Background/Border/Clip 推断；
-  Text 按钮显式 `clip(shape)` 兜底（否则回退矩形）。
-- 键盘激活：Enter/Space 只触发**聚焦节点自身**的 `on_click`，不向祖先冒泡
-  （对标 Compose clickable；与鼠标点击路径的冒泡行为有意不对称）。
-- Tab/Shift+Tab 循环聚焦；方向键按“方向半平面 + 方向距离 + 垂直偏离×2”
-  评分导航（候选为可见焦点节点的视觉中心，含 scroll 偏移）。
-- IME：框架只做机械转发——节点声明 `ime_callback` 才开启输入法。
-  Tab/方向键/点击聚焦/Escape 清焦四条路径都经 `apply_ime_for_focus` 同步。
-- 文本字段按键：多行模式消费 Up/Down（按 `\n` 近似行移动，Shift 扩选区）；
-  单行模式放行给方向键焦点导航。
+**Elevation is a paint-time value.** `ButtonElevation::for_state` picks by interaction state and the
+result feeds `graphics_layer` through a closure; `spec_for(from, to)` keys the tween on the
+interaction PAIR (120 ms towards an interaction, 150 ms away, 120 ms when leaving hover, snap on
+idle-to-idle), which is Compose's rule in `internal/Elevation.kt:50-61`. A style whose every state is
+0 creates no layer at all.
 
-### 2.6 动态尺寸（SizeValue）
+**Text style carries its shape without a clip.** It has neither a background nor a border, and the
+ripple plus the focus ring both infer the shape from the chain. It used `clip(shape)`, but a clip also
+cuts what is drawn OUTSIDE the node — and the focus ring is stroked outside — so a Text button lost
+its ring while the other styles kept theirs. A zero-width transparent `border(0.0, transparent, shape)`
+states the same shape and clips nothing.
 
-- `content_padding` / `min_size` 支持 `&State<f32>` / `State<f32>` / 闭包；
-  在 measure 期求值并注册 layout 依赖——动画只触发重测，不重组。
-- 布局语义：min 约束提升 incoming min 且受 max 夹住（对标 `widthIn/heightIn`）。
+**Content and icons.** The inner `Row` applies `icon_label_space()` itself, where M3 leaves the gap
+to the caller's Row. A leading icon wants `ButtonDefaults::button_with_icon_content_padding()`
+(16 / 24) so it sits optically tight against the edge while the label keeps its 24 dp;
+`text_button_with_icon_content_padding()` is the 12 / 16 pair. Typography: the content is wrapped in
+`ProvideTextStyle(label_large)` with the resolved content colour, as Compose does.
 
-### 2.7 性能要点
+**Styling.** `button_visual_with_styles` resolves "explicit parameter > `ComponentStyles` > theme" in
+one place, and `build` declares the RESOLVED colours and border through `ctx.changed` before the
+group opens — a styling that changes at runtime must re-enter, or a Clean slot keeps the label style
+and border it built earlier while only the live closures update.
 
-- Skip 判定 = style/enabled 参数相等 + modifier 参数相等；动画值走
-  `graphics_layer`/layout 依赖，不经过重组。
-- 波纹按时间在渲染期计算，无额外动画状态；按下/释放只在交互源上发事件。
+**Focus.** `clickable_with_source` also pushes `Focusable` and `Hoverable`, so a button is a Tab stop
+by construction; `set_current_node_focus_color(theme.primary)` captures the ring colour during
+composition, because the render phase can no longer read the theme. Enter and Space activate the
+focused node only, without bubbling to ancestors (`app/per_window/keyboard.rs`) — deliberately
+asymmetric with the pointer path, matching Compose's `clickable`.
 
-## 3. 与 material3 1.4.0 的差距（未实现/近似）
+**Accessibility.** The chain declares `role = Button` with `merge_descendants(true)` and the enabled
+state, BEFORE the caller's modifier, so a caller's own declaration merges over it per field and a
+disabled button keeps its role.
 
-### 3.1 组件与 API 形态
+## Differences from Compose
 
-- **独立 composable**：M3 的 `ElevatedButton` / `FilledTonalButton` /
-  `OutlinedButton` / `TextButton` 是独立函数；winia 用构造变体近似，签名与
-  `Button` 相同（后续可拆成独立组件，API 不变）。
-- **`IconButton` / `FilledIconButton` / `OutlinedIconButton`**：不是独立
-  composable，而是 `IconButton` 的 `IconButtonStyle`（Standard / Filled /
-  FilledTonal / Outlined）——与 Button 一族同一套做法（`components/icon_button.rs`）。
-  专用 `Icon` 组件是有的（`components/icon.rs`），`IconToggleButton` 同理
-  （`::new` / `::filled` / `::filled_tonal` / `::outlined`）。
-  真正缺的是 **`TextButton` 的 icon-only 形态**。
-- **`ButtonDefaults.shapes()` / `ButtonShapes`**：winia 的按下形变由
-  `ButtonSize::pressed_container_radius()` + `Shape::PillToRounded` 表达，
-  没有 `ButtonShapes(shape, pressedShape)` 这个公开载体，也没有各尺寸的
-  `squareShape` / `pressedShape` 常量。
-- **`BorderStroke`**：仅 width + color；无 Brush/渐变/虚线。
-- **`ButtonDefaults.buttonColors(...)` 逐状态参数**：winia 以
-  `ButtonColors::new(4 色)` 覆盖；没有 M3 的 `containerColor/contentColor/
-  disabledContainerColor/disabledContentColor` 命名参数形态。
+- **One type, five constructors.** Upstream ships five composables; the slots, measurement rules and
+  state contract are identical, so separate types would duplicate all of it.
+- **No `ButtonShapes` / `ButtonDefaults.shapes()`.** The press morph exists (above) but has no public
+  carrier: there is no `ButtonShapes(shape, pressedShape)` parameter and no per-size `squareShape` /
+  `pressedShape` constants. `ButtonSize::pressed_container_radius()` is the whole surface.
+- **`BorderStroke` is width + colour only** — no brush, gradient or dashed borders.
+- **`ButtonColors` takes four colours positionally** (`ButtonColors::new`), not Compose's named
+  `containerColor` / `contentColor` / `disabledContainerColor` / `disabledContentColor` copy-form,
+  and there are no per-variant factories (`elevatedButtonColors` and friends); the style picks them.
+- **No precision-pointer sizing.** `isPrecisionPointerComponentSizingEnabled` is `false` upstream by
+  default, so its 36 dp `MinHeight` and 8 dp `smallVerticalPadding` are not modelled at all.
+- **Focus ring colour is the theme's `primary`**, where M3 uses `secondary`. The colour travels
+  through the desc channel, so it can become a token without moving the API.
+- **`graphics_layer` transforms do not take input.** A 3D-transformed or partially transparent button
+  keeps its layout hit area, as Compose's `graphicsLayer` does.
+- **`TextButton`'s icon-only form does not exist**, and `IconButton` is a `IconButtonStyle` on one
+  type rather than separate composables — the same shape as this component.
 
-### 3.2 主题与 Token
+## Tests
 
-- **形状 token**：`CornerFull` 用 `Shape::Pill` 近似（短边一半圆角），
-  无主题级 shape 系统（`MaterialTheme.shapes` 对应物未实现）。
-  - **The press morph IS implemented.** Upstream's Button carries
-    `ButtonShapes(shape, pressedShape)` and interpolates between the two through
-    `shapeByInteraction(shapes, pressed, spec)` (`material3/Button.kt:1922-1939`); the default
-    pair is `ContainerShapeRound` (CornerFull) to that size's `PressedContainerShape`, on
-    `MotionSchemeKeyTokens.DefaultEffects` (`:248-252`, whose comment reads "intentional here to
-    prevent any bounce in this component").
-  - The per-size pressed radius is `ButtonSize::pressed_container_radius()`: 8/8/12/16/16
-    (CornerSmall/CornerSmall/CornerMedium/CornerLarge/CornerLarge). The default button goes from
-    a Pill (radius 20) to 8, which is visible on a 40 dp container.
-  - The resting end is a **percent** corner (half the short side) and the pressed end a **fixed**
-    radius — different units, so the transition is carried by
-    `Shape::PillToRounded { corner_radius, t }`: `t = 0` is `Shape::Pill`, `t = 1` is
-    `Shape::rounded(corner_radius)`, and the radius is resolved against the painted box. At
-    exactly 0 or 1 the plain `Pill` / `RoundedRect` comes back, so **a button that was never
-    pressed still carries the shape its caller asked for**.
-  - A caller-supplied fixed-radius `shape(...)` takes the fixed-radius interpolation branch;
-    multi-corner shapes (`Corners` / `TopRoundedRect` / `Rectangle`) are returned unchanged and do
-    not morph.
-  - `squareShape` (12/12/16/28/28) is still not exposed as API.
-- **字体**：M3 Button 强制 `LabelLarge`；winia 跟随 `ProvideTextStyle`，
-  不自动应用 LabelLarge。
-- **焦点指示器颜色**：M3 默认 secondary，winia 用主题 primary（有意选择，
-  颜色经 desc 通道可扩展为 token 化）。
-- **禁用色 alpha**：50% 近似（M3 12%/38%），项目统一约定，未逐 token 对齐。
+```bash
+cargo test -p winia --lib components::button
+```
 
-### 3.3 交互与渲染
+30 unit tests over the arena, plus `cargo run -p winia --example button_demo`. There is no fixture
+scenario (`tests/ui_fixtures/fixture_all.rs` has no button entry) and no `ui_test.rs` coverage, so the
+unit suite is what runs in CI.
 
-- **行移动**：多行 Up/Down 是 `\n` 分隔的行首近似，无布局感知的列保持；
-  换行/软换行/溢出场景行为与真实文本编辑器不同。
-- **波纹**：只有 bounded 波纹；无 unbounded（M3 某些组件用）、无
-  hover 涟漪（M3 也仅在 press 触发，此项与 M3 一致）。
-- **动画**：阴影/尺寸/内边距可动画；无容器色动画
-  （M3 的 containerColor 默认也不做 crossfade，可接受）。
-- **a11y**：无 semantics 树/无障碍标签（全框架缺口，非 Button 特有）。
-- **命中测试**：`graphics_layer` 外观不参与命中（已注释为语义），
-  3D 变换/透明度下的点击区域与视觉不一致属已知取舍。
+What the suite pins, by area:
 
-### 3.4 测试缺口
-
-- 键盘激活（Enter/Space 仅自身）、Tab/IME 同步、方向键导航均无
-  app 级集成测试（现有覆盖为 helper/单元级）。
-- 焦点环形状/颜色的渲染断言未接入 UI 测试框架。
-
-## 4. 维护约定
-
-- 新增 builder 参数：默认值放 `ButtonDefaults`，在 `build` 中经 modifier
-  携带即可（不需要加进 `changed()`）；同步补 getter、单元测试与本文档。
-- 修改视觉语义（颜色/形状/焦点）时保持“对标 M3 token 优先、近似需注释”原则。
-- 涉及焦点/IME/键盘的分支改动，四条路径（Tab/方向键/点击/Escape）必须一起更新。
+- **defaults** — `ButtonDefaults` values, the style's colours, `(58, 40)`, the pill
+- **per-size tokens** — heights, paddings (horizontal AND vertical), icon sizes, outline widths, and
+  the invariant `2 * vertical_padding + icon_size == container_height`
+- **`content_padding_for` uses that padding** — asserted against the returned value, not against the
+  constants, so putting the flat 8 back fails the test
+- **naming a size vs not** — Small (named) takes 16 dp, an unsized button keeps the baseline 24
+- **colour resolution** — enabled/disabled, and the elevation priority order
+- **elevation** — the pair-keyed spec, and a hovered Filled/Tonal button actually raising the shadow
+  it paints while Outlined carries no layer at all
+- **press morph** — the radii are the tokens, the container shape moves over time, and the morph does
+  NOT recompose the button per frame
+- **styling** — reaching the derivation, deriving from the theme, light/dark, merging sets, an
+  explicit colour beating the class styling, and the styling block ending where it should
+- **touch target** — a 48 dp box around a 40 dp visual box
