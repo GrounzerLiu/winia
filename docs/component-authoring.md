@@ -23,44 +23,54 @@ Companion documents, read as needed:
 A component is a **builder struct** plus a `build` method. Construction is cheap and total; `build`
 does the composing.
 
+The example below is the real `Badge` (`winia/src/components/badge.rs`), trimmed to the shape this
+section is about - it drops the size tokens, the alignment policy and the content closure's body.
+
 ```rust
 pub struct Badge {
-    label: String,
-    container: Color,
+    container_color: Option<Color>,
+    content_color: Option<Color>,
+    content: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     modifier: Modifier,
 }
 
 impl Badge {
-    pub fn new(label: impl Into<String>) -> Self {
+    pub fn new() -> Self {
         Self {
-            label: label.into(),
-            container: WiniaTheme::colors().error,
+            container_color: None,
+            content_color: None,
+            content: None,
             modifier: Modifier::new(),
         }
     }
 
     /// Every option is a method that returns `Self` - the builder stays linear.
     pub fn container_color(mut self, color: Color) -> Self {
-        self.container = color;
-        self
-    }
-
-    pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = modifier;
+        self.container_color = Some(color);
         self
     }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let modifier = Modifier::new()
-            .background(self.container, Shape::Rectangle)
-            .test_tag("badge")
-            .then(self.modifier);
-        // ... compose the content, see the sections below ...
-        let _ = (ctx, modifier, self.label);
+        // Resolve BEFORE declaring: the resolved set is itself a parameter (section 3.2).
+        let container = self.container_color.unwrap_or(WiniaTheme::colors().error);
+        let content_color = self
+            .content_color
+            .or_else(|| WiniaTheme::colors().content_color_for(container))
+            .unwrap_or_else(WiniaTheme::content_color);
+        ctx.changed(&container);
+        ctx.changed(&content_color);
+        // ... default_min_size, the restartable group, the content closure ...
+        let m = Modifier::new().background(container, Shape::Rectangle);
+        let m = self.modifier.then(m); // caller OUTERMOST here - see section 2.3
+        let _ = (ctx, m, self.content);
     }
 }
 ```
+
+Note what the options hold: `Option<Color>`, not a resolved `Color`. The component cannot resolve at
+construction time, because `WiniaTheme::colors()` is only valid inside a composition - so `new` records
+"unset" and `build` derives.
 
 **MUST** keep the fields private. Public fields freeze the representation and let callers mutate state
 between `new` and `build`, which no component's invariants survive.
@@ -581,11 +591,17 @@ Two rules cover most cases:
 
 ## 10. Testing
 
-| Level | Where | What it must cover |
+| Level | Where | What it covers |
 | --- | --- | --- |
 | Unit | `#[cfg(test)] mod tests` in the component file | builder defaults, measured size and positions, colour selection, the `ctx.changed` behaviour |
-| Fixture | `winia/tests/ui_fixtures/fixture_all.rs` (one bin, scenario by `argv[1]`) | a scenario the visual/behavioural suite can drive |
-| UI | `winia/tests/ui_test.rs` (`--features debug-server`) | clicks, key events, semantics tree, screenshots |
+| Fixture | `winia/tests/ui_fixtures/fixture_all.rs` (one bin, scenario by `argv[1]`) | a demo compiled in through `#[path]`, so the UI test drives the same tree a human runs |
+| UI | `winia/tests/ui_test.rs` (`--features debug-server`) | clicks by test tag, the debug tree's tags/texts/sizes, the animation registry, a layout-direction override |
+
+The UI harness can do more than the suite currently asks of it: `tests/ui/support.rs` also exposes
+`key`/`key_until`, `semantics`/`semantics_entries`, `pixel`/`pixels_at_logical`, `drag`/`fling_inside`,
+`scroll` and `resize`. That is CAPABILITY, not coverage - `ui_test.rs` is four demo-behaviour tests
+(flow features and reflow, item animation, flex layout) and exercises none of the key, semantics or
+pixel readers today. Treat those as available tools for a new test, not as existing proof.
 
 **MUST** lay a demo's control row out as a `FlowRow`, not a `Row`: the UI test clicks a button by its
 reported coordinates, and a fixed row pushes the tail of a long button run outside the card, where a
