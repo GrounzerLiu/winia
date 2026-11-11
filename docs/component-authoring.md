@@ -619,12 +619,22 @@ let root = composer.layout_root_idx().unwrap();
 assert_eq!(composer.arena_nodes()[root].measured_size.height, 152.0);
 ```
 
-**SHOULD** phrase a test name as the property it pins, in snake_case, rather than as the method under
-test: `the_flexible_variants_take_their_height_from_the_subtitle`, not `test_height`. Two reasons:
-cargo already prints `test <name>`, so a `test_` prefix reads as `test test_...` in the output, and the
-name is the only place a failing assertion explains itself. This applies to NEW tests: an existing
-`test_*` name is renamed when the file is touched for another reason — the same grandfathering rule the
-Chinese-text convention uses.
+**SHOULD** name a test for the property it pins, so a `... FAILED` line explains itself: a failing
+`a_named_size_takes_its_own_padding_and_the_default_takes_the_baseline` says what broke, while
+`test_button_sizes` says only which file to open. Phrase it in snake_case, as a statement about
+behaviour rather than about the thing being tested.
+
+The testable question is **does the name state the BEHAVIOUR (what must be true) or only the SUBJECT
+(what it touches)** — not whether it has a prefix. A `test_` prefix carries no meaning either way:
+`test_outlined_border_uses_theme_outline` names its property and is a perfectly good name, and
+`button_size_dimensions` has no prefix and tells a reader nothing. Renaming a test purely to drop the
+prefix is churn, and the earlier version of this rule asked for exactly that; it was wrong. Rename a
+test when its NAME cannot explain a failure, whatever it starts with.
+
+(The "cargo prints `test <name>` already" argument for banning the prefix does not survive contact
+with the suite either: inside `src/`, cargo prints the module path between the two —
+`test components::button::tests::test_button_defaults` — so the doubling only exists for the
+integration tests under `winia/tests/`, and there it is one redundant word, not a cost.)
 
 **MUST** hold `crate::animation::tests::TEST_SERIAL` and clear the registry in any test that pushes an
 animation (`push_animatable`, `update_animations`, `clear_all_animations`); the suite relies on
