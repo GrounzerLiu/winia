@@ -651,6 +651,16 @@ impl Button {
         self
     }
 
+    /// 设置修饰符链（追加到已有 modifier）
+    ///
+    /// Immediately after the action, as Compose orders its parameters (`docs/component-authoring.md`
+    /// section 2.1): a caller skimming the builder finds it where Compose puts it. Builder methods are
+    /// chained, so the position is a reading convention rather than something callers depend on.
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
     /// 设置启用状态
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -740,12 +750,6 @@ impl Button {
         self
     }
 
-    /// 设置修饰符链（追加到已有 modifier）
-    pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = self.modifier.then(modifier);
-        self
-    }
-
     /// 注册到组合树并执行子内容。
     /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
     #[composable]
@@ -763,6 +767,14 @@ impl Button {
         ctx.changed(&self.colors);
         ctx.changed(&colors);
         ctx.changed(&visual.border);
+        // `size_variant` reaches the content: the inner Row's spacing is
+        // `self.size_variant.icon_label_space()` (section 3.2 - a parameter the CONTENT reads).
+        //
+        // Today this cannot be observed: the height is derived from the same field
+        // (`min_height_for(size_variant)`, and all five heights differ), so the modifier chain always
+        // changes with it and the group Enters anyway. That is an accident of the token set, not a
+        // guarantee - declaring it is what makes the dependency real rather than incidental.
+        ctx.changed(&self.size_variant);
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self
             .interaction_source
