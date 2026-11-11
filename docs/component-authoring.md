@@ -165,7 +165,7 @@ finds it where Compose puts it.
 
 Shape, colour and elevation defaults go in `ButtonDefaults` / `CardDefaults`-style types with
 associated functions, not as `impl Default for X` and not inline in the builder. `ButtonDefaults::
-elevated_button_elevation()` (`button.rs:448`) is the Compose name and the Compose value; a component that inlines
+elevated_button_elevation()` (`components/button.rs`, `impl ButtonDefaults`) is the Compose name and the Compose value; a component that inlines
 `Shadow::new(0.0, 2.0)` is a token drift waiting to happen.
 
 ### 2.3 The caller's modifier goes LAST
@@ -186,7 +186,8 @@ receives:
 - **semantics** - a role declared before `then(user_modifier)` survives a caller adding their own
   description, which is why `docs/semantics.md` states that ordering as a rule.
 - **input nodes** - every clickable component appends `clickable`/ripple AFTER the caller's modifier
-  (`button.rs:909` before `:917`, `card.rs:457-462`, `list_item.rs:146-150`), because the
+  (`Button::build`: `modifier.then(self.modifier)` precedes `.clickable_with_source`; `Card::build`
+  and `ListItem::build` have the same shape), because the
   interaction node has to be added by the component, not by the caller.
 - **the drawing itself** - a leaf whose payload IS its content appends that payload after the caller's
   chain (`components/text.rs` ends its chain with `text_content_full`, `rich_text.rs` likewise): the
@@ -321,10 +322,10 @@ pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) 
 **MUST** declare every parameter the content or the slots read. The modifier chain carries some of
 them and the declaration carries the rest - know which channel you are using: `Modifier::param_eq`
 (`modifier.rs`) compares sizes, padding, border, semantics, layout direction, z-index and `test_tag`,
-and `TextField` relies on that for its visual parameters (`text_field/field.rs:872`, with the rest
-declared through `ctx.changed` at `:256-259`); everything the chain cannot express - closures,
-flag-shaped branch controls, values passed outside the modifier - has to go through `ctx.changed`,
-or a Clean slot Skips past it.
+and `TextField` relies on that for its visual parameters (its `.text_field_visual(..)` chain step, with
+the rest declared through `ctx.changed` at the top of `TextField::build`); everything the chain cannot
+express - closures, flag-shaped branch controls, values passed outside the modifier - has to go through
+`ctx.changed`, or a Clean slot Skips past it.
 
 **A container whose CONTENT changes without any parameter changing** declares a SIGNATURE of that
 content instead of a parameter: a lazy list compares the sequence of item KEYS (`docs/lazy-column.md`
@@ -539,7 +540,7 @@ system theme - otherwise the components keep the colours they composed with.
 ## 7. Slots
 
 Optional named content goes in `Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>` (the shape the
-real slots use, `text_field/field.rs:19`) with a builder
+real slots use, e.g. `TextField`'s `placeholder` field) with a builder
 method per slot (`navigation_icon`, `actions`, `subtitle`). **MUST** give a slot the M3 geometry it
 has in Compose (touch slot, inset, alignment) instead of letting the content decide.
 
@@ -559,7 +560,7 @@ has in Compose (touch slot, inset, alignment) instead of letting the content dec
   (`docs/semantics.md`, rule 1).
 - A focusable component **MUST** obtain a `FocusRequester` and attach it with
   `Modifier::focus_requester(..)` (the requester's own `request_focus()` is what moves focus);
-  `TextField` is the model to copy (`text_field/field.rs:951`). Focus has to survive recomposition: the runtime
+  `TextField` is the model to copy (its `.focus_requester(&fr)` chain step). Focus has to survive recomposition: the runtime
   restores it by slot key, so a component that changes its slot layout on a branch can lose it
   (that is what `ctx.key` is for).
 
