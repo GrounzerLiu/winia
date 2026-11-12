@@ -29,6 +29,12 @@ pub struct Composer {
     pub(super) path_counters: crate::layout::node::SlotKeyMap<u32>,
     /// 每路径独立 counter（next_remember_key 用——同上，防 remember key 漂移）
     pub(super) remember_path_counters: crate::layout::node::SlotKeyMap<u32>,
+    /// Per-path counter for `next_provider_key`: lets a tracked `CompositionLocal` provider tell its
+    /// several calls INSIDE one group apart. A table of its own is load-bearing — providers are
+    /// commonly written in conditional branches (`alert_dialog.rs`'s `if let`), and sharing
+    /// `remember`'s counters would make a branch flipping shift the ordinal of every `remember`
+    /// after it, so those states would change key and lose their value.
+    pub(super) provider_path_counters: crate::layout::node::SlotKeyMap<u32>,
 
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
     pub(super) scope_source_stack: Vec<Option<u64>>,
@@ -43,6 +49,7 @@ pub struct Composer {
     pub(super) movable_saved_group_key: u32,
     pub(super) movable_saved_path_counters: crate::layout::node::SlotKeyMap<u32>,
     pub(super) movable_saved_remember_counters: crate::layout::node::SlotKeyMap<u32>,
+    pub(super) movable_saved_provider_counters: crate::layout::node::SlotKeyMap<u32>,
     pub(super) movable_saved_params: Vec<Box<dyn ParamValue>>,
     pub(super) movable_saved_pending_next: usize,
     /// ctx.key() 显式 key 栈（最高优先级）
@@ -249,6 +256,7 @@ impl Composer {
             layout_override_fresh: false,
             path_counters: crate::layout::node::SlotKeyMap::default(),
             remember_path_counters: crate::layout::node::SlotKeyMap::default(),
+            provider_path_counters: crate::layout::node::SlotKeyMap::default(),
             scope_source_stack: Vec::new(),
             key_override_stack: Vec::new(),
             movable_saved_scopes: Vec::new(),
@@ -260,6 +268,7 @@ impl Composer {
             movable_saved_group_key: 0,
             movable_saved_path_counters: crate::layout::node::SlotKeyMap::default(),
             movable_saved_remember_counters: crate::layout::node::SlotKeyMap::default(),
+            movable_saved_provider_counters: crate::layout::node::SlotKeyMap::default(),
             movable_saved_params: Vec::new(),
             movable_saved_pending_next: 0,
             pending_recomposition: VecDeque::new(),
@@ -396,6 +405,50 @@ impl Composer {
             Some(id) => mix_key(base, mix_key(0x6d6f_7661_626c_6500, id)),
             None => base,
         }
+    }
+
+    /// Per-SITE key for a `CompositionLocal` provider — what
+    /// [`crate::runtime::composition_local::CompositionLocal::provide`] remembers its last
+    /// value under.
+    ///
+    /// Same scheme as `next_remember_key` (statement id mixed with a per-base ordinal) but under its
+    /// OWN counter table: a provider written inside a conditional branch (`alert_dialog.rs` has
+    /// several) would otherwise shift the ordinal of every `remember` after it, and those states
+    /// would change key and lose their value the first time the branch flipped.
+    ///
+    /// The namespace mix is not decoration: providers and `remember` share the slot table's
+    /// `remembered` map, so a colliding key would fail its downcast, rebuild the handle on every
+    /// frame, and read each frame's value as "changed" — an endless `mark_subtree_dirty`.
+    pub(crate) fn next_provider_key(&mut self) -> u64 {
+        const PROVIDER_NAMESPACE: u64 = 0x7769_6e69_7072_6f76; // "winia prov"
+        let base = match self.try_stable_base() {
+            Some(b) => b,
+            None => {
+                // No compiler statement to key off — a bare scene in a test, or a wrapper with no
+                // `#[composable]` of its own. NOT a panic: `provides` never required a statement id,
+                // and turning that into an abort would break every wrapper that legitimately has
+                // none. Fall back to the slot path, the same source `position_key` uses.
+                //
+                // Be honest about the cost: this key only remembers "what did I provide last frame",
+                // so a path that DRIFTS with the structure loses that memory — the new key seeds a
+                // fresh backchannel with the CURRENT value, no change is seen, and readers keep what
+                // they composed with. That is the stale value this whole API exists to prevent, so
+                // the statement-id path above is the one that must hold; this branch only keeps a
+                // keyless caller from panicking.
+                let path = self.slot_table.current_path().to_vec();
+                let mut h: u64 = 0xcbf29ce484222325;
+                for &idx in &path {
+                    h ^= idx as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h
+            }
+        };
+        let base = mix_key(base, PROVIDER_NAMESPACE);
+        let counter = self.provider_path_counters.entry(base).or_insert(0);
+        let c = *counter;
+        *counter += 1;
+        mix_key(base, c as u64)
     }
 
     pub(crate) fn try_stable_base(&self) -> Option<u64> {
@@ -1025,6 +1078,7 @@ impl Composer {
             current_group_key: self.current_group_key,
             path_counters: self.path_counters.clone(),
             remember_path_counters: self.remember_path_counters.clone(),
+            provider_path_counters: self.provider_path_counters.clone(),
             scope_source_stack: self.scope_source_stack.clone(),
             key_override_stack: self.key_override_stack.clone(),
             pending_recomposition: self.pending_recomposition.clone(),
@@ -1045,6 +1099,7 @@ impl Composer {
         self.current_group_key = snapshot.current_group_key;
         self.path_counters = snapshot.path_counters;
         self.remember_path_counters = snapshot.remember_path_counters;
+        self.provider_path_counters = snapshot.provider_path_counters;
         self.scope_source_stack = snapshot.scope_source_stack;
         self.key_override_stack = snapshot.key_override_stack;
         self.pending_recomposition = snapshot.pending_recomposition;
@@ -1112,6 +1167,7 @@ impl Composer {
         self.lifecycle.reset_for_compose();
         self.path_counters.clear();
         self.remember_path_counters.clear();
+        self.provider_path_counters.clear();
         STMT_STACK.with(|s| s.borrow_mut().clear());
         // The runtime frame starts empty; these clears also self-heal any state
         // left by an older caller that entered before frame isolation was added.
@@ -1854,6 +1910,35 @@ impl Composer {
         self.needs_recomposition = false;
         self.compose(content);
         true
+    }
+
+    /// Test-only: recompose until the pending queue drains, the way a frame does
+    /// (`PerWindow::recompose_until_stable`).
+    ///
+    /// A `CompositionLocal` provider invalidates its readers through the signal its entry carries,
+    /// and `compose` drains the pending queue at its START — before any content runs. A `notify`
+    /// raised mid-pass therefore lands in the queue and dirties the subscribed scope on the NEXT
+    /// pass, never on the pass that discovered the move. The frame path loops for exactly that
+    /// reason, so a test that calls `recompose` ONCE and then asserts a reader re-ran is asserting
+    /// the same-pass semantics of `mark_subtree_dirty` — the mechanism the signal replaced, and the
+    /// one whose imprecision (dirtying a whole subtree because the readers were unknown) is why it
+    /// went away. Use this in tests that exercise a provider's invalidation.
+    #[cfg(test)]
+    pub(crate) fn recompose_to_stable<C>(&mut self, mut content: impl FnMut() -> C) -> bool
+    where
+        C: FnOnce(&mut ComposeCtx),
+    {
+        let mut any = false;
+        // Bounded like the frame path's own convergence loop: a test that spins is worse than one
+        // that reports the tree it settled on.
+        for _ in 0..8 {
+            let did_compose = self.recompose(content());
+            any |= did_compose;
+            if !did_compose && !self.has_pending_states() {
+                break;
+            }
+        }
+        any
     }
 }
 

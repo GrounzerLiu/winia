@@ -25,7 +25,6 @@
 //!   are not published as tokens for this component (the source carries its own TODO), so the spring
 //!   parameters here are ours while the behavior is the source's.
 
-use crate::components::text::ProvideTextStyle;
 use crate::composable;
 use crate::graphics::{Color, GraphicsLayerParams, Shape, TransformOrigin};
 use crate::input::interaction::MutableInteractionSource;
@@ -762,10 +761,11 @@ impl SegmentedButton {
                     ctx.end_restartable_group();
                 });
                 let label_key = ctx.next_key();
-                WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    let mut text_style = WiniaTheme::typography().label_large;
-                    text_style.color = Some(content_color);
-                    ProvideTextStyle(text_style, ctx, |ctx| {
+                crate::components::text::ProvideContentColorTextStyle(
+                    content_color,
+                    WiniaTheme::typography().label_large,
+                    ctx,
+                    |ctx| {
                         match ctx.start_restartable_group(
                             label_key,
                             Modifier::new(),
@@ -775,8 +775,8 @@ impl SegmentedButton {
                             GroupStatus::Enter => label(ctx),
                         }
                         ctx.end_restartable_group();
-                    });
-                });
+                    },
+                );
             }
         }
         // The framework's own ring follows the theme's focus color; without this it is the default

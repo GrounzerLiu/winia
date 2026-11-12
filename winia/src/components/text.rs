@@ -25,6 +25,11 @@ pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> =
 
 /// Provide a default text style to a subtree, MERGED with the inherited one rather than replacing
 /// it — Compose's `ProvideTextStyle`.
+///
+/// Tracked, like every state-fed provider: the style is usually derived from state somewhere up the
+/// tree, and a reader that composed with the old one keeps it until its group is re-entered. The
+/// per-site key inside keeps two nested `ProvideTextStyle` calls (this file's own test has them) from
+/// overwriting each other's memory.
 #[allow(non_snake_case)]
 pub fn ProvideTextStyle(
     style: TextStyle,
@@ -32,9 +37,37 @@ pub fn ProvideTextStyle(
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
-    LOCAL_TEXT_STYLE.provides(merged, || {
-        content(ctx);
-    });
+    LOCAL_TEXT_STYLE.provide(merged, ctx, |ctx| content(ctx));
+}
+
+/// Provide a content colour AND a text style to a subtree in ONE call — Compose's
+/// `ProvideContentColorTextStyle`.
+///
+/// The two always travel together: a label's colour is usually stated twice (once for the
+/// `LocalContentColor` an `Icon` picks up, once inside the `LocalTextStyle` a `Text` falls back on),
+/// and two nested providers meant two slot positions, two sets of remembered values, and an ordering
+/// that had to keep the style reading the colour just provided. One call states it once.
+///
+/// `style` is merged with the inherited one, as [`ProvideTextStyle`] does, and then carries
+/// `color` — Compose's own implementation does exactly that
+/// (`CompositionLocalProvider(LocalContentColor provides contentColor, LocalTextStyle provides
+/// LocalTextStyle.current.merge(textStyle))`).
+#[allow(non_snake_case)]
+pub fn ProvideContentColorTextStyle(
+    color: Color,
+    style: TextStyle,
+    ctx: &mut ComposeCtx,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
+    let mut merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
+    merged.color = Some(color);
+    ctx.provide(
+        &[
+            crate::theme::LOCAL_CONTENT_COLOR.provided(color),
+            LOCAL_TEXT_STYLE.provided(merged),
+        ],
+        |ctx| content(ctx),
+    );
 }
 
 /// Merge two styles: a `Some` on the right wins over the left, so the right is the override.

@@ -61,8 +61,12 @@ fn a_theme_change_reaches_an_idle_subtree_by_itself() {
 
     // The system mode moves. Nothing external tells the tree about it, and the subtree is idle: the
     // provider itself has to carry the new palette in.
+    //
+    // Converged rather than single-pass: the provider's notify is queued during the pass that sees
+    // the new palette and acted on by the next one (`compose` drains the pending queue at its
+    // START), which is why the frame path loops in `recompose_until_stable`.
     set_system_dark_mode(Some(true));
-    composer.recompose(scene);
+    composer.recompose_to_stable(|| scene);
     assert_ne!(
         centre_pixel(&mut composer),
         light,
@@ -151,8 +155,18 @@ fn a_local_change_reaches_a_reader_that_declared_nothing() {
     // that composes twice in a row now Skips too (it restores nodes that were never measured,
     // which is not the shape this test is about). The CONTROL below is what catches a vacuous
     // "the reader kept the old value".
+    //
+    // A frame also CONVERGES: `compose` drains the pending queue at its START, so a provider that
+    // announced a change while this pass was running is acted on by the next one. That is the same
+    // loop `PerWindow::recompose_until_stable` runs; here `compose` is unconditional (the CONTROL
+    // below needs a pass that does nothing), so only the pending queue decides.
     let mut frame = |composer: &mut Composer, scene: &dyn Fn(&mut ComposeCtx)| {
-        composer.compose(|ctx| scene(ctx));
+        for _ in 0..8 {
+            composer.compose(|ctx| scene(ctx));
+            if !composer.has_pending_states() {
+                break;
+            }
+        }
         composer.layout(crate::layout::constraints::Constraints::new(
             0.0, 200.0, 0.0, 200.0,
         ));

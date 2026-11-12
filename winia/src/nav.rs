@@ -63,9 +63,11 @@ pub(crate) struct EntryStateScope {
 static ENTRY_STATE_SCOPE: std::sync::LazyLock<
     crate::runtime::composition_local::CompositionLocal<EntryStateScope>,
 > = std::sync::LazyLock::new(|| {
-    // default 不可达（try_current 不调 default）——占位
-    crate::runtime::composition_local::CompositionLocal::new(|| {
-        panic!("ENTRY_STATE_SCOPE 无默认值——必须经 NavDisplay 提供")
+    // `new_static`: one scope per entry, and an entry's content is rendered by a fresh statement
+    // group each time (its key changes), so the reader always re-reads it without needing a mark.
+    // Unreachable default — `try_current` never calls it.
+    crate::runtime::composition_local::CompositionLocal::new_static(|| {
+        panic!("ENTRY_STATE_SCOPE has no default - it must be provided by NavDisplay")
     })
 });
 

@@ -41,3 +41,15 @@ pub(crate) fn set_debug_direction(direction: Option<LayoutDirection>) {
 pub fn provides<T>(direction: LayoutDirection, f: impl FnOnce() -> T) -> T {
     LOCAL_DIRECTION.provides(direction, f)
 }
+
+/// `direction` as an entry for a multi-value
+/// [`ComposeCtx::provide`](crate::runtime::composer::ComposeCtx::provide) call.
+///
+/// The `provides` above is the ctx-less form, which invalidates nobody: it wraps a whole frame, and
+/// its interesting readers run at measure/draw time. A theme that CHANGES direction mid-run needs the
+/// tracked form — a `Row` that composed against `Ltr` has to re-run, not just re-measure.
+pub(crate) fn provided(
+    direction: LayoutDirection,
+) -> crate::runtime::composition_local::ProvidedValue {
+    LOCAL_DIRECTION.provided(direction)
+}

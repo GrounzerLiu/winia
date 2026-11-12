@@ -12,7 +12,6 @@
 //! onSurfaceVariant 文字 + primary icon；Filter/Input：selected = secondaryContainer
 //! + onSecondaryContainer + 0 边框，unselected = transparent + outline 边框。
 
-use crate::components::text::ProvideTextStyle;
 use crate::graphics::Shape;
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
@@ -898,11 +897,14 @@ fn build_chip(
     ) {
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
-            crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                let mut text_style = crate::theme::WiniaTheme::typography().label_large;
-                text_style.color = Some(content_color);
-                ProvideTextStyle(text_style, ctx, content);
-            });
+            // The content colour and the label style in ONE call — they always travel together, and
+            // one site is one slot position instead of two that have to agree about ordering.
+            crate::components::text::ProvideContentColorTextStyle(
+                content_color,
+                crate::theme::WiniaTheme::typography().label_large,
+                ctx,
+                content,
+            );
         }
     }
     ctx.end_restartable_group();

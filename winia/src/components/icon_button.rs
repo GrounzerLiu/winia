@@ -583,14 +583,14 @@ impl IconButton {
         ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // 内容色下传：Icon tint Auto / Text 均取此色（对标 LocalContentColor）
-                WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    crate::components::text::ProvideTextStyle(
-                        crate::text::TextStyle::new().color(content_color),
-                        ctx,
-                        content,
-                    );
-                });
+                // 内容色下传：Icon tint Auto / Text 均取此色（对标 LocalContentColor）。
+                // 色和样式一次提供——它们总是一起走，一个站点即一个 slot 位置。
+                crate::components::text::ProvideContentColorTextStyle(
+                    content_color,
+                    crate::text::TextStyle::new(),
+                    ctx,
+                    content,
+                );
             }
         }
         ctx.set_current_node_focus_color(theme.primary);

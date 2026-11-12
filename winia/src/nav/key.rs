@@ -206,8 +206,10 @@ impl ResultEventBus {
 pub(super) static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<
     crate::runtime::composition_local::CompositionLocal<ResultEventBus>,
 > = std::sync::LazyLock::new(|| {
-    crate::runtime::composition_local::CompositionLocal::new(|| {
-        panic!("RESULT_EVENT_BUS_SCOPE 无默认值——必须经 NavDisplay 提供")
+    // `new_static`: one bus per NavDisplay, handed down to every entry it renders; the entry's own
+    // statement group re-enters whenever a different entry is rendered.
+    crate::runtime::composition_local::CompositionLocal::new_static(|| {
+        panic!("RESULT_EVENT_BUS_SCOPE has no default - it must be provided by NavDisplay")
     })
 });
 

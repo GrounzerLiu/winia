@@ -1018,18 +1018,30 @@ impl Button {
                         // content colour handed down — the `LocalContentColor` equivalent, so an
                         // `Icon` with `tint(Auto)` picks up the button's colour (inside a Filled
                         // button it becomes `on_primary`).
-                        crate::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
-                            let mut text_style = crate::theme::WiniaTheme::typography().label_large;
-                            text_style.color = Some(text_color);
-                            crate::components::text::ProvideTextStyle(text_style, ctx, |ctx| {
+                        //
+                        // ONE provider, not two nested ones: the colour and the style always travel
+                        // together, and installing them at one site means one slot position instead
+                        // of two that have to agree about ordering.
+                        //
+                        // It is tracked, and that is what repaints the label when the colours change:
+                        // the inner `Row` declares only its alignment and spacing, so it stays Clean
+                        // and Skips, and an untracked provider would never run again — a toggle
+                        // switching checked/unchecked painted the NEW container behind the OLD label
+                        // (a dark fill under the previous light `onPrimary` text and vice versa,
+                        // measured).
+                        crate::components::text::ProvideContentColorTextStyle(
+                            text_color,
+                            crate::theme::WiniaTheme::typography().label_large,
+                            ctx,
+                            |ctx| {
                                 crate::layout::Row::new()
                                     .alignment(crate::layout::Alignment::Center)
                                     .spacing(self.size_variant.icon_label_space())
                                     // The caller's content is a `FnOnce(&mut ComposeCtx)`; forward the
                                     // row's scope through its `Deref`.
                                     .build(ctx, |scope| content(scope));
-                            });
-                        });
+                            },
+                        );
                     }
                 }
                 // The focus ring colour: the theme's primary, captured during composition because

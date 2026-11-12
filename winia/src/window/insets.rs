@@ -514,8 +514,11 @@ fn fallback_controller() -> WindowInsetsController {
 
 /// The insets controller of the enclosing window. Outside a provided window a shared zero controller
 /// answers, so a modifier still composes (and pads by zero).
+///
+/// `new_static`: a window installs its controller once and never swaps it, and the readers run at
+/// MEASURE time (`modifier/element.rs`), which composition invalidation cannot reach anyway.
 pub static LOCAL_WINDOW_INSETS: LazyLock<CompositionLocal<WindowInsetsController>> =
-    LazyLock::new(|| CompositionLocal::new(fallback_controller));
+    LazyLock::new(|| CompositionLocal::new_static(fallback_controller));
 
 /// The enclosing window's insets controller.
 pub fn current() -> WindowInsetsController {

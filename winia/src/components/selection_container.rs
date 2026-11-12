@@ -292,9 +292,12 @@ impl DisableSelection {
         Self { enabled: true }
     }
 
-    /// Conditionally disable selection while keeping this scope at a stable call site. When the
-    /// value changes, the whole subtree is marked dirty so reused Text nodes re-read the local and
-    /// clear/reapply their registrar instead of keeping a stale one across Skip.
+    /// Conditionally disable selection while keeping this scope at a stable call site.
+    ///
+    /// `provide`, not a bare `provides`: the ctx-less form invalidates nobody, so a reused `Text`
+    /// that skipped keeps the registrar it composed with and its range never clears. `provide`
+    /// compares the value against the last frame's and notifies the scopes that read it, which is
+    /// what the hand-rolled `ctx.changed` + `mark_subtree_dirty` here used to do.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -302,11 +305,7 @@ impl DisableSelection {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        let changed = ctx.changed(&self.enabled);
-        if changed {
-            ctx.mark_subtree_dirty();
-        }
-        LOCAL_SELECTION_DISABLED.provides(self.enabled, || content(ctx));
+        LOCAL_SELECTION_DISABLED.provide(self.enabled, ctx, content);
     }
 }
 

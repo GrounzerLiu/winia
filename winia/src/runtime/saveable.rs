@@ -222,9 +222,12 @@ impl Drop for SaveableRegistration {
 
 static SAVEABLE_REGISTRY: std::sync::LazyLock<CompositionLocal<Arc<SaveableStateRegistry>>> =
     std::sync::LazyLock::new(|| {
-        CompositionLocal::new(|| {
-            panic!("no saveable registry: wrap the composition in with_saveable_registry")
-        })
+        CompositionLocal::new_by(
+            || panic!("no saveable registry: wrap the composition in with_saveable_registry"),
+            // A registry is installed once per window and never rebuilt, so pointer identity is the
+            // only question worth asking.
+            |a, b| Arc::ptr_eq(a, b),
+        )
     });
 
 /// Provide `registry` to everything composed inside `f`.

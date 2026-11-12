@@ -883,7 +883,11 @@ impl Default for SelectionRegistrar {
 // ═══════════════════════════════════════════════════════════
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
-    std::sync::LazyLock::new(|| CompositionLocal::new(SelectionRegistrar::new));
+    std::sync::LazyLock::new(|| {
+        // Handles are identified by their inner Arc, exactly what `SelectionRegistrar::is_same`
+        // asks; two registrars with equal contents are still different scopes.
+        CompositionLocal::new_by(SelectionRegistrar::new, |a, b| a.is_same(b))
+    });
 
 /// Whether selectable children are disabled in this subtree (Compose's `DisableSelection`).
 pub static LOCAL_SELECTION_DISABLED: std::sync::LazyLock<CompositionLocal<bool>> =

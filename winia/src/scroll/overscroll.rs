@@ -160,7 +160,15 @@ fn platform_factory() -> OverscrollFactory {
 static LOCAL_OVERSCROLL_FACTORY: std::sync::LazyLock<
     crate::runtime::composition_local::CompositionLocal<Option<OverscrollFactory>>,
 > = std::sync::LazyLock::new(|| {
-    crate::runtime::composition_local::CompositionLocal::new(|| Some(platform_factory()))
+    // A factory is an `Arc<dyn Fn>`: two of them are the same only when they are the same allocation.
+    crate::runtime::composition_local::CompositionLocal::new_by(
+        || Some(platform_factory()),
+        |a, b| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        },
+    )
 });
 
 /// Compose's `rememberOverscrollEffect()`: the effect this composition's scroll containers should
@@ -212,19 +220,21 @@ pub fn remember_overscroll_factory(
 
 /// Provide a factory for a subtree - `None` turns overscroll off for everything inside.
 ///
-/// The `ctx.changed` + dirty marking are load-bearing: a provider that only changes the local leaves
-/// already-Skipped children reading the old value (the same trap `DisableSelection` documents).
+/// The tracking is load-bearing: a provider that only changes the local leaves already-Skipped
+/// children reading the old value (the same trap `DisableSelection` documents). A factory is an
+/// `Arc<dyn Fn>`, so identity - not equality - is what decides whether it moved.
+///
+/// `ctx` follows the values and `content` is last, like every other provider here — Compose's own
+/// argument order.
 #[crate::composable]
 pub fn with_overscroll_factory(
-    ctx: &mut crate::runtime::composer::ComposeCtx,
     factory: Option<OverscrollFactory>,
+    ctx: &mut crate::runtime::composer::ComposeCtx,
     content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx),
 ) {
-    let identity = factory.as_ref().map(factory_identity);
-    if ctx.changed(&identity) {
-        ctx.mark_subtree_dirty();
-    }
-    LOCAL_OVERSCROLL_FACTORY.provides(factory, || content(ctx));
+    // The comparison lives on the LOCAL (`new_by` above): `Arc<dyn Fn>` has no usable `PartialEq`,
+    // and identity is what the provider documents.
+    LOCAL_OVERSCROLL_FACTORY.provide(factory, ctx, content);
 }
 
 /// Turn the overscroll off for a subtree, the same way `LocalOverscrollFactory provides null` does.
@@ -233,7 +243,7 @@ pub fn disable_overscroll(
     ctx: &mut crate::runtime::composer::ComposeCtx,
     content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx),
 ) {
-    with_overscroll_factory(ctx, None, content);
+    with_overscroll_factory(None, ctx, content);
 }
 
 impl Default for OverscrollEffect {
@@ -570,7 +580,7 @@ mod tests {
             composer.compose(crate::compose!(|ctx| {
                 let factory = remember_overscroll_factory(ctx, || OverscrollEffect::new());
                 ids.push(std::sync::Arc::as_ptr(&factory) as *const () as u64);
-                with_overscroll_factory(ctx, Some(factory), |ctx| {
+                with_overscroll_factory(Some(factory), ctx, |ctx| {
                     crate::layout::Column::new()
                         .modifier(
                             crate::modifier::Modifier::new()

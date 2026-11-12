@@ -460,13 +460,13 @@ impl FloatingActionButton {
         ) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    crate::components::text::ProvideTextStyle(
-                        crate::text::TextStyle::new().color(content_color),
-                        ctx,
-                        content,
-                    );
-                });
+                // 内容色与样式一次提供：两者总是一起走，一个站点即一个 slot 位置。
+                crate::components::text::ProvideContentColorTextStyle(
+                    content_color,
+                    crate::text::TextStyle::new(),
+                    ctx,
+                    content,
+                );
             }
         }
         ctx.set_current_node_focus_color(theme.primary);
@@ -944,18 +944,17 @@ impl ExtendedFloatingActionButton {
                             }
                         });
                         wrap_fab_slot_with(ctx, text_alpha, |ctx| {
-                            WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(
-                                    label_style.clone(),
-                                    ctx,
-                                    |ctx| {
-                                        // The tier's icon-label gap, bled into the text slot so the
-                                        // gap moves with the padding. The baseline's is 12 dp
-                                        // (`ExtendedFabEndIconPadding`).
-                                        text(ctx);
-                                    },
-                                );
-                            });
+                            crate::components::text::ProvideContentColorTextStyle(
+                                content_color,
+                                label_style.clone(),
+                                ctx,
+                                |ctx| {
+                                    // The tier's icon-label gap, bled into the text slot so the
+                                    // gap moves with the padding. The baseline's is 12 dp
+                                    // (`ExtendedFabEndIconPadding`).
+                                    text(ctx);
+                                },
+                            );
                         });
                     }
                 }
@@ -969,15 +968,12 @@ impl ExtendedFloatingActionButton {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         wrap_fab_slot(ctx, |ctx| {
-                            WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(
-                                    label_style.clone(),
-                                    ctx,
-                                    |ctx| {
-                                        content(ctx);
-                                    },
-                                );
-                            });
+                            crate::components::text::ProvideContentColorTextStyle(
+                                content_color,
+                                label_style.clone(),
+                                ctx,
+                                content,
+                            );
                         });
                     }
                 }

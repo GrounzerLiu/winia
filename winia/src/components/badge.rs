@@ -39,8 +39,6 @@ pub const BADGE_CONTENT_OFFSET_X: f32 = 12.0;
 /// The with-content badge's vertical offset (Compose `BadgeWithContentVerticalOffset = 14dp` — the
 /// badge's bottom edge 14dp from the anchor's top edge).
 pub const BADGE_CONTENT_OFFSET_Y: f32 = 14.0;
-/// Namespace for the backchannel that remembers this badge's last content colour — see `build`.
-const BADGE_CONTENT_COLOUR_NAMESPACE: u64 = 0x7769_6E69_6162_6467; // "winia badge"
 
 /// The `Badge` builder (material3's `Badge(containerColor, contentColor, content)`) — no content
 /// means a small dot; `.content()` makes it a large badge (a number or a short label).
@@ -136,35 +134,25 @@ impl Badge {
         match ctx.start_restartable_group(key, m, BoxLayout::new().alignment(Alignment::Center)) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // Entering this group is NOT enough to repaint the label: the inner `Row` declares
-                // only its arrangement/alignment/spacing, so it stays Clean and Skips, and
-                // `with_content_color` below never runs again — a white `onError` label outlived a
-                // switch to `surfaceContainerHigh` (measured). A `CompositionLocal` does not
-                // invalidate its readers, which is the same defect `WiniaTheme::provide_resolved`
-                // records for a theme switch; this is the same fix: remember the last value in a
-                // backchannel (no notification) and dirty the subtree when it moved.
-                let prev = ctx.remember_backchannel_at_key(
-                    ctx.position_key(BADGE_CONTENT_COLOUR_NAMESPACE),
-                    || crate::runtime::state::Backchannel::new(content_color),
-                );
-                if prev.get() != content_color {
-                    prev.set(content_color);
-                    ctx.mark_subtree_dirty();
-                }
+                // The label repaints through the provider below: the inner `Row` declares only its
+                // arrangement/alignment/spacing, so it stays Clean and Skips, and an untracked
+                // provider would never run again — a white `onError` label outlived a switch to
+                // `surfaceContainerHigh` (measured).
                 if let Some(content) = content {
-                    // Push the content colour down together with the default LabelSmall style
-                    // (Compose's `ProvideContentColorTextStyle(LargeLabelTextFont)`).
-                    WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                        let mut text_style = WiniaTheme::typography().label_small;
-                        text_style.color = Some(content_color);
-                        crate::components::text::ProvideTextStyle(text_style, ctx, |ctx| {
+                    // The content colour and the default LabelSmall style, in ONE call — Compose's
+                    // `ProvideContentColorTextStyle(LargeLabelTextFont)`.
+                    crate::components::text::ProvideContentColorTextStyle(
+                        content_color,
+                        WiniaTheme::typography().label_small,
+                        ctx,
+                        |ctx| {
                             crate::layout::components::Row::new()
                                 .alignment(Alignment::Center)
                                 // The stored content is a `FnOnce(&mut ComposeCtx)`; the row hands
                                 // its scope, which derefs to `ComposeCtx`, so forward it.
                                 .build(ctx, |scope| content(scope));
-                        });
-                    });
+                        },
+                    );
                 }
             }
         }
@@ -942,7 +930,10 @@ mod tests {
         );
 
         colour.set(theme.surface_container_high);
-        let ran = composer.recompose(scene(colour.clone(), seen.clone()));
+        // Converge the way a frame does: the provider's notify is queued during the pass that
+        // discovers the move and acted on by the next one, so a single `recompose` would assert
+        // `mark_subtree_dirty`'s same-pass timing rather than the signal's arrival.
+        let ran = composer.recompose_to_stable(|| scene(colour.clone(), seen.clone()));
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
         assert!(
             ran,
@@ -987,7 +978,9 @@ mod tests {
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
 
         colour.set(Color::from_argb(255, 99, 99, 99));
-        composer.recompose(scene(colour.clone(), seen.clone()));
+        // Same reason as `the_label_follows_a_container_colour_that_moves_at_runtime`: the notify is
+        // queued during the pass that sees the new colour, and the reader re-runs on the next one.
+        composer.recompose_to_stable(|| scene(colour.clone(), seen.clone()));
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
         assert_eq!(
             seen.lock().unwrap().last().copied(),

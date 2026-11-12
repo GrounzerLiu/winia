@@ -14,10 +14,19 @@ winia::run_app!(|ctx| {
 ```
 
 `WiniaTheme::auto` resolves the system mode, the others take a palette. All of them go through one place
-(`provide_spec`), which resolves the palette and pushes four locals — `LOCAL_COLORS`, `LOCAL_TYPOGRAPHY`,
-`LOCAL_DIRECTION`, `LOCAL_CONTENT_COLOR` — around the content. Reads are `WiniaTheme::colors()`,
-`::typography()`, `::direction()`, `::content_color()`, and a component reads them while it builds: a
-component's colors are therefore fixed at the moment its group composed.
+(`provide_spec`), which resolves the palette and makes ONE `ctx.provide` call carrying five entries —
+`LOCAL_DIRECTION`, `LOCAL_COLORS`, `LOCAL_TYPOGRAPHY`, `LOCAL_CONTENT_COLOR`, `LOCAL_MOTION_SCHEME` —
+around the content. Reads are `WiniaTheme::colors()`, `::typography()`, `::direction()`,
+`::content_color()`, and a component reads them while it builds: a component's colours are therefore
+fixed at the moment its group composed.
+
+A theme switch reaches the components that already composed because each of those entries carries a
+signal, and reading a local subscribes to it (`CompositionLocal::current` hands the signal to
+`register_dependency`, exactly as `State::get` does). So the scopes re-entered are the ones that
+actually read a value — no subtree is dirtied wholesale, and this function no longer keeps a
+hand-compared `(colors, typography, direction)` tuple. Because `Composer::compose` drains its pending
+queue at the START of a pass, the move is acted on by the NEXT pass; the frame path loops
+(`PerWindow::recompose_until_stable`), so a frame never presents the old palette.
 
 There is no ambient default theme: outside any `WiniaTheme` node the locals answer with the plain light
 palette (and black content color), which is what makes a bare `Composer` test behave like the old flat

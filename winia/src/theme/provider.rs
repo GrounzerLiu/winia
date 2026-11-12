@@ -326,44 +326,40 @@ impl WiniaTheme {
             let _ = SYSTEM_THEME_STATE.get();
         }
         let on_surface = colors.on_surface;
-        // A `CompositionLocal` does not invalidate its readers, so the provider has to: when the resolved
-        // theme differs from the previous frame's, everything inside composed with the old value —
-        // padding, alignment, colors — and has to run again. Without this, a theme or direction switch
-        // only reached components that happened to read a state directly (measured: a param-less group
-        // between the provider and the reader stayed on the previous palette after the system mode moved).
-        //
-        // The previous values live in a backchannel: it has the same slot stability as `remember` but
-        // never notifies, and this frame is already composing — waking the composer for a value it is
-        // reading right now would only schedule an empty pass.
-        // The tuple is cheap to clone and every field is `PartialEq`; the backchannel keeps a COPY, so
-        // the values below still move into the locals.
-        // Keyed by the POSITION rather than by a remembered call site: this function also runs from a
-        // window's per-frame wrapper, where there is no `#[composable]` call site to key off, and two
-        // providers inside one composer must not share the memory of what they last provided.
-        const NAMESPACE: u64 = 0x7769_6E69_6174_6865; // "winia the(me)"
-        let prev = ctx.remember_backchannel_at_key(ctx.position_key(NAMESPACE), || {
-            crate::runtime::state::Backchannel::new((colors, typography.clone(), direction))
-        });
-        let resolved = (colors, typography.clone(), direction);
-        if prev.get() != resolved {
-            prev.set(resolved);
-            ctx.mark_subtree_dirty();
-        }
         let _restore = SpecGuard(CURRENT_THEME_SPEC.with(|s| s.borrow_mut().replace(spec)));
-        crate::layout::direction::provides(direction, || {
-            LOCAL_COLORS.provides(colors, || {
-                LOCAL_TYPOGRAPHY.provides(typography, || {
-                    LOCAL_CONTENT_COLOR.provides(on_surface, || {
-                        // The motion scheme travels with the theme, as Compose's `LocalMotionScheme` does.
-                        // The theme provides the standard one; a subtree switches to expressive motion with
-                        // `WiniaTheme::with_motion_scheme`.
-                        LOCAL_MOTION_SCHEME.provides(MotionScheme::standard(), || {
-                            content(ctx);
-                        });
-                    });
-                });
-            });
-        });
+        // ONE provide call, and the invalidation is the signals' job.
+        //
+        // This used to hand-roll it: keep the previous `(colors, typography, direction)` tuple in a
+        // backchannel, compare by hand, and `mark_subtree_dirty` when it moved — because a local
+        // does not invalidate its readers, and a theme switch that only decided what the NEXT reader
+        // sees reached components that happened to read a state directly. Measured then: a
+        // param-less group between the provider and the reader stayed on the previous palette after
+        // the system mode moved. The dirty-subtree was also the only option available, since nobody
+        // knew WHICH scopes read which local.
+        //
+        // Now each entry carries its own signal and `current()` subscribes on read, so the readers
+        // that actually used a value are exactly the ones re-entered — no tuple to remember, no
+        // subtree to dirty, and direction (previously in the tuple) is tracked too instead of going
+        // through the ctx-less `direction::provides`.
+        //
+        // The previous values used to live in a backchannel keyed by `position_key`, because this
+        // function also runs from a window's per-frame wrapper where there is no `#[composable]` call
+        // site to key off. `ctx.provide` keys its entry through `next_provider_key`, whose keyless
+        // fallback is the slot path — the same stability that wrapper needs, one entry per call site
+        // either way.
+        ctx.provide(
+            &[
+                crate::layout::direction::provided(direction),
+                LOCAL_COLORS.provided(colors),
+                LOCAL_TYPOGRAPHY.provided(typography),
+                LOCAL_CONTENT_COLOR.provided(on_surface),
+                // The motion scheme travels with the theme, as Compose's `LocalMotionScheme` does.
+                // The theme provides the standard one; a subtree switches to expressive motion with
+                // `WiniaTheme::with_motion_scheme`.
+                LOCAL_MOTION_SCHEME.provided(MotionScheme::standard()),
+            ],
+            content,
+        );
     }
 
     /// The motion scheme in force — Compose's `LocalMotionScheme.current`.
@@ -380,7 +376,7 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        LOCAL_MOTION_SCHEME.provides(scheme, || content(ctx));
+        LOCAL_MOTION_SCHEME.provide(scheme, ctx, content);
     }
 
     /// 在子树中覆盖 Material Typography token，不改变颜色或布局方向。
@@ -389,16 +385,20 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        LOCAL_TYPOGRAPHY.provides(typography, || content(ctx));
+        LOCAL_TYPOGRAPHY.provide(typography, ctx, content);
     }
 
     /// 在子树中覆盖内容色（对标 Compose `CompositionLocalProvider(LocalContentColor)`）
+    ///
+    /// Uses [`CompositionLocal::provide`], so a caller whose colour comes from state does not
+    /// have to remember to dirty the subtree itself — a label that composed with the previous colour
+    /// would otherwise keep painting it behind a container that had already moved on.
     pub fn with_content_color(
         color: Color,
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        LOCAL_CONTENT_COLOR.provides(color, || content(ctx));
+        LOCAL_CONTENT_COLOR.provide(color, ctx, content);
     }
 
     /// 在子树中开关 tonal overlay（对标 Compose `LocalTonalElevationEnabled`）。关闭后子树内所有
@@ -408,7 +408,7 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        LOCAL_TONAL_ELEVATION_ENABLED.provides(enabled, || content(ctx));
+        LOCAL_TONAL_ELEVATION_ENABLED.provide(enabled, ctx, content);
     }
 
     /// 当前子树是否启用 tonal overlay（默认开——对标 Compose `LocalTonalElevationEnabled`）。
@@ -424,7 +424,7 @@ impl WiniaTheme {
         ctx: &mut ComposeCtx,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
-        LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation, || content(ctx));
+        LOCAL_ABSOLUTE_TONAL_ELEVATION.provide(elevation, ctx, content);
     }
 
     /// 父层累积下来的 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation.current`）。

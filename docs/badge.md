@@ -65,13 +65,12 @@ BadgedBox::new(|ctx| { Badge::new().build(ctx); })   // Compose's `badge` parame
 ## 3. Implementation
 
 - **Badge**: `default_min_size` for the size + `background` (the CornerFull shape) + horizontal
-  content padding, then `WiniaTheme::with_content_color` + `ProvideTextStyle` (LabelSmall) around a
-  Row (vertically centred) when it has content — Compose's `ProvideContentColorTextStyle`.
-  A content-colour change is tracked through a backchannel that remembers the previous value and
-  calls `mark_subtree_dirty()` when it moved: a `CompositionLocal` does not invalidate its readers,
-  and the inner Row group declares only arrangement/alignment/spacing, so entering the outer group
-  alone never reaches the label (the same defect `WiniaTheme::provide_resolved` records for a theme
-  switch).
+  content padding, then a single `ProvideContentColorTextStyle(content_color, label_small, ctx, …)`
+  around a Row (vertically centred) when it has content — Compose's provider of the same name, one
+  call instead of two nested ones.
+  It is TRACKED, which is what carries a content-colour change to the label: the inner Row group
+  declares only arrangement/alignment/spacing, so entering the outer group alone never reaches it.
+  The colour and the style each carry a signal, and the label subscribed to both when it read them.
 - **BadgedBox**: a custom `MeasurePolicy` (`BadgedBoxPolicy`) — the anchor is measured with the
   full constraints and the badge with a loosened height (`constraints.loosen_height()`; Compose is
   `constraints.copy(minHeight = 0)`, so **only the height is loosened, not the width** — the text

@@ -1140,3 +1140,84 @@ fn a_merged_set_lets_the_page_win_per_class() {
         });
     assert_eq!(resolved.container, green());
 }
+
+/// A Button repaints its label when the CONTENT colour changes — the container moved and the text
+/// stayed behind (measured on a checked/unchecked toggle: a dark container kept the old light
+/// label and vice versa).
+///
+/// `WiniaTheme::with_content_color` and `ProvideTextStyle` are `CompositionLocal`s, and a local does
+/// NOT invalidate its readers: the inner `Row` declares nothing that changed, so it Skips, the
+/// providers never re-run, and the label keeps painting the colour it was composed with while the
+/// background — computed in `build` itself — moves on. That is the defect `badge.rs` records, and
+/// this pins the same fix for `Button`: remember the last content colour in a backchannel (reading
+/// it registers no dependency) and dirty the subtree when it moved.
+#[test]
+fn a_button_repaints_its_label_when_the_content_colour_changes() {
+    use crate::graphics::Color;
+    let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+    let disabled_container = Color::from_argb(128, 0, 0, 0);
+    let disabled_content = Color::from_argb(97, 0, 0, 0);
+    let dark_container = Color::from_argb(255, 20, 24, 30);
+    let light_label = Color::from_argb(255, 245, 246, 250);
+    let light_container = Color::from_argb(255, 210, 200, 240);
+    let dark_label = Color::from_argb(255, 6, 8, 12);
+
+    let colours = std::cell::Cell::new(ButtonColors::new(
+        dark_container,
+        light_label,
+        disabled_container,
+        disabled_content,
+    ));
+    let mut composer = crate::runtime::composer::Composer::new();
+    let scene = |ctx: &mut ComposeCtx| {
+        let colours = colours.get();
+        crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            Button::filled()
+                .colors(colours)
+                .on_click(|| {})
+                .build(ctx, |ctx| crate::components::text::Text::new("Day").build(ctx));
+        });
+    };
+    composer.compose(scene);
+    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+    // Flip BOTH halves, the way a toggle moves between checked and unchecked.
+    colours.set(ButtonColors::new(
+        light_container,
+        dark_label,
+        disabled_container,
+        disabled_content,
+    ));
+    // A frame's own path: the content colour reaches the label through a provider, whose notify
+    // lands in the queue during this pass and dirties the reader on the next one.
+    composer.recompose_to_stable(|| scene);
+    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+    let nodes = composer.arena_nodes();
+    let mut painted_container = None;
+    let mut painted_label = None;
+    for el in nodes.iter().flat_map(|node| node.modifier.elements()) {
+        match el {
+            crate::modifier::ModifierElement::Background { color, .. }
+                if painted_container.is_none() =>
+            {
+                painted_container = Some(color.eval())
+            }
+            crate::modifier::ModifierElement::TextContent { content, color, .. }
+                if content.as_str() == "Day" =>
+            {
+                painted_label = Some(*color)
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        painted_container,
+        Some(light_container),
+        "the container moved to the new colour"
+    );
+    assert_eq!(
+        painted_label,
+        Some(dark_label),
+        "the label repaints in the NEW content colour instead of the one it was composed with"
+    );
+}

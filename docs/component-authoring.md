@@ -702,19 +702,27 @@ Reach for one of these before writing anything new:
 
 | Provider | Provides | Notes |
 | --- | --- | --- |
+| `ProvideContentColorTextStyle(color, style, ctx, \|ctx\| …)` | `LocalContentColor` + `LocalTextStyle` | **prefer this** for a label slot: colour and style travel together (§13.2) |
 | `ProvideTextStyle(style, ctx, \|ctx\| …)` | the subtree's `TextStyle` | **MERGED**, not replaced (§13.2) |
 | `WiniaTheme::with_content_color(color, ctx, \|ctx\| …)` | `LocalContentColor` | what an `Icon` / `Text` inherits |
 | `WiniaTheme::with_theme*` (four overloads) | colours + typography + direction | see the warning in §13.4 |
 | `WiniaTheme::with_typography(type, ctx, \|ctx\| …)` | the type scale only | leaves colours and direction alone |
 | `WiniaTheme::with_motion_scheme(scheme, ctx, \|ctx\| …)` | the springs | how an app switches every animation at once |
 | `WiniaTheme::with_tonal_elevation_enabled(bool, ctx, \|ctx\| …)` | `Surface`'s tonal overlay | |
-| `with_component_styles(styles, \|…\|)` | the per-class styling registry | `_when_changed` / `_arc` variants in §13.5 |
+| `ctx.provide(&[A.provided(x), B.provided(y)], \|ctx\| …)` | several locals at ONE site | Compose's `CompositionLocalProvider(A provides x, B provides y)`; one call = one slot position |
+| `with_component_styles_when_changed(styles, ctx, \|ctx\| …)` | the per-class styling registry | `_arc` / plain variants in §13.5 |
 | `with_density(density, \|…\|)` | `Density` | no `ctx` — a plain closure |
-| `layout::direction::provides(direction, \|…\|)` | `LayoutDirection` | no `ctx` either |
+| `layout::direction::provides(direction, \|…\|)` | `LayoutDirection` | no `ctx` either; `direction::provided` is its tracked form |
 
-**SHOULD** wrap a text slot in `ProvideTextStyle(...)` so the style is the COMPONENT's and the caller
-can still override it, rather than baking the settings into the content's own `Text`. **SHOULD** wrap
-a colour-carrying slot in `WiniaTheme::with_content_color(...)` for the same reason.
+**SHOULD** wrap a text slot in `ProvideContentColorTextStyle(...)` when it carries both a colour and a
+style, and in `ProvideTextStyle(...)` when it only carries a style — so the styling is the
+COMPONENT's and the caller can still override it, rather than baking the settings into the content's
+own `Text`. **SHOULD** wrap a colour-only slot in `WiniaTheme::with_content_color(...)` for the same
+reason.
+
+**MUST** prefer one `ctx.provide` call over nesting two single-value providers in one statement:
+nesting spends two slot positions on what is one decision, and the two then have to agree about which
+ran first.
 
 ### 13.2 `ProvideTextStyle` merges; most providers replace
 
@@ -723,7 +731,7 @@ inherits:
 
 ```rust
 let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
-LOCAL_TEXT_STYLE.provides(merged, || content(ctx));
+LOCAL_TEXT_STYLE.provide(merged, ctx, |ctx| content(ctx));
 ```
 
 Every field resolves `override_.field.or(base.field)`, so a nested provider that names only
@@ -768,29 +776,67 @@ arrives — with no compile error and no panic.
 composition (`impl FnOnce(&mut ComposeCtx)`), and the `ctx`-less shape (`impl FnOnce() -> R`) for a
 pure value provider such as `with_density`. Do not mix the two in one family.
 
-### 13.4 `provides` does NOT invalidate its readers — the one that breaks at runtime
+### 13.4 `provide` invalidates; `provides` does not — pick by whether the value moves
 
-This is the whole trap, quoted from `CompositionLocal::provides`:
+Two verbs, one meaning each:
 
-> A reader picks the local up again only when the group it sits in is re-entered, and a group that
-> declared nothing about itself is Skipped and keeps what it composed with.
+| Form | Signature | Invalidates its readers? |
+| --- | --- | --- |
+| `LOCAL.provide(value, ctx, \|ctx\| …)` | takes `ctx` | **yes** — compares against the last frame's value and notifies the scopes that read it |
+| `ctx.provide(&[A.provided(x), B.provided(y)], \|ctx\| …)` | takes `ctx` | **yes**, per entry, under each local's own comparison |
+| `LOCAL.provides(value, \|…\|)` | ctx-less | **no** — decides only what the NEXT reader sees |
+| `LOCAL.provided(value)` | — | nothing at all: it BUILDS an entry for `ctx.provide` |
 
-So a provider whose value comes from a `State` has to do BOTH:
+**MUST** use `provide` for anything that can change at runtime. The ctx-less `provides` is for the
+handful of values installed once or wrapping a whole frame (§13.4.2).
 
-1. **read the state inside a scope** — a `#[composable]` function or a container's restartable
-   group. A read at the root of a window's content has no scope to register against, so nothing
-   marks the provider to re-run. `examples/common/settings.rs` hit exactly this: it reads the
-   direction and hands it to `with_theme_and_direction`, and because that read landed at the
-   content root, the sheet flipped while the page behind it kept the old direction. The
-   `#[composable]` on `shell` is load-bearing, not decoration.
-2. **dirty the subtree when the value actually moves** — `ctx.mark_subtree_dirty()`, which is what
-   re-enters every reader inside it. `WiniaTheme::provide_resolved` is the worked example: it
-   remembers what it last provided and dirties only when the resolved palette, typography or
-   direction differs.
+#### 13.4.1 How the invalidation works
 
-`with_component_styles_when_changed` is the same pattern for a styling set (§13.5). **MUST NOT**
-assume a fresh `provides` call reaches a reader that composed before it: the reader keeps the value
-it composed with, forever, unless one of the two steps above happens.
+A provided entry carries a `StateSignal`, and reading the local subscribes to it —
+`CompositionLocal::current()` hands the signal to `register_dependency`, the same call `State::get`
+makes. So the scopes that re-run are exactly the ones that READ the value. Nothing else has to
+happen: no component writes invalidation code, and no subtree is dirtied wholesale because "we do not
+know who read it".
+
+Two consequences a component author has to know:
+
+1. **A reader must actually READ.** A group that never calls `current()` has nothing to wake. This is
+   not a burden — reading is what the component was doing anyway — but it does mean a test that
+   provides a value and never reads it proves nothing about invalidation.
+2. **The move lands one pass later than you might expect.** `Composer::compose` drains the pending
+   notification queue at its START, before any content runs; a `notify` raised while content is
+   running can therefore only be acted on by the NEXT pass. The frame path loops for this reason
+   (`PerWindow::recompose_until_stable`), so a frame never PRESENTS the intermediate state. In a unit
+   test that means: after changing a provided value, converge (`Composer::recompose_to_stable` under
+   `cfg(test)`, or your own loop over `recompose` and `has_pending_states`) rather than calling
+   `recompose` once and asserting.
+
+The old advice — compare by hand, then `ctx.mark_subtree_dirty()` — is gone. `provide_resolved`, the
+`Button`/`Badge` label colour, and `DisableSelection` each carried a hand-rolled copy of it; each is
+now one `provide` call.
+
+#### 13.4.2 The four providers that keep the ctx-less `provides`
+
+- `runtime::density::with_density` wraps a whole FRAME, not a composition: `per_window/core.rs`
+  opens it around `recompose_until_stable()` + `layout()` + `sw.draw(...)` in ONE closure. It cannot
+  take `&mut ComposeCtx` — the caller holds the composer across that span, so threading the ctx in is
+  a borrow conflict, not a style choice. And composition invalidation would be the wrong lever even
+  if it fit: the readers that matter for `density` run in MEASURE and DRAW
+  (`modifier/element.rs`'s `DrawNode::draw`, `render/pass.rs`'s clip slack), which no composition
+  invalidation reaches. Tracking it would promise something it cannot deliver.
+- `layout::direction::provides` is the ctx-less form for a test that supplies a direction around a
+  bare `Composer::compose`, and for a caller that wants to wrap a frame. Where a direction can
+  CHANGE, use the tracked entry instead: `WiniaTheme::provide_resolved` puts
+  `layout::direction::provided(direction)` into its `ctx.provide` call for exactly that reason. Until
+  recently direction rode inside a hand-compared tuple in that function; leaving it on the ctx-less
+  form would have silently dropped direction-change invalidation.
+- `saveable::with_saveable_registry` provides a per-window `Arc` installed once and never rebuilt;
+  `component_styles::with_component_styles` has no production call site at all (a different, non-`Arc`
+  form for callers that never change the set — its changing twin is
+  `with_component_styles_when_changed`). A signal over an unchanging value is pure per-frame cost.
+
+The rule that survives all of it: **if the value changes at runtime AND its readers compose, use
+`provide`. If either half is false, the tracking is either impossible or useless.**
 
 **One more trap, specific to `WiniaTheme::with_theme`:** it forwards to
 `with_theme_typography_and_direction(colors, Typography::default(), LayoutDirection::Ltr, …)`, so
@@ -798,18 +844,32 @@ nesting it inside a themed subtree RESETS the typography and the direction to th
 component that needs its own palette in `with_theme_and_direction` (passing the direction through),
 or change the colours some other way.
 
-### 13.5 A provider that has to be cheap to re-provide
+### 13.5 A value with no usable `PartialEq`
 
-`with_component_styles_when_changed` is worth reading as the model for a "value may change at
-runtime" provider:
+The comparison lives on the LOCAL, not at the call site — `CompositionLocal::new_by(default, same)`
+takes it once, and every `provide` of that local uses it. Two framework examples:
 
-- it keys its memory with `ctx.position_key(NAMESPACE)` rather than a call-site key, so two
-  providers in one composer do not share what they last provided;
-- it compares with `Arc::ptr_eq` — IDENTITY, not equality — so the caller must rebuild the set only
-  when it really changes. A set reconstructed every frame is a different set every frame, and will
-  re-compose the subtree every frame;
-- it seeds the remembered value with what it is providing, so the first frame does not dirty itself
-  for nothing.
+- `LOCAL_OVERSCROLL_FACTORY` compares by `Arc::ptr_eq`, because `Arc<dyn Fn>` has no `PartialEq` that
+  means anything;
+- `LOCAL_STYLES` does the same, so `with_component_styles_when_changed` compares by IDENTITY: the
+  caller must rebuild the set only when it really changes. A set reconstructed every frame is a
+  different set every frame, and will re-compose its readers every frame.
+
+**SHOULD** reach for `new_by` rather than wrapping a plain local in a hand-written comparison. A
+`same` that answers `false` too eagerly re-runs readers every frame; one that answers `true` too
+readily leaves them on a stale value with no way to tell. Compare by the identity that actually
+distinguishes two states.
+
+**Do not confuse this with `new_static`.** `new_static` is Compose's `staticCompositionLocalOf`: the
+value still moves (a reader that composes later for its own reasons must see the CURRENT one), but no
+reader is ever woken. It is for a handle installed once and never rebuilt, not an optimisation for a
+value that changes.
+
+`CompositionLocal::provide` also keeps its own memory per SITE (a per-site key over the composition
+position), so two providers in one statement do not overwrite each other's remembered value — which
+is what lets `ProvideTextStyle` nest inside another `ProvideTextStyle` and each keep its own. That key
+is load-bearing: pinning it to a constant makes two providers in one group share one entry, read each
+other's value as "changed", and re-dirty on every pass.
 
 ## 14. Checklist
 
@@ -832,10 +892,13 @@ Copy this into the pull request and tick it there:
      (enforced: components::conventions::no_component_spawns_its_own_task)
 [ ] hoisted state + remember_x_state when the caller must drive it
 [ ] remember_derived_state for a threshold over a continuous source
-[ ] coloured / styled slots get their context from a PROVIDER (ProvideTextStyle, with_content_color,
-     a CompositionLocal) rather than from each leaf's own parameters (section 13)
-[ ] a provider whose value comes from State reads it inside a scope AND dirties the subtree
-     (section 13.4 - provides does not invalidate readers)
+[ ] coloured / styled slots get their context from a PROVIDER (ProvideContentColorTextStyle,
+     ProvideTextStyle, with_content_color, a CompositionLocal) rather than from each leaf's own
+     parameters (section 13)
+[ ] a provider whose value can change at runtime uses CompositionLocal::provide (or one
+     ctx.provide call for several locals) - NOT the ctx-less provides, which invalidates nobody;
+     a value without a usable PartialEq gets CompositionLocal::new_by instead of a hand-written
+     comparison (sections 13.4, 13.5)
 [ ] self.modifier appended last, semantics declared before it
 [ ] colours and text styles from WiniaTheme; token constants named after the Compose token
 [ ] M3 geometry: 48dp touch targets, insets, RTL mirroring

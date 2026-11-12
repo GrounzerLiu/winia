@@ -640,30 +640,38 @@ fn alert_dialog_content(
         });
     }
     if let Some(title) = &slots.title {
-        WiniaTheme::with_content_color(colors.title, ctx, |ctx| {
-            // Compose centres the title when an icon sits above it, and starts it otherwise.
-            let align = if has_icon {
-                Alignment::Center
-            } else {
-                Alignment::Start
-            };
-            slot(ctx, DIALOG_TITLE_PADDING_BOTTOM, align, None, |ctx| {
-                ProvideTextStyle(styles.title.clone(), ctx, |ctx| title(ctx));
-            });
-        });
+        // Colour and style in ONE call: they always travel together, and one site means one slot
+        // position instead of two that have to agree about which ran first.
+        crate::components::text::ProvideContentColorTextStyle(
+            colors.title,
+            styles.title.clone(),
+            ctx,
+            |ctx| {
+                // Compose centres the title when an icon sits above it, and starts it otherwise.
+                let align = if has_icon {
+                    Alignment::Center
+                } else {
+                    Alignment::Start
+                };
+                slot(ctx, DIALOG_TITLE_PADDING_BOTTOM, align, None, |ctx| title(ctx));
+            },
+        );
     }
     if let Some(text) = &slots.text {
-        WiniaTheme::with_content_color(colors.text, ctx, |ctx| {
-            slot(
-                ctx,
-                DIALOG_TEXT_PADDING_BOTTOM,
-                Alignment::Start,
-                Some(1.0),
-                |ctx| {
-                    ProvideTextStyle(styles.text.clone(), ctx, |ctx| text(ctx));
-                },
-            );
-        });
+        crate::components::text::ProvideContentColorTextStyle(
+            colors.text,
+            styles.text.clone(),
+            ctx,
+            |ctx| {
+                slot(
+                    ctx,
+                    DIALOG_TEXT_PADDING_BOTTOM,
+                    Alignment::Start,
+                    Some(1.0),
+                    |ctx| text(ctx),
+                );
+            },
+        );
     }
     let (confirm, dismiss) = (&slots.confirm_button, &slots.dismiss_button);
     if confirm.is_some() || dismiss.is_some() {

@@ -192,7 +192,15 @@ impl SharedTransitionScope {
 }
 
 pub(crate) static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScope>>> =
-    LazyLock::new(|| CompositionLocal::new(|| None));
+    LazyLock::new(|| {
+        // A scope is identified by the id it was created with; two scopes with equal contents are
+        // different flights' targets.
+        CompositionLocal::new_by(|| None, |a, b| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.scope_id == b.scope_id,
+            _ => false,
+        })
+    });
 
 /// One scene published by a scene host: an id that is stable for that scene across frames, plus a
 /// handle that reads its visibility whenever the flight system asks (1 = fully in the scene).

@@ -1423,3 +1423,100 @@ fn a_label_inherits_the_rows_text_style_whether_built_in_or_by_hand() {
         "the label must not wrap, got a {item_custom} dp item"
     );
 }
+
+/// A toggled item repaints its label in the NEW content colour.
+///
+/// This is the reported screenshot: a `Day / Week / Month` row where switching the selection left
+/// each label painted in the colour of its PREVIOUS state — the newly checked item kept the
+/// unchecked `onSurface` (a pale label on the pale `primary` fill) and the newly unchecked one kept
+/// `onPrimary` (a violet label on the dark `surfaceContainer`), while the item that never moved was
+/// right. The container is computed in `Button::build` and moved on; the label arrives through
+/// `with_content_color` / `ProvideTextStyle`, and a `CompositionLocal` does not invalidate its
+/// readers, so the inner `Row` Skipped and the providers never ran again. `Button::build` now
+/// dirties the content subtree when the content colour moved; this pins the fix at the level the
+/// screenshot was taken at, with the state read where a real selection puts it — inside the item's
+/// own content closure, as `examples/button_group_demo.rs`'s `connected_selectable_row` does.
+#[test]
+fn a_toggled_item_repaints_its_label_in_the_new_content_colour() {
+    let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+    // A real `State`, not a `Cell`: the read registers a composition dependency, so the change
+    // actually reaches the group instead of the slot staying Clean.
+    let checked = crate::runtime::state::State::new(false);
+    let make_scene = |checked: crate::runtime::state::State<bool>,
+                      theme: crate::theme::ThemeColors| {
+        move |ctx: &mut ComposeCtx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let picked = checked.clone();
+                let item_theme = theme.clone();
+                ButtonGroup::new()
+                    .add(ButtonGroupItem::new(move |ctx, source| {
+                        // Read INSIDE the item closure — the nearest scope that uses the value.
+                        let on = picked.get();
+                        let t = &item_theme;
+                        let alpha = |c: crate::graphics::Color, a: f32| {
+                            crate::graphics::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
+                        };
+                        // `ToggleButton`'s two containers, as the demo's `toggle_colors` has them.
+                        let colors = if on {
+                            crate::components::button::ButtonColors::new(
+                                t.primary,
+                                t.on_primary,
+                                alpha(t.on_surface, 0.12),
+                                alpha(t.on_surface, 0.38),
+                            )
+                        } else {
+                            crate::components::button::ButtonColors::new(
+                                t.surface_container,
+                                t.on_surface,
+                                alpha(t.on_surface, 0.12),
+                                alpha(t.on_surface, 0.38),
+                            )
+                        };
+                        crate::components::button::Button::filled()
+                            .colors(colors)
+                            .interaction_source(source)
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new("Day").build(ctx);
+                            });
+                    }))
+                    .build(ctx);
+            });
+        }
+    };
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(make_scene(checked.clone(), theme.clone()));
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+    checked.set(true);
+    // Converged like a frame: the button's content colour is provided, so its notify is acted on by
+    // the NEXT pass rather than the one that saw the toggle move.
+    let ran = composer.recompose_to_stable(|| make_scene(checked.clone(), theme.clone()));
+    assert!(ran, "the state change must recompose");
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+    let nodes = composer.arena_nodes();
+    let mut containers = Vec::new();
+    let mut painted = None;
+    for el in nodes.iter().flat_map(|node| node.modifier.elements()) {
+        match el {
+            crate::modifier::ModifierElement::Background { color, .. } => {
+                containers.push(color.eval())
+            }
+            crate::modifier::ModifierElement::TextContent { content, color, .. }
+                if content.as_str() == "Day" =>
+            {
+                painted = Some(*color)
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        containers.contains(&theme.primary),
+        "the checked item's container must be the primary fill — otherwise the item never re-ran \
+         and this test says nothing about the label; painted: {containers:?}"
+    );
+    assert_eq!(
+        painted,
+        Some(theme.on_primary),
+        "the checked item's label must be repainted in onPrimary, not the previous onSurface"
+    );
+}

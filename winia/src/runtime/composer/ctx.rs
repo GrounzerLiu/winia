@@ -207,6 +207,8 @@ impl<'a> ComposeCtx<'a> {
             std::mem::take(&mut self.composer.path_counters);
         self.composer.movable_saved_remember_counters =
             std::mem::take(&mut self.composer.remember_path_counters);
+        self.composer.movable_saved_provider_counters =
+            std::mem::take(&mut self.composer.provider_path_counters);
         self.composer.movable_saved_params = std::mem::take(&mut self.composer.pending_params);
         self.composer.movable_saved_pending_next =
             std::mem::replace(&mut self.composer.pending_next, 0);
@@ -250,6 +252,8 @@ impl<'a> ComposeCtx<'a> {
             std::mem::take(&mut self.composer.movable_saved_path_counters);
         self.composer.remember_path_counters =
             std::mem::take(&mut self.composer.movable_saved_remember_counters);
+        self.composer.provider_path_counters =
+            std::mem::take(&mut self.composer.movable_saved_provider_counters);
         self.composer.pending_params = std::mem::take(&mut self.composer.movable_saved_params);
         self.composer.pending_next = self.composer.movable_saved_pending_next;
         self.composer
@@ -332,6 +336,42 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember_handle(key, init)
     }
 
+    /// Install several locals at ONE composition site — Compose's
+    /// `CompositionLocalProvider(A provides x, B provides y, content = ...)`.
+    ///
+    /// ```ignore
+    /// ctx.provide(&[
+    ///     LOCAL_CONTENT_COLOR.provided(color),
+    ///     LOCAL_TEXT_STYLE.provided(merged),
+    /// ], |ctx| { ... })
+    /// ```
+    ///
+    /// One CALL is one slot position, so the values no longer nest. That nesting is what made three
+    /// levels of providers overwrite each other's remembered value, and what forced
+    /// `CompositionLocal::provide`'s per-site counter into existence in the first place.
+    ///
+    /// Each value compares against the previous pass under its OWN local's policy, and only a
+    /// genuine move notifies — the readers that subscribed through `current()` are then re-entered
+    /// by the runtime, on the next pass (the pending queue drains at the START of each pass).
+    pub fn provide<R>(
+        &mut self,
+        values: &[crate::runtime::composition_local::ProvidedValue],
+        content: impl FnOnce(&mut ComposeCtx) -> R,
+    ) -> R {
+        // No values: nothing to install, and no slot to consume — a provider that compiled its
+        // value list conditionally must not shift the keys of everything after it.
+        if values.is_empty() {
+            return content(self);
+        }
+        let key = self.next_provider_key();
+        let entry = self.remember_backchannel_at_key(key, || {
+            crate::runtime::state::Backchannel::new(
+                crate::runtime::composition_local::seed_supplied(values),
+            )
+        });
+        crate::runtime::composition_local::provide_all(values, &entry, || content(self))
+    }
+
     /// A key for "the composition position we are at right now", mixed with `namespace`.
     ///
     /// A provider needs a per-SITE key: two `WiniaTheme::with_*` calls in one composer must not share
@@ -367,6 +407,23 @@ impl<'a> ComposeCtx<'a> {
     /// Call it only when the value actually changed: it costs a re-entry of the whole subtree.
     pub fn mark_subtree_dirty(&mut self) {
         self.composer.mark_inner_slots_dirty();
+    }
+
+    /// A per-SITE key for a `CompositionLocal` provider — what [`CompositionLocal::provide`]
+    /// remembers its last value under.
+    ///
+    /// Why not [`Self::position_key`]: that key is the enclosing GROUP, so every provider inside one
+    /// container collides. Two `ProvideTextStyle` calls nested in the same statement (`text.rs`'s own
+    /// test does exactly that) would then overwrite each other's memory, each seeing the other's style
+    /// as a change and dirtying its subtree on every frame. `alert_dialog.rs` has the same shape with
+    /// `with_content_color` inside `if let` branches.
+    ///
+    /// This is `next_remember_key`'s scheme — statement id mixed with a per-base ordinal — with its own
+    /// counter. Sharing `remember`'s counters would make a provider that sits in a conditional branch
+    /// shift the ordinal of every `remember` after it, so those states would change key and lose their
+    /// value the first time the branch flipped.
+    pub(crate) fn next_provider_key(&mut self) -> u64 {
+        self.composer.next_provider_key()
     }
 
     /// 当前组合节点的 slot_key（DropdownMenu 锚点用）

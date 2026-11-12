@@ -255,7 +255,7 @@ impl StateSignal {
         self.id
     }
 
-    fn new(id: StateId) -> Arc<Self> {
+    pub(crate) fn new(id: StateId) -> Arc<Self> {
         Arc::new(Self {
             id,
             revision: AtomicU64::new(0),
@@ -299,7 +299,7 @@ impl StateSignal {
             .retain(|entry| entry.id != subscription_id);
     }
 
-    fn notify(&self, wake: bool) {
+    pub(crate) fn notify(&self, wake: bool) {
         let has_live_queues = {
             let mut subscribers = self.subscribers.lock();
             self.revision.fetch_add(1, Ordering::AcqRel);
@@ -990,7 +990,7 @@ fn defer_write(signal: &Arc<StateSignal>, wake: bool) -> bool {
     })
 }
 
-fn next_state_id() -> StateId {
+pub(crate) fn next_state_id() -> StateId {
     StateId::new(NEXT_STATE_ID.fetch_add(1, Ordering::Relaxed))
 }
 

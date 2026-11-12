@@ -5,6 +5,7 @@ pub(super) struct ComposeRuntimeSnapshot {
     pub(super) current_group_key: u32,
     pub(super) path_counters: crate::layout::node::SlotKeyMap<u32>,
     pub(super) remember_path_counters: crate::layout::node::SlotKeyMap<u32>,
+    pub(super) provider_path_counters: crate::layout::node::SlotKeyMap<u32>,
     pub(super) scope_source_stack: Vec<Option<u64>>,
     pub(super) key_override_stack: Vec<u64>,
     pub(super) pending_recomposition: VecDeque<u64>,

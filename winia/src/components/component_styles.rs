@@ -113,7 +113,11 @@ fn empty_styles() -> Arc<ComponentStyles> {
 }
 
 static LOCAL_STYLES: std::sync::LazyLock<CompositionLocal<Arc<ComponentStyles>>> =
-    std::sync::LazyLock::new(|| CompositionLocal::new(empty_styles));
+    std::sync::LazyLock::new(|| {
+        // `Arc::ptr_eq`, not `==`: identity is the contract this provider documents, and two equal
+        // sets rebuilt each frame would otherwise read as "unchanged" while being new allocations.
+        CompositionLocal::new_by(empty_styles, |a, b| Arc::ptr_eq(a, b))
+    });
 
 /// Provide `styles` to everything composed inside `content`.
 ///
@@ -130,40 +134,27 @@ pub fn with_component_styles<R>(styles: ComponentStyles, content: impl FnOnce() 
 ///
 /// The plain [`with_component_styles`] is a `CompositionLocal` provider, and a local does not
 /// invalidate its readers: a set that changes at runtime (a brand switch, a screen selecting a
-/// different look) only reaches components that recompose for some other reason. This form compares
-/// the `Arc` it provided last time with the one it is given now and dirties the subtree when they
-/// differ - the same remedy `WiniaTheme` applies to a theme switch.
+/// different look) only reaches components that recompose for some other reason. This form notifies
+/// the scopes that read the local, which is the same remedy `WiniaTheme` applies to a theme switch.
 ///
 /// Identity, not equality: hold the `Arc` and rebuild it only when the styling actually changes.
 /// A set reconstructed every frame is a different set every frame here, and will re-compose the
 /// subtree every frame.
+///
+/// `ctx` follows the values and `content` is last, like every other provider here — Compose's own
+/// argument order.
 #[crate::composable]
 pub fn with_component_styles_when_changed<R>(
-    ctx: &mut crate::runtime::composer::ComposeCtx,
     styles: Arc<ComponentStyles>,
+    ctx: &mut crate::runtime::composer::ComposeCtx,
     content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx) -> R,
 ) -> R {
-    // Keyed by position, not by call site: this also runs from a per-frame wrapper where there is no
-    // `#[composable]` statement to key off, and two providers in one composer must not share the
-    // memory of what they last provided.
-    const NAMESPACE: u64 = 0x7769_6e69_6173_7479; // "winia sty"
-    let slot_key = ctx.position_key(NAMESPACE);
-    // Seeded with the value being provided, so the first frame does not dirty itself for nothing.
-    let previous = {
-        let seed = Arc::clone(&styles);
-        ctx.remember_backchannel_at_key(slot_key, move || {
-            crate::runtime::state::Backchannel::new(Some(seed))
-        })
-    };
-    let same = previous
-        .get()
-        .as_ref()
-        .is_some_and(|provided| Arc::ptr_eq(provided, &styles));
-    if !same {
-        previous.set(Some(Arc::clone(&styles)));
-        ctx.mark_subtree_dirty();
-    }
-    LOCAL_STYLES.provides(styles, move || content(ctx))
+    // `Arc::ptr_eq`, not `==`: identity is the contract this provider documents, and two equal sets
+    // rebuilt each frame would otherwise stay "unchanged" while being different allocations — or,
+    // with a plain `PartialEq` over the registry, would deep-compare every frame.
+    //
+    // The comparison lives on the LOCAL (`new_by` above), so the provider no longer has to pass it.
+    LOCAL_STYLES.provide(styles, ctx, content)
 }
 
 /// The same provider for the immutable case, without a ctx: kept for callers that build the set once
