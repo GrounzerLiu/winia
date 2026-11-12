@@ -20,12 +20,6 @@ use crate::runtime::state::{Backchannel, StateSignal, next_state_id};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// One entry on the provide stack: the value plus the signal that announces it changed.
-///
-/// The signal is what makes a read a subscription. `CompositionLocal::current` hands it to
-/// `register_dependency`, so the scope that read the value becomes a dependent and is marked dirty
-/// when the provider moves — no `mark_subtree_dirty`, and no "remember to invalidate" duty on the
-/// component that provides it.
 /// One provide site's state: its current value plus the signal that announces changes.
 ///
 /// The signal is what makes a read a subscription. `CompositionLocal::current` hands it to
@@ -135,6 +129,7 @@ pub struct ProvidedValue {
     pub(crate) same: Arc<dyn Fn(&dyn Any, &dyn Any) -> bool + Send + Sync>,
     /// Whether a moved value may wake its readers — `false` for `new_static`. Carried per VALUE
     /// rather than per call, so one `ctx.provide` can mix a notifying local with a static one.
+    /// It is a COPY of the local's own flag, taken when [`CompositionLocal::provided`] bundled it.
     pub(crate) notifies: bool,
 }
 
@@ -195,26 +190,45 @@ pub fn with_snapshot<R>(snapshot: &LocalSnapshot, f: impl FnOnce() -> R) -> R {
 /// One CALL is one slot position, so the values no longer have to nest — which is what let three
 /// levels of nesting overwrite each other's memory and made the per-site counter necessary.
 ///
-/// # Panics
-/// When `values.len()` differs from the entry's arity. A site's provide count comes from the same
-/// statement every frame, so a change means the call site itself is inconsistent — and zipping
-/// silently would leave later values un-installed while earlier ones looked fine, which is exactly
-/// the kind of "some of it updated" bug the signals exist to prevent.
+/// Entries are matched by the LOCAL's id, not by array position. Two consequences that matter:
+///
+/// - a call site whose value list GROWS or SHRINKS between passes keeps working. Its existing
+///   entries keep their signals (so readers already subscribed still hear about them), a local
+///   joining the list gets a fresh entry seeded with the value it is given, and a local leaving it
+///   simply stops being on the stack. Panicking here would abort a shipping app for a mistake whose
+///   only symptom a user would ever see is a blank window.
+/// - reordering the array is not a change. Zipping by position would report every local as moved
+///   (each one downcasts against another's payload, fails, and answers "changed"), re-entering every
+///   reader for a list that had not changed at all.
 pub fn provide_all<R>(
     values: &[ProvidedValue],
     entry: &Backchannel<Vec<(u64, Arc<Supplied>)>>,
     content: impl FnOnce() -> R,
 ) -> R {
-    let supplied = entry.peek();
-    assert_eq!(
-        supplied.len(),
-        values.len(),
-        "one `ctx.provide` call must supply the same locals every frame: this site holds {} from \
-         the previous pass but was given {} — a provider written in a conditional branch needs its \
-         own site (and therefore its own key), not a varying array at one site",
-        supplied.len(),
-        values.len()
-    );
+    let previous = entry.peek();
+    // Reuse the entry a local already had, so its signal survives (a subscriber points at the
+    // signal, not at the value). Only a local new to this site gets a fresh one.
+    let mut supplied: Vec<(u64, Arc<Supplied>)> = Vec::with_capacity(values.len());
+    let mut reshaped = previous.len() != values.len()
+        || previous
+            .iter()
+            .zip(values)
+            .any(|((id, _), value)| *id != value.id);
+    for value in values {
+        match previous.iter().find(|(id, _)| *id == value.id) {
+            Some((id, slot)) => supplied.push((*id, Arc::clone(slot))),
+            None => {
+                reshaped = true;
+                supplied.push((
+                    value.id,
+                    Arc::new(Supplied::tracked_erased(Arc::clone(&value.value))),
+                ));
+            }
+        }
+    }
+    if reshaped {
+        entry.set(supplied.clone());
+    }
     // Compare first, so a notify lands before content runs and the readers it wakes are the ones
     // that composed against the OLD value.
     //
@@ -448,6 +462,12 @@ impl<T: Clone + 'static> CompositionLocal<T> {
     /// Outside a composition there is no scope to register against either, and
     /// `register_dependency` answers that by returning `None`; a measure/draw read falls back to the
     /// active node, which is a layout dependency.
+    ///
+    /// The return value is discarded on purpose. `State::get` keeps it for the post-read
+    /// `enqueue_if_changed` handshake, which closes the window between reading the value and
+    /// subscribing: a write landing in that gap would otherwise be lost. A local has no such window —
+    /// the value it reads comes from the same entry the signal belongs to, and a write to it is a
+    /// whole composition pass, not a concurrent `State::set` from another thread.
     fn subscribe(signal: Option<Arc<StateSignal>>) {
         if let Some(signal) = signal {
             crate::runtime::state::register_dependency(signal);
@@ -884,6 +904,114 @@ mod tests {
             &[7, 9],
             "the reader composed against the old value first and the new one after — anything else \
              means the entry swapped without notifying, or notified without swapping"
+        );
+    }
+
+    /// A call site's value list may change SHAPE between passes without taking the app down.
+    ///
+    /// A provider written inside a conditional branch is ordinary code, and the length of its array
+    /// follows that branch. Panicking on the mismatch would abort a shipping window for a mistake
+    /// whose only visible symptom is a missing colour; entries are matched by LOCAL instead, so a
+    /// local joining the list gets a fresh entry seeded with the value it is being given.
+    #[test]
+    fn a_provide_call_may_change_its_value_list_between_passes() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static NUMBER: std::sync::LazyLock<CompositionLocal<i32>> =
+            std::sync::LazyLock::new(|| CompositionLocal::new(|| 0i32));
+        static LABEL: std::sync::LazyLock<CompositionLocal<String>> =
+            std::sync::LazyLock::new(|| CompositionLocal::new(String::new));
+
+        // Read in the content closure, NOT inside a container's restartable group: the point of this
+        // test is what the stack holds on the pass with the longer list, and a `Row` would Skip on
+        // the second pass and replay the first one's value.
+        let wide = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let make_scene = |wide: Arc<AtomicBool>,
+                          seen: Arc<std::sync::Mutex<Vec<(i32, String)>>>| {
+            move |ctx: &mut ComposeCtx| {
+                // Both arrays are built every pass and one is selected, so the borrow outlives the
+                // call — the LENGTH is what varies, which is the case that used to assert.
+                let narrow = [NUMBER.provided(7)];
+                let broad = [NUMBER.provided(7), LABEL.provided("wide".to_string())];
+                let values = if wide.load(Ordering::SeqCst) {
+                    &broad[..]
+                } else {
+                    &narrow[..]
+                };
+                let seen = seen.clone();
+                ctx.provide(values, move |ctx| {
+                    seen.lock().unwrap().push((NUMBER.current(), LABEL.current()));
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, crate::modifier::Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                });
+            }
+        };
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(make_scene(wide.clone(), seen.clone()));
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[(7, String::new())],
+            "the narrow list provides only the number, so the label falls back to its default"
+        );
+
+        wide.store(true, Ordering::SeqCst);
+        composer.compose(make_scene(wide.clone(), seen.clone()));
+        assert_eq!(
+            seen.lock().unwrap().last().cloned(),
+            Some((7, "wide".to_string())),
+            "the local that joined the list is on the stack, with the value it was given"
+        );
+    }
+
+    /// Reordering a call's array is NOT a change.
+    ///
+    /// Entries are matched by local, so a call site that happens to list its values in another order
+    /// must not report every entry as moved. Zipping by position would: each slot would downcast
+    /// against another local's payload, fail, and answer "changed" for a list that had not changed at
+    /// all — re-entering every reader, on every pass, for nothing.
+    #[test]
+    fn reordering_a_provide_call_is_not_a_change() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static NUMBER: std::sync::LazyLock<CompositionLocal<i32>> =
+            std::sync::LazyLock::new(|| CompositionLocal::new(|| 0i32));
+        static LABEL: std::sync::LazyLock<CompositionLocal<String>> =
+            std::sync::LazyLock::new(|| CompositionLocal::new(String::new));
+
+        let flipped = Arc::new(AtomicBool::new(false));
+        let make_scene = |flipped: Arc<AtomicBool>| {
+            move |ctx: &mut ComposeCtx| {
+                let forward = [NUMBER.provided(7), LABEL.provided("x".to_string())];
+                let backward = [LABEL.provided("x".to_string()), NUMBER.provided(7)];
+                let values = if flipped.load(Ordering::SeqCst) {
+                    &backward[..]
+                } else {
+                    &forward[..]
+                };
+                ctx.provide(values, |ctx| {
+                    // READ both, so the content is subscribed to both: a reordering that looked like
+                    // a change would land in the queue, and that is exactly what is asserted below.
+                    let _ = (NUMBER.current(), LABEL.current());
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, crate::modifier::Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                });
+            }
+        };
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(make_scene(flipped.clone()));
+        assert!(!composer.has_pending_states(), "the first pass queues nothing");
+
+        flipped.store(true, Ordering::SeqCst);
+        composer.compose(make_scene(flipped.clone()));
+        assert!(
+            !composer.has_pending_states(),
+            "the same two locals in a different order are the same values, so nothing may be queued \
+             — a queue here means an entry was compared against the OTHER local's payload"
         );
     }
 

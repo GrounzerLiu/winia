@@ -353,6 +353,12 @@ impl<'a> ComposeCtx<'a> {
     /// Each value compares against the previous pass under its OWN local's policy, and only a
     /// genuine move notifies — the readers that subscribed through `current()` are then re-entered
     /// by the runtime, on the next pass (the pending queue drains at the START of each pass).
+    ///
+    /// The list may change SHAPE between passes: entries are matched by LOCAL, so a provider whose
+    /// values depend on a branch keeps working. A local that joins the list is seeded with the value
+    /// it is given, a local that leaves it simply stops being on the stack, and reordering the array
+    /// is not a change. (Matching by position instead would report every entry as moved and either
+    /// panic or re-enter every reader on each pass.)
     pub fn provide<R>(
         &mut self,
         values: &[crate::runtime::composition_local::ProvidedValue],

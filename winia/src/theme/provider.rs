@@ -344,9 +344,15 @@ impl WiniaTheme {
         //
         // The previous values used to live in a backchannel keyed by `position_key`, because this
         // function also runs from a window's per-frame wrapper where there is no `#[composable]` call
-        // site to key off. `ctx.provide` keys its entry through `next_provider_key`, whose keyless
-        // fallback is the slot path — the same stability that wrapper needs, one entry per call site
-        // either way.
+        // site to key off. `ctx.provide` keys its entry through `next_provider_key`, which falls back
+        // to the slot path for such a wrapper.
+        //
+        // Be honest about that fallback: a slot path DRIFTS with the structure, and a key that drifts
+        // loses the site's memory — the new entry seeds itself with the current value, no change is
+        // seen, and readers keep what they composed with. `position_key` had exactly the same
+        // property, so this is not a regression; the frame makes up for it by re-resolving the theme
+        // and calling `mark_content_dirty` when the epoch moves (`PerWindow::refresh_theme`), which
+        // is what actually carries a switch into a window whose wrapper has no statement to key on.
         ctx.provide(
             &[
                 crate::layout::direction::provided(direction),

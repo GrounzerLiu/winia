@@ -1145,12 +1145,12 @@ fn a_merged_set_lets_the_page_win_per_class() {
 /// stayed behind (measured on a checked/unchecked toggle: a dark container kept the old light
 /// label and vice versa).
 ///
-/// `WiniaTheme::with_content_color` and `ProvideTextStyle` are `CompositionLocal`s, and a local does
-/// NOT invalidate its readers: the inner `Row` declares nothing that changed, so it Skips, the
+/// `WiniaTheme::with_content_color` and `ProvideTextStyle` are `CompositionLocal`s. A local does not
+/// invalidate its readers, so the inner `Row` — which declares nothing that changed — Skips, the
 /// providers never re-run, and the label keeps painting the colour it was composed with while the
-/// background — computed in `build` itself — moves on. That is the defect `badge.rs` records, and
-/// this pins the same fix for `Button`: remember the last content colour in a backchannel (reading
-/// it registers no dependency) and dirty the subtree when it moved.
+/// background (computed in `build` itself) moves on. That is the defect `badge.rs` records, and this
+/// pins the same fix for `Button`: the provided entries carry a signal, reading one subscribes, and
+/// the label is re-entered because it read the value.
 #[test]
 fn a_button_repaints_its_label_when_the_content_colour_changes() {
     use crate::graphics::Color;
