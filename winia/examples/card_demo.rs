@@ -336,7 +336,16 @@ fn section(
     body: &'static str,
     content: impl FnOnce(&mut ComposeCtx),
 ) {
-    Card::new().build(ctx, |ctx| {
+    // Outlined, not the default Filled — the shell is the page's chrome, and Filled paints
+    // `surfaceContainerHighest` behind every section, which is exactly the colour a Filled card
+    // inside that section paints. The example then disappears into its own frame.
+    //
+    // `surface` is the right backdrop because it is the LOWEST of the three containers: a Filled
+    // card (a lighter role) stands off it by colour and an Elevated one by its shadow. Outlined's
+    // own container colour IS `surface` (`OutlinedCardTokens.ContainerColor`), so on this shell the
+    // border is the only thing you see — which is what an outlined container looks like with
+    // nothing behind it, rather than a translucent box.
+    Card::new().style(CardStyle::Outlined).build(ctx, |ctx| {
         Column::new()
             .spacing(12.0)
             .modifier(Modifier::new().fill_max_width().padding(16.0))
