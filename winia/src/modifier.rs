@@ -92,6 +92,36 @@ impl Modifier {
         &self.elements
     }
 
+    /// Split this chain into the half a PARENT container reads and the half that paints/measures.
+    ///
+    /// Compose keeps those on two channels: the modifier chain, and the parent data a container
+    /// reads back off the resulting `Placeable` (`RowColumnParentData`, written by
+    /// `LayoutWeightNode.modifyParentData` — `foundation-layout/RowColumnImpl.kt:485-492`). winia has
+    /// no `Placeable`, so a container asks `nodes[child].modifier` instead, which is equivalent
+    /// *until* a component inserts a node of its own: `Card` and `Button` wrap themselves for the
+    /// 48 dp touch target, and the caller's `weight`/`align`/`gridItem` then sit one level too deep
+    /// to be seen (measured: three weighted clickable cards each measured 48 dp instead of sharing
+    /// the row).
+    ///
+    /// So a wrapping component hands the first half to the wrapper and keeps the second inside —
+    /// the same division Compose gets for free. The elements are MOVED, not copied: leaving them on
+    /// the inner node as well would apply `AlignSelf` twice (once by the `Row`, once by the wrapper's
+    /// own `Box`).
+    pub(crate) fn split_parent_data(self) -> (Modifier, Modifier) {
+        let (layout, rest): (Vec<_>, Vec<_>) =
+            self.elements.into_iter().partition(|el| el.is_parent_data());
+        (
+            Modifier {
+                elements: layout,
+                nodes: Vec::new(),
+            },
+            Modifier {
+                elements: rest,
+                nodes: self.nodes,
+            },
+        )
+    }
+
     // ── Node 轨道（实验性开放扩展点） ──
 
     /// Append a draw node (renders at the background layer, after the enum chain).

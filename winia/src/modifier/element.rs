@@ -983,3 +983,38 @@ pub(crate) enum ModifierElement {
         id: u64,
     },
 }
+
+impl ModifierElement {
+    /// Whether a PARENT container reads this off its DIRECT child — Compose's
+    /// [`ParentDataModifierNode`].
+    ///
+    /// Compose keeps two channels on a node: the chain that paints and measures it, and the parent
+    /// data a container reads back off the resulting `Placeable`. `Modifier.weight` belongs to the
+    /// second — `LayoutWeightNode` writes `RowColumnParentData.weight` through `modifyParentData`
+    /// (`foundation-layout/RowColumnImpl.kt:485-492`) — which is why a `Row` still sees the weight of
+    /// a child wrapped in any number of `Surface`s.
+    ///
+    /// winia has no `Placeable`, so a container asks its direct child's modifier instead. That is
+    /// equivalent until a component inserts a node of its own: `Card` and `Button` wrap themselves
+    /// for the 48 dp touch target, and a placement parameter left on the inner node becomes
+    /// invisible to the parent (measured: three weighted clickable cards each measured 48 dp instead
+    /// of sharing the row). [`Modifier::parent_data`] is how such a wrapper carries them up.
+    ///
+    /// Keep this list in step with the `get_*` queries the containers use: every variant here has a
+    /// reader that looks only at `nodes[child].modifier`.
+    pub(crate) fn is_parent_data(&self) -> bool {
+        matches!(
+            self,
+            ModifierElement::LayoutWeight { .. }
+                | ModifierElement::AlignSelf { .. }
+                | ModifierElement::ContentAlignSelf { .. }
+                | ModifierElement::AlignBy { .. }
+                | ModifierElement::MatchParentSize
+                | ModifierElement::GridItemArea { .. }
+                | ModifierElement::GridItem { .. }
+                | ModifierElement::FlexItem(..)
+                | ModifierElement::FillMaxRowHeight { .. }
+                | ModifierElement::FillMaxColumnWidth { .. }
+        )
+    }
+}

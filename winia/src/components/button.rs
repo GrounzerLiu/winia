@@ -999,9 +999,19 @@ impl Button {
         // painted box that width — the touch target is not the only thing that grows. Without it
         // a ButtonGroup item's press growth widened this 48 dp box while the visual box inside
         // stayed at its content width, and the difference showed up as a gap on each side.
+        // The wrapper IS the node a parent measures, so it takes the parent-data half of the
+        // caller's chain (`weight`, `align`, …) while the visual half stays on the inner box.
+        // Compose gets this for free: `Modifier.weight` is a `ParentDataModifierNode` that writes
+        // `RowColumnParentData` onto the resulting `Placeable`
+        // (`foundation-layout/RowColumnImpl.kt:485-492`), so a `Row` sees it through any number of
+        // nested nodes. winia asks the DIRECT child's modifier instead, which is why a weighted
+        // button used to collapse to its 48 dp touch target (measured on `Card`; the same wrapper
+        // shape here).
+        let (parent_data, visual) = modifier.split_parent_data();
+        let wrapper = parent_data.then(Modifier::new().minimum_interactive_component_size());
         crate::layout::components::build_container(
             ctx,
-            Modifier::new().minimum_interactive_component_size(),
+            wrapper,
             BoxLayout::new()
                 .alignment(crate::layout::Alignment::Center)
                 .propagate_min_constraints(true),
@@ -1009,7 +1019,7 @@ impl Button {
                 // The content closure becomes its own composition scope, as a Column's does.
                 match ctx.start_restartable_group(
                     key,
-                    modifier,
+                    visual,
                     BoxLayout::new().alignment(crate::layout::Alignment::Center),
                 ) {
                     crate::runtime::composer::GroupStatus::Skip => {}

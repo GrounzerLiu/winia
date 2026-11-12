@@ -342,6 +342,54 @@ fn a_button_reserves_a_48_dp_touch_target() {
     );
 }
 
+/// A button honours `RowScope::weight`, as a plain box of the same content would.
+///
+/// `weight` is Compose's `ParentDataModifierNode` — `LayoutWeightNode` writes
+/// `RowColumnParentData` onto the resulting `Placeable`
+/// (`foundation-layout/RowColumnImpl.kt:485-492`) — so a `Row` reads it through any number of nodes
+/// nested in between. winia asks the DIRECT child's modifier and a button always inserts its 48 dp
+/// wrapper, so without `Modifier::split_parent_data` the weight lands one level too deep and the
+/// button falls back to its touch target.
+#[test]
+fn a_button_honours_a_row_weight() {
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        crate::layout::components::Row::new()
+            .spacing(10.0)
+            .build(ctx, |row| {
+                for label in ["One", "Two"] {
+                    // `weight` is a `RowScope` method: it hands back the modifier this child needs,
+                    // and the scope derefs to the ctx the button builds with.
+                    let share = row.weight(1.0);
+                    Button::filled()
+                        .modifier(share)
+                        .on_click(|| {})
+                        .build(row, |ctx| crate::components::Text::new(label).build(ctx));
+                }
+            });
+    });
+    composer.layout(crate::layout::Constraints::new(0.0, 410.0, 0.0, 400.0));
+    // Two equal shares of 410 minus one 10 dp gap: each is 200.
+    let expected = (410.0 - 10.0) / 2.0;
+    let widths: Vec<f32> = composer
+        .arena_nodes()
+        .iter()
+        .map(|n| n.measured_size.width)
+        .collect();
+    let shares = widths.iter().filter(|w| (*w - expected).abs() < 0.5).count();
+    assert_eq!(
+        shares, 4,
+        "each weighted button must measure {expected}, in both its 48 dp wrapper and the visual box \
+         inside it (all widths: {widths:?}) — fewer means the weight stayed on the inner node and \
+         the wrapper kept its touch target"
+    );
+    assert!(
+        !widths.iter().any(|w| (*w - 48.0).abs() < 0.5),
+        "no button may sit at the bare 48 dp touch-target width once it has a weight \
+         (all widths: {widths:?})"
+    );
+}
+
 /// The elevation animation is directional, as Compose's is (`material3/internal/Elevation.kt:101-118`):
 /// 120 ms `FastOutSlowInEasing` towards an interaction, 150 ms of
 /// `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, and 120 ms of that same curve when what is

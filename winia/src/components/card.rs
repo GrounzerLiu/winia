@@ -95,11 +95,19 @@ impl CardColors {
                 alpha(theme.surface_variant, 0.38),
                 alpha(theme.on_surface, 0.38),
             ),
-            // ElevatedCardTokens: Container=SurfaceContainerLow, Disabled=Surface（不变）
+            // ElevatedCardTokens: Container = SurfaceContainerLow.
+            // Disabled = DisabledContainerColor(Surface) @0.38 compositeOver(Surface), and compositing
+            // a surface tint over an opaque surface of the SAME colour returns that colour — so the
+            // disabled container is the plain, fully opaque `Surface`. That is a real change from
+            // SurfaceContainerLow, not "unchanged": the two are different scheme roles.
+            //
+            // Written as the exact result rather than the repo's usual `alpha(.., 0.38)` shortcut
+            // (FilledCard above uses it): the shortcut would leave a TRANSLUCENT card that shows
+            // whatever sits behind it, where Compose gets an opaque one.
             CardStyle::Elevated => Self::new(
                 theme.surface_container_low,
                 theme.on_surface,
-                theme.surface_container_low,
+                theme.surface,
                 alpha(theme.on_surface, 0.38),
             ),
             // OutlinedCardTokens: Container=Surface, Disabled 容器不变
@@ -253,9 +261,14 @@ impl CardBorder {
 pub struct CardDefaults;
 
 impl CardDefaults {
-    /// 默认形状：8dp 圆角（对标 M3 `CardTokens.ContainerShape` = CornerMedium）
+    /// 默认形状：`CardTokens.ContainerShape` = `CornerMedium` = 12dp（`ShapeTokens.kt:70`：
+    /// `val CornerMedium = RoundedCornerShape(12.0.dp)`）。
+    ///
+    /// This said 8 dp for a long time, and the comment claimed `CornerMedium` while the number was
+    /// a different token's — the same 8/12 mix-up `icon_button`'s `CornerSmall` (8) and
+    /// `CornerMedium` (12) make easy to hit.
     pub fn shape() -> Shape {
-        Shape::rounded(8.0)
+        Shape::rounded(12.0)
     }
 
     /// 默认颜色（对标 material3 CardDefaults.cardColors——按 style 从主题推导）
@@ -305,7 +318,7 @@ pub struct Card {
     interaction_source: Option<MutableInteractionSource>,
     /// 阴影高度（None = 按 style 默认）
     elevation: Option<CardElevation>,
-    /// 容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 8dp 圆角）
+    /// 容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 12dp 圆角）
     shape: Shape,
     /// 边框（None = 按 style 默认——Outlined 有 1dp 主题色边框，其余无）
     border: Option<CardBorder>,
@@ -383,7 +396,7 @@ impl Card {
         self
     }
 
-    /// 设置容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 8dp 圆角）
+    /// 设置容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 12dp 圆角）
     pub fn shape(mut self, shape: Shape) -> Self {
         self.shape = shape;
         self
@@ -486,6 +499,26 @@ impl Card {
             });
         }
 
+        // Accessibility: a card that takes clicks is a BUTTON to a screen reader, and whether it is
+        // enabled is part of what it reports. Declared BEFORE the caller's modifier is appended, so
+        // a caller's own `semantics(..)` merges over this one per field while keeping the role
+        // (`docs/component-authoring.md` §9).
+        //
+        // Only the clickable form declares anything: Compose's non-clickable `Card` is a plain
+        // `Surface`, and §9's second rule is that a node declaring nothing stays transparent in the
+        // tree. Supplying a role there would put a nameless button in front of every static card.
+        //
+        // `merge_descendants(true)` for the same reason `Button` sets it: the card IS one control,
+        // so its label must be read as this node's name rather than as a separate child.
+        if self.on_click.is_some() {
+            modifier = modifier.semantics(
+                crate::semantics::SemanticsConfig::new()
+                    .role(crate::semantics::SemanticsRole::Button)
+                    .merge_descendants(true)
+                    .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
+            );
+        }
+
         // 追加用户 modifier（在外层，可覆盖默认样式）
         modifier = modifier.then(self.modifier);
 
@@ -511,10 +544,10 @@ impl Card {
         // its own for the reason the Button's is: winia decides a chain's size across the whole chain, so a
         // minimum inside the card's chain would fight its own background and padding. It also carries the
         // ring's shape and colour, since it is the node that takes focus.
-        let dir = modifier
-            .get_layout_direction()
-            .unwrap_or(crate::layout::direction::current());
-        let build_card = |ctx: &mut ComposeCtx| {
+        let build_card = |ctx: &mut ComposeCtx, modifier: Modifier| {
+            let dir = modifier
+                .get_layout_direction()
+                .unwrap_or(crate::layout::direction::current());
             match ctx.start_restartable_group(
                 key,
                 modifier,
@@ -537,13 +570,24 @@ impl Card {
             ctx.end_restartable_group();
         };
         if self.on_click.is_some() {
-            crate::layout::components::build_container(
-                ctx,
+            // The wrapper IS the node the parent measures, so it takes the parent-data half of the
+            // caller's chain (`weight`, `align`, …) while the visual half stays on the inner
+            // surface. Compose gets this for free: `Modifier.weight` is a `ParentDataModifierNode`
+            // that writes `RowColumnParentData` onto the resulting `Placeable`
+            // (`foundation-layout/RowColumnImpl.kt:485-492`), so the Row sees it through any number
+            // of nested nodes. winia asks the DIRECT child's modifier instead, which is why a
+            // weighted clickable card measured 48 dp rather than sharing its row (measured).
+            let (parent_data, visual) = modifier.split_parent_data();
+            let wrapper = parent_data.then(
                 Modifier::new().minimum_interactive_component_size().border(
                     0.0,
                     crate::graphics::Color::from_argb(0, 0, 0, 0),
                     shape,
                 ),
+            );
+            crate::layout::components::build_container(
+                ctx,
+                wrapper,
                 // `propagate_min_constraints`: the same reason the Button's wrapper sets it — a
                 // parent that FORCES a width on the card gets a card that width. Without it the
                 // wrapper reports the forced size while the surface inside it keeps hugging its own
@@ -553,13 +597,14 @@ impl Card {
                     .alignment(crate::layout::Alignment::Center)
                     .propagate_min_constraints(true),
                 |ctx| {
-                    build_card(ctx);
+                    build_card(ctx, visual);
                     // The wrapper is the focus node, so the ring's colour has to reach it too.
                     ctx.set_current_node_focus_color(theme.secondary);
                 },
             );
         } else {
-            build_card(ctx);
+            // No wrapper: the card's own node IS the direct child, so its chain stays whole.
+            build_card(ctx, modifier);
         }
     }
 
@@ -601,6 +646,74 @@ impl Default for Card {
 mod tests {
     use super::*;
 
+    /// A clickable card honours `RowScope::weight`, exactly as a plain one does.
+    ///
+    /// `weight` is Compose's `ParentDataModifierNode`: `LayoutWeightNode` writes
+    /// `RowColumnParentData` onto the resulting `Placeable`
+    /// (`foundation-layout/RowColumnImpl.kt:485-492`), so a `Row` reads it through any number of
+    /// nodes nested in between. winia asks the DIRECT child's modifier, and a clickable card inserts
+    /// its own 48 dp wrapper, so the caller's chain has to be split with
+    /// `Modifier::split_parent_data` or the weight lands one level too deep and the card falls back
+    /// to its touch target (measured: three weighted cards at 48 dp each instead of sharing 600).
+    #[test]
+    fn a_clickable_card_honours_a_row_weight() {
+        let widths = |clickable: bool| -> Vec<f32> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                crate::layout::components::Row::new()
+                    .spacing(12.0)
+                    .build(ctx, |row| {
+                        for _ in 0..3 {
+                            // `weight` is a `RowScope` method: it hands back the modifier this child
+                            // needs, and the scope derefs to the ctx the card builds with.
+                            let share = row.weight(1.0);
+                            let card = Card::filled();
+                            let card = if clickable {
+                                card.on_click(|| {})
+                            } else {
+                                card
+                            };
+                            card.modifier(share).build(row, |ctx| {
+                                crate::components::Text::new("Card")
+                                    .modifier(Modifier::new().padding(16.0))
+                                    .build(ctx);
+                            });
+                        }
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 600.0, 0.0, 400.0));
+            composer
+                .arena_nodes()
+                .iter()
+                .map(|n| n.measured_size.width)
+                .collect()
+        };
+
+        // Three equal shares of 600 minus two 12 dp gaps: each is 192.
+        let expected = (600.0 - 24.0) / 3.0;
+        let shares = |clickable: bool| -> usize {
+            let widths = widths(clickable);
+            let n = widths.iter().filter(|w| (**w - expected).abs() < 0.5).count();
+            assert!(
+                widths.iter().all(|w| (*w - 48.0).abs() > 0.5 || expected <= 48.0),
+                "no card may fall back to its 48 dp touch target when it has a weight \
+                 (clickable: {clickable}, all widths: {widths:?})"
+            );
+            n
+        };
+        // A plain card contributes one node at its share; a clickable one contributes two — the
+        // wrapper and the surface inside it, which `propagate_min_constraints` widens to match.
+        assert_eq!(
+            shares(false), 3,
+            "a plain weighted card is one node, at its share"
+        );
+        assert_eq!(
+            shares(true), 6,
+            "a clickable weighted card is the wrapper AND the surface inside it, both at its share \
+             — one node here means the wrapper took the weight and the surface kept its own width"
+        );
+    }
+
     /// Compose's CLICKABLE card carries a 48 dp touch target, because the `onClick` overload is built on
     /// `Surface(onClick = …)` (`material3/Card.kt:146-156`) whose Box applies
     /// `Modifier.minimumInteractiveComponentSize()` (`material3/Surface.kt:219`, the node at
@@ -640,6 +753,68 @@ mod tests {
         assert!(
             !plain.contains(&48.0),
             "and a card that takes no clicks does not, as in Compose ({plain:?})"
+        );
+    }
+
+    /// A card that takes clicks announces itself as a BUTTON and reports whether it is enabled;
+    /// a card that takes none declares nothing at all.
+    ///
+    /// Compose's clickable `Card` is a `Surface(onClick = …)`, whose semantics come from the
+    /// `clickable` modifier; the non-clickable `Card` is a plain `Surface` and declares nothing.
+    /// `docs/component-authoring.md` §9 wants the role and the state declared BEFORE the caller's
+    /// modifier is appended, and a node that declares nothing to stay transparent in the tree —
+    /// both halves are asserted here, because either one alone passes for the wrong reason.
+    #[test]
+    fn a_clickable_card_declares_the_button_role_and_its_enabled_state() {
+        let declare = |clickable: bool, enabled: bool| {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                let card = Card::filled().enabled(enabled);
+                let card = if clickable {
+                    card.on_click(|| {})
+                } else {
+                    card
+                };
+                card.build(ctx, |ctx| {
+                    crate::components::Text::new("Card").build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer
+                .arena_nodes()
+                .iter()
+                .map(|node| node.modifier.semantics_config())
+                .find(|config| config.role_value().is_some())
+        };
+
+        let clickable = declare(true, true).expect("the clickable card declares a role");
+        assert_eq!(
+            clickable.role_value(),
+            Some(crate::semantics::SemanticsRole::Button),
+            "a card that takes clicks is a button to a screen reader"
+        );
+        assert_eq!(
+            clickable.state_value().enabled_value(),
+            Some(true),
+            "and it reports that it is enabled"
+        );
+        assert!(
+            clickable.merges_descendants(),
+            "the card is ONE control, so its label must be read as this node's name rather than as \
+             a separate child"
+        );
+
+        let disabled = declare(true, false).expect("a disabled clickable card keeps its role");
+        assert_eq!(
+            disabled.state_value().enabled_value(),
+            Some(false),
+            "a disabled card keeps its role AND reports the disabled state — dropping either would \
+             leave a nameless, unreachable control"
+        );
+
+        assert!(
+            declare(false, true).is_none(),
+            "a card that takes no clicks declares nothing, so it stays transparent in the tree"
         );
     }
 
@@ -708,8 +883,10 @@ mod tests {
     }
 
     #[test]
-    fn test_card_default_shape_is_8dp_rounded() {
-        assert_eq!(CardDefaults::shape(), Shape::rounded(8.0));
+    fn test_card_default_shape_is_corner_medium() {
+        // `CornerMedium` is 12 dp (`ShapeTokens.kt:70`), not 8: the 8 dp in this assertion was the
+        // `CornerSmall` token, which is what `IconButton`'s smallest `Square` uses.
+        assert_eq!(CardDefaults::shape(), Shape::rounded(12.0));
     }
 
     #[test]
@@ -728,10 +905,24 @@ mod tests {
             filled.disabled_content.a,
             (theme.on_surface.a as f32 * 0.38) as u8
         );
-        // Elevated：SurfaceContainerLow 容器，禁用容器不变
+        // Elevated：SurfaceContainerLow 容器；禁用容器是**不透明的 Surface**
+        //
+        // Compose computes it as `Surface @0.38 compositeOver Surface`, which returns the plain
+        // opaque `Surface` — a DIFFERENT scheme role from the enabled container, so the card really
+        // does change colour when disabled. This used to assert `disabled_container == container`,
+        // which is the reading that made the mismatch invisible.
         let elevated = CardDefaults::card_colors(&theme, CardStyle::Elevated);
         assert_eq!(elevated.container, theme.surface_container_low);
-        assert_eq!(elevated.disabled_container, elevated.container);
+        assert_eq!(elevated.disabled_container, theme.surface);
+        assert_ne!(
+            theme.surface, theme.surface_container_low,
+            "the assertion above only means something while these two roles differ"
+        );
+        assert_eq!(
+            elevated.disabled_container.a, 255,
+            "compositing the tint over an opaque surface leaves it opaque — the alpha shortcut would \
+             make the disabled card show whatever is behind it"
+        );
         // Outlined：Surface 容器，禁用容器不变
         let outlined = CardDefaults::card_colors(&theme, CardStyle::Outlined);
         assert_eq!(outlined.container, theme.surface);
@@ -1004,7 +1195,7 @@ mod tests {
             .modifier(Modifier::new().padding(8.0));
         assert!(card.get_enabled());
         assert_eq!(card.get_style(), CardStyle::Elevated);
-        assert_eq!(card.get_shape(), Shape::rounded(8.0));
+        assert_eq!(card.get_shape(), Shape::rounded(12.0));
         assert!(card.get_modifier().elements().len() >= 1);
     }
 }
