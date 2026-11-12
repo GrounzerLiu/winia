@@ -1,13 +1,14 @@
-//! Card 组件 — 对齐 Compose material3 1.4.0 Card 一族
+//! The Card component — aligned with Compose material3 1.4.0's Card family
 //!
-//! M3 Card 家族三个变体（Card(filled) / ElevatedCard / OutlinedCard）用
-//! `Card` builder 的构造变体表达（与 Button 的 filled/elevated/outlined 同模式）：
-//! - `Card::new()` / `Card::filled()` —— 对标 `Card`（SurfaceContainerHighest 容器）
-//! - `Card::elevated()` —— 对标 `ElevatedCard`（SurfaceContainerLow + 默认阴影）
-//! - `Card::outlined()` —— 对标 `OutlinedCard`（Surface 容器 + 1dp outline 边框）
+//! The three variants of the M3 Card family (Card(filled) / ElevatedCard / OutlinedCard) are
+//! constructor variants of the one `Card` builder, as Button's filled/elevated/outlined are:
+//! - `Card::new()` / `Card::filled()` — `Card`'s counterpart (SurfaceContainerHighest container)
+//! - `Card::elevated()` — `ElevatedCard`'s counterpart (SurfaceContainerLow + default shadow)
+//! - `Card::outlined()` — `OutlinedCard`'s counterpart (Surface container + 1dp outline border)
 //!
-//! 内容 = 顶部对齐 Column（对标 M3 Surface { Column(content) }）；内容色经
-//! `WiniaTheme::with_content_color` 下传（Icon tint Auto 自动取卡片内容色）。
+//! Content = a top-aligned Column (the counterpart of M3's Surface { Column(content) }); the
+//! content colour is passed down through `WiniaTheme::with_content_color` (an Icon with tint
+//! Auto then picks up the card's own content colour).
 
 use crate::composable;
 use crate::graphics::{Color, Shape};
@@ -20,21 +21,22 @@ use std::sync::Arc;
 // CardStyle / CardColors / CardElevation / CardBorder
 // ═══════════════════════════════════════════════════════════
 
-/// Card 风格变体（对标 M3 Card / ElevatedCard / OutlinedCard）
+/// Card style variants (the counterpart of M3's Card / ElevatedCard / OutlinedCard)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CardStyle {
-    /// 实心卡片（对标 `Card`）——SurfaceContainerHighest 容器
+    /// Filled card (the counterpart of `Card`) — SurfaceContainerHighest container
     #[default]
     Filled,
-    /// 悬浮卡片（对标 `ElevatedCard`）——SurfaceContainerLow + 默认阴影
+    /// Elevated card (the counterpart of `ElevatedCard`) — SurfaceContainerLow + default shadow
     Elevated,
-    /// 轮廓卡片（对标 `OutlinedCard`）——Surface 容器 + 1dp outline 边框
+    /// Outlined card (the counterpart of `OutlinedCard`) — Surface container + 1dp outline border
     Outlined,
 }
 
-/// 卡片颜色集（对标 material3 `CardColors`）——container/content 各含
-/// enabled/disabled 变体；禁用：容器 M3 token（Filled SurfaceVariant@38% 叠底、
-/// Elevated/Outlined 容器不变），内容色 @38%（对齐 M3 DisabledAlpha）。
+/// The card colour set (the material3 `CardColors` counterpart) — container/content each carry an
+/// enabled/disabled variant; disabled: the container follows the M3 token (Filled composites
+/// SurfaceVariant@38% underneath, the Elevated/Outlined container stays as it is) and the content
+/// colour sits at 38% (M3's DisabledAlpha).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardColors {
     pub container: Color,
@@ -58,8 +60,9 @@ impl CardColors {
         }
     }
 
-    /// 状态化容器色——仅区分 enabled/disabled（与 material3 CardColors 一致；
-    /// hover/focus/press 视觉由 indication（ripple）状态层绘制，避免双重叠加）
+    /// The state-aware container colour — it tells enabled and disabled apart only (as material3's
+    /// CardColors does; the hover/focus/press visuals are drawn by the indication (ripple) state
+    /// layer, so the two never stack).
     pub fn container_color_for(&self, state: &ComponentState) -> Color {
         if !state.enabled {
             self.disabled_container
@@ -68,7 +71,7 @@ impl CardColors {
         }
     }
 
-    /// 状态化内容色（仅区分 enabled/disabled——与 material3 CardColors 一致）
+    /// The state-aware content colour (enabled/disabled only — as material3's CardColors does)
     pub fn content_color_for(&self, state: &ComponentState) -> Color {
         if state.enabled {
             self.content
@@ -77,17 +80,19 @@ impl CardColors {
         }
     }
 
-    /// 从主题按 style 生成默认色（对标 material3 CardDefaults.cardColors/
-    /// elevatedCardColors/outlinedCardColors——M3 1.4.0 tokens）。
+    /// Builds the style's default colours from the theme (the counterpart of material3's
+    /// CardDefaults.cardColors/elevatedCardColors/outlinedCardColors — M3 1.4.0 tokens).
     ///
-    /// 禁用容器色按 Compose 的原式算，不用 `alpha` 直乘近似：M3 是
+    /// The disabled container is evaluated with Compose's own expression, not approximated by
+    /// multiplying `alpha` directly: M3 composites
     /// `DisabledContainerColor @ DisabledContainerOpacity compositeOver(ContainerColor)`
-    /// （`Card.kt:507-511`、`:559-563`），合成到不透明容器色上，结果**不透明**。直乘
-    /// alpha 会得到一张半透明卡片，把身后的东西透出来——三种 style 里两种都踩得到：
-    /// Filled 的底是 `SurfaceContainerHighest`，Elevated 的底是 `Surface` 自身。
-    /// （Outlined 无此问题：它的 `disabledContainerColor` 就是 `ContainerColor`。）
+    /// (`Card.kt:507-511`, `:559-563`) onto the opaque container, so the result is **opaque**.
+    /// Multiplying the alpha directly yields a translucent card that lets whatever sits behind it
+    /// show through — and two of the three styles hit that: Filled's base is
+    /// `SurfaceContainerHighest`, Elevated's base is `Surface` itself. (Outlined is not affected:
+    /// its `disabledContainerColor` IS its `ContainerColor`.)
     ///
-    /// `Color::overlay` 就是这个 src-over 合成，见 `surface.rs:29` 的同款用法。
+    /// `Color::overlay` is exactly that src-over composite; `surface.rs:29` uses the same form.
     pub fn from_theme(theme: &crate::theme::ThemeColors, style: CardStyle) -> Self {
         use crate::graphics::Color;
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
@@ -117,7 +122,7 @@ impl CardColors {
                 theme.surface,
                 alpha(theme.on_surface, 0.38),
             ),
-            // OutlinedCardTokens: Container=Surface, Disabled 容器不变
+            // OutlinedCardTokens: Container=Surface, and the disabled container stays unchanged
             CardStyle::Outlined => Self::new(
                 theme.surface,
                 theme.on_surface,
@@ -132,9 +137,9 @@ impl CardColors {
 /// focused/hovered/dragged/disabled), in DP, resolved from the token LEVELS in
 /// `material3/tokens/ElevationTokens.kt:24-29`: Level0 0, Level1 1, Level2 3, Level3 6, Level4 8 dp. winia
 /// used to carry the level INDEX here, which is the same number only for Level0 and Level1.
-/// - `card_elevation()`（Filled）：0/0/0/1/6/0
-/// - `elevated_card_elevation()`（Elevated）：1/1/1/3/8/1
-/// - `outlined_card_elevation()`（Outlined）：0/0/0/1/6/0
+/// - `card_elevation()` (Filled): 0/0/0/1/6/0
+/// - `elevated_card_elevation()` (Elevated): 1/1/1/3/8/1
+/// - `outlined_card_elevation()` (Outlined): 0/0/0/1/6/0
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardElevation {
     pub default: f32,
@@ -237,8 +242,8 @@ impl Default for CardElevation {
     }
 }
 
-/// 卡片边框（对标 material3 `BorderStroke`）——宽度 + 颜色；形状由
-/// [`Card::shape`] 决定（画在容器形状边缘）。
+/// A card border (the material3 `BorderStroke` counterpart) — a width plus a colour; the shape
+/// comes from [`Card::shape`] (the border is drawn along the container's shape edge).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardBorder {
     pub width: f32,
@@ -250,13 +255,13 @@ impl CardBorder {
         Self { width, color }
     }
 
-    /// OutlinedCard 默认边框（对标 material3：1dp + `OutlineVariant`；
-    /// disabled 为 Outline @ DisabledOutlineOpacity(0.12) 叠 SurfaceContainerLow）
+    /// The OutlinedCard default border (the material3 counterpart: 1dp + `OutlineVariant`; when
+    /// disabled, Outline @ DisabledOutlineOpacity(0.12) over SurfaceContainerLow)
     fn outlined(theme: &crate::theme::ThemeColors, enabled: bool) -> Self {
         let color = if enabled {
             theme.outline_variant
         } else {
-            // OutlinedCardTokens.DisabledOutlineColor = Outline @ 12% 叠容器
+            // OutlinedCardTokens.DisabledOutlineColor = Outline @ 12% over the container
             let c = theme.outline;
             Color::from_argb((c.a as f32 * 0.12) as u8, c.r, c.g, c.b)
         };
@@ -264,12 +269,12 @@ impl CardBorder {
     }
 }
 
-/// Card 默认值（对标 material3 `CardDefaults`）
+/// The Card defaults (the material3 `CardDefaults` counterpart)
 pub struct CardDefaults;
 
 impl CardDefaults {
-    /// 默认形状：`CardTokens.ContainerShape` = `CornerMedium` = 12dp（`ShapeTokens.kt:70`：
-    /// `val CornerMedium = RoundedCornerShape(12.0.dp)`）。
+    /// The default shape: `CardTokens.ContainerShape` = `CornerMedium` = 12dp (`ShapeTokens.kt:70`:
+    /// `val CornerMedium = RoundedCornerShape(12.0.dp)`).
     ///
     /// This said 8 dp for a long time, and the comment claimed `CornerMedium` while the number was
     /// a different token's — the same 8/12 mix-up `icon_button`'s `CornerSmall` (8) and
@@ -278,7 +283,7 @@ impl CardDefaults {
         Shape::rounded(12.0)
     }
 
-    /// 默认颜色（对标 material3 CardDefaults.cardColors——按 style 从主题推导）
+    /// The default colours (the material3 CardDefaults.cardColors counterpart — derived per style)
     pub fn card_colors(theme: &crate::theme::ThemeColors, style: CardStyle) -> CardColors {
         CardColors::from_theme(theme, style)
     }
@@ -298,43 +303,46 @@ impl CardDefaults {
         CardElevation::outlined()
     }
 
-    /// OutlinedCard 默认边框（M3 OutlinedCardTokens：1dp OutlineVariant）
+    /// The OutlinedCard default border (M3 OutlinedCardTokens: 1dp OutlineVariant)
     pub fn outlined_border(theme: &crate::theme::ThemeColors, enabled: bool) -> CardBorder {
         CardBorder::outlined(theme, enabled)
     }
 }
 
 // ═══════════════════════════════════════════════════════════
-// Card 组件
+// The Card component
 // ═══════════════════════════════════════════════════════════
 
-/// 卡片组件（对标 material3 Card 一族）。
+/// The card component (the counterpart of material3's Card family).
 ///
-/// 无 `on_click` 时为纯展示卡片（不可交互、无波纹）；设置 `on_click` 后
-/// 可点击 + 水波纹（对标 M3 clickable Card）。
+/// Without `on_click` it is a display-only card (not interactive, no ripple); with `on_click`
+/// set it is clickable and gets the ripple (the counterpart of M3's clickable Card).
 pub struct Card {
-    /// 点击回调（None = 纯展示卡片）
+    /// The click callback (None = a display-only card)
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// 是否启用
+    /// Whether the card is enabled
     enabled: bool,
-    /// 卡片风格（Filled / Elevated / Outlined）
+    /// The card style (Filled / Elevated / Outlined)
     style: CardStyle,
-    /// 颜色集（None = 从主题按 style 默认）
+    /// The colour set (None = the style's default, derived from the theme)
     colors: Option<CardColors>,
-    /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
+    /// The interaction source (None = remembered internally in `build` — the Compose counterpart
+    /// of an optional injection)
     interaction_source: Option<MutableInteractionSource>,
-    /// 阴影高度（None = 按 style 默认）
+    /// The shadow elevation (None = the style's default)
     elevation: Option<CardElevation>,
-    /// 容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 12dp 圆角）
+    /// The container/border/shadow shape (the material3 `Card(shape = ...)` counterpart — 12dp
+    /// rounded by default)
     shape: Shape,
-    /// 边框（None = 按 style 默认——Outlined 有 1dp 主题色边框，其余无）
+    /// The border (None = the style's default — Outlined has a 1dp theme-coloured border, the
+    /// other styles have none)
     border: Option<CardBorder>,
-    /// 修饰符链
+    /// The modifier chain
     modifier: Modifier,
 }
 
 impl Card {
-    /// 创建新的 Card 组件（默认 Filled 样式）
+    /// Creates a new Card component (Filled style by default)
     pub fn new() -> Self {
         Card {
             on_click: None,
@@ -349,100 +357,109 @@ impl Card {
         }
     }
 
-    /// 实心卡片（对标 material3 `Card`）——默认 Filled 样式
+    /// A filled card (the material3 `Card` counterpart) — the default, Filled style
     pub fn filled() -> Self {
         Self::new()
     }
 
-    /// 悬浮卡片（对标 material3 `ElevatedCard`）——Elevated 样式 + 默认阴影
+    /// An elevated card (the material3 `ElevatedCard` counterpart) — Elevated style + the default
+    /// shadow
     pub fn elevated() -> Self {
         Self::new()
             .style(CardStyle::Elevated)
             .elevation(CardElevation::elevated())
     }
 
-    /// 轮廓卡片（对标 material3 `OutlinedCard`）——Surface 容器 + 1dp outline 边框
+    /// An outlined card (the material3 `OutlinedCard` counterpart) — Surface container + 1dp
+    /// outline border
     pub fn outlined() -> Self {
         Self::new().style(CardStyle::Outlined)
     }
 
-    /// 设置点击回调（None = 纯展示；设置后卡片可点击 + 水波纹）
+    /// Sets the click callback (None = display-only; once set the card is clickable and ripples)
     pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_click = Some(Arc::new(f));
         self
     }
 
-    /// 设置启用状态
+    /// Sets the enabled state
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
-    /// 设置卡片风格
+    /// Sets the card style
     pub fn style(mut self, style: CardStyle) -> Self {
         self.style = style;
         self
     }
 
-    /// 设置颜色集（覆盖主题默认——对标 material3 `Card(colors = ...)`）
+    /// Sets the colour set (overriding the theme default — the material3 `Card(colors = ...)`
+    /// counterpart)
     pub fn colors(mut self, colors: CardColors) -> Self {
         self.colors = Some(colors);
         self
     }
 
-    /// 注入交互源（hoist——Card 的 press/hover/focus 状态发射到此源；
-    /// 不传则内部 remember 一个）
+    /// Injects an interaction source (a hoist — the card's press/hover/focus states are emitted
+    /// into this source; when not passed, one is remembered internally)
     pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
 
-    /// 设置阴影高度（各状态取值见 [`CardElevation::for_state`]）
+    /// Sets the shadow elevation (see [`CardElevation::for_state`] for the per-state values)
     pub fn elevation(mut self, elevation: CardElevation) -> Self {
         self.elevation = Some(elevation);
         self
     }
 
-    /// 设置容器/边框/阴影形状（对标 material3 `Card(shape = ...)`——默认 12dp 圆角）
+    /// Sets the container/border/shadow shape (the material3 `Card(shape = ...)` counterpart —
+    /// 12dp rounded by default)
     pub fn shape(mut self, shape: Shape) -> Self {
         self.shape = shape;
         self
     }
 
-    /// 设置边框（覆盖 style 默认——Outlined 默认 1dp outline 色）
+    /// Sets the border (overriding the style default — Outlined's default is 1dp outline colour)
     pub fn border(mut self, border: CardBorder) -> Self {
         self.border = Some(border);
         self
     }
 
-    /// 修饰符链（尺寸、内边距等——追加在外层）
+    /// The modifier chain (size, padding, … — appended on the outside)
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = modifier;
         self
     }
 
-    /// 构建卡片。内容自动包在顶部对齐 Column 中（对标 M3 Surface { Column }）。
+    /// Builds the card. The content is wrapped in a top-aligned Column (the M3
+    /// Surface { Column } counterpart).
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        // 参数暂存（参数相等跳过——style/enabled 未变 → 容器 Skip）
+        // Stage the parameters (equal params skip — style/enabled unchanged → the container Skips)
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
         let key = ctx.next_key();
         let theme = crate::theme::WiniaTheme::colors();
-        // 默认颜色统一从 CardDefaults 取（对标 material3 CardDefaults.cardColors）
+        // The default colours all come from CardDefaults (the material3
+        // CardDefaults.cardColors counterpart)
         let colors = self
             .colors
             .unwrap_or_else(|| CardDefaults::card_colors(&theme, self.style));
-        // 交互源：外部注入或内部 remember（对标 Compose Card 的 interactionSource 参数）
+        // The interaction source: injected from outside or remembered internally (the counterpart
+        // of the Compose Card's interactionSource parameter)
         let interaction = self
             .interaction_source
             .unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
-        // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
+        // State-aware colour lookup (registering the dependency — press/hover/focus changes
+        // recompose on their own)
         let state = interaction.state(self.enabled);
         let container = colors.container_color_for(&state);
         let content_color = colors.content_color_for(&state);
-        // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
-        // 平滑过渡——悬停/按下时阴影逐渐升高、移出后逐渐回落，不跳变。
+        // The shadow elevation: state changes (a hover/focus/press entering and leaving) go
+        // through an animated State, so the shadow rises gradually while hovering/pressing and
+        // settles back after the pointer leaves, instead of jumping.
         // The spec is Compose's, and Compose keys it on the interaction PAIR
         // (`animation::elevation_spec_for_pair`, from `material3/internal/Elevation.kt:50-61`), so the build
         // remembers the interaction kind the last target came from in a backchannel — reading it registers no
@@ -480,11 +497,13 @@ impl Card {
         };
 
         let shape = self.shape;
-        // 容器：三种 style 都有不透明容器色（Filled=SurfaceContainerHighest、
-        // Elevated=SurfaceContainerLow、Outlined=Surface——M3 Card 无透明底变体）
+        // The container: all three styles have an opaque container colour
+        // (Filled=SurfaceContainerHighest, Elevated=SurfaceContainerLow, Outlined=Surface — M3 has
+        // no card variant with a transparent background)
         let mut modifier = Modifier::new().background(container, shape);
-        // 边框：显式 border 优先，否则 Outlined 默认 1dp outline 色
-        // （对标 material3 OutlinedCard = Card(border = BorderStroke(1.dp, OutlineVariant))）
+        // The border: an explicit border wins, otherwise Outlined's default 1dp outline colour
+        // (the counterpart of material3's OutlinedCard =
+        // Card(border = BorderStroke(1.dp, OutlineVariant)))
         let border = self.border.or_else(|| {
             if self.style == CardStyle::Outlined {
                 Some(CardBorder::outlined(&theme, self.enabled))
@@ -496,8 +515,10 @@ impl Card {
             modifier = modifier.border(b.width, b.color, shape);
         }
 
-        // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
-        // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Card shape）
+        // The shadow is rendered through a dynamic graphics_layer closure (shadow_elevation reads
+        // the animated value every frame, so evaluating it at render time triggers no
+        // recomposition; the counterpart of Compose's layer shadow semantics; the shape follows
+        // the Card shape)
         if let Some(anim) = elevation_anim {
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: anim.peek(),
@@ -526,23 +547,25 @@ impl Card {
             );
         }
 
-        // 追加用户 modifier（在外层，可覆盖默认样式）
+        // Append the caller's modifier (on the outside, so it can override the default styling)
         modifier = modifier.then(self.modifier);
 
         if self.enabled
             && let Some(on_click) = &self.on_click
         {
             let cb = on_click.clone();
-            // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
-            // clickable 默认 indication=ripple；颜色用内容色）
+            // clickable (press/focus/hover interaction) + the ripple (a Compose clickable's
+            // default `indication=ripple`; the colour is the content colour)
             modifier = modifier
                 .clickable_with_source(&interaction, move || cb())
-                // 显式传容器 shape——波纹按容器形状裁剪
+                // Pass the container shape explicitly — the ripple is clipped to the container
+                // shape
                 .ripple_with_shape(&interaction, content_color, true, shape);
         }
 
-        // content 闭包自动成为组合 scope（与 Column 一致）；
-        // 布局策略 = ColumnLayout（对标 M3：内容包在 Column 中，顶部对齐）
+        // The content closure becomes a composition scope of its own (as it does with Column); the
+        // layout strategy = ColumnLayout (the M3 counterpart: the content is wrapped in a Column,
+        // top-aligned)
         //
         // A CLICKABLE card gets Compose's 48 dp touch target: its `onClick` overload goes through
         // `Surface(onClick = …)` (`material3/Card.kt:146-156`), whose Box applies
@@ -615,7 +638,7 @@ impl Card {
         }
     }
 
-    // ── Getters（测试用）──
+    // ── Getters (tests) ──
     pub fn get_enabled(&self) -> bool {
         self.enabled
     }
@@ -646,7 +669,7 @@ impl Default for Card {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 测试
+// Tests
 // ═══════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -874,7 +897,7 @@ mod tests {
     fn test_card_variant_constructors() {
         let filled = Card::new();
         assert_eq!(filled.get_style(), CardStyle::Filled);
-        assert_eq!(filled.get_elevation(), None, "Filled 无默认阴影");
+        assert_eq!(filled.get_elevation(), None, "Filled has no default shadow");
 
         let elevated = Card::elevated();
         assert_eq!(elevated.get_style(), CardStyle::Elevated);
@@ -899,7 +922,7 @@ mod tests {
     #[test]
     fn test_card_colors_match_m3_tokens() {
         let theme = crate::theme::ThemeColors::default_light();
-        // Filled：SurfaceContainerHighest 容器 + OnSurface 内容
+        // Filled: SurfaceContainerHighest container + OnSurface content
         let filled = CardDefaults::card_colors(&theme, CardStyle::Filled);
         assert_eq!(filled.container, theme.surface_container_highest);
         assert_eq!(filled.content, theme.on_surface);
@@ -913,7 +936,8 @@ mod tests {
             theme
                 .surface_container_highest
                 .overlay(theme.surface_variant, 0.38),
-            "Filled 禁用容器 = SurfaceVariant@38% compositeOver SurfaceContainerHighest"
+            "the Filled disabled container = SurfaceVariant@38% compositeOver \
+             SurfaceContainerHighest"
         );
         assert_eq!(
             filled.disabled_container.a, 255,
@@ -928,7 +952,7 @@ mod tests {
             filled.disabled_content.a,
             (theme.on_surface.a as f32 * 0.38) as u8
         );
-        // Elevated：SurfaceContainerLow 容器；禁用容器是**不透明的 Surface**
+        // Elevated: SurfaceContainerLow container; the disabled container is an **opaque Surface**
         //
         // Compose computes it as `Surface @0.38 compositeOver Surface`, which returns the plain
         // opaque `Surface` — a DIFFERENT scheme role from the enabled container, so the card really
@@ -946,7 +970,7 @@ mod tests {
             "compositing the tint over an opaque surface leaves it opaque — the alpha shortcut would \
              make the disabled card show whatever is behind it"
         );
-        // Outlined：Surface 容器，禁用容器不变
+        // Outlined: Surface container, and the disabled container stays as it is
         let outlined = CardDefaults::card_colors(&theme, CardStyle::Outlined);
         assert_eq!(outlined.container, theme.surface);
         assert_eq!(outlined.disabled_container, outlined.container);
@@ -960,13 +984,14 @@ mod tests {
             Color::from_argb(100, 100, 100, 100),
             Color::from_argb(80, 200, 200, 200),
         );
-        // disabled 优先
+        // disabled wins
         assert_eq!(
             colors.container_color_for(&ComponentState::disabled()),
             colors.disabled_container
         );
-        // 容器色仅区分 enabled/disabled（与 material3 CardColors 一致——
-        // hover/focus/press 状态层由 ripple indication 绘制，不叠加在容器色上）
+        // The container colour tells enabled and disabled apart only (as material3's CardColors
+        // does — the hover/focus/press state layer is drawn by the ripple indication and never
+        // stacks onto the container colour)
         assert_eq!(
             colors.container_color_for(&ComponentState::idle()),
             colors.container
@@ -979,7 +1004,7 @@ mod tests {
             }),
             colors.container,
         );
-        // 内容色只区分 enabled/disabled
+        // The content colour tells enabled and disabled apart only
         assert_eq!(
             colors.content_color_for(&ComponentState::idle()),
             colors.content
@@ -1201,13 +1226,13 @@ mod tests {
         assert_eq!(
             disabled.color.a,
             (theme.outline.a as f32 * 0.12) as u8,
-            "禁用边框 = Outline @ 12%"
+            "the disabled border = Outline @ 12%"
         );
-        // Outlined 变体默认带边框，Filled/Elevated 不带
+        // Outlined carries a border by default, Filled/Elevated do not
         assert_eq!(
             Card::outlined().get_border(),
             None,
-            "边框在 build 时按 style 解析"
+            "the border is resolved by style at build time"
         );
     }
 
