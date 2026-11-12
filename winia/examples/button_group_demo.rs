@@ -203,7 +203,10 @@ fn connected_selectable_row(ctx: &mut ComposeCtx) {
             let pressed = source.state(true).pressed;
             Button::filled()
                 .shape(shapes.shape_for(pressed, checked))
-                .colors(toggle_colors(&WiniaTheme::colors(), checked))
+                .colors(ButtonGroupDefaults::toggle_colors(
+                    &WiniaTheme::colors(),
+                    checked,
+                ))
                 .interaction_source(source)
                 .on_click({
                     clone!(picked);
@@ -213,23 +216,6 @@ fn connected_selectable_row(ctx: &mut ComposeCtx) {
         }));
     }
     group.build(ctx);
-}
-
-/// `ToggleButton`'s two containers: `SurfaceContainer` unchecked, `Primary` checked
-/// (`FilledButtonTokens.UnselectedContainerColor` / `SelectedContainerColor`).
-fn toggle_colors(theme: &winia::theme::ThemeColors, checked: bool) -> ButtonColors {
-    let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-    let (container, content) = if checked {
-        (theme.primary, theme.on_primary)
-    } else {
-        (theme.surface_container, theme.on_surface)
-    };
-    ButtonColors::new(
-        container,
-        content,
-        alpha(theme.on_surface, 0.12),
-        alpha(theme.on_surface, 0.38),
-    )
 }
 
 /// A plain filled button that reports its presses through the group's source.
@@ -399,13 +385,29 @@ fn sized_button(
         .build(ctx, |ctx| Text::new(label).build(ctx));
 }
 
+/// A readable name for each distribution. **Exhaustive on purpose**: a `_` arm here would let a
+/// variant added later show up as "other arrangement" on the card, with nothing failing.
 fn arrangement_label(arrangement: Arrangement) -> &'static str {
     match arrangement {
         Arrangement::Start => "Arrangement::Start — packed to the leading edge",
         Arrangement::Center => "Arrangement::Center",
         Arrangement::End => "Arrangement::End — packed to the trailing edge",
         Arrangement::SpaceBetween => "Arrangement::SpaceBetween — the leftover becomes the gaps",
-        _ => "other arrangement",
+        Arrangement::SpaceAround => "Arrangement::SpaceAround — half a gap at each end",
+        Arrangement::SpaceEvenly => "Arrangement::SpaceEvenly — equal gaps, ends included",
+        Arrangement::Absolute(arrangement) => match arrangement {
+            AbsoluteArrangement::Start => "Arrangement::Absolute(Start) — no RTL mirroring",
+            AbsoluteArrangement::End => "Arrangement::Absolute(End) — no RTL mirroring",
+            AbsoluteArrangement::Center => "Arrangement::Absolute(Center)",
+            AbsoluteArrangement::SpaceBetween => "Arrangement::Absolute(SpaceBetween)",
+            AbsoluteArrangement::SpaceAround => "Arrangement::Absolute(SpaceAround)",
+            AbsoluteArrangement::SpaceEvenly => "Arrangement::Absolute(SpaceEvenly)",
+        },
+        Arrangement::Aligned(Alignment::Start) => "Arrangement::Aligned(Start)",
+        Arrangement::Aligned(Alignment::Center) => "Arrangement::Aligned(Center)",
+        Arrangement::Aligned(Alignment::End) => "Arrangement::Aligned(End)",
+        // `Stretch` has nothing to stretch on the main axis, so the layout treats it as `Center`.
+        Arrangement::Aligned(Alignment::Stretch) => "Arrangement::Aligned(Stretch) — behaves as Center",
     }
 }
 

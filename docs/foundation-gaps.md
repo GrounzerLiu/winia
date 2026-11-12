@@ -120,7 +120,7 @@ concentrated in the APIs 1.13 added, and in the grid family.
 | Area | Today | Note |
 | --- | --- | --- |
 | Semantics + accessibility | `semantics.rs` (1410 lines) + `accessibility.rs` (1536 lines), `semantics_tree()` | per-component gaps are tracked in [semantics-gap.md](semantics-gap.md) |
-| CompositionLocal | `runtime/composition_local.rs` (280 lines): `provides`, `capture`, `try_current` | implemented |
+| CompositionLocal | `runtime/composition_local.rs`: `provide`, `provided`, `provides`, `ctx.provide`, `capture`/`with_snapshot` | implemented — mechanism in [composition-local.md](composition-local.md) |
 | Navigation | `nav.rs`, modelled on Nav3, with `SaveableStateHolder` | implemented |
 | Movable content | composition-level movable placements in `runtime/composer.rs` | implemented |
 | Tooltip | `components/tooltip.rs` | implemented |

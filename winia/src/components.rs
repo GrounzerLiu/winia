@@ -277,7 +277,22 @@ mod conventions {
             let lines: Vec<&str> = text.lines().collect();
             for (index, line) in lines.iter().enumerate() {
                 let trimmed = line.trim();
-                if !trimmed.starts_with("fn ") || !trimmed.contains("(ctx: &mut ComposeCtx) {") {
+                if !trimmed.starts_with("fn ") {
+                    continue;
+                }
+                // Two shapes count. `(ctx: &mut ComposeCtx) {` is the plain one this check has
+                // always matched. `(ctx: &mut ComposeCtx, scaffold:` is the DEMO BODY — the
+                // function `settings::shell` drives — which takes a second parameter and was
+                // therefore invisible to the first shape alone: the one function the check is
+                // named after could never fail it.
+                //
+                // Not every `fn` taking a `ctx` belongs here. A helper that builds a SINGLE node
+                // (`fn grow_tile(ctx, index, config)` wrapping one `Stack`) has no siblings to
+                // disambiguate, which is what the attribute exists for; requiring it there would
+                // be churn the rule does not ask for.
+                let is_demo_body = trimmed.contains("(ctx: &mut ComposeCtx, scaffold:");
+                let is_plain = trimmed.contains("(ctx: &mut ComposeCtx) {");
+                if !is_demo_body && !is_plain {
                     continue;
                 }
                 let previous = index

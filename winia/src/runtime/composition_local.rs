@@ -1,12 +1,29 @@
-//! CompositionLocal — 类似 Jetpack Compose 的隐式数据传递机制。
+//! Implicitly propagated values — winia's analogue of Jetpack Compose's `CompositionLocal`.
 //!
-//! 每个实例通过全局递增的 ID 区分。`provides()` 压栈，闭包返回后弹栈。
-//! 嵌套 provides（同实例或不同实例）通过 unique ID + rposition 正确隔离。
-//! Panic-safe: PopGuard 在栈展开时自动清理。
+//! The core ideas:
+//! - A provider puts a value in scope for a subtree; a reader asks for it without a parameter.
+//!   The stack is one thread-local `Vec<(id, Arc<Supplied>)>`: push before the content, pop after,
+//!   and a read scans from the back so the innermost provider wins.
+//! - **A read is the subscription.** `current()` hands the entry's `StateSignal` to
+//!   `register_dependency`, the same call `State::get` makes. The scopes that re-run are exactly the
+//!   scopes that read the value, so no component writes invalidation code and no subtree is dirtied
+//!   because "we do not know who read it".
+//! - Four ways in, and the difference is the whole API: `provide(value, ctx, content)` installs one
+//!   local and invalidates; `ctx.provide(&[..], content)` installs several at ONE slot position;
+//!   `provides(value, f)` is the ctx-less form and invalidates nobody; `provided(value)` only
+//!   describes an entry for the other two.
+//! - An entry's signal must OUTLIVE a change — readers point at the signal, not at the value — so a
+//!   later pass swaps the value in place instead of replacing the entry.
+//! - `capture`/`with_snapshot` replay the stack around an independent composition unit (an overlay),
+//!   sharing the same entries and therefore the same signals.
 //!
-//! 快照机制（`capture`/`with_snapshot`）：值用 `Arc<dyn Any>` 存储——快照
-//! 只是 `Arc::clone`（引用计数 +1，O(1) 浅拷贝，无需值 Clone）。用于独立
-//! 组合单元（overlay 等）继承捕获时的隐式上下文（主题/方向/排版）。
+//! Two consequences worth knowing before changing this file: invalidation lands one pass late (the
+//! pending queue drains at the START of a pass), and a provider's entry is addressed by a per-site
+//! key whose keyless fallback drifts with the structure.
+//!
+//! Rationale and the redesign that produced this: `docs/composition-local-redesign.md`. Mechanism,
+//! pitfalls and the invariant each test pins: `docs/composition-local.md`. How a component should
+//! choose a provider: `docs/component-authoring.md` §13.
 
 use std::any::Any;
 use std::cell::RefCell;

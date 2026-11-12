@@ -193,6 +193,31 @@ impl ButtonGroupDefaults {
             .align(TextAlign::Center)
     }
 
+    /// `ToggleButton`'s two containers: `SurfaceContainer` unchecked, `Primary` checked
+    /// (`FilledButtonTokens.UnselectedContainerColor` / `SelectedContainerColor`).
+    ///
+    /// Public because a caller drawing its own toggle item has to supply the same pair — the demo
+    /// did exactly that, with a hand-copied version of this function that was one token edit away
+    /// from drifting from the one `toggleable` uses internally.
+    pub fn toggle_colors(
+        theme: &crate::theme::ThemeColors,
+        checked: bool,
+    ) -> crate::components::button::ButtonColors {
+        use crate::graphics::Color;
+        let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
+        let (container, content) = if checked {
+            (theme.primary, theme.on_primary)
+        } else {
+            (theme.surface_container, theme.on_surface)
+        };
+        crate::components::button::ButtonColors::new(
+            container,
+            content,
+            alpha(theme.on_surface, 0.12),
+            alpha(theme.on_surface, 0.38),
+        )
+    }
+
     /// `Icons.Filled.MoreVert` — a VERTICAL ellipsis, which is what upstream's indicator shows.
     pub const MORE_VERT_PATH: &'static str = "M12,8c1.1,0,2-0.9,2-2s-0.9-2-2-2s-0.9,2-2,2S10.9,8,12,8z \
          M12,10c-1.1,0-2,0.9-2,2s0.9,2,2,2s2-0.9,2-2S13.1,10,12,10z \
@@ -331,27 +356,6 @@ enum LabelAction {
 }
 
 impl LabelItem {
-    /// `ToggleButton`'s container roles: `SurfaceContainer` unchecked, `Primary` checked
-    /// (`FilledButtonTokens.UnselectedContainerColor` / `SelectedContainerColor`).
-    fn toggle_colors(
-        theme: &crate::theme::ThemeColors,
-        checked: bool,
-    ) -> crate::components::button::ButtonColors {
-        use crate::graphics::Color;
-        let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-        let (container, content) = if checked {
-            (theme.primary, theme.on_primary)
-        } else {
-            (theme.surface_container, theme.on_surface)
-        };
-        crate::components::button::ButtonColors::new(
-            container,
-            content,
-            alpha(theme.on_surface, 0.12),
-            alpha(theme.on_surface, 0.38),
-        )
-    }
-
     /// The button — upstream's `ButtonGroupContent` (`ButtonGroup.kt:1084-1129`).
     fn compose_button(self, ctx: &mut ComposeCtx, source: MutableInteractionSource) {
         use crate::components::button::{Button, ButtonStyle};
@@ -378,7 +382,7 @@ impl LabelItem {
                 let on_change = on_change.clone();
                 let now = *checked;
                 button = button.on_click(move || on_change(!now));
-                button = button.colors(Self::toggle_colors(&theme, now));
+                button = button.colors(ButtonGroupDefaults::toggle_colors(&theme, now));
             }
         }
         let icon = self.icon.clone();

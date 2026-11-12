@@ -542,11 +542,22 @@ rather than a field of the builder, so without this a Clean slot keeps the label
 it built on an earlier pass while only live closures (background, ripple) update - the container
 changes and the text inside it does not.
 
-One caveat, the same one every `CompositionLocal` has: providing a NEW set does not invalidate
-readers that were composed before it. A styling that changes at runtime (a user switching to a brand
-palette) has to be driven by a `State` read inside the subtree, the way `WiniaTheme::auto` follows the
-system theme - otherwise the components keep the colours they composed with. Section 13.4 is the
-general rule, with the two steps such a provider has to take.
+One caveat, and it is the same one every `CompositionLocal` has: **the plain `with_component_styles`
+does not invalidate readers that were composed before it.** It goes through the ctx-less `provides`,
+which carries no signal — so a styling that changes at runtime (a user switching to a brand palette)
+leaves components painting the colours they composed with.
+
+Two ways out, in order of preference:
+
+1. **`with_component_styles_when_changed(styles, ctx, |ctx| …)`** — the same provider through
+   `provide`, so each reader that actually read the local is re-entered when the set moves. This is
+   the one to reach for; it compares by `Arc::ptr_eq`, so hold the `Arc` and rebuild it only when the
+   styling really changes.
+2. Re-read the set from a `State` inside the subtree, the way `WiniaTheme::auto` follows the system
+   theme. Correct, but it is work `provide` already did for you.
+
+Section 13.4 is the general rule behind the difference; the mechanism is in
+[composition-local.md](composition-local.md).
 
 ## 7. Slots
 
@@ -622,6 +633,27 @@ composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
 let root = composer.layout_root_idx().unwrap();
 assert_eq!(composer.arena_nodes()[root].measured_size.height, 152.0);
 ```
+
+**MUST** converge when a test asserts that a PROVIDED value reached a reader. A
+`CompositionLocal` change is delivered one pass late: `compose` drains the pending queue at its
+START, so the pass that discovers the move only queues the notification and the NEXT pass marks the
+subscribed scope dirty. Calling `recompose` once and asserting therefore tests the old same-pass
+timing, not the new mechanism, and will fail for a correct implementation:
+
+```rust
+// NOT this — one pass cannot see the notification it just caused.
+composer.recompose(scene);
+assert_eq!(painted_label(), Some(new_colour));
+
+// This — the loop the frame path itself runs (`PerWindow::recompose_until_stable`).
+composer.recompose_to_stable(|| scene);   // cfg(test), bounded at 8 passes
+assert_eq!(painted_label(), Some(new_colour));
+```
+
+Keep a CONTROL assertion alongside it (an unchanged frame must NOT re-run the reader). Without one, a
+test passes whether the provider works or the group re-runs for some unrelated reason. Section 13.4.1
+explains the timing; `badge.rs`'s `the_label_follows_a_container_colour_that_moves_at_runtime` is the
+worked example, and `composition_local.rs`'s own tests pin the mechanism underneath.
 
 **SHOULD** name a test for the property it pins, so a `... FAILED` line explains itself: a failing
 `a_named_size_takes_its_own_padding_and_the_default_takes_the_baseline` says what broke, while

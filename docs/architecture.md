@@ -214,7 +214,10 @@ unchanged keeps its identity, so measure caches and animation state survive.
 
 **Composition locals** (`runtime/composition_local.rs`) are the implicit context: theme, layout
 direction, density, text style. A provider pushes a value for its subtree; a reader asks for the
-current one. Values are captured in the tree, never read from a global at draw time.
+current one. Values are captured in the tree, never read from a global at draw time. A provided entry
+carries a `StateSignal` and **the read is the subscription** (`current()` registers the dependency the
+same way `State::get` does), so a change re-enters exactly the scopes that read the value — no
+provider writes invalidation code. Mechanism and pitfalls: [composition-local.md](composition-local.md).
 
 **Dependency frames** are what makes recomposition incremental. A read inside a compose pass records
 a dependency on that `State`; a write schedules exactly the subscribers that read it. Three modes

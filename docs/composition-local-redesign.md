@@ -1,8 +1,11 @@
 # CompositionLocal redesign: reads register their dependencies
 
-> **Status: design for approval.** This is the single source of truth for the rewrite. Once
-> approved, land it step by step following the checklist in §8; every step is testable and
-> revertible on its own. No code changes before approval.
+> **Status: landed.** Everything in §8's checklist is done except D2–D4, which were measured to be
+> wrong rather than left unfinished — see the note on each. §1 and §2 describe the tree BEFORE the
+> rewrite and are kept as the record of what was replaced; §3 onward is what exists today.
+>
+> For how the mechanism works now, see [`docs/composition-local.md`](composition-local.md). This
+> document is the rationale and the migration log.
 >
 > The defect that triggered this design: after switching the selection in a `Day / Week / Month`
 > group, the container changed colour while the labels stayed on their previous colour (pale label on
@@ -10,7 +13,11 @@
 > `provides_tracked_by`, a per-site key, `provider_path_counters`, and two `backchannel`s. Those
 > patches work, but they patch a wrong model — this document replaces that model.
 
-## 1. Today: three layers, 23 entry points
+## 1. Before (historical): three layers, 23 entry points
+
+> ⚠ **This section describes the tree as it was before the rewrite, not today.** `provides_tracked`,
+> `provides_tracked_by`, the per-group `position_key` providers and the hand-written
+> `mark_subtree_dirty` are all gone; §3 is what replaced them.
 
 ### 1.1 The primitive (`runtime/composition_local.rs`)
 
@@ -53,7 +60,10 @@ internal provide sites in `SelectionContainer`, `sub_window_content`,
 | `provides_tracked` | 11 |
 | `provides_tracked_by` | 3 |
 
-## 2. Root cause
+## 2. Root cause (historical)
+
+> Also describing the tree before the rewrite — kept because the reason the old model was wrong is
+> what §3 answers.
 
 `CompositionLocal::current()` is a **pure pull** (`composition_local.rs:142-153`):
 
@@ -84,66 +94,72 @@ from:
 read itself creates the dependency. When the provider's value changes it invalidates exactly those
 readers — it knows **which ones**, and never touches the whole tree.
 
-## 3. The new design
+## 3. The new design (as landed)
 
 ### 3.1 Core: the local carries a signal, and reading subscribes
 
 Each **provide site** holds a state with a signal; `current()` registers a dependency on read, reusing
-the existing `StateSignal` machinery (`state.rs:79-93`, `ComposerSubscription::subscribe_signal`).
+the existing `StateSignal` machinery (`state.rs`, `ComposerSubscription::subscribe_signal`).
 
 ```rust
-// composition_local.rs (new)
-struct Supplied {
-    value: Box<dyn LocalValue>,      // type-erased value
-    signal: Arc<StateSignal>,        // reuses State's notification machinery
+// composition_local.rs
+pub struct Supplied {
+    value: RwLock<Arc<dyn Any>>,     // type-erased value, swapped in place
+    signal: Option<Arc<StateSignal>>, // None = a provide that cannot invalidate anybody
 }
 
 thread_local! {
-    // stack entries now carry their signal
+    // stack entries carry their signal
     static SLOTS: RefCell<Vec<(u64, Arc<Supplied>)>>;
 }
 ```
+
+The value sits behind a lock rather than being replaced wholesale because **readers point at the
+signal, not at the value**: a fresh `Supplied` would strand every existing subscriber on a signal
+nobody notifies again.
 
 **Reader side** (`current()` keeps its zero-argument signature; no call site changes):
 
 ```rust
 pub fn current(&self) -> T {
-    if let Some(supplied) = find(self.id) {
-        // read = register: the same path State::get takes
-        crate::runtime::state::register_dependency(supplied.signal.clone());
-        supplied.value.downcast::<T>().clone()
-    } else {
-        (self.default)()
+    match self.find() {
+        Some((value, signal)) => { subscribe(signal); value }  // read = register
+        None => (self.default)(),
     }
 }
 ```
 
 `register_dependency` already exists and **does not need `&mut ComposeCtx`**: it resolves the target
-through `with_active_scope` (`composer.rs:221-236`), which takes the innermost scope from the
-thread-local `GROUP_STACK` and falls back to `ACTIVE_SLOT_KEY` when that stack is empty (so a
-measure/draw read still lands on a node). `State::get` walks this exact path every frame.
+through `with_active_scope`, which takes the innermost scope from the thread-local `GROUP_STACK` and
+falls back to `ACTIVE_SLOT_KEY` when that stack is empty (so a measure/draw read still lands on a
+node). `State::get` walks this exact path every frame.
 
 **Provider side** (takes `ctx`, so a value from any source invalidates correctly):
 
 ```rust
-pub fn provides<R>(&self, value: T, ctx: &mut ComposeCtx,
-                   content: impl FnOnce(&mut ComposeCtx) -> R) -> R {
-    let slot = ctx.remember_local_state(self.id, value.clone());   // stable per slot
-    if !slot.eq(&value) {          // comparison policy lives on the local, see §3.2
-        slot.set(value.clone());
-        slot.signal.notify(true);   // wake only the scopes that subscribed
+pub fn provide<R>(&self, value: T, ctx: &mut ComposeCtx,
+                  content: impl FnOnce(&mut ComposeCtx) -> R) -> R {
+    let key = ctx.next_provider_key();                       // per SITE, see below
+    let entry = ctx.remember_backchannel_at_key(key, || /* seed with `value` */);
+    let supplied = entry.peek();
+    if !supplied.is_same(&value, self.same) {                // policy lives on the local, §3.2
+        supplied.replace(value.clone());
+        if self.notifies { /* signal.notify(true) */ }       // false for `new_static`
     }
-    SLOTS.with(|s| s.borrow_mut().push((self.id, slot)));
-    let guard = PopGuard::new(self.id);
-    let result = content(ctx);
-    /* pop + disarm, same as the current implementation */
-    result
+    SLOTS.with(|s| s.borrow_mut().push((self.id, supplied)));
+    /* run content, then pop */
 }
 ```
 
-Net effect: **one `provides` = one comparison = at most one precise notification.** No per-site key
-(the storage location is the slot that called it), no `backchannel` (the signal already holds the
-value), no `mark_subtree_dirty` (the readers are exact).
+Net effect: **one `provide` = one comparison = at most one precise notification.** No hand-kept
+"previous value" beside the entry (the `Supplied` IS it), no `mark_subtree_dirty` (the readers are
+exact).
+
+**But NOT "no per-site key", which this section claimed when it was a design.** The plan assumed the
+provided value would live in the `Slot` itself, making `next_provider_key` unnecessary. It does not:
+the entry lives in the slot table's `remembered` map, and that key is what addresses it. §8 D2 carries
+the measurement — pinning the ordinal to a constant makes two providers in one group share one entry,
+read each other's value as "changed", and re-dirty on every pass.
 
 ### 3.2 Move the comparison to the definition
 
@@ -215,15 +231,21 @@ Compose's single `CompositionLocalProvider(A provides x, B provides y)` becomes:
 
 ```rust
 ctx.provide(&[
-    LOCAL_CONTENT_COLOR.provides(color),
-    LOCAL_TEXT_STYLE.provides(merged),
+    LOCAL_CONTENT_COLOR.provided(color),
+    LOCAL_TEXT_STYLE.provided(merged),
 ], |ctx| { ... })
 ```
 
-`Local.provides(value)` returns a type-erased `ProvidedValue` (`Arc<dyn Any>` plus a comparison
-function pointer), and the array lives on the stack. **One provide call = one slot position**, so
-three levels of nesting no longer overwrite each other's memory — which is exactly the problem the
-per-site counter had to solve.
+`Local.provided(value)` returns a type-erased `ProvidedValue` (`Arc<dyn Any>` plus a comparison
+predicate that downcasts inside itself), and the array lives on the stack. **One provide call = one
+slot position**, so three levels of nesting no longer overwrite each other's memory — which is
+exactly the problem the per-site counter had to solve.
+
+It is `provided`, not `provides`: the plan called this constructor `provides`, which the ctx-less
+form already occupies. A past participle describes a value; the verb installs it.
+
+Entries are matched by the LOCAL's id rather than by array position, so a call site whose list length
+follows a branch keeps working and a reordering is not mistaken for a change.
 
 Also provide Compose's named combination, so call sites read line-for-line against upstream:
 
@@ -253,41 +275,57 @@ Only 3 call sites need to move (they put `ctx` first today):
 
 ## 4. API map (old → new)
 
-| Now | After |
+| Now | After (as landed) |
 |---|---|
-| `.provides(v, f)` | **deleted** (folded into `provides`) |
-| `.provides_tracked(v, ctx, f)` | `.provides(v, ctx, f)` |
+| `.provides(v, f)` | **kept** — the ctx-less form, 15 call sites, for the 4 in §6 |
+| `.provides_tracked(v, ctx, f)` | **`.provide(v, ctx, f)`** |
 | `.provides_tracked_by(v, ctx, same, f)` | **deleted** (the comparator moves to `new_by`) |
 | `CompositionLocal::new(default)` | gains `where T: PartialEq` |
 | — | `CompositionLocal::new_by(default, same)` |
 | — | `CompositionLocal::new_static(default)` |
-| — | `Local.provides(value) -> ProvidedValue` |
+| — | `Local.provided(value) -> ProvidedValue` |
 | — | `ctx.provide(&[ProvidedValue], content)` |
 | — | `ProvideContentColorTextStyle(color, style, ctx, content)` |
-| `WiniaTheme::with_theme*`, four overloads | kept (all four combinations have call sites); internally they go through `ctx.provide` |
-| `ProvideTextStyle(style, ctx, content)` | keeps its name, internally goes through `ctx.provide` |
+| `WiniaTheme::with_theme*`, four overloads | kept (all four combinations have call sites); internally they go through one `ctx.provide` |
+| `ProvideTextStyle(style, ctx, content)` | keeps its name, internally goes through `provide` |
+
+**Two departures from the plan, both measured:**
+
+1. The tracked form landed as `provide`, not `provides`. The plan had `provides` free because
+   `.provides(v, f)` was to be deleted; in practice that ctx-less form has 15 production call sites
+   and the 4 in §6 legitimately keep it. Rust has no overloads, so one name had to cover one meaning,
+   and the verb/participle split (`provide` acts, `provided` describes) is what replaced verbosity
+   with a distinction that reads correctly at the call site.
+2. `provided(value)`, not `provides(value)`, builds a `ProvidedValue`. Same reason: `provides` was
+   taken, and a constructor that installs nothing must not be named like one that does.
 
 ## 5. Deletion list
 
 | Goes away | Why |
 |---|---|
-| `provides_tracked` / `provides_tracked_by` | folded into `provides` |
-| `Composer::next_provider_key` | storage is the slot, so no per-site key |
-| `Composer::provider_path_counters` + its 4 registration sites (init / snapshot / rollback / per-frame clear) | same |
-| `movable_saved_provider_counters` | same |
-| `ComposeCtx::next_provider_key` | same |
+| `provides_tracked` / `provides_tracked_by` | folded into `provide` |
+| ~~`Composer::next_provider_key`~~ | **NOT deleted** — the premise was that storage moves into the slot; it did not, so this is still what addresses an entry. See D2. |
+| ~~`Composer::provider_path_counters`~~ | **NOT deleted** — the ordinal is exactly what D2 needs. See D3. |
+| ~~`movable_saved_provider_counters`~~ | **NOT deleted** — it saves/restores the table above. See D4. |
+| ~~`ComposeCtx::next_provider_key`~~ | **NOT deleted** — same as the first of these. |
 | the tuple compare + `mark_subtree_dirty` in `provide_resolved` | the 4th hand-written copy; the signal does it |
 | the backchannel in `with_component_styles_when_changed` | the signal does it |
 | the `provides_tracked_by` call in `with_overscroll_factory` | same |
 | the two-level nesting in `Button` / `Badge` | each becomes one `ProvideContentColorTextStyle` |
 | `component_styles.rs`'s `NAMESPACE` constant | goes with the backchannel |
 
+The four struck-through rows are the one part of this plan that did not survive contact with the
+code, and §8 D2 carries the measurement that settled it: pinning the ordinal to a constant makes two
+providers in one group share one entry, read each other's value as "changed", and re-dirty on every
+pass. Deleting the key requires moving the provided value into `Slot` itself, which is a larger
+change than this redesign.
+
 ## 6. The 4 that keep a `ctx`-less signature (unchanged)
 
 | provider | Why it stays (verified) |
 |---|---|
 | `with_density` | wraps a whole FRAME: the closure at `per_window/core.rs:816` contains `recompose_until_stable()` + `layout()` + `sw.draw()`. Taking `&mut ComposeCtx` collides with `self.composer.layout()` inside it; and its readers run in **measure/draw** (`box_layout.rs:70`, `modifier/element.rs:74`, `render/pass.rs:1492`), which composition invalidation cannot reach |
-| `direction::provides` | its only production call site is inside `provide_resolved`; everything else is a test |
+| `direction::provides` | **no production call site left**: `provide_resolved` now uses the tracked `direction::provided(direction)` entry, so the ctx-less form survives only for tests that supply a direction around a bare `Composer::compose` |
 | `with_saveable_registry` / `with_registry_of` | one `Arc` per window, installed once and never rebuilt |
 | `with_component_styles` / `_arc` | no production call site (tests only); the changing form is `_when_changed` |
 
@@ -295,7 +333,7 @@ Only 3 call sites need to move (they put `ctx` first today):
 `ctx.provide`'s `FnOnce(&mut ComposeCtx)`. That boundary is deliberate — every entry above has a
 concrete reason, recorded in §9's docs.
 
-## 7. Risks and open questions
+## 7. Risks and open questions (as assessed before landing)
 
 | Risk | Detail | Mitigation |
 |---|---|---|
@@ -305,6 +343,22 @@ concrete reason, recorded in §9's docs.
 | **Per-frame notify cost** | today `mark_subtree_dirty` re-enters a whole subtree; the new path notifies precisely, but each value is an `Arc<dyn Any>` plus one comparison | notify only when unequal, matching `State::set`'s dedup |
 | **`next_state_id` visibility** | the new signal needs an id | `StateSignal::new(StateId)` is `pub(crate)`; `next_state_id` is private to `state.rs` today and must be exposed to `composition_local` |
 | **2276 tests** | all of them rely on current semantics | land in steps, running the full suite at each |
+
+How each one ended up:
+
+- **Reads outside composition** — held. `subscribe` reaches `register_dependency`, which falls back to
+  the active node outside a scope, so a measure-time read is a layout dependency. No separate test was
+  added; the four ctx-less providers that read at measure time carry the behaviour instead.
+- **Movable content** — held, for the same reason the entry always lived in the slot table's
+  `remembered` map rather than beside the value. This is also why D2–D4 could not delete the per-site
+  key: the storage never moved into `Slot` itself.
+- **Snapshot** — held. The snapshot shares the `Arc<Supplied>`, so a replayed overlay subscribes to
+  the same signals, which is the intended semantics.
+- **Per-frame notify cost** — held, and it is the point: a comparison per provided value replaces
+  re-entering a whole subtree.
+- **`next_state_id` visibility** — done; it is `pub(crate)` and `Supplied::tracked` uses it.
+- **Test count** — 2276 at the time of writing; 2283 at the end of the work (two of the extra tests
+  came from the review of this change).
 
 ## 8. Migration checklist
 
@@ -320,16 +374,19 @@ Each step is testable and revertible on its own. Tick items as they land.
       subscribed to — swapping the whole entry would leave every subscriber on a signal nobody
       notifies again. `signal: None` is the untracked form (`provides`, ctx-less).
 - [x] A3 ~~`Policy::{Equal, By(fn), Never}`~~ → one field `same: fn(&T, &T) -> bool`; the three
-      variants became three constructors and `Never` is the constant `|_, _| true`.
+      variants became three constructors. `Never` is **not** the constant `|_, _| true`: that would
+      freeze the value at its first pass, so a reader composing later for its own reasons would read
+      something older than what is in scope. `new_static` answers `false` ("always replace") and
+      keeps the signal quiet through the separate `notifies` flag.
 - [x] A4 `CompositionLocal::{new_by, new_static}`, `T: PartialEq` on `new`
 - [x] A5 `next_state_id` is `pub(crate)`; `Supplied::tracked` uses it
 - [x] A6 `a_signal_notify_reaches_the_subscription_that_read_it`
 
 ### Phase B: swap `provides`' implementation (keep the old API as a shim)
 
-- [x] B1 the new `provides(value, ctx, content)`: per-site `next_provider_key` →
-      `remember_backchannel_at_key` holding the `Supplied`, compare under the local's `same`,
-      `replace` + `signal.notify(true)` only when it moved, push, run content, pop
+- [x] B1 the new `provide(value, ctx, content)` (the plan called it `provides`; see §4): per-site
+      `next_provider_key` → `remember_backchannel_at_key` holding the `Supplied`, compare under the
+      local's `same`, `replace` + `signal.notify(true)` only when it moved, push, run content, pop
 - [x] B2 `current()` / `try_current()` hand the entry's signal to `register_dependency` — the read IS
       the subscription, the same call `State::get` makes
 - [x] B3 `provides_tracked` / `provides_tracked_by` forward to `provide` (shims, deleted in Phase D)
@@ -466,13 +523,26 @@ code; they are recorded above rather than quietly dropped.
 
 ## 9. Acceptance criteria
 
-1. **`provides` has exactly one shape**, and it takes `ctx` (except the 4 in §6, each with a written
-   reason).
+1. **One verb per meaning.** `provide` installs a value and invalidates; `provides` is the ctx-less
+   form and invalidates nobody; `provided` only builds an entry. The API map in §4 said
+   `provides_tracked` would become `.provides(v, ctx, f)` — it became `.provide(v, ctx, f)` instead,
+   because `provides` was already the ctx-less form with 15 call sites and the two cannot share a name
+   in Rust. **Met**, with that rename recorded in §4.
 2. **Zero changes at `current()` call sites** — a reader never needs to know how invalidation works.
-3. **`composition_local.rs` no longer mentions `mark_subtree_dirty`, `backchannel` or `position_key`.**
+   **Met**: every `current()` call site is untouched by this work.
+3. **`composition_local.rs` no longer uses `mark_subtree_dirty` or `position_key` to invalidate.**
+   **Met with a caveat**: both words still appear in comments, as the explanation of what this
+   replaced, and `remember_backchannel_at_key` is still how a provider addresses its entry — a
+   *storage* backchannel, not the hand-rolled previous-value one the redesign deleted. The criterion
+   was about mechanism, not vocabulary.
 4. **Adding a provider requires no invalidation code from its author** — the only goal of this design.
+   **Met**: `Button`, `Badge`, `AlertDialog`, `Chip`, `SegmentedButton`, `IconButton`,
+   `IconToggleButton` and `FloatingActionButton` each dropped a hand-written compare-and-dirty for
+   one `provide` call.
 5. The screenshot defect stays covered by `a_toggled_item_repaints_its_label_in_the_new_content_colour`.
-6. Full `cargo test -p winia --lib` green, `--examples` builds.
+   **Met.**
+6. Full `cargo test -p winia --lib` green, `--examples` builds. **Met** (2283 passed at the time of
+   writing; see §8 E6 and the D-phase note for the two tests added afterwards).
 
 ## 10. Why not "just tidy the API surface"
 
