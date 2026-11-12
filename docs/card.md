@@ -147,6 +147,14 @@ semantics → 用户 modifier → clickable/ripple。
   进入 120ms、离开 150ms、离开 hover 120ms、idle→idle 直接 snap。
 - `for_state` 优先级：disabled > **dragged** > pressed > hovered > focused > default
   —— 拖拽必须排在按压之前，因为拖拽一定伴随按压，反过来 `dragged` 永远不可达。
+- **交互五值只有 clickable 卡能用到**。一张卡要有 hover/press/focus 可报，才谈得上
+  在这些状态间切换阴影；没有 `on_click` 的卡收不到任何交互，永远停在 `default`。
+  Compose 是同一回事：非 clickable 的 `Card` 重载把 `interactionSource = null`
+  传给 `shadowElevation`，后者直接返回 `remember { mutableStateOf(defaultElevation) }`，
+  不挂动画（`material3/Card.kt:660-668`）。winia 从另一侧到达同一点——`Hoverable`
+  由 `clickable` 安装（`modifier/builders/input.rs:22-31`），hover 路由只认声明了它的
+  节点（`app/per_window/pointer.rs:225-227`）。所以给静态卡配
+  `CardElevation::new(0,0,0,8,12,0)` 时，`hovered` 那个 8 永远不会生效。
 - 阴影由 Skia 原生 ambient/spot 光源绘制，默认颜色约为 ambient 10% 黑、spot 25% 黑；
   阴影形状跟随 `Card::shape`。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。

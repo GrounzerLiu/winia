@@ -255,9 +255,21 @@ fn overrides_card(ctx: &mut ComposeCtx) {
                     });
 
                 // Flat at rest, high on hover: the whole set is visible in one hover.
+                //
+                // `on_click` is what makes the OTHER five values reachable, not decoration. A card
+                // with no click takes no interactions, so it has no hover/focus/press to report and
+                // the animated layer sits at `default` forever — this card said `hovered = 8` and
+                // stayed at 0, which is exactly what Compose does: its non-clickable `Card` overload
+                // passes `interactionSource = null` to `shadowElevation`, and that returns
+                // `remember { mutableStateOf(defaultElevation) }` with no animation
+                // (`material3/Card.kt:660-668`). winia reaches the same place from the other side —
+                // `Hoverable` is installed by `clickable` (`modifier/builders/input.rs:22-31`), and
+                // the hover router only looks at nodes that declare it
+                // (`app/per_window/pointer.rs:225-227`).
                 let share = row.weight(1.0);
                 Card::new()
                     .elevation(CardElevation::new(0.0, 0.0, 0.0, 8.0, 12.0, 0.0))
+                    .on_click(|| {})
                     .modifier(share)
                     .build(row, |ctx| {
                         Column::new()
