@@ -80,19 +80,26 @@ impl CardColors {
     /// 从主题按 style 生成默认色（对标 material3 CardDefaults.cardColors/
     /// elevatedCardColors/outlinedCardColors——M3 1.4.0 tokens）。
     ///
-    /// 简化：M3 的 disabled 容器 = DisabledContainerColor @ DisabledContainerOpacity
-    /// compositeOver(ContainerColor)；本仓库约定（同 checkbox/button）用 alpha
-    /// 直乘近似——Filled 取 SurfaceVariant@38%，Elevated/Outlined 容器不变
-    /// （M3：Elevated 为 Surface@38% 叠 Surface、Outlined 无 disabled 容器变化）。
+    /// 禁用容器色按 Compose 的原式算，不用 `alpha` 直乘近似：M3 是
+    /// `DisabledContainerColor @ DisabledContainerOpacity compositeOver(ContainerColor)`
+    /// （`Card.kt:507-511`、`:559-563`），合成到不透明容器色上，结果**不透明**。直乘
+    /// alpha 会得到一张半透明卡片，把身后的东西透出来——三种 style 里两种都踩得到：
+    /// Filled 的底是 `SurfaceContainerHighest`，Elevated 的底是 `Surface` 自身。
+    /// （Outlined 无此问题：它的 `disabledContainerColor` 就是 `ContainerColor`。）
+    ///
+    /// `Color::overlay` 就是这个 src-over 合成，见 `surface.rs:29` 的同款用法。
     pub fn from_theme(theme: &crate::theme::ThemeColors, style: CardStyle) -> Self {
         use crate::graphics::Color;
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
         match style {
-            // FilledCardTokens: Container=SurfaceContainerHighest, Disabled=SurfaceVariant@38%
+            // FilledCardTokens: Container = SurfaceContainerHighest,
+            // Disabled = SurfaceVariant @0.38 compositeOver SurfaceContainerHighest.
             CardStyle::Filled => Self::new(
                 theme.surface_container_highest,
                 theme.on_surface,
-                alpha(theme.surface_variant, 0.38),
+                theme
+                    .surface_container_highest
+                    .overlay(theme.surface_variant, 0.38),
                 alpha(theme.on_surface, 0.38),
             ),
             // ElevatedCardTokens: Container = SurfaceContainerLow.
@@ -896,10 +903,26 @@ mod tests {
         let filled = CardDefaults::card_colors(&theme, CardStyle::Filled);
         assert_eq!(filled.container, theme.surface_container_highest);
         assert_eq!(filled.content, theme.on_surface);
+        // `SurfaceVariant @0.38 compositeOver SurfaceContainerHighest` (`Card.kt:507-511`). The
+        // point of computing it rather than multiplying the alpha: the result is OPAQUE, because
+        // the enabled container it composites onto is opaque. The old assertion here pinned
+        // `a == surface_variant.a * 0.38`, which is what a translucent card looks like — it passed
+        // precisely because it encoded the shortcut instead of the formula.
         assert_eq!(
-            filled.disabled_container.a,
-            (theme.surface_variant.a as f32 * 0.38) as u8,
-            "Filled 禁用容器 = SurfaceVariant @ 38%"
+            filled.disabled_container,
+            theme
+                .surface_container_highest
+                .overlay(theme.surface_variant, 0.38),
+            "Filled 禁用容器 = SurfaceVariant@38% compositeOver SurfaceContainerHighest"
+        );
+        assert_eq!(
+            filled.disabled_container.a, 255,
+            "the composite lands on an opaque container, so the disabled card is opaque — an alpha \
+             shortcut would let whatever sits behind it show through"
+        );
+        assert_ne!(
+            filled.disabled_container, filled.container,
+            "a disabled Filled card does change colour"
         );
         assert_eq!(
             filled.disabled_content.a,

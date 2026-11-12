@@ -135,10 +135,10 @@ semantics → 用户 modifier → clickable/ripple。
   hover/press/focus 的视觉反馈由 ripple 状态层绘制，不叠加在背景色上。
 - M3 token 配色（1.4.0）：Filled = SurfaceContainerHighest/OnSurface；
   Elevated = SurfaceContainerLow/OnSurface；Outlined = Surface/OnSurface。
-- 禁用：Filled 容器 SurfaceVariant@38%（alpha 直乘近似 M3 的
-  compositeOver）；Elevated 容器换成**不透明的 Surface**（M3 是
-  `Surface@0.38 compositeOver Surface`，结果即为 Surface 本身，与启用的
-  SurfaceContainerLow 不同色）；Outlined 容器不变（M3 的
+- 禁用：按 Compose 原式合成，而非 alpha 直乘——Filled 容器 =
+  `SurfaceVariant@0.38 compositeOver SurfaceContainerHighest`（不透明）；
+  Elevated 容器 = `Surface@0.38 compositeOver Surface`，结果即为**不透明的
+  Surface** 本身，与启用的 SurfaceContainerLow 不同色；Outlined 容器不变（M3 的
   DisabledContainerColor 就是 ContainerColor）。内容统一 OnSurface@38%。
 
 ### 3.3 阴影（hover/按下升高动画）
@@ -200,9 +200,12 @@ semantics → 用户 modifier → clickable/ripple。
 
 - **形状 token**：CornerMedium = 12dp，对应 `Shape::rounded(12.0)`，无主题级
   shape 系统（同 Button）。
-- **disabled 容器色**：Filled 用 alpha 直乘近似 M3 的 compositeOver（项目统一
-  约定，同 checkbox/button）；Elevated 取不透明的 Surface 作为精确结果（叠加同色
-  后本就该不透明，用 alpha 近似反而会做出半透明卡片）；Outlined 与 M3 一致。
+- **disabled 容器色**：按 Compose 原式算——`DisabledContainerColor @0.38
+  compositeOver(ContainerColor)`（`Card.kt:507-511`、`:559-563`），合成到底色
+  上得到**不透明**结果。Filled 的底是 SurfaceContainerHighest，Elevated 的底是
+  Surface 自身（叠同色 → 就是 Surface），Outlined 的 `disabledContainerColor`
+  本就是 ContainerColor。**不用 alpha 直乘近似**：那会做出半透明卡片，把身后的
+  东西透出来（旧的 Filled 分支就是这么写的，断言也只比 alpha 值，所以一直没暴露）。
 - **内容色**：M3 `contentColorFor(container)` 按对比度计算；winia 统一取
   OnSurface（三种容器均为 surface 系，对比结果一致）。
 - **tonal overlay**：M3 在容器色为 `surface` 时按 elevation 叠一层 primary；winia

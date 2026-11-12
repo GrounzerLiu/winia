@@ -986,7 +986,7 @@ pub(crate) enum ModifierElement {
 
 impl ModifierElement {
     /// Whether a PARENT container reads this off its DIRECT child — Compose's
-    /// [`ParentDataModifierNode`].
+    /// `ParentDataModifierNode`.
     ///
     /// Compose keeps two channels on a node: the chain that paints and measures it, and the parent
     /// data a container reads back off the resulting `Placeable`. `Modifier.weight` belongs to the
@@ -998,10 +998,27 @@ impl ModifierElement {
     /// equivalent until a component inserts a node of its own: `Card` and `Button` wrap themselves
     /// for the 48 dp touch target, and a placement parameter left on the inner node becomes
     /// invisible to the parent (measured: three weighted clickable cards each measured 48 dp instead
-    /// of sharing the row). [`Modifier::parent_data`] is how such a wrapper carries them up.
+    /// of sharing the row). [`Modifier::split_parent_data`] is how such a wrapper carries them up.
     ///
     /// Keep this list in step with the `get_*` queries the containers use: every variant here has a
     /// reader that looks only at `nodes[child].modifier`.
+    ///
+    /// Two elements a container DOES read are deliberately absent, because moving them would break
+    /// something that copying them would also break — `split_parent_data` moves, so an element has
+    /// to belong wholly to one side to qualify:
+    ///
+    /// - `FillMaxWidth`/`FillMaxHeight`/`FillMaxSize`. A `FlexBox` reads them as a grow factor when
+    ///   the item declares none (`FlexBox.kt:365-377`, read at `flexbox/policy.rs:296`) — real
+    ///   parent data. But they are also size STEPS this node resolves for ITSELF
+    ///   (`modifier/query.rs:228-237` → `SizeStep::Fill`), so moving them to the wrapper would stop
+    ///   the inner node filling its own constraints. Unlike `weight`, the single channel here has to
+    ///   serve both readers: on a wrapping component a `fillMax*` therefore sizes the wrapper and
+    ///   the surface inside it inherits the size through `propagate_min_constraints` — close enough
+    ///   to Compose's result that a second channel is not worth its cost.
+    /// - `animateItem`. A `Flow` reads the marker off its direct child (`flow/row.rs:171`,
+    ///   `flow/column.rs:171`), but `wrapper_item_spec` (`layout/item_animation.rs:456`) already
+    ///   looks ONE level down for it, so a wrapper in the way costs the animation nothing. Listing it
+    ///   here would move the marker and leave the spec's own key/subtree assumptions behind.
     pub(crate) fn is_parent_data(&self) -> bool {
         matches!(
             self,
