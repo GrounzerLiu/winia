@@ -20,12 +20,14 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
     .enabled(bool)
     .shape(Shape)                                    // 默认 8dp 圆角
     .elevation(ChipElevation)                        // 覆盖变体默认的阴影高度
+    .border(ChipBorder)                              // 覆盖变体边框（ChipBorder::none() = Compose 的 border = null）
+    .horizontal_arrangement(f32)                     // 子元素间距（默认 ChipDefaults::ELEMENT_GAP = 8dp）
     .interaction_source(MutableInteractionSource)    // 调用方提供交互源（否则组件自己 remember 一个）
     .colors(ChipColors)                              // 非选择型配色（assist/suggestion）
     .selectable_colors(SelectableChipColors)         // 选择型配色（filter/input）
     .leading_icon(|ctx| { ... })                     // 前置图标（18dp）
     .trailing_icon(|ctx| { ... })                    // 后置图标
-    .avatar(|ctx| { ... })                           // 头像（input 专用，24dp 12dp 圆角）
+    .avatar(|ctx| { ... })                           // 头像（input 专用，24dp 12dp 圆角；优先于 leading）
     .icon(|ctx| { ... })                             // 建议图标（suggestion 的 icon = leading 别名）
     .build(ctx);
 ```
@@ -33,6 +35,7 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 - 受控语义：`selected` 由调用方持有；`on_click` 只通知（切换由调用方 `State.update`，
   与 Compose 一致）。
 - 无 content 闭包——label 是第一个参数。
+- 两个 colors 类都有 `copy(..)`（`None` = 沿用原值，见 §5）。
 
 ## 2. 结构与默认值（M3 specs）
 
@@ -137,19 +140,20 @@ assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
 - **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
-- **`horizontalArrangement` 未开放**：元素间距写死 `ChipDefaults::ELEMENT_GAP`（8dp）。
-- **`border` 未开放**：Compose 七个入口都有 `border` 参数（`ChipBorder` / `BorderStroke`），
-  winia 的边框宽度与颜色由变体分支直接算出，调用方无法覆盖。
-- **两个 colors 类缺 `copy(..)`**：Compose 的 `ChipColors.copy(..)` / `SelectableChipColors.copy(..)`
-  都存在且以 `Color.Unspecified` 表示「沿用原值」；winia 只能用结构体更新语法 `ChipColors { ..base }`。
-  （`CheckboxColors` 有 `copy`，以 `Option<Color>` 承载「沿用」，见 `docs/checkbox.md` §5。）
-- **缺四个 disabled icon 槽位**：`ChipColors` 没有 `disabled_leading_icon` / `disabled_trailing_icon`
-  （Compose 8 个字段，winia 6 个），`SelectableChipColors` 同样缺这两个（Compose 13 个，winia 11 个）。
-  当前禁用态两个图标都取 `disabled_label`，与 M3 默认的 `OnSurface` 禁用角色一致，所以视觉上没有缺口；
-  缺的是「调用方单独覆盖禁用图标色」这个能力。
-- **InputChip avatar 不做禁用降透明度**：Compose 用 `InputChipTokens.DisabledAvatarOpacity`（0.38）
-  给禁用态的 avatar 降透明度，winia 原样绘制。
+  （`horizontalArrangement` 已开放为 `horizontal_arrangement(f32)`，见 §1。）
 - 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。
+
+以下五项此前记在这里，现已对齐 material3：
+
+- `border` —— `ChipBorder` + `.border(..)`，`ChipBorder::none()` 对应 Compose 的 `border = null`；
+- `horizontalArrangement` —— `.horizontal_arrangement(spacing)`；
+- `ChipColors::copy(..)` / `SelectableChipColors::copy(..)` —— `Option<Color>` 承载「沿用原值」，
+  与 `CheckboxColors::copy` 同一契约；
+- 四个 disabled icon 槽位 —— 两个 colors 类各有 `disabled_leading_icon` / `disabled_trailing_icon`，
+  默认仍是 `OnSurface` @ 38 %（M3 的 `DisabledLeadingIconColor` / `DisabledTrailingIconColor`），
+  所以像素不变，变的是调用方能单独覆盖；
+- InputChip avatar 禁用降透明度 —— `ChipDefaults::DISABLED_AVATAR_OPACITY`（0.38），
+  对标 `InputChipTokens.DisabledAvatarOpacity`。
 
 ## 6. Tests
 
@@ -164,3 +168,11 @@ cargo test -p winia --lib components::chip
 | `moving_only_an_icon_colour_recolours_the_glyph` | a colour that moves reaches the glyph: declared on the chip's group AND before the inner `Row` starts |
 | `two_modifier_calls_append_to_the_chain` | the second `.modifier(..)` appends instead of replacing the first |
 | `an_avatar_wins_over_a_leading_icon` | avatar + leading icon together paint ONE leading slot (the avatar) |
+| `the_disabled_icon_slots_are_separate_from_the_label` | the two disabled icon colours are independent slots, not the label's colour |
+| `the_disabled_icons_default_to_the_on_surface_role` | the defaults stay at M3's disabled `OnSurface` role, so the pixels do not move |
+| `copy_replaces_exactly_the_slots_it_is_given` | `ChipColors::copy(..)` replaces what it is given and keeps every `None` |
+| `selectable_copy_replaces_exactly_the_slots_it_is_given` | the same contract on `SelectableChipColors` |
+| `a_callers_border_overrides_the_variants_own` | `.border(..)` wins over the variant, and `ChipBorder::none()` detaches it |
+| `a_border_can_be_added_to_a_variant_that_has_none` | an elevated chip can be given one |
+| `horizontal_arrangement_changes_the_laid_out_gap` | the spacing moves the laid-out width by exactly the difference |
+| `a_disabled_input_chips_avatar_is_dimmed` | a disabled input chip's avatar is drawn at `DISABLED_AVATAR_OPACITY` |

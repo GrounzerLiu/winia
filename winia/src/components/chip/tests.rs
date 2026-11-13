@@ -784,3 +784,218 @@ fn an_avatar_wins_over_a_leading_icon() {
         "exactly one leading slot paints — the avatar"
     );
 }
+
+// ── The API gaps closed against material3 (section 5 of `docs/chip.md`) ──
+
+/// The two disabled icon slots exist and are INDEPENDENT of the disabled label.
+///
+/// Compose's `ChipColors` carries `disabledLeadingIconContentColor` / `disabledTrailingIconContentColor`
+/// separately from `disabledLabelColor`; winia had neither, so a disabled chip could only paint both
+/// icons in the label's colour and a caller could not override them at all.
+#[test]
+fn the_disabled_icon_slots_are_separate_from_the_label() {
+    let (composer, _) = chip_container(
+        Chip::assist(label("A"), || {})
+            .enabled(false)
+            .leading_icon(an_icon("M0 0h1v1z"))
+            .trailing_icon(an_icon("M0 0h2v2z"))
+            .colors(ChipColors {
+                disabled_leading_icon: crate::graphics::Color::from_argb(255, 200, 10, 20),
+                disabled_trailing_icon: crate::graphics::Color::from_argb(255, 20, 10, 200),
+                ..ChipDefaults::assist_chip_colors(&crate::theme::WiniaTheme::colors())
+            }),
+    );
+    let tints = icon_tints(&composer);
+    assert_eq!(
+        tints[0],
+        Some(crate::graphics::Color::from_argb(255, 200, 10, 20)),
+        "the disabled leading icon takes its own slot"
+    );
+    assert_eq!(
+        tints[1],
+        Some(crate::graphics::Color::from_argb(255, 20, 10, 200)),
+        "and the trailing icon takes a different one"
+    );
+}
+
+/// The disabled icon defaults match M3's `OnSurface` role — the pixels a chip already painted.
+#[test]
+fn the_disabled_icons_default_to_the_on_surface_role() {
+    let theme = crate::theme::WiniaTheme::colors();
+    let flat = ChipDefaults::assist_chip_colors(&theme);
+    assert_eq!(
+        flat.disabled_leading_icon, flat.disabled_label,
+        "an assist chip's disabled leading icon is the label's disabled colour"
+    );
+    assert_eq!(
+        flat.disabled_trailing_icon, flat.disabled_label,
+        "and so is the trailing one"
+    );
+    let sel = ChipDefaults::selectable_chip_colors(&theme);
+    assert!(sel.disabled_leading_icon.a > 0, "the selectable set has one too");
+    assert_eq!(sel.disabled_trailing_icon, sel.disabled_leading_icon);
+}
+
+/// `copy(..)` replaces exactly the slots it is given and keeps every `None`.
+#[test]
+fn copy_replaces_exactly_the_slots_it_is_given() {
+    let theme = crate::theme::WiniaTheme::colors();
+    let base = ChipDefaults::assist_chip_colors(&theme);
+    let red = crate::graphics::Color::from_argb(255, 200, 10, 20);
+
+    let all_none = base.copy(None, None, None, None, None, None, None, None);
+    assert_eq!(all_none, base, "an all-`None` copy is the identity");
+
+    let one = base.copy(None, Some(red), None, None, None, None, None, None);
+    assert_eq!(one.label, red, "the supplied slot is replaced");
+    assert_eq!(one.container, base.container, "and the rest is untouched");
+    assert_eq!(one.leading_icon, base.leading_icon);
+    assert_eq!(one.trailing_icon, base.trailing_icon);
+    assert_eq!(one.disabled_label, base.disabled_label);
+}
+
+/// The same contract on the selectable set.
+#[test]
+fn selectable_copy_replaces_exactly_the_slots_it_is_given() {
+    let theme = crate::theme::WiniaTheme::colors();
+    let base = ChipDefaults::selectable_chip_colors(&theme);
+    let red = crate::graphics::Color::from_argb(255, 200, 10, 20);
+
+    let all_none = base.copy(
+        None, None, None, None, None, None, None, None, None, None, None, None, None,
+    );
+    assert_eq!(all_none, base, "an all-`None` copy is the identity");
+
+    let one = base.copy(
+        None,
+        None,
+        None,
+        None,
+        Some(red),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(one.selected_container, red);
+    assert_eq!(one.container, base.container);
+    assert_eq!(one.selected_label, base.selected_label);
+}
+
+/// `border(..)` overrides what the variant resolved — and `ChipBorder::none()` removes it.
+///
+/// material3 gives every one of the seven entry points a `border` parameter; winia computed the border
+/// from the variant and gave the caller no way in.
+#[test]
+fn a_callers_border_overrides_the_variants_own() {
+    let red = crate::graphics::Color::from_argb(255, 200, 10, 20);
+
+    let (base, b_idx) = chip_container(Chip::assist(label("A"), || {}));
+    let (w0, _) = outline_of(&base, b_idx).expect("an assist chip outlines by default");
+    assert_eq!(w0, 1.0, "the variant's own border is 1 dp");
+
+    let (over, o_idx) = chip_container(
+        Chip::assist(label("A"), || {}).border(ChipBorder::new(2.0, red)),
+    );
+    assert_eq!(
+        outline_of(&over, o_idx),
+        Some((2.0, red)),
+        "the caller's width and colour win"
+    );
+
+    let (none, n_idx) =
+        chip_container(Chip::assist(label("A"), || {}).border(ChipBorder::none()));
+    assert_eq!(
+        outline_of(&none, n_idx),
+        None,
+        "`none()` detaches the border (Compose's `border = null`)"
+    );
+}
+
+/// A caller can also ADD a border where the variant has none — an elevated chip.
+#[test]
+fn a_border_can_be_added_to_a_variant_that_has_none() {
+    let red = crate::graphics::Color::from_argb(255, 200, 10, 20);
+    let (base, b_idx) = chip_container(Chip::elevated_assist(label("A"), || {}));
+    assert_eq!(
+        outline_of(&base, b_idx),
+        None,
+        "an elevated chip carries no outline by default"
+    );
+    let (with, w_idx) = chip_container(
+        Chip::elevated_assist(label("A"), || {}).border(ChipBorder::new(3.0, red)),
+    );
+    assert_eq!(outline_of(&with, w_idx), Some((3.0, red)));
+}
+
+/// `horizontal_arrangement(..)` changes the gap between the chip's children.
+///
+/// Measured through the laid-out width rather than the builder field, because that is what the caller
+/// sees: with one icon and one label the width moves by exactly the gap difference.
+#[test]
+fn horizontal_arrangement_changes_the_laid_out_gap() {
+    let width_of = |gap: Option<f32>| -> f32 {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let mut c = Chip::assist(label("A"), || {}).leading_icon(an_icon("M0 0h1v1z"));
+            if let Some(g) = gap {
+                c = c.horizontal_arrangement(g);
+            }
+            c.build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        composer.arena_nodes()[root].measured_size.width
+    };
+    let default = width_of(None);
+    let zero = width_of(Some(0.0));
+    let wide = width_of(Some(30.0));
+    assert_eq!(
+        default - zero,
+        ChipDefaults::ELEMENT_GAP,
+        "the default gap is ELEMENT_GAP ({})",
+        ChipDefaults::ELEMENT_GAP
+    );
+    assert_eq!(wide - default, 30.0 - ChipDefaults::ELEMENT_GAP);
+}
+
+/// A disabled input chip's avatar drops to `DisabledAvatarOpacity` (0.38).
+///
+/// Compose wraps the avatar in `graphicsLayer { alpha = … }` (`Chip.kt:1205-1215`); winia painted it at
+/// full opacity, so a disabled chip's avatar looked enabled.
+#[test]
+fn a_disabled_input_chips_avatar_is_dimmed() {
+    let alpha_of = |enabled: bool| -> Vec<f32> {
+        let (composer, _) = chip_container(
+            Chip::input(false, label("I"), || {})
+                .avatar(an_icon("M0 0h9v9z"))
+                .enabled(enabled),
+        );
+        composer
+            .arena_nodes()
+            .iter()
+            .flat_map(|n| n.modifier.elements().iter())
+            .filter_map(|el| match el {
+                crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                    Some(params.eval().alpha)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        alpha_of(true),
+        vec![1.0],
+        "an enabled chip's avatar is fully opaque"
+    );
+    let dimmed = alpha_of(false);
+    assert!(
+        dimmed.contains(&ChipDefaults::DISABLED_AVATAR_OPACITY),
+        "a disabled chip's avatar is drawn at {} — got {dimmed:?}",
+        ChipDefaults::DISABLED_AVATAR_OPACITY
+    );
+}

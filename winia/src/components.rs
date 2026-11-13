@@ -99,7 +99,9 @@ pub use button_group::{
 };
 pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
-pub use chip::{Chip, ChipColors, ChipDefaults, ChipElevation, ChipVariant, SelectableChipColors};
+pub use chip::{
+    Chip, ChipBorder, ChipColors, ChipDefaults, ChipElevation, ChipVariant, SelectableChipColors,
+};
 pub use divider::{DIVIDER_HAIRLINE, DIVIDER_THICKNESS, Divider, DividerDefaults};
 pub use floating_action_button::{
     EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT, EXTENDED_FAB_MIN_EXPANDED_WIDTH,

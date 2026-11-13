@@ -21,7 +21,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 // ═══════════════════════════════════════════════════════════
 
 /// Chip 配色（Assist/Suggestion——非选择型；对标 material3 ChipColors）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChipColors {
     pub container: crate::graphics::Color,
     pub label: crate::graphics::Color,
@@ -29,9 +29,15 @@ pub struct ChipColors {
     pub trailing_icon: crate::graphics::Color,
     pub disabled_container: crate::graphics::Color,
     pub disabled_label: crate::graphics::Color,
+    /// The disabled leading icon — material3's `disabledLeadingIconContentColor`
+    /// (`ChipsTokens.DisabledLeadingIconColor` = `OnSurface`, at the disabled opacity).
+    pub disabled_leading_icon: crate::graphics::Color,
+    /// The disabled trailing icon — `disabledTrailingIconContentColor`.
+    pub disabled_trailing_icon: crate::graphics::Color,
 }
 
 impl ChipColors {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         container: crate::graphics::Color,
         label: crate::graphics::Color,
@@ -39,6 +45,8 @@ impl ChipColors {
         trailing_icon: crate::graphics::Color,
         disabled_container: crate::graphics::Color,
         disabled_label: crate::graphics::Color,
+        disabled_leading_icon: crate::graphics::Color,
+        disabled_trailing_icon: crate::graphics::Color,
     ) -> Self {
         Self {
             container,
@@ -47,6 +55,38 @@ impl ChipColors {
             trailing_icon,
             disabled_container,
             disabled_label,
+            disabled_leading_icon,
+            disabled_trailing_icon,
+        }
+    }
+
+    /// A copy with some slots replaced — material3's `ChipColors.copy(..)`.
+    ///
+    /// `None` means "keep the source value", the role Compose gives `Color.Unspecified`. winia's
+    /// `Color` has no unspecified variant, so the absence is carried by the `Option` instead of by a
+    /// sentinel colour a caller could legitimately want to paint — the same contract
+    /// `CheckboxColors::copy` uses (`docs/checkbox.md` section 5).
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy(
+        &self,
+        container: Option<crate::graphics::Color>,
+        label: Option<crate::graphics::Color>,
+        leading_icon: Option<crate::graphics::Color>,
+        trailing_icon: Option<crate::graphics::Color>,
+        disabled_container: Option<crate::graphics::Color>,
+        disabled_label: Option<crate::graphics::Color>,
+        disabled_leading_icon: Option<crate::graphics::Color>,
+        disabled_trailing_icon: Option<crate::graphics::Color>,
+    ) -> Self {
+        Self {
+            container: container.unwrap_or(self.container),
+            label: label.unwrap_or(self.label),
+            leading_icon: leading_icon.unwrap_or(self.leading_icon),
+            trailing_icon: trailing_icon.unwrap_or(self.trailing_icon),
+            disabled_container: disabled_container.unwrap_or(self.disabled_container),
+            disabled_label: disabled_label.unwrap_or(self.disabled_label),
+            disabled_leading_icon: disabled_leading_icon.unwrap_or(self.disabled_leading_icon),
+            disabled_trailing_icon: disabled_trailing_icon.unwrap_or(self.disabled_trailing_icon),
         }
     }
 }
@@ -57,7 +97,7 @@ impl ChipColors {
 
 /// 选择型 chip 配色（Filter/Input——selected/unselected 双态；
 /// 对标 material3 SelectableChipColors）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SelectableChipColors {
     pub container: crate::graphics::Color,
     pub label: crate::graphics::Color,
@@ -70,9 +110,15 @@ pub struct SelectableChipColors {
     pub disabled_container: crate::graphics::Color,
     pub disabled_label: crate::graphics::Color,
     pub disabled_selected_container: crate::graphics::Color,
+    /// The disabled leading icon — `disabledLeadingIconColor` (Compose's selectable set has it per
+    /// state; winia keeps ONE disabled icon pair, taken when the chip is disabled either way).
+    pub disabled_leading_icon: crate::graphics::Color,
+    /// The disabled trailing icon — `disabledTrailingIconColor`.
+    pub disabled_trailing_icon: crate::graphics::Color,
 }
 
 impl SelectableChipColors {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         container: crate::graphics::Color,
         label: crate::graphics::Color,
@@ -85,6 +131,8 @@ impl SelectableChipColors {
         disabled_container: crate::graphics::Color,
         disabled_label: crate::graphics::Color,
         disabled_selected_container: crate::graphics::Color,
+        disabled_leading_icon: crate::graphics::Color,
+        disabled_trailing_icon: crate::graphics::Color,
     ) -> Self {
         Self {
             container,
@@ -98,6 +146,47 @@ impl SelectableChipColors {
             disabled_container,
             disabled_label,
             disabled_selected_container,
+            disabled_leading_icon,
+            disabled_trailing_icon,
+        }
+    }
+
+    /// A copy with some slots replaced — material3's `SelectableChipColors.copy(..)`.
+    ///
+    /// `None` means "keep the source value" (Compose's `Color.Unspecified`), the same contract
+    /// [`ChipColors::copy`] and `CheckboxColors::copy` use.
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy(
+        &self,
+        container: Option<crate::graphics::Color>,
+        label: Option<crate::graphics::Color>,
+        leading_icon: Option<crate::graphics::Color>,
+        trailing_icon: Option<crate::graphics::Color>,
+        selected_container: Option<crate::graphics::Color>,
+        selected_label: Option<crate::graphics::Color>,
+        selected_leading_icon: Option<crate::graphics::Color>,
+        selected_trailing_icon: Option<crate::graphics::Color>,
+        disabled_container: Option<crate::graphics::Color>,
+        disabled_label: Option<crate::graphics::Color>,
+        disabled_selected_container: Option<crate::graphics::Color>,
+        disabled_leading_icon: Option<crate::graphics::Color>,
+        disabled_trailing_icon: Option<crate::graphics::Color>,
+    ) -> Self {
+        Self {
+            container: container.unwrap_or(self.container),
+            label: label.unwrap_or(self.label),
+            leading_icon: leading_icon.unwrap_or(self.leading_icon),
+            trailing_icon: trailing_icon.unwrap_or(self.trailing_icon),
+            selected_container: selected_container.unwrap_or(self.selected_container),
+            selected_label: selected_label.unwrap_or(self.selected_label),
+            selected_leading_icon: selected_leading_icon.unwrap_or(self.selected_leading_icon),
+            selected_trailing_icon: selected_trailing_icon.unwrap_or(self.selected_trailing_icon),
+            disabled_container: disabled_container.unwrap_or(self.disabled_container),
+            disabled_label: disabled_label.unwrap_or(self.disabled_label),
+            disabled_selected_container: disabled_selected_container
+                .unwrap_or(self.disabled_selected_container),
+            disabled_leading_icon: disabled_leading_icon.unwrap_or(self.disabled_leading_icon),
+            disabled_trailing_icon: disabled_trailing_icon.unwrap_or(self.disabled_trailing_icon),
         }
     }
 }
@@ -127,6 +216,10 @@ impl ChipDefaults {
     /// `FlatDisabledSelectedContainerOpacity` (filter) / `DisabledSelectedContainerOpacity` (input) — a
     /// disabled SELECTED chip's container is `OnSurface` at 12 %, the same value as its outline.
     pub const DISABLED_SELECTED_CONTAINER_OPACITY: f32 = 0.12;
+    /// `InputChipTokens.DisabledAvatarOpacity` — a disabled input chip's avatar is drawn at 38 %.
+    /// Compose wraps the avatar in a `graphicsLayer { alpha = … }` for exactly this
+    /// (`Chip.kt:1205-1215`); winia painted it at full opacity.
+    pub const DISABLED_AVATAR_OPACITY: f32 = 0.38;
 
     /// The disabled outline's colour: `OnSurface` at `DISABLED_OUTLINE_OPACITY`.
     pub fn disabled_outline(theme: &crate::theme::ThemeColors) -> crate::graphics::Color {
@@ -148,19 +241,26 @@ impl ChipDefaults {
 
     /// `AssistChipDefaults.assistChipColors()` — the specs page's assist chip color roles: transparent
     /// container, label **On surface**, leading icon Primary, trailing icon On surface variant.
+    ///
+    /// A disabled chip's label and BOTH icons take `OnSurface` at the disabled opacity:
+    /// `ChipsTokens.DisabledLabelTextColor` / `DisabledLeadingIconColor` / `DisabledTrailingIconColor`
+    /// are all the `OnSurface` role.
     pub fn assist_chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
+        let disabled_on_surface = crate::graphics::Color::from_argb(
+            97,
+            theme.on_surface.r,
+            theme.on_surface.g,
+            theme.on_surface.b,
+        );
         ChipColors {
             container: crate::graphics::Color::TRANSPARENT,
             label: theme.on_surface,
             leading_icon: theme.primary,
             trailing_icon: theme.on_surface_variant,
             disabled_container: crate::graphics::Color::TRANSPARENT,
-            disabled_label: crate::graphics::Color::from_argb(
-                97,
-                theme.on_surface.r,
-                theme.on_surface.g,
-                theme.on_surface.b,
-            ),
+            disabled_label: disabled_on_surface,
+            disabled_leading_icon: disabled_on_surface,
+            disabled_trailing_icon: disabled_on_surface,
         }
     }
 
@@ -177,6 +277,12 @@ impl ChipDefaults {
     /// + onSurfaceVariant；selected secondaryContainer（填充）+ onSecondaryContainer
     /// + 0 边框（有填充即无边框）
     pub fn selectable_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
+        let disabled_on_surface = crate::graphics::Color::from_argb(
+            97,
+            theme.on_surface.r,
+            theme.on_surface.g,
+            theme.on_surface.b,
+        );
         SelectableChipColors {
             container: crate::graphics::Color::TRANSPARENT,
             label: theme.on_surface_variant,
@@ -187,12 +293,11 @@ impl ChipDefaults {
             selected_leading_icon: theme.on_secondary_container,
             selected_trailing_icon: theme.on_secondary_container,
             disabled_container: crate::graphics::Color::TRANSPARENT,
-            disabled_label: crate::graphics::Color::from_argb(
-                97,
-                theme.on_surface.r,
-                theme.on_surface.g,
-                theme.on_surface.b,
-            ),
+            disabled_label: disabled_on_surface,
+            // Both disabled icons are `OnSurface` at the disabled opacity — `FilterChipTokens` /
+            // `InputChipTokens` `DisabledLeadingIconColor` / `DisabledTrailingIconColor`.
+            disabled_leading_icon: disabled_on_surface,
+            disabled_trailing_icon: disabled_on_surface,
             // A disabled SELECTED container is `OnSurface` at 12 % — `FlatDisabledSelectedContainerColor` /
             // `FlatDisabledSelectedContainerOpacity` (filter) and `DisabledSelectedContainerColor` /
             // `DisabledSelectedContainerOpacity` (input). winia painted 38 % here.
@@ -437,6 +542,39 @@ pub struct Chip {
     /// A caller-supplied interaction source (`interactionSource: MutableInteractionSource?` upstream). When it
     /// is absent the component remembers one of its own.
     interaction_source: Option<crate::input::interaction::MutableInteractionSource>,
+    /// A caller-supplied border, overriding the variant's own (`border: BorderStroke?` / `ChipBorder?`
+    /// upstream — every one of the seven entry points takes one).
+    border: Option<ChipBorder>,
+    /// The spacing between the chip's children inside its `Row` — material3's `horizontalArrangement`
+    /// (`horizontalArrangement: Arrangement.Horizontal` upstream, `ChipDefaults::ELEMENT_GAP` = 8 dp when
+    /// the caller says nothing).
+    gap: Option<f32>,
+}
+
+/// A chip border — the material3 `BorderStroke` counterpart, what every `border` parameter upstream
+/// resolves to. The shape comes from [`Chip::shape`], so this is just a width and a colour.
+///
+/// `width <= 0.0` means NO border, which is how Compose's `border = null` is spelled here: the modifier
+/// is not attached at all, rather than attached with width 0 (a zero-width stroke still paints and leaves
+/// a visible seam — see `build_chip`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChipBorder {
+    pub width: f32,
+    pub color: crate::graphics::Color,
+}
+
+impl ChipBorder {
+    pub fn new(width: f32, color: crate::graphics::Color) -> Self {
+        Self { width, color }
+    }
+
+    /// No border at all — Compose's `border = null`.
+    pub fn none() -> Self {
+        Self {
+            width: 0.0,
+            color: crate::graphics::Color::TRANSPARENT,
+        }
+    }
 }
 
 impl Chip {
@@ -520,6 +658,8 @@ impl Chip {
             selectable_colors: None,
             elevation: None,
             interaction_source: None,
+            border: None,
+            gap: None,
         }
     }
 
@@ -586,6 +726,30 @@ impl Chip {
         self
     }
 
+    /// Override the border — material3's `border: BorderStroke?` / `ChipBorder?`, which every one of the
+    /// seven entry points takes. Without it the border comes from the variant: `Outline` for a flat
+    /// assist/suggestion chip, `Outline variant` for an unselected filter/input chip, and nothing for a
+    /// selected chip or an `Elevated*` one.
+    ///
+    /// [`ChipBorder::none`] removes the border (`border = null` upstream).
+    pub fn border(mut self, border: ChipBorder) -> Self {
+        self.border = Some(border);
+        self
+    }
+
+    /// The spacing between the chip's children — material3's `horizontalArrangement`
+    /// (`horizontalArrangement: Arrangement.Horizontal` upstream; its default factory is
+    /// `horizontalArrangement(spacing)`, which is what this takes). Default
+    /// [`ChipDefaults::ELEMENT_GAP`] (8 dp), the specs page's gap between an icon and the label.
+    ///
+    /// Compose's arrangement also carries a DISTRIBUTION (`Start`, `Center`, …); a chip's children are
+    /// always packed along the main axis and the container is sized to them, so only the spacing can
+    /// change what gets painted. That is why this is a `f32` rather than an `Arrangement`.
+    pub fn horizontal_arrangement(mut self, spacing: f32) -> Self {
+        self.gap = Some(spacing.max(0.0));
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = crate::theme::WiniaTheme::colors();
         let sel = self.selected;
@@ -617,18 +781,18 @@ impl Chip {
                     ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
                     _ => ChipDefaults::assist_chip_colors(&theme),
                 });
-                // A disabled chip paints both icons in `disabled_label`: M3's default
-                // `disabledLeadingIconContentColor` / `disabledTrailingIconContentColor` are both `OnSurface`
-                // at the disabled opacity, which is the same role this slot carries (winia has no separate
-                // disabled icon slots — see section 5 of `docs/chip.md`).
+                // A disabled chip reads its two icon colours from the DEDICATED slots (Compose's
+                // `disabledLeadingIconContentColor` / `disabledTrailingIconContentColor`), which is what
+                // lets a caller override them independently. Both default to `OnSurface` at the disabled
+                // opacity, so the pixels are unchanged from when this reused `disabled_label`.
                 let (container, label, leading, trailing) = if self.enabled {
                     (c.container, c.label, c.leading_icon, c.trailing_icon)
                 } else {
                     (
                         c.disabled_container,
                         c.disabled_label,
-                        c.disabled_label,
-                        c.disabled_label,
+                        c.disabled_leading_icon,
+                        c.disabled_trailing_icon,
                     )
                 };
                 // A flat assist or suggestion chip outlines with `Outline`; the elevated variants carry no
@@ -667,8 +831,8 @@ impl Chip {
                     (
                         container,
                         c.disabled_label,
-                        c.disabled_label,
-                        c.disabled_label,
+                        c.disabled_leading_icon,
+                        c.disabled_trailing_icon,
                     )
                 } else if sel {
                     (
@@ -694,6 +858,14 @@ impl Chip {
                 };
                 (container, label, leading, trailing, w, colour)
             }
+        };
+        // A caller-supplied border WINS over the variant's own — material3's `border` parameter, which
+        // every one of the seven entry points takes (`border: BorderStroke?` on Chip, `ChipBorder?` on
+        // assist/suggestion). `ChipBorder::none()` is Compose's `border = null`: width 0 detaches the
+        // modifier entirely in `build_chip`.
+        let (border_w, border_color) = match self.border {
+            Some(b) => (b.width.max(0.0), b.color),
+            None => (border_w, border_color),
         };
         // 左右 padding 按 specs：无 icon 16dp、有 icon 8dp；InputChip 带头像时左 4dp / 右 8dp。
         let pad = match self.variant {
@@ -731,6 +903,15 @@ impl Chip {
         let trailing = self.trailing_icon;
         let avatar = self.avatar;
         let label = self.label;
+        let gap = self.gap.unwrap_or(ChipDefaults::ELEMENT_GAP);
+        // `InputChipTokens.DisabledAvatarOpacity`: a disabled input chip's avatar drops to 38 %. Compose
+        // wraps the avatar in `graphicsLayer { alpha = … }` (`Chip.kt:1205-1215`); winia painted it at
+        // full opacity, so a disabled chip's avatar looked enabled.
+        let avatar_alpha = if self.enabled {
+            1.0
+        } else {
+            ChipDefaults::DISABLED_AVATAR_OPACITY
+        };
 
         // 阴影：`ChipElevation` 按交互状态取值（token 层级换算成 dp），用与 Button/Card 相同的
         // `elevation_spec_for_pair` 配对规则升降；**但只在容器不透明时才画**——透明背景后面的阴影看起来
@@ -804,6 +985,7 @@ impl Chip {
             label_color,
             leading_icon_color,
             trailing_icon_color,
+            gap,
             on_click,
             // material3's roles: `Chip.kt:1963` gives the non-selectable chip `Role.Button`, and the
             // selectable one `Role.Checkbox` (`:2010`, whose `Surface(selected = …)` publishes the selected
@@ -839,7 +1021,7 @@ impl Chip {
                 // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
                 // 有图标（18dp）时文字会顶对齐而非垂直居中
                 crate::layout::components::Row::new()
-                    .spacing(ChipDefaults::ELEMENT_GAP)
+                    .spacing(gap)
                     .alignment(crate::layout::Alignment::Center)
                     .build(ctx, |ctx| {
                         // The avatar takes PRECEDENCE over a leading icon, and only ONE of them is drawn:
@@ -859,7 +1041,10 @@ impl Chip {
                                             )
                                             .clip(Shape::RoundedRect {
                                                 corner_radius: ChipDefaults::AVATAR_CORNER_RADIUS,
-                                            }),
+                                            })
+                                            // `graphicsLayer { alpha = … }` for the disabled case, as
+                                            // Compose does (`Chip.kt:1210`). `.alpha()` is a no-op at 1.0.
+                                            .alpha(avatar_alpha),
                                     )
                                     .build(ctx, |c| av(c));
                             }
@@ -908,6 +1093,7 @@ fn build_chip(
     content_color: crate::graphics::Color,
     leading_icon_color: crate::graphics::Color,
     trailing_icon_color: crate::graphics::Color,
+    gap: f32,
     on_click: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     semantics: crate::semantics::SemanticsConfig,
     content: impl FnOnce(&mut ComposeCtx),
@@ -929,6 +1115,10 @@ fn build_chip(
     ctx.changed(&content_color);
     ctx.changed(&leading_icon_color);
     ctx.changed(&trailing_icon_color);
+    // The `Row`'s spacing is built inside the content closure, but the closure only runs when THIS group
+    // enters — so a spacing change has to be declared here as well, or `horizontal_arrangement(..)` on a
+    // live chip would be ignored.
+    ctx.changed(&gap);
     let key = ctx.next_key();
     // The background accepts a dynamic colour (`impl Into<BackgroundColor>`) evaluated per paint:
     // an animation tick advances the State and requests a redraw, so the renderer reads the latest
