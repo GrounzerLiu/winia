@@ -407,10 +407,18 @@ fn checkbox_impl(
         interaction_source.unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
     let box_color = colors.box_color(enabled, state);
     let border_color = colors.border_color(enabled, state);
-    // 勾号保持选中色常量：Off 静止态由 scale=0 隐藏；取消选中过渡期（1→0）
-    // 仍可见，否则 tint 瞬时切透明会把退出动画吞掉（M3 checkmarkColor 本身
-    // 也是随 checkDrawFraction 过渡的）。
-    let check_color = colors.checked_checkmark;
+    // The checkmark's COLOUR follows the state, as M3's does: `checkmarkColor(state)` returns
+    // `uncheckedCheckmarkColor` — transparent by default (`Checkbox.kt:451`) — when `Off`, so
+    // unchecking FADES the glyph out rather than only shrinking it.
+    //
+    // winia used to pin this to `checked_checkmark` for every state, on the theory that a transparent
+    // tint would "swallow" the exit. It does not: the colour has its own animation (below), and without
+    // it the glyph's only exit was the 100 ms-delayed snap of its scale — measured, the tint stayed
+    // (255, 255, 255) for the whole transition, which reads as "unchecking has no animation".
+    //
+    // `checkmark_color(state)` ignores `enabled` on purpose — that is M3's flag-off branch
+    // (`Checkbox.kt:506`), the default one, so a disabled checked box keeps the checked colour.
+    let check_color = colors.checkmark_color(state);
 
     // The draw fraction (check / dash), animated per M3 — see `checkbox_draw_spec`.
     let check_spec = checkbox_draw_spec(state);
@@ -426,6 +434,17 @@ fn checkbox_impl(
     };
     let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
     let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
+    // The checkmark's colour animates UNCONDITIONALLY, which is where M3 differs from its own box and
+    // border: `animateColorAsState(checkmarkColor, colorAnimationSpec)` has no `enabled` branch
+    // (`Checkbox.kt:634`), unlike the two colours above it, so a glyph never snaps across a
+    // disable/enable switch either.
+    //
+    // Spec from `checkbox_color_spec(state)` — M3 reuses `colorAnimationSpecForState` here, not the
+    // draw fraction's spec: emptying fades on the faster `FastEffects`, filling on `DefaultEffects`.
+    let check_color_anim = ctx.animate_color_as_state(
+        check_color,
+        crate::animation::AnimationSpec::Spring(checkbox_color_spec(state)),
+    );
 
     // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
     // M3 checkDrawFraction + crossCenterGravitation 过渡）
@@ -514,18 +533,16 @@ fn checkbox_impl(
                     shape,
                 );
             let vkey = ctx.next_key();
-            // The supplied checkmark colour is a PARAMETER of this group, not decoration: it is
-            // captured into both `Icon::tint` calls below, which happen on Enter. The group's own
-            // modifier cannot carry the change — its box/border take `Dyn` closures, and
-            // `Dyn::same_parameter` calls any two dynamics equal (`graphics/dyn_value.rs:43-49`), so
-            // without this declaration a `colors(..)` change leaves the tint on the colour the glyph
-            // was BUILT with. Measured: `checked_checkmark` moved from `on_primary` to (1, 2, 3) and
-            // both icons kept painting (255, 255, 255).
+            // The supplied checkmark colour is still a PARAMETER of this group: `colors(..)` reaching
+            // `checked_checkmark` has to rebuild the two `Icon`s below. Their tint is a `Dyn` read at
+            // paint time, so the ANIMATION value would arrive without this — but `Dyn::same_parameter`
+            // calls any two dynamics equal (`graphics/dyn_value.rs:43-49`), which is exactly the case a
+            // regenerated tint would hide behind; declaring the source value keeps the rebuild
+            // explicit. Measured before the tint became dynamic: `checked_checkmark` moved from
+            // `on_primary` to (1, 2, 3) and both icons kept painting (255, 255, 255).
             //
             // A theme switch never showed this — the theme provider re-enters the whole subtree — so it
-            // only surfaced when a caller passed a changed `CheckboxColors`, which is why it went
-            // unnoticed. `box_color`/`border_color` above do not need this: they are read with `peek()`
-            // at paint time, so they follow the animation without recomposing.
+            // only surfaced when a caller passed a changed `CheckboxColors`.
             ctx.changed(&check_color);
             match ctx.start_restartable_group(
                 vkey,
@@ -538,7 +555,7 @@ fn checkbox_impl(
                     let scale = check_scale.clone();
                     crate::components::icon::Icon::svg_path(CHECK_MARK_PATH)
                         .size(CHECKBOX_SIZE)
-                        .tint(check_color)
+                        .tint(check_color_anim.clone())
                         .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
                             scale_x: scale.peek(),
                             scale_y: scale.peek(),
@@ -549,7 +566,7 @@ fn checkbox_impl(
                     let scale = dash_scale.clone();
                     crate::components::icon::Icon::svg_path(DASH_PATH)
                         .size(CHECKBOX_SIZE)
-                        .tint(check_color)
+                        .tint(check_color_anim)
                         .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
                             scale_x: scale.peek(),
                             scale_y: scale.peek(),

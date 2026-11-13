@@ -493,10 +493,8 @@ fn disabled_checked_border_merges_with_fill() {
 #[test]
 fn a_colors_change_reaches_the_checkmark_tint() {
     // The container colour is animated, so this registers with the process-wide table the other
-    // animation tests share.
-    let _g = crate::animation::tests::TEST_SERIAL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    // animation tests share — and the frozen clock lets the assertion step the fade to rest.
+    let (_g, clock) = crate::animation::tests::serial_clock();
     crate::animation::clear_all_animations();
 
     let theme = ThemeColors::light_from_seed(0x6750A4);
@@ -547,7 +545,18 @@ fn a_colors_change_reaches_the_checkmark_tint() {
     );
 
     current.set(after);
+    // The tint is the color of an `animateColorAsState` call now, not a constant, so the glyphs reach
+    // the new colour over the spring instead of on the next pass. Push the motion once, then step the
+    // clock to rest before reading — asserting straight after the recomposition measures the START of
+    // the fade, which is the colour they are leaving (measured: (251, 255, 255)).
     composer.recompose_to_stable(|| scene);
+    for _ in 0..120 {
+        clock.advance(std::time::Duration::from_millis(17));
+        if !crate::animation::update_animations() {
+            break;
+        }
+        composer.recompose_to_stable(|| scene);
+    }
     composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
     let repainted = tints(&composer);
     assert!(
@@ -667,5 +676,101 @@ fn defaults_colors_feeds_six_arguments_and_forces_three_transparent() {
         CheckboxDefaults::colors(&theme, None, None, None, None, None, None),
         base,
         "every argument is optional — omitting all six must return the theme's derivation"
+    );
+}
+
+/// Unchecking FADES the glyph out; the checkmark's colour has an animation of its own.
+///
+/// The tint used to be pinned to `checked_checkmark` for every state, so the only exit a glyph had was
+/// the snap of its scale at `SnapAnimationDelay` (100 ms) — and 100 ms of nothing followed by an
+/// instant disappearance reads as "unchecking has no animation". M3 animates the colour:
+/// `animateColorAsState(checkmarkColor, colorAnimationSpec)` (`Checkbox.kt:634`), with no `enabled`
+/// branch, over `checkmarkColor(state)` (`:948`), which returns `uncheckedCheckmarkColor` —
+/// `Color.Transparent` by default (`:451`) — when `Off`. Emptying therefore fades on `FastEffects`
+/// while the scale waits out its delay.
+///
+/// Both halves are asserted: the fade is PART WAY through one frame in (neither the old colour nor
+/// gone), and the scale has not moved yet. Measured trajectory at 17 ms frames after the flip:
+/// 255 → 162 → 85 → 43 → 21 → 11 → 5 → 0, scale holding 1.0 until 102 ms.
+#[test]
+fn unchecking_fades_the_glyph_colour_before_the_scale_snaps() {
+    let (_g, clock) = crate::animation::tests::serial_clock();
+    crate::animation::clear_all_animations();
+
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let mut composer = crate::runtime::composer::Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
+    let scene = |ctx: &mut ComposeCtx| {
+        WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            let c = ctx.remember(|| true);
+            holder.replace(Some(c.clone()));
+            Checkbox::new(c.get()).on_checked_change(|_| {}).build(ctx);
+        });
+    };
+    // The two glyphs' tint alphas, and the largest layer scale (the check sits at 1 while the dash
+    // rests at 0 in the On state, so `max` is the one that moves).
+    let glyphs = |composer: &crate::runtime::composer::Composer| -> (Vec<u8>, f32) {
+        let mut alphas = Vec::new();
+        let mut scale = 0.0f32;
+        for node in composer.arena_nodes() {
+            for el in node.modifier.elements() {
+                match el {
+                    crate::modifier::ModifierElement::DrawIcon { spec } => {
+                        alphas.push(spec.tint.as_ref().map(|t| t.eval().a).unwrap_or(0));
+                    }
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        scale = scale.max(params.eval().scale_x);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (alphas, scale)
+    };
+    let frame = |composer: &mut crate::runtime::composer::Composer| {
+        composer.recompose_to_stable(|| scene);
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+    };
+
+    composer.compose(scene);
+    composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+    let c = holder.borrow().clone().expect("the checkbox state");
+    let (at_rest, _) = glyphs(&composer);
+    assert_eq!(at_rest, vec![255, 255], "On paints both glyphs opaque");
+
+    c.set(false);
+    frame(&mut composer);
+    clock.advance(std::time::Duration::from_millis(17));
+    crate::animation::update_animations();
+    frame(&mut composer);
+
+    let (fading, scale_early) = glyphs(&composer);
+    assert!(
+        fading.iter().all(|a| *a > 0 && *a < 255),
+        "one frame into the exit the glyphs are MID-FADE, not switched off and not still opaque; \
+         got {fading:?} — a pinned tint leaves this at 255 for every frame"
+    );
+    assert!(
+        (scale_early - 1.0).abs() < 1e-4,
+        "and the SCALE has not moved yet: M3 waits out SnapAnimationDelay before snapping it, so the \
+         fade is the only thing carrying the exit; got {scale_early}"
+    );
+
+    // Past the delay the colour has arrived at `unchecked_checkmark` (transparent) and the scale snaps.
+    for _ in 0..120 {
+        clock.advance(std::time::Duration::from_millis(17));
+        if !crate::animation::update_animations() {
+            break;
+        }
+        frame(&mut composer);
+    }
+    let (settled, scale_late) = glyphs(&composer);
+    assert!(
+        settled.iter().all(|a| *a == 0),
+        "settled Off paints no glyph; got {settled:?}"
+    );
+    assert!(
+        scale_late.abs() < 1e-4,
+        "and the scale has snapped to 0 by then; got {scale_late}"
     );
 }
