@@ -143,9 +143,16 @@ fn parse_ctx_ident(attr: proc_macro2::TokenStream) -> syn::Ident {
 /// 运行时 `remember_at(KEY)` 混合调用链 + 迭代 seq，结构变化/滚动不漂移。
 fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec<Stmt> {
     let mut out = Vec::new();
-    for stmt in stmts {
+    let last = stmts.len().saturating_sub(1);
+    for (index, stmt) in stmts.into_iter().enumerate() {
         let id = *counter;
         *counter += 1;
+        // Only the FINAL statement of a block is a tail expression, and only it has to be left
+        // unwrapped. This used to be decided by shape (`Stmt::Expr(_, None)`, i.e. "no semicolon"),
+        // which also matches a mid-body `if` / `for` / `while` / `match` — those are legitimately
+        // written without a semicolon, so they were treated as tails and silently lost their guard
+        // (measured: `if a > 0 { … }` in the middle of a body emitted with no wrapping block).
+        let is_tail = index == last;
         // 先递归注入（if/while/for/match 条件与体、闭包体、let init、表达式嵌套的
         // content 闭包）——再按语句形态决定包裹方式（尾表达式不包 / let init guard
         // 块包 / 其他 guard 块包）。⚠ 此注入点必须对每条语句执行——漏掉会导致
@@ -157,10 +164,12 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
             continue;
         }
         match stmt {
-            // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
+            // 尾表达式不包裹 push/pop——包裹会吞掉尾值
             // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
             // 尾表达式通常是值表达式（组合函数返回 ()，无 build）——递归仍注入内部块。
-            Stmt::Expr(e, None) => {
+            // The `None` arm is the "no semicolon" case; combined with `is_tail` it means
+            // "the block's final expression", which is the only shape that must stay bare.
+            Stmt::Expr(e, None) if is_tail => {
                 out.push(Stmt::Expr(e, None));
             }
             // let：init 用 guard 块包（`let x = { guard; <init> };`）——init 表达式内
@@ -827,15 +836,22 @@ mod inject_tests_extra {
         assert!(n >= 3, "顶层 + 两臂体都应注入（实际 {n}）");
     }
 
+    /// A `for` loop statement gets a guard of its own, and so does the body inside it.
+    ///
+    /// The trailing statement is load-bearing. A loop written last in a block is that block's tail
+    /// expression, and a tail expression is deliberately left unwrapped (a wrapper would turn the
+    /// block's value into `()`), so only the loop body would be injected. This test used to end on
+    /// the loop and asserted the guard anyway, which is why it failed.
     #[test]
     fn test_for_body_injected() {
         let body: syn::Block = syn::parse_quote!({
             for i in 0..5 {
                 Text::new("x").build(ctx);
             }
+            let after = 1;
         });
         let n = enter_count(body);
-        assert!(n >= 2, "顶层 for + 循环体都应注入（实际 {n}）");
+        assert!(n >= 2, "顶层的 for 语句与循环体都应注入（实际 {n}）");
     }
 
     #[test]
