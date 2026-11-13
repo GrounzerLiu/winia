@@ -91,53 +91,80 @@ fn toggleable_state_conversion() {
     assert!(ToggleableState::Indeterminate.is_indeterminate());
 }
 
-/// The draw-fraction spec per state, pinned to M3: filling (and `On` ↔ `Indeterminate`) is the
-/// `DefaultSpatial` spring, emptying is a 100 ms-delayed snap rather than either a spring or an
-/// immediate jump.
+/// The draw-fraction spec is the SAME spring in both directions — a deliberate departure from M3.
+///
+/// The reference splits on the direction (`material3/Checkbox.kt:597-613`): filling springs on
+/// `DefaultSpatial`, emptying is `snap(delayMillis = SnapAnimationDelay)`. At this component's size
+/// that made ticking off read as "no animation" — measured on a frozen clock, the exit held 1.0 for six
+/// frames and then jumped to 0, while the entry grew 0.13 → 0.32 → 0.49 → 0.63 → … over ~160 ms.
+///
+/// Both directions run the same spring so the exit shrinks instead of vanishing. This test pins the
+/// symmetry, which `docs/checkbox.md` section 5 records as the divergence; reverting to M3's split
+/// (a `Tween` when leaving) has to fail here rather than only changing how it feels.
 #[test]
-fn the_draw_spec_matches_m3s_transition() {
-    for state in [ToggleableState::On, ToggleableState::Indeterminate] {
+fn the_draw_spec_is_one_spring_in_both_directions() {
+    for state in [
+        ToggleableState::On,
+        ToggleableState::Off,
+        ToggleableState::Indeterminate,
+    ] {
         match checkbox_draw_spec(state) {
             crate::animation::AnimationSpec::Spring(spec) => {
                 assert_eq!(
                     spec,
                     crate::animation::SpringSpec::spatial_default(),
-                    "{state:?}"
+                    "{state:?} draws on DefaultSpatial"
                 );
                 assert_eq!(spec.damping_ratio, 0.9, "{state:?}");
             }
-            other => panic!("{state:?} must draw on a spring, got {other:?}"),
+            other => panic!(
+                "{state:?} must draw on the spring — M3's delayed snap for `Off` is exactly what this \
+                 component departs from; got {other:?}"
+            ),
         }
     }
-    match checkbox_draw_spec(ToggleableState::Off) {
-        crate::animation::AnimationSpec::Tween(spec) => {
-            assert!(spec.duration.is_zero(), "the snap itself is instant");
-            assert_eq!(
-                spec.delay, CHECKBOX_SNAP_DELAY,
-                "SnapAnimationDelay = 100 ms"
-            );
-            assert_eq!(CHECKBOX_SNAP_DELAY, std::time::Duration::from_millis(100));
-        }
-        other => panic!("emptying must snap after a delay, got {other:?}"),
-    }
+    // The three states must genuinely be interchangeable here: same spec for every one, so an `if`
+    // that reintroduces a direction split cannot survive by comparing equal on two of them.
+    assert_eq!(
+        format!("{:?}", checkbox_draw_spec(ToggleableState::Off)),
+        format!("{:?}", checkbox_draw_spec(ToggleableState::On)),
+        "leaving and entering share the spec"
+    );
 }
 
-/// The colour spec per state, pinned to M3's tokens: leaving (`Off`) is the faster spring, every
-/// other state the slower one. A silent return to a 300 ms tween fails here.
+/// The colour spec is ONE spring in both directions, and it is the SLOW `DefaultEffects` one.
+///
+/// M3 splits here too (`colorAnimationSpecForState`, `Checkbox.kt:1040-1049`): `FastEffects`
+/// (stiffness 3800) while the box empties, `DefaultEffects` (1600) otherwise. winia used to follow it,
+/// and that split is why unchecking read as "it just becomes a box": measured on the box's own
+/// background element, the fill was gone by 120 ms while the glyph still carried a third of its alpha,
+/// so the glyph finished its exit painted on the page at almost no contrast.
+///
+/// Both directions run `DefaultEffects` so the fill, the border and the glyph fade together. This
+/// test pins that: reverting to the `FastEffects`-when-leaving branch fails here rather than only
+/// changing what the eye reports, and a silent return to a 300 ms tween fails too.
 #[test]
-fn the_colour_spec_is_m3s_effect_spring_per_state() {
-    let leaving = checkbox_color_spec(ToggleableState::Off);
-    assert_eq!(leaving, crate::animation::SpringSpec::effects_fast());
-    assert_eq!(leaving.stiffness, 3800.0);
-    for state in [ToggleableState::On, ToggleableState::Indeterminate] {
-        let arriving = checkbox_color_spec(state);
+fn the_colour_spec_is_one_effect_spring_in_both_directions() {
+    for state in [
+        ToggleableState::On,
+        ToggleableState::Off,
+        ToggleableState::Indeterminate,
+    ] {
+        let spec = checkbox_color_spec(state);
         assert_eq!(
-            arriving,
+            spec,
             crate::animation::SpringSpec::effects_default(),
-            "{state:?}"
+            "{state:?} fades on DefaultEffects"
         );
-        assert_eq!(arriving.stiffness, 1600.0, "{state:?}");
+        assert_eq!(spec.stiffness, 1600.0, "{state:?}");
     }
+    // The three states must be genuinely interchangeable, so an `if` that reintroduces the direction
+    // split cannot survive by happening to compare equal on two of them.
+    assert_eq!(
+        format!("{:?}", checkbox_color_spec(ToggleableState::Off)),
+        format!("{:?}", checkbox_color_spec(ToggleableState::On)),
+        "leaving and arriving share the spec"
+    );
 }
 
 #[test]
@@ -679,21 +706,27 @@ fn defaults_colors_feeds_six_arguments_and_forces_three_transparent() {
     );
 }
 
-/// Unchecking FADES the glyph out; the checkmark's colour has an animation of its own.
+/// Unchecking FADES and SHRINKS the glyph — and the fade must stay VISIBLE while it happens.
 ///
-/// The tint used to be pinned to `checked_checkmark` for every state, so the only exit a glyph had was
-/// the snap of its scale at `SnapAnimationDelay` (100 ms) — and 100 ms of nothing followed by an
-/// instant disappearance reads as "unchecking has no animation". M3 animates the colour:
-/// `animateColorAsState(checkmarkColor, colorAnimationSpec)` (`Checkbox.kt:634`), with no `enabled`
-/// branch, over `checkmarkColor(state)` (`:948`), which returns `uncheckedCheckmarkColor` —
-/// `Color.Transparent` by default (`:451`) — when `Off`. Emptying therefore fades on `FastEffects`
-/// while the scale waits out its delay.
+/// Three separate things made the exit unreadable, each found by measuring the rendered frame rather
+/// than the component's properties:
 ///
-/// Both halves are asserted: the fade is PART WAY through one frame in (neither the old colour nor
-/// gone), and the scale has not moved yet. Measured trajectory at 17 ms frames after the flip:
-/// 255 → 162 → 85 → 43 → 21 → 11 → 5 → 0, scale holding 1.0 until 102 ms.
+/// 1. the tint was pinned to `checked_checkmark` for every state, so the colour never moved at all;
+/// 2. the draw fraction held at 1.0 for `SnapAnimationDelay` (100 ms) then jumped to 0 in one frame,
+///    because M3 snaps the emptying direction (`Checkbox.kt:603`). winia now runs the exit on the same
+///    `DefaultSpatial` spring as the entry — `the_draw_spec_is_one_spring_in_both_directions`;
+/// 3. the fade target was `unchecked_checkmark`, which is `Color.Transparent` — BLACK. `Color`
+///    interpolates in Oklab, lightness included, so white → black-at-zero-alpha dimmed the glyph almost
+///    at once: measured peak-vs-interior lightness inside the box went 206 → 63 in the first 17 ms frame
+///    and then barely moved, i.e. the tick did not fade, it just became a bare box. The target is now
+///    the checked colour at alpha 0, so only opacity moves.
+///
+/// This test pins (2) and (3) together, on the pixels this time: the scale must be mid-shrink AND the
+/// glyph must still be visible one frame in. A regression to the black target re-collapses the contrast
+/// even though every property-level assertion above still passes.
 #[test]
-fn unchecking_fades_the_glyph_colour_before_the_scale_snaps() {
+fn unchecking_fades_and_shrinks_the_glyph_visibly() {
+    use skia_safe::{Color as SkColor, surfaces};
     let (_g, clock) = crate::animation::tests::serial_clock();
     crate::animation::clear_all_animations();
 
@@ -727,16 +760,41 @@ fn unchecking_fades_the_glyph_colour_before_the_scale_snaps() {
         }
         (alphas, scale)
     };
+    // How far the brightest pixel inside the 20 dp box stands out from its interior: the glyph's
+    // legibility, in lightness units. Read from the rendered frame, because that is where the fade the
+    // eye complains about actually happens.
+    let contrast = |composer: &crate::runtime::composer::Composer| -> i32 {
+        let mut surface = surfaces::raster_n32_premul((120, 120)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::from_rgb(28, 27, 31));
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let (mut hi, mut lo) = (0i32, i32::MAX);
+        for y in 14..34usize {
+            for x in 14..34usize {
+                let p = px[y * 120 + x];
+                // N32 premul reads BGRA.
+                let lum = (p[2] as i32 * 3 + p[1] as i32 * 6 + p[0] as i32) / 10;
+                hi = hi.max(lum);
+                lo = lo.min(lum);
+            }
+        }
+        hi - lo
+    };
     let frame = |composer: &mut crate::runtime::composer::Composer| {
         composer.recompose_to_stable(|| scene);
-        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        composer.layout(crate::layout::Constraints::new(0.0, 120.0, 0.0, 120.0));
     };
 
     composer.compose(scene);
-    composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+    composer.layout(crate::layout::Constraints::new(0.0, 120.0, 0.0, 120.0));
     let c = holder.borrow().clone().expect("the checkbox state");
-    let (at_rest, _) = glyphs(&composer);
+    let (at_rest, scale_rest) = glyphs(&composer);
     assert_eq!(at_rest, vec![255, 255], "On paints both glyphs opaque");
+    assert!((scale_rest - 1.0).abs() < 1e-4, "and the check at full size");
+    let contrast_rest = contrast(&composer);
 
     c.set(false);
     frame(&mut composer);
@@ -745,18 +803,27 @@ fn unchecking_fades_the_glyph_colour_before_the_scale_snaps() {
     frame(&mut composer);
 
     let (fading, scale_early) = glyphs(&composer);
+    let contrast_early = contrast(&composer);
     assert!(
         fading.iter().all(|a| *a > 0 && *a < 255),
         "one frame into the exit the glyphs are MID-FADE, not switched off and not still opaque; \
          got {fading:?} — a pinned tint leaves this at 255 for every frame"
     );
     assert!(
-        (scale_early - 1.0).abs() < 1e-4,
-        "and the SCALE has not moved yet: M3 waits out SnapAnimationDelay before snapping it, so the \
-         fade is the only thing carrying the exit; got {scale_early}"
+        scale_early > 0.0 && scale_early < 1.0,
+        "and the scale is MID-SHRINK: the exit springs down instead of holding at full size; got \
+         {scale_early} — a `snap(delayMillis = 100)` spec parks it at 1.0 for six frames"
+    );
+    // The one the eye actually reports. Half the resting contrast is the floor: a fade to BLACK keeps
+    // the alpha curve identical but lands far below this, because Oklab moves lightness too.
+    assert!(
+        contrast_early * 2 > contrast_rest,
+        "the glyph is still LEGIBLE one frame in — fading to black-at-zero-alpha collapses this to a \
+         third of the resting value while every alpha assertion above still passes; got \
+         {contrast_early} against {contrast_rest} at rest"
     );
 
-    // Past the delay the colour has arrived at `unchecked_checkmark` (transparent) and the scale snaps.
+    // Both channels finish at the same place: no glyph painted, no scale left.
     for _ in 0..120 {
         clock.advance(std::time::Duration::from_millis(17));
         if !crate::animation::update_animations() {
@@ -771,6 +838,6 @@ fn unchecking_fades_the_glyph_colour_before_the_scale_snaps() {
     );
     assert!(
         scale_late.abs() < 1e-4,
-        "and the scale has snapped to 0 by then; got {scale_late}"
+        "and the scale has shrunk to 0 by then; got {scale_late}"
     );
 }

@@ -41,10 +41,6 @@ const CHECK_MARK_PATH: &str = "M9.55 18.2 3.55 12.2 5 10.75 9.55 15.3 19 5.85 20
 /// Indeterminate 横线（M3 drawCheck 中段：0.2w..0.8w、y=0.5h，2dp 高）
 const DASH_PATH: &str = "M4.8 11h14.4v2H4.8z";
 
-/// How long the checkmark stays visible after the box starts emptying — M3's `SnapAnimationDelay`
-/// (`material3/Checkbox.kt:733`), before the draw fraction snaps to zero.
-const CHECKBOX_SNAP_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
-
 use crate::selection::ToggleableState;
 
 /// 勾选框颜色集（对标 material3 `CheckboxColors`）——box/border/checkmark
@@ -342,42 +338,60 @@ impl CheckboxDefaults {
     }
 }
 
-/// The colour spec M3 picks for a checkbox state — its `colorAnimationSpecForState`
-/// (`material3/Checkbox.kt:685-694`): the box EMPTYING uses `FastEffects` (spring 1.0/3800) and every
-/// other state, including indeterminate, uses `DefaultEffects` (spring 1.0/1600), so the fill arrives
-/// more slowly than it leaves. Kept as a named function so a change from these springs to a tween
-/// fails a test instead of only changing how the component feels.
-fn checkbox_color_spec(state: ToggleableState) -> crate::animation::SpringSpec {
-    if state == ToggleableState::Off {
-        crate::animation::SpringSpec::effects_fast()
-    } else {
-        crate::animation::SpringSpec::effects_default()
-    }
+/// The colour spec for the fill and border — `DefaultEffects` in BOTH directions.
+///
+/// M3 splits on the direction here, exactly as it does for the draw fraction: `colorAnimationSpecForState`
+/// (`material3/Checkbox.kt:1040-1049`) returns `FastEffects` (damping 1.0, stiffness 3800) while the box
+/// EMPTIES and `DefaultEffects` (1.0, 1600) otherwise, so "the fill arrives more slowly than it leaves".
+///
+/// winia used to follow that, and it is what made unchecking read as "it just becomes a box". The
+/// fill and the checkmark have to fade on the SAME clock, because the checkmark's colour is
+/// `on_primary` — it is only legible against the `primary` fill underneath it. Measured with
+/// `FastEffects` on the fill and anything slower on the glyph:
+///
+/// ```text
+///           17 ms   34 ms   51 ms   68 ms   119 ms
+/// fill a     162      85      43      21        0
+/// glyph a    221     174     130      94       31
+/// border a   255     255     255     255      255
+/// ```
+///
+/// The fill is gone by 120 ms while the glyph still has a third of its alpha, so the glyph spends the
+/// rest of its exit painted on the page background at almost no contrast — and the border, which never
+/// fades, is all that is left to look at. That is the "empty box" the eye reports. Running both colour
+/// channels on `DefaultEffects` keeps them together: the fill and the glyph leave at one rate, and the
+/// border's colour travels with them (section 5 of `docs/checkbox.md` records the departure).
+fn checkbox_color_spec(_state: ToggleableState) -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::effects_default()
 }
 
-/// The draw-fraction spec M3 picks, from its `transition.animateFloat(transitionSpec = { … })` over
-/// `ToggleableState` (`material3/Checkbox.kt:405-411`, `:733`):
+/// The draw-fraction spec, the SAME spring in both directions.
 ///
-/// - the box EMPTYING (`targetState == Off`) is `snap(delayMillis = SnapAnimationDelay)`, i.e. the
-///   checkmark disappears at once after 100 ms — winia has no delayed `Snap`, so this is a
-///   zero-duration tween with that delay, which the engine runs as an instant jump after waiting;
-/// - filling from `Off`, and every move between `On` and `Indeterminate`, is the `DefaultSpatial`
-///   token (`Checkbox.kt:404`), damping 0.9 / stiffness 700 — not the no-bouncy 400 winia used.
+/// This is a deliberate departure from M3, whose `transition.animateFloat(transitionSpec = { … })`
+/// (`material3/Checkbox.kt:597-613`) splits on the direction:
 ///
-/// (`Checkbox.kt` also snaps `checkCenterGravitationShiftFraction` in the same two cases; winia has no
-/// separate gravitation shift.)
-fn checkbox_draw_spec(state: ToggleableState) -> crate::animation::AnimationSpec {
-    if state == ToggleableState::Off {
-        crate::animation::AnimationSpec::Tween(
-            crate::animation::TweenSpec::new(
-                std::time::Duration::ZERO,
-                crate::animation::interpolator::Linear::new(),
-            )
-            .delay(CHECKBOX_SNAP_DELAY),
-        )
-    } else {
-        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
-    }
+/// - filling (`initialState == Off`) and every move between `On` and `Indeterminate` use the
+///   `DefaultSpatial` token (`:596`) — damping 0.9, stiffness 700;
+/// - EMPTYING (`targetState == Off`) is `snap(delayMillis = SnapAnimationDelay)` (`:603`, `:1061`):
+///   the checkmark holds for 100 ms and then disappears in one frame.
+///
+/// That asymmetry is the reference's choice, not an oversight — but at this component's size it reads
+/// as "ticking on animates, ticking off does not", because the entry is a ~160 ms growth while the exit
+/// is a single invisible jump. Measured with a frozen clock, the draw fraction went
+///
+/// ```text
+/// Off -> On   0.000 → 0.132 → 0.317 → 0.491 → 0.633 → … → 0.944   (per 17 ms frame)
+/// On -> Off   1.000 → 1.000 → 1.000 → 1.000 → 1.000 → 1.000 → 0.000
+/// ```
+///
+/// so winia runs the exit on the same spring as the entry. The colour still fades on its own channel
+/// (`checkbox_color_spec`, which DOES keep M3's `FastEffects`-when-leaving split), so the glyph now
+/// shrinks and fades together instead of vanishing.
+///
+/// (`Checkbox.kt` snaps `checkCenterGravitationShiftFraction` in the same two cases; winia has no
+/// separate gravitation shift, so it has nothing to mirror here.)
+fn checkbox_draw_spec(_state: ToggleableState) -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
 
 /// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用。
@@ -405,20 +419,59 @@ fn checkbox_impl(
     ctx.changed(&colors);
     let interaction =
         interaction_source.unwrap_or_else(|| ctx.remember(MutableInteractionSource::new).get());
-    let box_color = colors.box_color(enabled, state);
     let border_color = colors.border_color(enabled, state);
-    // The checkmark's COLOUR follows the state, as M3's does: `checkmarkColor(state)` returns
-    // `uncheckedCheckmarkColor` — transparent by default (`Checkbox.kt:451`) — when `Off`, so
-    // unchecking FADES the glyph out rather than only shrinking it.
+    // The FILL fades; it must not darken on the way out.
     //
-    // winia used to pin this to `checked_checkmark` for every state, on the theory that a transparent
-    // tint would "swallow" the exit. It does not: the colour has its own animation (below), and without
-    // it the glyph's only exit was the 100 ms-delayed snap of its scale — measured, the tint stayed
-    // (255, 255, 255) for the whole transition, which reads as "unchecking has no animation".
+    // `unchecked_box` is `Color::Transparent` — `(0, 0, 0, 0)`, black — and `Color` interpolates in
+    // Oklab with lightness as one of its four components (`graphics/color.rs:66`). Animating the
+    // checked fill into black-at-zero-alpha therefore spends the transition losing LIGHTNESS as well as
+    // opacity, and on the dark scheme the two together erase it: measured on the box's own background
+    // element, the fill went primary (101, 85, 143, a255) → (51, 42, 75, a162) → (15, 11, 26, a85) →
+    // (2, 1, 4, a43) over 34 ms, i.e. it became the background instead of fading out of it. What is
+    // left on screen is the border, which holds a real colour and does animate — so the whole exit
+    // reads as "the checkbox turns into an empty box at once".
+    //
+    // The target keeps the checked fill's RGB and sets only alpha to 0, so the spring moves a single
+    // component and the fill dims where it stands. The resting `Off` fill is drawn at alpha 0 either
+    // way, so nothing about the settled state changes.
+    let box_color = if state.is_checked() {
+        colors.box_color(enabled, state)
+    } else {
+        Color {
+            a: 0,
+            ..colors.box_color(enabled, ToggleableState::On)
+        }
+    };
+    // The checkmark's COLOUR fades with the state, but only in ALPHA. Its target when leaving is the
+    // checked colour at alpha 0, NOT `unchecked_checkmark`.
+    //
+    // That distinction is the whole point. `unchecked_checkmark` is `Color.Transparent` — `(0, 0, 0, 0)`,
+    // black — and `Color` interpolates in Oklab (`graphics/color.rs:66`), which carries lightness as a
+    // component. Fading white into black-with-zero-alpha therefore drops the glyph's LIGHTNESS as well as
+    // its opacity, and the two together collapse its contrast against the container in a couple of
+    // frames: measured on the rendered frame, the peak-vs-interior lightness difference inside the box
+    // went 206 → 63 in the first 17 ms frame and then barely moved. To the eye the tick does not fade,
+    // it turns into a bare box immediately — which is exactly what this was reported as.
+    //
+    // Fading the checked colour's alpha alone leaves L untouched, so the glyph dims uniformly and stays
+    // a glyph while it does. M3's `checkmarkColor(state)` returns the transparent colour for `Off`
+    // (`:948`, `:451`), so this is a deliberate departure, recorded in section 5 of `docs/checkbox.md`
+    // next to the draw-fraction one — both exist for the same reason: at 20 dp the reference's exit is
+    // not readable as motion.
     //
     // `checkmark_color(state)` ignores `enabled` on purpose — that is M3's flag-off branch
     // (`Checkbox.kt:506`), the default one, so a disabled checked box keeps the checked colour.
-    let check_color = colors.checkmark_color(state);
+    let checked_mark = colors.checked_checkmark;
+    let check_color = if state.is_checked() {
+        checked_mark
+    } else {
+        // Same RGB, zero alpha: `Dyn` only ever sees two colours, and the spring between them moves one
+        // component.
+        crate::graphics::Color {
+            a: 0,
+            ..checked_mark
+        }
+    };
 
     // The draw fraction (check / dash), animated per M3 — see `checkbox_draw_spec`.
     let check_spec = checkbox_draw_spec(state);
@@ -439,12 +492,23 @@ fn checkbox_impl(
     // (`Checkbox.kt:634`), unlike the two colours above it, so a glyph never snaps across a
     // disable/enable switch either.
     //
-    // Spec from `checkbox_color_spec(state)` — M3 reuses `colorAnimationSpecForState` here, not the
-    // draw fraction's spec: emptying fades on the faster `FastEffects`, filling on `DefaultEffects`.
-    let check_color_anim = ctx.animate_color_as_state(
-        check_color,
-        crate::animation::AnimationSpec::Spring(checkbox_color_spec(state)),
-    );
+    // The spec is the DRAW spec, not `checkbox_color_spec`, and that is the point of this line: the
+    // glyph has to fade on the same clock it shrinks on. M3 reuses `colorAnimationSpecForState` here,
+    // which means the emptying direction fades on `FastEffects` (damping 1.0, stiffness 3800) while its
+    // size moves on `DefaultSpatial` (0.9, 700) — the opacity is ~5x ahead of the geometry. Measured at
+    // 17 ms frames after the flip, with `FastEffects` on the colour:
+    //
+    // ```text
+    //           17 ms        34 ms        51 ms        68 ms
+    // alpha     162 (63 %)    85 (33 %)    43 (17 %)    21 (8 %)
+    // scale     0.868        0.683        0.509        0.367
+    // ```
+    //
+    // The glyph is already near-invisible a third of the way through, so the shrink that follows carries
+    // nothing and the exit reads as "the tick vanishes and a box is left" — which is how it was
+    // reported. One spec for both channels keeps the glyph legible while it leaves. Recorded in
+    // section 5 of `docs/checkbox.md`.
+    let check_color_anim = ctx.animate_color_as_state(check_color, check_spec.clone());
 
     // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
     // M3 checkDrawFraction + crossCenterGravitation 过渡）
