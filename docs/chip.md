@@ -141,7 +141,6 @@ assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
 - **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
   （`horizontalArrangement` 已开放为 `horizontal_arrangement(f32)`，见 §1。）
-- 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。
 
 以下五项此前记在这里，现已对齐 material3：
 
@@ -176,3 +175,11 @@ cargo test -p winia --lib components::chip
 | `a_border_can_be_added_to_a_variant_that_has_none` | an elevated chip can be given one |
 | `horizontal_arrangement_changes_the_laid_out_gap` | the spacing moves the laid-out width by exactly the difference |
 | `a_disabled_input_chips_avatar_is_dimmed` | a disabled input chip's avatar is drawn at `DISABLED_AVATAR_OPACITY` |
+
+Fixtures: **no** `fixture_all` scenario, so the UI test suite never reaches this component. Its own
+page is `examples/chip_demo.rs`; `examples/animated_visibility_demo.rs` and
+`examples/animated_content_demo.rs` also build chips, as the content they animate.
+
+`chip_demo.rs` walks the seven variants, the `selected` state, the three slots (leading icon,
+trailing icon, avatar — including the avatar-over-leading rule), the border / gap / colour overrides,
+the shadow rule, and a hoisted interaction source with a disabled row.
