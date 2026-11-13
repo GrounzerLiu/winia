@@ -253,7 +253,9 @@ Two gaps the bridge surfaces in the examples themselves:
   Checkbox(..) }` composes a checkbox with nothing inside it, so the element has no name to announce.
   Naming it is `Modifier::semantics(SemanticsConfig::new().content_description("Row 1"))` on the
   control (Compose has the same requirement — a label next to a control is not associated with it
-  automatically). The checkboxes in `checkbox_demo` read as `''` for exactly this reason.
+  automatically). The checkboxes in `checkbox_demo` read as `''` for exactly this reason, until the
+  demo was rebuilt: every control whose label sits beside it now carries a `content_description`, so
+  the current demo is the working demonstration of this rule rather than another instance of the gap.
 - A `LoadingIndicator` reads as a progress bar with no value, which is right — but nothing ANNOUNCES
   that it appeared. A live region would, and an indicator is a reasonable candidate: it is the
   component whose appearance is the information. `Snackbar` already does this; the loading family has

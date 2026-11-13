@@ -233,7 +233,7 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 | 自包含叶子/交互组件 | Text/Button/Card/Checkbox/TriStateCheckbox/`checkbox_impl`/Icon/IconButton/IconToggleButton/Image/RichText/SelectionContainer/Switch/TextField/Window `build` | ✅ `#[composable]` |
 | effect | `LaunchedEffect::build`/`DisposableEffect::build`/`remember_coroutine_scope`/`observe_watch`/`attach_cleanup` | ✅ `#[composable]` |
 | overlay | Popup/Dialog/DropdownMenu `build` | ✅ `#[composable]` |
-| **布局容器** | **Column/Row/Stack** | ❌ **不宏化**——content 闭包顶层 `State.get()`（如 ps 计算）必须注册到容器自身（子项变化 → 容器 Enter → 内容重跑）；宏化引入内部 scope 拦截 → 父 Skip → 联动断（checkbox_demo 全选不联动即此） |
+| **布局容器** | **Column/Row/Stack** | ❌ **不宏化**——content 闭包顶层 `State.get()`（如 ps 计算）必须注册到容器自身（子项变化 → 容器 Enter → 内容重跑）；宏化引入内部 scope 拦截 → 父 Skip → 联动断（checkbox_demo 全选不联动即此；该 demo 已重建，现按本规则在容器内容闭包内推导父状态） |
 | **动画容器** | **AnimatedVisibility/Crossfade/AnimatedContent/AnimatedSize** | ❌ **不宏化**——内部 `progress.get()` 每帧检测（淡出完成/removed）需父容器每帧重跑；宏化 → 父 Skip → 检测冻结 → 内容残留/动画断 |
 | **透传 caller 闭包的容器** | **Chip（`build_chip`）/SplitButtonLayout** | ❌ **不宏化**——`label`/`leading`/`trailing` 是调用方闭包，原样透传给主题 scope；闭包顶层 `State.get()` 只有注册到父容器才会刷新。两者内部确用 `animate_*`/`remember`，但那份状态由组件自己消费（满足条件 1、2），闭包本身不进组件 scope |
 

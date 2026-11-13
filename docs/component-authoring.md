@@ -113,7 +113,9 @@ target** for everything it reads.
 - **Why:** a `State::get()` written at the top of the content closure belongs to whoever composed
   it. With a scope in between it registers on the container instead, the parent Skips, and the
   change never re-runs the content - that is how the checkbox demo's select-all stopped
-  propagating. Every other component that composes a restartable group IS `#[composable]` (39 of
+  propagating. (That demo was rebuilt since: its select-all derives the parent state inside the
+  container's own content closure, which is the rule this bullet states.) Every other component
+  that composes a restartable group IS `#[composable]` (39 of
   the 45 component files that do, measured by grepping for a real attribute line, not a mention in a
   comment), because its content is composed by the component, not passed through. The six without
   the attribute are the four animation containers (`animated_visibility`, `animated_size`,

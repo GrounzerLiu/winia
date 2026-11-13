@@ -181,4 +181,5 @@ cargo test -p winia --lib a_colors_change_reaches_the_checkmark_tint
 | `a_checkbox_styling_overrides_only_what_it_sets` | `CheckboxStyling` replaces the slots it names and leaves the rest at the theme's derivation |
 
 Fixtures: **no** `fixture_all` scenario, so the UI test suite never reaches this component. It appears
-in `examples/alert_dialog_demo.rs` and `examples/bottom_sheet_demo.rs`.
+in `examples/checkbox_demo.rs` (the component's own page), `examples/alert_dialog_demo.rs` and
+`examples/bottom_sheet_demo.rs`.
