@@ -1,13 +1,16 @@
-//! Checkbox / TriStateCheckbox 组件 — 对标 material3 `Checkbox` / `TriStateCheckbox`
+//! Checkbox / TriStateCheckbox — the counterpart of material3's `Checkbox` / `TriStateCheckbox`.
 //!
-//! M3 1.5.0-beta01 实现要点（对齐项）：
-//! - 视觉 20×20、圆角 2、描边 2dp；checked/indeterminate 时边框色=容器色（合并）；
-//! - 触摸目标/状态层 40×40（`CheckboxTokens.StateLayerSize`），波纹 unbounded；
-//! - 颜色只分 enabled×state（M3 `CheckboxColors` 无 hover/focus/press 变体，
-//!   交互反馈由 ripple 承担）；
-//! - On=check 路径、Indeterminate=横线（M3 drawCheck 中段压平），用两个图标
-//!   各自缩放动画近似 `checkDrawFraction` + `crossCenterGravitation` 过渡；
-//! - `Checkbox` 内部委托 `TriStateCheckbox(state = ToggleableState(checked))`。
+//! What the M3 1.5.0-beta01 implementation pins, and what this file matches:
+//! - a 20×20 visual, a 2 dp corner and a 2 dp stroke; when checked or indeterminate the border
+//!   colour equals the container colour, so the two merge into one fill;
+//! - a 40×40 touch target and state layer (`CheckboxTokens.StateLayerSize`), with an unbounded
+//!   ripple;
+//! - colour splits on enabled × state only — M3's `CheckboxColors` has no hover/focus/press variant,
+//!   because the ripple carries the interaction feedback;
+//! - `On` draws the check path and `Indeterminate` draws a dash (M3 flattens the middle of
+//!   `drawCheck`); the two icons scale independently, approximating the `checkDrawFraction` +
+//!   `crossCenterGravitation` transition;
+//! - `Checkbox` delegates to `TriStateCheckbox(state = ToggleableState(checked))`.
 
 use crate::composable;
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
@@ -18,7 +21,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
-/// 视觉勾选框尺寸（M3 实现 `CheckboxSize = 20dp`）
+/// The visual box size — M3's `CheckboxSize = 20dp`.
 pub const CHECKBOX_SIZE: f32 = 20.0;
 /// The node a CLICKABLE checkbox occupies: `Modifier.minimumInteractiveComponentSize()` = 48 dp, with the 20 dp
 /// box centred inside (`material3/Checkbox.kt:293-302`; the minimum applies whenever `onClick != null`, disabled
@@ -31,20 +34,20 @@ pub const CHECKBOX_STATE_LAYER_SIZE: f32 = 40.0;
 /// The node a checkbox WITHOUT a click handler occupies: the 20 dp visual plus Compose's 2 dp padding on each
 /// side (`CheckboxDefaultPadding`, `material3/Checkbox.kt:736`), and no minimum interactive size.
 pub const CHECKBOX_IDLE_SIZE: f32 = CHECKBOX_SIZE + 4.0;
-/// 描边宽度（`CheckboxDefaults.StrokeWidth = 2dp`）
+/// The stroke width — `CheckboxDefaults.StrokeWidth = 2dp`.
 pub const CHECKBOX_STROKE_WIDTH: f32 = 2.0;
-/// 容器圆角（`CheckboxTokens.ContainerShape = RoundedCornerShape(2dp)`）
+/// The container corner — `CheckboxTokens.ContainerShape = RoundedCornerShape(2dp)`.
 pub const CHECKBOX_CORNER_RADIUS: f32 = 2.0;
 
-/// Material Icons “check”（24dp viewBox 填充路径）——勾号
+/// Material Icons "check" (a 24 dp viewBox fill path) — the tick.
 const CHECK_MARK_PATH: &str = "M9.55 18.2 3.55 12.2 5 10.75 9.55 15.3 19 5.85 20.45 7.3z";
-/// Indeterminate 横线（M3 drawCheck 中段：0.2w..0.8w、y=0.5h，2dp 高）
+/// The indeterminate dash — the flattened middle of M3's `drawCheck`: 0.2w..0.8w at y = 0.5h, 2 dp tall.
 const DASH_PATH: &str = "M4.8 11h14.4v2H4.8z";
 
 use crate::selection::ToggleableState;
 
-/// 勾选框颜色集（对标 material3 `CheckboxColors`）——box/border/checkmark
-/// 三组色 × enabled/disabled × Off/On/Indeterminate。
+/// The checkbox's colour set — the counterpart of material3's `CheckboxColors`: three colour groups
+/// (box / border / checkmark) × enabled-disabled × Off-On-Indeterminate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CheckboxColors {
     pub checked_checkmark: Color,
@@ -102,9 +105,10 @@ impl CheckboxColors {
     pub fn from_theme(theme: &ThemeColors) -> Self {
         let transparent = Color::from_argb(0, 0, 0, 0);
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-        // Selected（On/Indeterminate）：容器/边框 Primary、勾号 OnPrimary
-        // Unselected：容器透明、边框 OnSurfaceVariant、勾号透明
-        // Disabled：容器与边框 OnSurface @ 0.38（含 indeterminate 专用字段）
+        // Selected (On/Indeterminate): the container and border take Primary, the mark OnPrimary.
+        // Unselected: a transparent container, an OnSurfaceVariant border, a transparent mark.
+        // Disabled: container and border at OnSurface @ 0.38 (with a field of their own for
+        // indeterminate).
         Self::new(
             theme.on_primary,
             transparent,
@@ -279,7 +283,7 @@ pub fn checkbox_colors_with_styles(theme: &crate::theme::ThemeColors) -> Checkbo
     colors
 }
 
-/// Checkbox 默认值（对标 material3 `CheckboxDefaults`）
+/// The checkbox's defaults — the counterpart of material3's `CheckboxDefaults`.
 pub struct CheckboxDefaults;
 
 impl CheckboxDefaults {
@@ -394,9 +398,11 @@ fn checkbox_draw_spec(_state: ToggleableState) -> crate::animation::AnimationSpe
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
 
-/// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用。
-/// #[composable]：内部组合子组件（Icon×2）调用语句注入——多实例隔离
-/// （勾号/横线两个 Icon 同调用位置靠语句 id 区分）
+/// The shared implementation — the counterpart of M3's `CheckboxImpl`, used by both `Checkbox` and
+/// `TriStateCheckbox`.
+/// `#[composable]` so the two inner `Icon`s get their call statements injected: that is what keeps
+/// multiple instances apart (the check and the dash icons sit at the same call position and are told
+/// apart by statement id).
 #[allow(clippy::too_many_arguments)]
 #[composable]
 fn checkbox_impl(
@@ -510,8 +516,8 @@ fn checkbox_impl(
     // section 5 of `docs/checkbox.md`.
     let check_color_anim = ctx.animate_color_as_state(check_color, check_spec.clone());
 
-    // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
-    // M3 checkDrawFraction + crossCenterGravitation 过渡）
+    // `On` scales the check to 1, `Indeterminate` scales the dash to 1, `Off` scales both to 0 — a
+    // spring approximating M3's `checkDrawFraction` + `crossCenterGravitation` transition.
     let check_scale = ctx.animate_float_as_state(
         if state == ToggleableState::On {
             1.0
@@ -586,8 +592,9 @@ fn checkbox_impl(
     ) {
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
-            // 视觉 20×20 勾选框：checked/indeterminate 时边框色=容器色（合并为
-            // 纯填充），Off 时透明底 + 2dp 边框——对标 M3 drawBox 分支
+            // The 20×20 visual: when checked or indeterminate the border colour equals the
+            // container's and the two merge into one fill; when Off it is a transparent background
+            // with a 2 dp border — M3's `drawBox` branches.
             let visual = Modifier::new()
                 .size(CHECKBOX_SIZE, CHECKBOX_SIZE)
                 .background(move || box_color_anim.peek(), shape)
@@ -615,7 +622,7 @@ fn checkbox_impl(
             ) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
-                    // 勾号（On）
+                    // The check mark (On).
                     let scale = check_scale.clone();
                     crate::components::icon::Icon::svg_path(CHECK_MARK_PATH)
                         .size(CHECKBOX_SIZE)
@@ -626,7 +633,7 @@ fn checkbox_impl(
                             ..Default::default()
                         }))
                         .build(ctx);
-                    // 横线（Indeterminate）
+                    // The dash (Indeterminate).
                     let scale = dash_scale.clone();
                     crate::components::icon::Icon::svg_path(DASH_PATH)
                         .size(CHECKBOX_SIZE)
@@ -646,8 +653,8 @@ fn checkbox_impl(
     ctx.end_restartable_group();
 }
 
-/// TriStateCheckbox 组件 Builder（对标 material3 `TriStateCheckbox(state,
-/// onClick, enabled, colors, interactionSource)`）
+/// The `TriStateCheckbox` builder — the counterpart of material3's
+/// `TriStateCheckbox(state, onClick, enabled, colors, interactionSource)`.
 pub struct TriStateCheckbox {
     state: ToggleableState,
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -689,7 +696,7 @@ impl TriStateCheckbox {
         self
     }
 
-    /// 注入交互源（hoist——press/hover/focus 状态发射到此源）
+    /// Inject an interaction source (hoist it: the press/hover/focus states are emitted into it).
     pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
@@ -739,8 +746,9 @@ impl TriStateCheckbox {
     }
 }
 
-/// Checkbox 组件 Builder（对标 material3 `Checkbox(checked, onCheckedChange,
-/// enabled, colors, interactionSource)`——内部委托 `TriStateCheckbox`）
+/// The `Checkbox` builder — the counterpart of material3's
+/// `Checkbox(checked, onCheckedChange, enabled, colors, interactionSource)`. It delegates to
+/// `TriStateCheckbox` internally.
 pub struct Checkbox {
     checked: bool,
     on_checked_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
@@ -782,7 +790,7 @@ impl Checkbox {
         self
     }
 
-    /// 注入交互源（hoist——press/hover/focus 状态发射到此源）
+    /// Inject an interaction source (hoist it: the press/hover/focus states are emitted into it).
     pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
@@ -793,7 +801,8 @@ impl Checkbox {
         self
     }
 
-    /// #[composable]：内部 TriStateCheckbox 调用点从本 build 语句取稳定 base
+    /// `#[composable]` so the inner `TriStateCheckbox` call site takes a stable base from this
+    /// `build` statement.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         // M3：Checkbox → TriStateCheckbox(state = ToggleableState(checked),
@@ -825,11 +834,12 @@ impl Checkbox {
 #[cfg(test)]
 mod tests;
 
-/// 父子联动回归（checkbox_demo）：Column 内 c1/c2/c3 remember +
-/// parent_state 计算 + 子项 Checkbox 循环。点子项（c2.set）→ 全选
-/// TriStateCheckbox 的 state 必须更新（On→Indeterminate/Off）。
-/// ⚠ 子项 State 必须 remember（绑定 owner queue——State::new 的 notify
-/// 不入队不触发重组——测试环境既有陷阱）。
+/// Parent/child linkage regression (from `checkbox_demo`): a Column remembers c1/c2/c3, derives
+/// `parent_state` and loops a Checkbox per child. Ticking a child (`c2.set`) must update the
+/// select-all `TriStateCheckbox`'s state (On → Indeterminate/Off).
+/// ⚠ The children's `State`s MUST be `remember`ed — that binds them to the owner's queue. A bare
+/// `State::new` never enqueues its notify and therefore never recomposes, which is a standing trap
+/// in this test harness.
 #[test]
 fn parent_tri_state_follows_children() {
     use std::cell::RefCell;
@@ -857,13 +867,13 @@ fn parent_tri_state_follows_children() {
                     ToggleableState::Indeterminate
                 };
                 parent_states.borrow_mut().push(ps);
-                // 全选 TriStateCheckbox
+                // The select-all box.
                 TriStateCheckbox::new(ps).build(ctx);
-                // 子项循环（列表显式 key——实例隔离）
+                // One row per child — an explicit key per item keeps the instances apart.
                 for (label, c) in [
-                    ("子项 1", c1.clone()),
-                    ("子项 2", c2.clone()),
-                    ("子项 3", c3.clone()),
+                    ("Child 1", c1.clone()),
+                    ("Child 2", c2.clone()),
+                    ("Child 3", c3.clone()),
                 ] {
                     ctx.key(label, |ctx| {
                         crate::layout::Row::new().build(ctx, |ctx| {
@@ -881,12 +891,16 @@ fn parent_tri_state_follows_children() {
         ));
     };
 
-    // 帧1：全 true → parent On
+    // Frame 1: all true → the parent is On.
     build(&mut composer);
     let ps1 = *parent_states.borrow().last().unwrap();
-    assert_eq!(ps1, ToggleableState::On, "全 true → On（实际 {ps1:?}）");
+    assert_eq!(
+        ps1,
+        ToggleableState::On,
+        "all true must read On (got {ps1:?})"
+    );
 
-    // 点子项2（c2 → false）：On → Indeterminate（真实联动验证）
+    // Tick child 2 off (c2 → false): On → Indeterminate, the real linkage check.
     let c2 = holder.borrow().clone().unwrap();
     c2.set(false);
     build(&mut composer);
@@ -894,21 +908,23 @@ fn parent_tri_state_follows_children() {
     assert_eq!(
         ps2,
         ToggleableState::Indeterminate,
-        "c2=false → Indeterminate（实际 {ps2:?}）——全选应随子项变化"
+        "c2=false must read Indeterminate (got {ps2:?}) — the select-all follows its children"
     );
 
-    // 再点 c3 → false：全 false → Off
-    // （c3 在闭包内 remember 未持引用——通过序列长度确认持续联动：父状态每次子项变化都重算）
+    // Tick c3 off too: all false → Off.
+    // (c3 is remembered inside the closure and no reference to it is kept, so continuing linkage is
+    // confirmed through the number of derivations instead: the parent recomputes on every child change.)
     assert!(
         parent_states.borrow().len() >= 2,
-        "子项变化后 parent_state 应重算（实际 {} 次）",
+        "parent_state must recompute after a child changes (ran {} times)",
         parent_states.borrow().len()
     );
 }
 
-/// 真实点击链路（demo 等价）：从 arena 找子项 Checkbox 的 Clickable 回调并
-/// 调用（等价鼠标点击）→ 子项 State 更新 → 父 TriStateCheckbox 联动。
-/// 验证：点击子项2（checked=true→false）→ parent On→Indeterminate。
+/// The real click path (what the demo does): find a child Checkbox's `Clickable` callback in the
+/// arena and call it — the equivalent of a mouse click — so the child's `State` updates and the
+/// parent `TriStateCheckbox` follows.
+/// Checks: clicking child 2 (checked=true→false) takes the parent from On to Indeterminate.
 #[test]
 fn parent_tri_state_follows_click() {
     use std::cell::RefCell;
@@ -918,7 +934,7 @@ fn parent_tri_state_follows_click() {
     let mut composer = crate::runtime::composer::Composer::new();
     let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
     let parent_states = RefCell::new(Vec::new());
-    // 记录子项 Checkbox 的 Clickable 回调（按出现顺序——子项1/2/3）
+    // The children's `Clickable` callbacks in the order they appear — child 1/2/3.
     let clickables = RefCell::new(Vec::new());
 
     let build = |composer: &mut crate::runtime::composer::Composer| {
@@ -942,9 +958,9 @@ fn parent_tri_state_follows_click() {
                 parent_states.borrow_mut().push(ps);
                 TriStateCheckbox::new(ps).build(ctx);
                 for (label, c) in [
-                    ("子项 1", c1.clone()),
-                    ("子项 2", c2.clone()),
-                    ("子项 3", c3.clone()),
+                    ("Child 1", c1.clone()),
+                    ("Child 2", c2.clone()),
+                    ("Child 3", c3.clone()),
                 ] {
                     ctx.key(label, |ctx| {
                         crate::layout::Row::new().build(ctx, |ctx| {
@@ -963,7 +979,7 @@ fn parent_tri_state_follows_click() {
         composer.layout(crate::layout::constraints::Constraints::new(
             0.0, 300.0, 0.0, 600.0,
         ));
-        // 收集 Clickable 回调
+        // Collect the `Clickable` callbacks.
         clickables.borrow_mut().clear();
         for n in composer.arena_nodes() {
             for el in n.modifier.elements() {
@@ -978,34 +994,37 @@ fn parent_tri_state_follows_click() {
     assert_eq!(
         *parent_states.borrow().last().unwrap(),
         ToggleableState::On,
-        "全 true → On"
+        "all true must read On"
     );
     let clicks = clickables.borrow().clone();
-    // 找子项2 的 Clickable：demo 结构里子项循环的 Checkbox 是第 2/3/4 个
-    // Clickable（前有"全选"的 TriStateCheckbox 1 个）——取第 2 个 = 子项2
+    // Find child 2's `Clickable`. In the demo's structure the loop's Checkboxes are the 2nd, 3rd
+    // and 4th `Clickable` (the select-all `TriStateCheckbox` comes first), so index 1 is child 2.
     assert!(
         clicks.len() >= 3,
-        "应有多个 Clickable（实际 {}）",
+        "expected several Clickables (got {})",
         clicks.len()
     );
     let sub2_click = clicks[1].clone();
-    // 模拟点击子项2（on_click = cb(!checked)——checked=true → 传 false → c2=false）
+    // Simulate a click on child 2 (on_click = cb(!checked): checked=true → passes false → c2=false).
     sub2_click();
-    // 下一帧：c2=false → parent Indeterminate
+    // Next frame: c2=false → the parent is Indeterminate.
     build(&mut composer);
     let ps = *parent_states.borrow().last().unwrap();
     assert_eq!(
         ps,
         ToggleableState::Indeterminate,
-        "点击子项2 后 parent 应变 Indeterminate（实际 {ps:?}）——全选应随点击联动"
+        "clicking child 2 must take the parent to Indeterminate (got {ps:?}) — the select-all \
+         follows a click"
     );
     let c2 = holder.borrow().clone().unwrap();
-    assert!(!c2.get(), "点击后 c2 应为 false");
+    assert!(!c2.get(), "c2 must be false after the click");
 }
 
-/// 渲染级父子联动（demo 等价）：Column + 子项循环 + 全选 TriStateCheckbox。
-/// 点击子项3（false→true）→ 全选从 Indeterminate→On → 全选区域位图必须变化
-/// （用户报告：全选按钮不随子项变化——此测试锁定视觉联动）。
+/// Parent/child linkage at the RENDER level (what the demo does): a Column, a loop of children and
+/// the select-all `TriStateCheckbox`.
+/// Clicking child 3 (false→true) takes the select-all from Indeterminate to On, so the pixels of the
+/// select-all region must change. (Reported as "the select-all button does not follow its children";
+/// this test pins the visual linkage, not just the derived value.)
 #[test]
 fn parent_tri_state_renders_change_on_child_click() {
     use skia_safe::{Color, surfaces};
@@ -1033,12 +1052,12 @@ fn parent_tri_state_renders_change_on_child_click() {
                 } else {
                     ToggleableState::Indeterminate
                 };
-                // 全选（第一个 40x40 checkbox）——demo 等价：带 on_click
+                // The select-all (the first 40×40 checkbox) — carrying an on_click, as in the demo.
                 TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
                 for (label, c) in [
-                    ("子项 1", c1.clone()),
-                    ("子项 2", c2.clone()),
-                    ("子项 3", c3.clone()),
+                    ("Child 1", c1.clone()),
+                    ("Child 2", c2.clone()),
+                    ("Child 3", c3.clone()),
                 ] {
                     ctx.key(label, |ctx| {
                         crate::layout::Row::new().build(ctx, |ctx| {
@@ -1055,7 +1074,7 @@ fn parent_tri_state_renders_change_on_child_click() {
             });
         });
     };
-    // 渲染一次 + 记录全选位置 + 收集 Clickable
+    // Render once, record the select-all's position and collect the `Clickable`s.
     let mut render = |composer: &mut crate::runtime::composer::Composer| -> Vec<u8> {
         composer.compose(build_scene);
         composer.layout(crate::layout::constraints::Constraints::new(
@@ -1107,7 +1126,7 @@ fn parent_tri_state_renders_change_on_child_click() {
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect::<Vec<_>>()
     };
-    // 提取全选区域像素
+    // Extract the pixels of the select-all region.
     let region_px = |px: &[u8], (x, y, w, h): (f32, f32, f32, f32)| -> Vec<u8> {
         let mut out = Vec::new();
         for row in 0..(h as usize) {
@@ -1123,20 +1142,23 @@ fn parent_tri_state_renders_change_on_child_click() {
         out
     };
 
-    // 首帧渲染：全选 Indeterminate
+    // First frame: the select-all is Indeterminate.
     let px1 = render(&mut composer);
-    let pos = parent_box_pos.borrow().clone().expect("全选位置");
+    let pos = parent_box_pos
+        .borrow()
+        .clone()
+        .expect("the select-all's position");
     let r1 = region_px(&px1, pos);
     let clicks = clickables.borrow().clone();
     assert!(
         clicks.len() >= 4,
-        "应有全选+3子项 Clickable（实际 {}）",
+        "expected the select-all plus three children as Clickables (got {})",
         clicks.len()
     );
-    // 点击子项3（第 4 个 Clickable——全选+子项1+2+3）
+    // Click child 3 — the 4th `Clickable`, after the select-all and children 1 and 2.
     let sub3 = clicks[3].clone();
     sub3(); // c3: false→true
-    // 推进动画（颜色/勾号过渡）
+    // Advance the animations (the colour and the glyph transition).
     for _ in 0..20 {
         crate::animation::update_animations();
         std::thread::sleep(std::time::Duration::from_millis(30));
@@ -1150,13 +1172,16 @@ fn parent_tri_state_renders_change_on_child_click() {
     let r2 = region_px(&px3, pos);
     assert_ne!(
         r1, r2,
-        "点击子项3 后全选区域位图必须变化（Indeterminate→On）——全选应随子项联动（区域 {pos:?}）"
+        "clicking child 3 must change the select-all region's pixels (Indeterminate→On) — the \
+         select-all follows its children (region {pos:?})"
     );
 }
 
-/// demo 差异复现：Column + vertical_scroll + 循环 ctx.key + 全选联动。
-/// 用户报告：滚动列表里点子项3，子项勾上了但全选不变。
-/// （无 scroll 的 parent_tri_state_renders_change_on_child_click 通过——差异在 scroll）
+/// Reproduces a difference the demo showed: a Column with `vertical_scroll`, a `ctx.key` loop and
+/// the select-all linkage.
+/// Reported as: in the scrolling list, clicking child 3 ticked the child but left the select-all
+/// unchanged. (`parent_tri_state_renders_change_on_child_click` passes without the scroll, so the
+/// difference is the scroll.)
 #[test]
 fn parent_tri_state_follows_child_in_scroll_column() {
     use std::cell::RefCell;
@@ -1192,9 +1217,9 @@ fn parent_tri_state_follows_child_in_scroll_column() {
                     parent_states.borrow_mut().push(ps);
                     TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
                     for (label, c) in [
-                        ("子项 1", c1.clone()),
-                        ("子项 2", c2.clone()),
-                        ("子项 3", c3.clone()),
+                        ("Child 1", c1.clone()),
+                        ("Child 2", c2.clone()),
+                        ("Child 3", c3.clone()),
                     ] {
                         ctx.key(label, |ctx| {
                             crate::layout::Row::new().build(ctx, |ctx| {
@@ -1211,7 +1236,7 @@ fn parent_tri_state_follows_child_in_scroll_column() {
                 });
         });
     };
-    // 帧1 + 点击子项3（第 4 个 Clickable）
+    // Frame 1, then click child 3 — the 4th `Clickable`.
     composer.compose(build_scene);
     composer.layout(crate::layout::constraints::Constraints::new(
         0.0, 400.0, 0.0, 600.0,
@@ -1225,10 +1250,14 @@ fn parent_tri_state_follows_child_in_scroll_column() {
         }
     }
     let clicks = clickables.borrow().clone();
-    assert!(clicks.len() >= 4, "Clickable 数 {}", clicks.len());
+    assert!(
+        clicks.len() >= 4,
+        "expected at least 4 Clickables (got {})",
+        clicks.len()
+    );
     let sub3 = clicks[3].clone();
     sub3(); // c3 false→true
-    // 下一帧：全选应变 On
+    // Next frame: the select-all must read On.
     composer.compose(build_scene);
     composer.layout(crate::layout::constraints::Constraints::new(
         0.0, 400.0, 0.0, 600.0,
@@ -1237,13 +1266,15 @@ fn parent_tri_state_follows_child_in_scroll_column() {
     assert_eq!(
         ps,
         ToggleableState::On,
-        "带 scroll 的 Column：点击子项3 后全选应变 On（实际 {ps:?}）——scroll 容器不应阻断联动"
+        "in a scrolling Column, clicking child 3 must turn the select-all On (got {ps:?}) — a scroll \
+         container must not break the linkage"
     );
 }
 
-/// 核心假设验证：宏化 Column 的 content 顶层 State.get() 变化 →
-/// Column 应 Enter（compose_dirty_count 增加）。若 Skip（计数不变）→
-/// 内容 scope 收不到依赖 → 全选联动断（demo 横线不变根因）。
+/// The core hypothesis: when a `State.get()` at the top of a scope-free `Column`'s content changes,
+/// the Column must Enter (`compose_dirty_count` grows). If it Skipped (count unchanged) the content
+/// scope would never receive the dependency and the select-all linkage would break — the root cause
+/// of the demo's dash never changing.
 #[test]
 fn macroized_column_content_state_notify_enters_column() {
     use std::cell::RefCell;
@@ -1254,7 +1285,7 @@ fn macroized_column_content_state_notify_enters_column() {
             crate::layout::Column::new().build(ctx, |ctx| {
                 let c3 = ctx.remember(|| false);
                 *holder.borrow_mut() = Some(c3.clone());
-                let _ = c3.get(); // 顶层依赖 → 应注册 Column scope
+                let _ = c3.get(); // a top-level dependency → must register on the Column's scope
                 TriStateCheckbox::new(if c3.get() {
                     ToggleableState::On
                 } else {
@@ -1272,9 +1303,12 @@ fn macroized_column_content_state_notify_enters_column() {
     let c = holder.borrow().clone().unwrap();
     c.set(true);
     scene(&mut composer);
-    // Column 应 Enter（content 重跑 → ps 重算 → TriStateCheckbox 变 On）
+    // The Column must Enter (content re-runs → ps is recomputed → the TriStateCheckbox turns On).
     let d2 = composer.compose_dirty_count;
-    assert!(d2 >= 1, "c3 变化后 Column 应 Enter（dirty 计数 {d2}）");
+    assert!(
+        d2 >= 1,
+        "the Column must Enter after c3 changes (dirty count {d2})"
+    );
 }
 
 #[test]

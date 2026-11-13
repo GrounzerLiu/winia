@@ -171,7 +171,7 @@ fn the_colour_spec_is_one_effect_spring_in_both_directions() {
 fn color_state_resolution() {
     let theme = ThemeColors::light_from_seed(0x6750A4);
     let colors = CheckboxDefaults::checkbox_colors(&theme);
-    // On：primary 容器/边框 + onPrimary 勾号
+    // On: a Primary container and border, an OnPrimary checkmark.
     assert_eq!(colors.box_color(true, ToggleableState::On), theme.primary);
     assert_eq!(
         colors.border_color(true, ToggleableState::On),
@@ -181,7 +181,7 @@ fn color_state_resolution() {
         colors.checkmark_color(ToggleableState::On),
         theme.on_primary
     );
-    // Indeterminate 与 On 共用 checked 色组
+    // Indeterminate shares the checked colour group with On.
     assert_eq!(
         colors.box_color(true, ToggleableState::Indeterminate),
         theme.primary
@@ -194,14 +194,14 @@ fn color_state_resolution() {
         colors.checkmark_color(ToggleableState::Indeterminate),
         theme.on_primary
     );
-    // Off：透明容器 + OnSurfaceVariant 边框 + 透明勾号
+    // Off: a transparent container, an OnSurfaceVariant border, a transparent checkmark.
     assert_eq!(colors.box_color(true, ToggleableState::Off).a, 0);
     assert_eq!(
         colors.border_color(true, ToggleableState::Off),
         theme.on_surface_variant
     );
     assert_eq!(colors.checkmark_color(ToggleableState::Off).a, 0);
-    // disabled 优先于状态
+    // `disabled` takes precedence over the state.
     assert_eq!(
         colors.box_color(false, ToggleableState::On),
         colors.disabled_checked_box
@@ -214,7 +214,7 @@ fn color_state_resolution() {
         colors.box_color(false, ToggleableState::Indeterminate),
         colors.disabled_indeterminate_box
     );
-    // disabled 色值：OnSurface @ 38%
+    // The disabled values: OnSurface @ 38%.
     assert_eq!(
         colors.disabled_checked_box.a,
         (theme.on_surface.a as f32 * 0.38) as u8
@@ -262,11 +262,11 @@ fn checkbox_callback_receives_inverted_checked() {
                 }
             }
         }
-        assert!(clicked, "存在 Clickable");
+        assert!(clicked, "a Clickable is present");
         assert_eq!(
             received.load(Ordering::Relaxed),
             expect,
-            "回调收到 !checked"
+            "the callback receives !checked"
         );
     }
 }
@@ -295,7 +295,7 @@ fn tri_state_on_click_fires() {
             }
         }
     }
-    assert!(clicked, "存在 Clickable");
+    assert!(clicked, "a Clickable is present");
     assert_eq!(clicks.load(Ordering::Relaxed), 1);
 }
 
@@ -321,7 +321,7 @@ fn disabled_checkbox_has_no_interaction_elements() {
                     !matches!(el, ModifierElement::Ripple { .. })
                         && !matches!(el, ModifierElement::Focusable { .. })
                         && !matches!(el, ModifierElement::Clickable { .. }),
-                    "禁用 Checkbox 不应有交互元素: {el:?}"
+                    "a disabled Checkbox must register no interaction element: {el:?}"
                 );
             }
         }
@@ -330,7 +330,7 @@ fn disabled_checkbox_has_no_interaction_elements() {
 
 #[test]
 fn checked_checkmark_icon_tint_resolves_to_on_primary() {
-    // 集成：On 时勾号/横线图标 tint = on_primary
+    // Integration: in the On state both the check and the dash icon are tinted on_primary.
     let theme = ThemeColors::light_from_seed(0x6750A4);
     let mut composer = crate::runtime::composer::Composer::new();
     composer.compose(|ctx| {
@@ -346,13 +346,16 @@ fn checked_checkmark_icon_tint_resolves_to_on_primary() {
                 assert_eq!(
                     spec.tint.as_ref().map(|t| t.eval()),
                     Some(theme.on_primary),
-                    "勾号 tint = OnPrimary"
+                    "the checkmark tint is OnPrimary"
                 );
                 count += 1;
             }
         }
     }
-    assert_eq!(count, 2, "On 状态同时挂 check 与 dash 两个图标（动画节点）");
+    assert_eq!(
+        count, 2,
+        "the On state carries BOTH the check and the dash icon (the animation pair)"
+    );
 }
 
 #[test]
@@ -366,9 +369,9 @@ fn unchecked_has_transparent_checkmark_and_no_fill() {
 
 #[test]
 fn uncheck_keeps_primary_pixels_during_transition() {
-    // 回归：取消选中时容器/勾号必须从 Primary 渐变消失（状态切换后的
-    // 第一个渲染帧仍可见），而不是瞬间切透明——否则勾号缩放退出动画
-    // 被吞掉，表现为“取消选中没有动画”。
+    // Regression: unchecking must fade the container and the checkmark out of Primary — still
+    // visible on the FIRST rendered frame after the state flips, not switched to transparent at
+    // once. Otherwise the glyph's scale-out is swallowed and unchecking reads as "no animation".
     use skia_safe::{Color, surfaces};
     use std::time::Duration;
     let _g = crate::animation::tests::TEST_SERIAL
@@ -402,7 +405,7 @@ fn uncheck_keeps_primary_pixels_during_transition() {
     };
     let count_primary = |px: &[u8]| {
         px.chunks_exact(3)
-            // skia N32 premul 内存序为 BGRA：flat_map 取前 3 字节 = B,G,R
+            // Skia's N32 premul memory order is BGRA, so the first 3 bytes from flat_map are B,G,R.
             .filter(|rgb| rgb[2] > 80 && rgb[0] as i32 > rgb[2] as i32 + 20)
             .count()
     };
@@ -412,18 +415,20 @@ fn uncheck_keeps_primary_pixels_during_transition() {
     let checked_px = render(&mut composer);
     assert!(
         count_primary(&checked_px) > 50,
-        "选中态应有 Primary 容器像素"
+        "the checked state must paint Primary container pixels"
     );
-    // 取消选中：状态立即切 Off，但颜色/勾号动画尚未推进——过渡帧必须
-    // 仍保留 Primary 像素（修复前容器/勾号瞬切透明 → 这里为 0）
+    // Uncheck: the state flips to Off at once, but the colour and glyph animations have not advanced
+    // yet — the transition frame must still carry Primary pixels (before the fix the container and
+    // the glyph went transparent instantly, so this was 0).
     c.update(|s| *s = false);
     let transition_px = render(&mut composer);
     let transition_primary = count_primary(&transition_px);
     assert!(
         transition_primary > 50,
-        "取消选中过渡帧应保留 Primary 像素（实际 {transition_primary}）——颜色瞬切透明吞掉退出动画"
+        "the unchecking transition frame must keep Primary pixels (got {transition_primary}) — \
+         switching the colour to transparent swallows the exit animation"
     );
-    // 动画推完 → 回到未选中静止态：不再有 Primary 像素
+    // Once the animations finish: the settled unchecked state has no Primary pixels left.
     for _ in 0..400 {
         if !crate::animation::update_animations() {
             break;
@@ -433,14 +438,15 @@ fn uncheck_keeps_primary_pixels_during_transition() {
     let settled_px = render(&mut composer);
     assert!(
         count_primary(&settled_px) < 5,
-        "未选中静止态不应再有 Primary 像素"
+        "the settled unchecked state must have no Primary pixels left"
     );
 }
 
 #[test]
 fn disabled_checked_border_merges_with_fill() {
-    // 回归：禁用已选中时边框色 = 容器色（半透明），渲染层应合并为
-    // 纯填充；若边框再叠一层 stroke 会双重混合，边框带明显深于内部。
+    // Regression: with a disabled CHECKED checkbox the border colour equals the container colour
+    // (semi-transparent), so the renderer must merge them into a plain fill. Stroking another layer
+    // of border blends twice and leaves the edge visibly darker than the interior.
     use skia_safe::{Color as SkColor, surfaces};
     let _g = crate::animation::tests::TEST_SERIAL
         .lock()
@@ -467,7 +473,7 @@ fn disabled_checked_border_merges_with_fill() {
     crate::render::render(nodes, root, canvas);
     let pm = surface.peek_pixels().expect("pixmap");
     let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
-    // 40×40 触摸目标内居中 20×20 视觉盒
+    // The 20×20 visual box, centred inside the 40×40 touch target.
     let (mut bx, mut by) = (0.0f32, 0.0f32);
     let mut found = false;
     for node in nodes {
@@ -480,14 +486,14 @@ fn disabled_checked_border_merges_with_fill() {
             break;
         }
     }
-    assert!(found, "应有 40×40 触摸目标");
-    // 当前场景是单层布局，node.position 即全局像素坐标（与 switch 像素
-    // 测试同一约定）；若测试引入嵌套节点需改为递归累计偏移。
+    assert!(found, "a 40×40 touch target must be present");
+    // This scene is a single-level layout, so `node.position` IS the global pixel coordinate — the
+    // same convention the switch pixel tests use. A nested node would need accumulated offsets.
     let at = |x: f32, y: f32| {
         let p = px[(y as usize) * 300 + (x as usize)];
         (p[0] as i32, p[1] as i32, p[2] as i32)
     };
-    // 内部参考点选在勾号路径上方（y+3），避免勾号覆盖
+    // The interior reference point sits above the checkmark's path (y+3) so the glyph cannot cover it.
     let interior = at(bx + 10.0, by + 3.0);
     let edges = [
         at(bx + 1.0, by + 10.0),
@@ -499,7 +505,7 @@ fn disabled_checked_border_merges_with_fill() {
         let d = (e.0 - interior.0).abs() + (e.1 - interior.1).abs() + (e.2 - interior.2).abs();
         assert!(
             d < 40,
-            "边框应合并为纯填充（edge[{i}]={e:?} interior={interior:?} diff={d}）"
+            "the border must merge into a plain fill (edge[{i}]={e:?} interior={interior:?} diff={d})"
         );
     }
 }
