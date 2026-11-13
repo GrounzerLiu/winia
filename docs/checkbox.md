@@ -193,7 +193,7 @@ Deliberate or not yet built; silence in this table would be a claim of parity.
 ## 6. Tests
 
 ```bash
-# Every unit test of this component (16 in tests.rs + 6 inline in checkbox.rs)
+# Every unit test of this component (17 in tests.rs + 6 inline in checkbox.rs)
 cargo test -p winia --lib components::checkbox
 
 # The regression for the checkmark tint following a colors(..) change
@@ -222,6 +222,7 @@ cargo test -p winia --lib unchecking_fades_and_shrinks_the_glyph
 | `copy_replaces_exactly_the_slots_it_is_given` | `CheckboxColors::copy(..)` replaces the supplied slots, keeps every `None`, and an all-`None` copy is the identity |
 | `defaults_colors_feeds_six_arguments_and_forces_three_transparent` | which slot each of the six `CheckboxDefaults::colors(..)` arguments feeds, and that the three unchecked ones stay transparent |
 | `parent_tri_state_follows_children` / `_follows_click` / `_renders_change_on_child_click` / `_follows_child_in_scroll_column` | the select-all group in the demo: parent state derives from the children and survives a scroll |
+| `a_derived_parent_follows_its_children` | a parent derived from three children reaches the node: `Indeterminate` → `On` → `Indeterminate` → `Off` — it fails if the derived value is not declared with `ctx.changed` on the container holding the checkbox |
 | `macroized_column_content_state_notify_enters_column` | a state read inside a `#[composable]` container re-enters its content |
 | `a_checkbox_styling_overrides_only_what_it_sets` | `CheckboxStyling` replaces the slots it names and leaves the rest at the theme's derivation |
 

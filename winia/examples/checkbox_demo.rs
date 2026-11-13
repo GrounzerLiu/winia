@@ -256,6 +256,19 @@ fn labelled(
     state: ToggleableState,
     on_click: impl Fn() + Send + Sync + 'static,
 ) {
+    // `state` is a parameter of the ROW, not just of the checkbox inside it.
+    //
+    // `Row` compares its own spacing/arrangement/alignment/direction and nothing else — none of which
+    // moves when the value does. Without this declaration the Row Skips, its content does not run,
+    // and the `TriStateCheckbox` inside keeps the value it captured last time. Measured on the
+    // select-all group below before this line existed: the parent had already DERIVED `On` from three
+    // ticked children (the enclosing closure ran, and a counter recorded it) while the box on screen
+    // stayed on the dash, because the Row holding it never re-entered.
+    //
+    // This is the caller-side half of the rule in `docs/component-authoring.md` section 3.2: a value
+    // read in the parent and captured into a container's content is invisible to that container's
+    // Skip decision unless the caller hands it over as a parameter.
+    ctx.changed(&state);
     Row::new()
         .spacing(8.0)
         .modifier(Modifier::new().padding_vertical(2.0))

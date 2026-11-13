@@ -841,3 +841,139 @@ fn unchecking_fades_and_shrinks_the_glyph_visibly() {
         "and the scale has shrunk to 0 by then; got {scale_late}"
     );
 }
+
+/// A parent DERIVED from its three children follows them — the select-all shape, on the pixels the
+/// semantics tree publishes.
+///
+/// `examples/checkbox_demo.rs` builds this with a `labelled(..)` helper, and that helper is where the
+/// bug lived: it took `state`, built a `Row`, and passed the value to the `TriStateCheckbox` inside
+/// WITHOUT declaring it as a parameter of the Row. `Row` compares its own
+/// spacing / arrangement / alignment / direction, none of which moves when a child is ticked, so it
+/// Skipped: content not run, checkbox not rebuilt, dash left on screen.
+///
+/// The derivation was never the problem. A counter in the enclosing closure recorded
+/// `Indeterminate`, `On`, `Indeterminate` — the right values, computed every pass — while the box
+/// stayed on the dash. This is the caller-side half of the rule in `docs/component-authoring.md`
+/// section 3.2: a value read in the parent and captured into a container's content is invisible to
+/// that container's Skip decision unless the caller hands it over as a parameter.
+///
+/// Deleting `ctx.changed(&parent)` below reproduces it exactly: the middle assertion fails with the
+/// parent stuck on `Indeterminate` after all three children are on.
+#[test]
+fn a_derived_parent_follows_its_children() {
+    use crate::components::Text;
+    use crate::layout::components::{Column, Row};
+    use crate::runtime::state::State;
+    use crate::semantics::{SemanticsConfig, semantics_tree};
+
+    let mut composer = crate::runtime::composer::Composer::new();
+    let handles = std::cell::RefCell::new(None::<(State<bool>, State<bool>, State<bool>)>);
+    let scene = |ctx: &mut ComposeCtx| {
+        WiniaTheme::light(ctx, |ctx| {
+            let first = ctx.remember(|| true);
+            let second = ctx.remember(|| true);
+            let third = ctx.remember(|| false);
+            handles.replace(Some((first.clone(), second.clone(), third.clone())));
+            Column::new().spacing(2.0).build(ctx, |ctx| {
+                // The derivation, in the closure that has to re-run — as the demo does it.
+                let all = first.get() && second.get() && third.get();
+                let none = !first.get() && !second.get() && !third.get();
+                let parent = if all {
+                    ToggleableState::On
+                } else if none {
+                    ToggleableState::Off
+                } else {
+                    ToggleableState::Indeterminate
+                };
+                // The line the whole test is about: the derived value is a parameter of the ROW that
+                // holds the checkbox. Without it the Row sees unchanged parameters and Skips.
+                ctx.changed(&parent);
+                Row::new().spacing(8.0).build(ctx, |ctx| {
+                    TriStateCheckbox::new(parent)
+                        .on_click(|| {})
+                        .modifier(Modifier::new().semantics(
+                            SemanticsConfig::new().content_description("All"),
+                        ))
+                        .build(ctx);
+                    Text::new("All").font_size(14.0).build(ctx);
+                });
+                for (label, value) in [
+                    ("First", first.clone()),
+                    ("Second", second.clone()),
+                    ("Third", third.clone()),
+                ] {
+                    ctx.key(label, |ctx| {
+                        Row::new().spacing(8.0).build(ctx, |ctx| {
+                            TriStateCheckbox::new(ToggleableState::from_bool(value.get()))
+                                .on_click({
+                                    let value = value.clone();
+                                    move || value.set(!value.get())
+                                })
+                                .modifier(Modifier::new().semantics(
+                                    SemanticsConfig::new().content_description(label),
+                                ))
+                                .build(ctx);
+                            Text::new(label).font_size(14.0).build(ctx);
+                        });
+                    });
+                }
+            });
+        });
+    };
+    let parent_state = |composer: &crate::runtime::composer::Composer| -> ToggleableState {
+        let root = composer.layout_root_idx().expect("layout root");
+        let tree = semantics_tree(composer.arena_nodes(), root);
+        for node in &tree {
+            if let Some(hit) = node.find_by_name("All") {
+                return hit.state.checked.expect("the parent publishes its tri-state value");
+            }
+        }
+        panic!("no semantics element named \"All\"");
+    };
+    let frame = |composer: &mut crate::runtime::composer::Composer| {
+        composer.compose(scene);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+    };
+
+    frame(&mut composer);
+    frame(&mut composer);
+    assert_eq!(
+        parent_state(&composer),
+        ToggleableState::Indeterminate,
+        "two of three ticked is Indeterminate"
+    );
+
+    let (first, second, third) = handles.borrow().clone().expect("the three handles");
+    // 3/3 — the parent must turn On. This is the assertion the demo failed: the value was derived
+    // correctly and then never reached the node.
+    third.set(true);
+    frame(&mut composer);
+    frame(&mut composer);
+    assert_eq!(
+        parent_state(&composer),
+        ToggleableState::On,
+        "all three ticked must read On — a parent whose value reaches no node stays on the dash \
+         (declare it with `ctx.changed` on the container that holds the checkbox)"
+    );
+
+    // 2/3 again — back to Indeterminate, so the following is not one-way.
+    first.set(false);
+    frame(&mut composer);
+    frame(&mut composer);
+    assert_eq!(
+        parent_state(&composer),
+        ToggleableState::Indeterminate,
+        "unticking one must bring the dash back"
+    );
+
+    // 0/3 — Off. (first is already off from the step above; second and third still have to go.)
+    second.set(false);
+    third.set(false);
+    frame(&mut composer);
+    frame(&mut composer);
+    assert_eq!(
+        parent_state(&composer),
+        ToggleableState::Off,
+        "none ticked is Off"
+    );
+}

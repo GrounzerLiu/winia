@@ -113,8 +113,15 @@ target** for everything it reads.
 - **Why:** a `State::get()` written at the top of the content closure belongs to whoever composed
   it. With a scope in between it registers on the container instead, the parent Skips, and the
   change never re-runs the content - that is how the checkbox demo's select-all stopped
-  propagating. (That demo was rebuilt since: its select-all derives the parent state inside the
-  container's own content closure, which is the rule this bullet states.) Every other component
+  propagating. (That demo derives the parent state inside the container's own content closure,
+  which is the rule this bullet states — and it was still broken for a second reason, found later:
+  the derived value is handed to a `labelled(..)` helper, which builds a `Row` around the checkbox,
+  and `Row` compares only its own spacing/arrangement/alignment/direction. The value never moved
+  any of those, so the Row Skipped and the checkbox inside it kept the value it captured. The
+  derivation was running and computing the right answer the whole time; nothing reached the node.
+  The fix is one line, `ctx.changed(&state)`, before the Row starts — the CALLER's half of section
+  3.2 below, and the reason that section exists. Regression:
+  `components::checkbox::tests::a_derived_parent_follows_its_children`.) Every other component
   that composes a restartable group IS `#[composable]` (39 of
   the 45 component files that do, measured by grepping for a real attribute line, not a mention in a
   comment), because its content is composed by the component, not passed through. The six without
