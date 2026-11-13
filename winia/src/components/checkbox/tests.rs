@@ -200,8 +200,12 @@ fn color_state_resolution() {
         colors.disabled_indeterminate_box.a,
         (theme.on_surface.a as f32 * 0.38) as u8
     );
-    // M3 CheckboxColors 无 disabled checkmark 字段：禁用勾号仍取
-    // checkedCheckmarkColor = OnPrimary（与 1.4.0 源码一致）
+    // winia has no disabled checkmark slot, so a disabled box keeps painting `checked_checkmark`
+    // (OnPrimary). M3 DOES have one — `CheckboxColors.disabledCheckmarkColor` (`Checkbox.kt:784`,
+    // tokens `SelectedDisabledIconColor` = Surface) — but the flag-off branch never reads it: it
+    // calls `checkmarkColor(state)` (`:948`), which splits on the state alone. Since
+    // `isCheckboxStylingFixEnabled` defaults to false (`ComposeMaterial3Flags.kt:49`), resolving the
+    // disabled checkmark to the checked colour matches M3's default behaviour.
     assert_eq!(
         colors.checkmark_color(ToggleableState::On),
         theme.on_primary
@@ -471,4 +475,197 @@ fn disabled_checked_border_merges_with_fill() {
             "边框应合并为纯填充（edge[{i}]={e:?} interior={interior:?} diff={d}）"
         );
     }
+}
+
+/// A new `colors(..)` reaches the CHECKMARK, not only the box.
+///
+/// The two are carried by different channels, and only one of them is automatic. The box and border
+/// take `Dyn` closures (`background(move || anim.peek())`), read at paint time, so they follow
+/// anything. The checkmark's colour goes into `Icon::tint`, which is consumed when the icon is
+/// COMPOSED — and the group holding those two icons can only re-enter if it compares a parameter.
+/// Its own modifier cannot supply one: `Dyn::same_parameter` calls any two dynamics equal
+/// (`graphics/dyn_value.rs:43-49`), which is what lets an animating container Skip at all. Hence the
+/// `ctx.changed(&check_color)` in `checkbox_impl`; deleting it leaves both glyphs painting the colour
+/// they were built with (measured: (255, 255, 255) after the palette moved to (1, 2, 3)).
+///
+/// A theme switch does not show this — the theme provider re-enters the whole subtree — so the
+/// regression only appears for a caller that passes changed `CheckboxColors`.
+#[test]
+fn a_colors_change_reaches_the_checkmark_tint() {
+    // The container colour is animated, so this registers with the process-wide table the other
+    // animation tests share.
+    let _g = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let before = CheckboxColors::from_theme(&theme);
+    let mut after = before;
+    after.checked_checkmark = Color::from_argb(255, 1, 2, 3);
+    assert_ne!(
+        before.checked_checkmark, after.checked_checkmark,
+        "this test needs two different checkmark colours"
+    );
+
+    let current = std::cell::Cell::new(before);
+    let mut composer = crate::runtime::composer::Composer::new();
+    let scene = |ctx: &mut ComposeCtx| {
+        let colours = current.get();
+        WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            Checkbox::new(true)
+                .colors(colours)
+                .on_checked_change(|_| {})
+                .build(ctx);
+        });
+    };
+    let tints = |composer: &crate::runtime::composer::Composer| -> Vec<Option<Color>> {
+        composer
+            .arena_nodes()
+            .iter()
+            .flat_map(|node| node.modifier.elements())
+            .filter_map(|el| match el {
+                crate::modifier::ModifierElement::DrawIcon { spec } => {
+                    Some(spec.tint.as_ref().map(|t| t.eval()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+
+    composer.compose(scene);
+    composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+    let painted = tints(&composer);
+    assert_eq!(
+        painted.len(),
+        2,
+        "On state carries both the check and the dash"
+    );
+    assert!(
+        painted.iter().all(|t| *t == Some(before.checked_checkmark)),
+        "at rest both glyphs take the supplied checkmark colour, got {painted:?}"
+    );
+
+    current.set(after);
+    composer.recompose_to_stable(|| scene);
+    composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+    let repainted = tints(&composer);
+    assert!(
+        repainted
+            .iter()
+            .all(|t| *t == Some(after.checked_checkmark)),
+        "the glyphs repaint in the NEW checkmark colour instead of the one they were composed \
+         with; got {repainted:?}, want {:?}",
+        after.checked_checkmark
+    );
+}
+
+/// `copy(..)` replaces exactly the slots it is given and keeps every other one.
+///
+/// `None` is the "keep" role: M3 spells it `Color.Unspecified` and routes it through `takeOrElse`
+/// (`Checkbox.kt:888-909`). Carrying the absence in the `Option` rather than in a sentinel colour is
+/// what makes an all-`None` copy an identity — a sentinel would break that the moment a caller wanted
+/// to paint the exact sentinel value.
+#[test]
+fn copy_replaces_exactly_the_slots_it_is_given() {
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let base = CheckboxColors::from_theme(&theme);
+    let changed = Color::from_argb(255, 1, 2, 3);
+    let c = base.copy(
+        Some(changed), // checked_checkmark
+        None,          // unchecked_checkmark
+        Some(changed), // checked_box
+        None,          // unchecked_box
+        None,          // disabled_checked_box
+        None,          // disabled_unchecked_box
+        None,          // disabled_indeterminate_box
+        None,          // checked_border
+        Some(changed), // unchecked_border
+        None,          // disabled_border
+        None,          // disabled_unchecked_border
+        None,          // disabled_indeterminate_border
+    );
+    // The three supplied slots moved...
+    assert_eq!(c.checked_checkmark, changed);
+    assert_eq!(c.checked_box, changed);
+    assert_eq!(c.unchecked_border, changed);
+    // ...and every `None` kept the source value, field by field.
+    assert_eq!(c.unchecked_checkmark, base.unchecked_checkmark);
+    assert_eq!(c.unchecked_box, base.unchecked_box);
+    assert_eq!(c.disabled_checked_box, base.disabled_checked_box);
+    assert_eq!(c.disabled_unchecked_box, base.disabled_unchecked_box);
+    assert_eq!(
+        c.disabled_indeterminate_box,
+        base.disabled_indeterminate_box
+    );
+    assert_eq!(c.checked_border, base.checked_border);
+    assert_eq!(c.disabled_border, base.disabled_border);
+    assert_eq!(c.disabled_unchecked_border, base.disabled_unchecked_border);
+    assert_eq!(
+        c.disabled_indeterminate_border,
+        base.disabled_indeterminate_border
+    );
+    assert_eq!(
+        base.copy(
+            None, None, None, None, None, None, None, None, None, None, None, None
+        ),
+        base,
+        "an all-`None` copy is the identity"
+    );
+}
+
+/// The six-argument `CheckboxDefaults::colors(..)` (`Checkbox.kt:368`): which slot each argument feeds.
+///
+/// Two of the six do double duty — `checkedColor` is both the checked FILL and the checked border,
+/// `disabledCheckedColor` both the disabled checked fill and that border — and three slots are forced
+/// transparent rather than exposed, exactly as upstream passes `Color.Transparent` for them.
+#[test]
+fn defaults_colors_feeds_six_arguments_and_forces_three_transparent() {
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let base = CheckboxDefaults::checkbox_colors(&theme);
+    let checked = Color::from_argb(255, 10, 0, 0);
+    let unchecked = Color::from_argb(255, 0, 10, 0);
+    let mark = Color::from_argb(255, 0, 0, 10);
+    let disabled_checked = Color::from_argb(255, 20, 0, 0);
+    let disabled_unchecked = Color::from_argb(255, 0, 20, 0);
+    let disabled_indeterminate = Color::from_argb(255, 0, 0, 20);
+    let c = CheckboxDefaults::colors(
+        &theme,
+        Some(checked),
+        Some(unchecked),
+        Some(mark),
+        Some(disabled_checked),
+        Some(disabled_unchecked),
+        Some(disabled_indeterminate),
+    );
+    // `checkmarkColor` feeds the checked slot. winia has no disabled checkmark slot, so unlike
+    // upstream this argument does not also seed one (`Checkbox.kt:379`).
+    assert_eq!(c.checked_checkmark, mark);
+    // Box: the checked fill, and the two disabled forms with a box argument of their own.
+    assert_eq!(c.checked_box, checked);
+    assert_eq!(c.disabled_checked_box, disabled_checked);
+    assert_eq!(c.disabled_indeterminate_box, disabled_indeterminate);
+    // Border: mirrors the checked fill, takes the caller's outline colours when not checked.
+    assert_eq!(c.checked_border, checked);
+    assert_eq!(c.unchecked_border, unchecked);
+    assert_eq!(c.disabled_border, disabled_checked);
+    assert_eq!(c.disabled_unchecked_border, disabled_unchecked);
+    assert_eq!(c.disabled_indeterminate_border, disabled_indeterminate);
+    // The three forced ones: an unchecked box is an OUTLINE, never a fill, so these cannot be named.
+    for (name, value) in [
+        ("unchecked_box", c.unchecked_box),
+        ("disabled_unchecked_box", c.disabled_unchecked_box),
+        ("unchecked_checkmark", c.unchecked_checkmark),
+    ] {
+        assert_eq!(
+            value.a, 0,
+            "{name} is transparent by construction in the six-argument form"
+        );
+    }
+    // The theme already derives those three transparent, so an all-`None` call is the theme's set.
+    assert_eq!(
+        CheckboxDefaults::colors(&theme, None, None, None, None, None, None),
+        base,
+        "every argument is optional — omitting all six must return the theme's derivation"
+    );
 }

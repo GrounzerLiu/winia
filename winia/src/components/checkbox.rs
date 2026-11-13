@@ -1,6 +1,6 @@
 //! Checkbox / TriStateCheckbox 组件 — 对标 material3 `Checkbox` / `TriStateCheckbox`
 //!
-//! M3 1.4.0 实现要点（对齐项）：
+//! M3 1.5.0-beta01 实现要点（对齐项）：
 //! - 视觉 20×20、圆角 2、描边 2dp；checked/indeterminate 时边框色=容器色（合并）；
 //! - 触摸目标/状态层 40×40（`CheckboxTokens.StateLayerSize`），波纹 unbounded；
 //! - 颜色只分 enabled×state（M3 `CheckboxColors` 无 hover/focus/press 变体，
@@ -97,8 +97,12 @@ impl CheckboxColors {
         }
     }
 
-    /// 从主题推导默认色（对标 `CheckboxDefaults.colors()`：
-    /// `CheckboxTokens` 1.4.0）
+    /// The theme's default set — M3's `ColorScheme.defaultCheckboxColors` (`Checkbox.kt:446`, tokens
+    /// from `CheckboxTokens`).
+    ///
+    /// Twelve slots, not M3's thirteen: the missing one is `disabledCheckmarkColor` (`:784`, tokens
+    /// `SelectedDisabledIconColor` = Surface). Dropping it keeps the flag-off behaviour, where the
+    /// disabled checkmark resolves to the checked colour — see [`CheckboxColors::checkmark_color`].
     pub fn from_theme(theme: &ThemeColors) -> Self {
         let transparent = Color::from_argb(0, 0, 0, 0);
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
@@ -149,11 +153,60 @@ impl CheckboxColors {
         }
     }
 
-    /// M3 `checkmarkColor(state)`：只分 On/Indeterminate 与 Off，忽略 enabled
-    /// （`CheckboxColors` 无 disabled checkmark 字段，禁用勾号仍取
-    /// checkedCheckmarkColor——与 1.4.0 实现一致）。
-    /// 注：生产组合路径用 `checked_checkmark` 常量（Off 由 scale=0 隐藏，
-    /// 保证取消选中退出动画可见），本方法保留供 API 对齐与测试引用。
+    /// A copy with some slots replaced — M3's `CheckboxColors.copy(..)` (`Checkbox.kt:829`, `:872`).
+    ///
+    /// `None` means "keep the source value", the role Compose gives `Color.Unspecified`. winia's
+    /// `Color` has no unspecified variant, so the absence is carried by the `Option` instead of by a
+    /// sentinel colour that a caller could legitimately want to paint.
+    ///
+    /// Two overloads upstream: a deprecated twelve-field one that also derives
+    /// `disabledCheckmarkColor` from `checkedCheckmarkColor`, and the primary one with all thirteen.
+    /// winia has no `disabled_checkmark` slot (section 5 of `docs/checkbox.md`), so one function
+    /// covers both.
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy(
+        &self,
+        checked_checkmark: Option<Color>,
+        unchecked_checkmark: Option<Color>,
+        checked_box: Option<Color>,
+        unchecked_box: Option<Color>,
+        disabled_checked_box: Option<Color>,
+        disabled_unchecked_box: Option<Color>,
+        disabled_indeterminate_box: Option<Color>,
+        checked_border: Option<Color>,
+        unchecked_border: Option<Color>,
+        disabled_border: Option<Color>,
+        disabled_unchecked_border: Option<Color>,
+        disabled_indeterminate_border: Option<Color>,
+    ) -> Self {
+        Self {
+            checked_checkmark: checked_checkmark.unwrap_or(self.checked_checkmark),
+            unchecked_checkmark: unchecked_checkmark.unwrap_or(self.unchecked_checkmark),
+            checked_box: checked_box.unwrap_or(self.checked_box),
+            unchecked_box: unchecked_box.unwrap_or(self.unchecked_box),
+            disabled_checked_box: disabled_checked_box.unwrap_or(self.disabled_checked_box),
+            disabled_unchecked_box: disabled_unchecked_box.unwrap_or(self.disabled_unchecked_box),
+            disabled_indeterminate_box: disabled_indeterminate_box
+                .unwrap_or(self.disabled_indeterminate_box),
+            checked_border: checked_border.unwrap_or(self.checked_border),
+            unchecked_border: unchecked_border.unwrap_or(self.unchecked_border),
+            disabled_border: disabled_border.unwrap_or(self.disabled_border),
+            disabled_unchecked_border: disabled_unchecked_border
+                .unwrap_or(self.disabled_unchecked_border),
+            disabled_indeterminate_border: disabled_indeterminate_border
+                .unwrap_or(self.disabled_indeterminate_border),
+        }
+    }
+
+    /// M3 `checkmarkColor(state)`: it splits on the state and IGNORES `enabled`.
+    ///
+    /// That is the flag-off branch of `CheckboxImpl` (`Checkbox.kt:506`), and the flag
+    /// `isCheckboxStylingFixEnabled` is `false` by default (`ComposeMaterial3Flags.kt:49`), so this is
+    /// the behaviour to match rather than an omission. It is also why a disabled checked box paints
+    /// `checked_checkmark` (OnPrimary) and not the `SelectedDisabledIconColor` token (Surface).
+    ///
+    /// The composer does not call this: it uses the `checked_checkmark` constant for every state,
+    /// because `Off` hides the glyph at scale 0 and the outgoing transition has to stay visible.
     pub fn checkmark_color(&self, state: ToggleableState) -> Color {
         if state.is_checked() {
             self.checked_checkmark
@@ -236,6 +289,48 @@ pub struct CheckboxDefaults;
 impl CheckboxDefaults {
     pub fn checkbox_colors(theme: &ThemeColors) -> CheckboxColors {
         CheckboxColors::from_theme(theme)
+    }
+
+    /// M3's six-argument `CheckboxDefaults.colors(...)` (`Checkbox.kt:368`).
+    ///
+    /// The six are the slots a caller actually varies; everything else keeps the theme's derivation,
+    /// so this is the theme's set with a partial override rather than a fresh palette. `None` means
+    /// "keep" — see [`CheckboxColors::copy`] for why an `Option` carries that role instead of a
+    /// sentinel colour.
+    ///
+    /// Three slots are forced TRANSPARENT here, exactly as upstream does in this overload: the
+    /// unchecked box, the disabled unchecked box and the unchecked checkmark. A caller who wants a
+    /// filled unchecked box passes an explicit `CheckboxColors` (or uses [`CheckboxColors::copy`])
+    /// rather than this convenience form.
+    #[allow(clippy::too_many_arguments)]
+    pub fn colors(
+        theme: &ThemeColors,
+        checked_color: Option<Color>,
+        unchecked_color: Option<Color>,
+        checkmark_color: Option<Color>,
+        disabled_checked_color: Option<Color>,
+        disabled_unchecked_color: Option<Color>,
+        disabled_indeterminate_color: Option<Color>,
+    ) -> CheckboxColors {
+        let transparent = Some(Color::TRANSPARENT);
+        Self::checkbox_colors(theme).copy(
+            // `checkmarkColor` feeds the checked slot; the unchecked one is forced transparent.
+            checkmark_color,
+            transparent,
+            // Box: checked, unchecked, then the two disabled forms.
+            checked_color,
+            transparent,
+            disabled_checked_color,
+            transparent,
+            disabled_indeterminate_color,
+            // Border mirrors the box for the two checked forms and takes the caller's outline colours
+            // for the unchecked ones.
+            checked_color,
+            unchecked_color,
+            disabled_checked_color,
+            disabled_unchecked_color,
+            disabled_indeterminate_color,
+        )
     }
 
     pub fn shape() -> Shape {
@@ -419,6 +514,19 @@ fn checkbox_impl(
                     shape,
                 );
             let vkey = ctx.next_key();
+            // The supplied checkmark colour is a PARAMETER of this group, not decoration: it is
+            // captured into both `Icon::tint` calls below, which happen on Enter. The group's own
+            // modifier cannot carry the change — its box/border take `Dyn` closures, and
+            // `Dyn::same_parameter` calls any two dynamics equal (`graphics/dyn_value.rs:43-49`), so
+            // without this declaration a `colors(..)` change leaves the tint on the colour the glyph
+            // was BUILT with. Measured: `checked_checkmark` moved from `on_primary` to (1, 2, 3) and
+            // both icons kept painting (255, 255, 255).
+            //
+            // A theme switch never showed this — the theme provider re-enters the whole subtree — so it
+            // only surfaced when a caller passed a changed `CheckboxColors`, which is why it went
+            // unnoticed. `box_color`/`border_color` above do not need this: they are read with `peek()`
+            // at paint time, so they follow the animation without recomposing.
+            ctx.changed(&check_color);
             match ctx.start_restartable_group(
                 vkey,
                 visual,
