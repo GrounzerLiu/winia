@@ -641,3 +641,146 @@ fn label_uses_typography_label_large() {
     assert_eq!(style.2, 1.3);
     assert_eq!(style.3, Some(27.0));
 }
+
+// ── The behaviour fixes (recorded in section 5 of `docs/chip.md`) ──
+
+/// Every `DrawIcon` tint the chip paints, in document order.
+fn icon_tints(composer: &Composer) -> Vec<Option<crate::graphics::Color>> {
+    let mut out = Vec::new();
+    for node in composer.arena_nodes() {
+        for el in node.modifier.elements() {
+            if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
+                out.push(spec.tint.as_ref().map(|t| t.eval()));
+            }
+        }
+    }
+    out
+}
+
+fn an_icon(path: &'static str) -> impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static {
+    move |ctx: &mut ComposeCtx| {
+        Icon::new(crate::graphics::IconSource::svg_path(path)).build(ctx);
+    }
+}
+
+/// The LEADING and TRAILING icons take their OWN colour slots.
+///
+/// Both were fed one `icon_color`, so the three `trailing_icon` slots on the two colour structs were
+/// written by `ChipDefaults` and never read. Measured before the fix on the default light theme: the
+/// trailing glyph painted (101, 85, 143) — the leading role — where the specs page gives it
+/// `On surface variant` (73, 69, 78).
+#[test]
+fn a_trailing_icon_takes_the_trailing_role() {
+    let theme = crate::theme::WiniaTheme::colors();
+    let (composer, _) = chip_container(
+        Chip::assist(label("A"), || {})
+            .leading_icon(an_icon("M0 0h1v1z"))
+            .trailing_icon(an_icon("M0 0h2v2z")),
+    );
+    let tints = icon_tints(&composer);
+    assert_eq!(tints.len(), 2, "both icons paint");
+    assert_eq!(
+        tints[0],
+        Some(theme.primary),
+        "the leading icon takes Primary"
+    );
+    assert_eq!(
+        tints[1],
+        Some(theme.on_surface_variant),
+        "the trailing icon takes On surface variant — feeding it the leading colour is the bug this \
+         pins"
+    );
+}
+
+/// A colour that MOVES has to reach the glyph — and it takes a declaration in BOTH groups.
+///
+/// The chip's outer group and the inner `Row` each compare a whitelist, and neither carries a colour
+/// in its modifier chain. Measured before the fix with a probe that counted the leading-icon closure
+/// across three frames while only `leading_icon` moved: it ran ONCE and kept painting the old tint
+/// (`seen=["101,143"]` on every frame). Declaring the colour on the chip's group alone was still not
+/// enough — the `Row` then Skipped on its own unchanged parameters — so the value is declared before
+/// the `Row` starts as well.
+#[test]
+fn moving_only_an_icon_colour_recolours_the_glyph() {
+    use std::cell::RefCell;
+    let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
+    let mut composer = Composer::new();
+    let scene = |ctx: &mut ComposeCtx| {
+        let flip = ctx.remember(|| false);
+        holder.replace(Some(flip.clone()));
+        let base = ChipDefaults::assist_chip_colors(&crate::theme::WiniaTheme::colors());
+        // ONLY the leading icon colour moves. The label, the container and the border stay put, so a
+        // stale glyph cannot be excused by "something else re-entered the group".
+        let colors = if flip.get() {
+            ChipColors {
+                leading_icon: crate::graphics::Color::from_argb(255, 200, 10, 20),
+                ..base
+            }
+        } else {
+            base
+        };
+        Chip::assist(label("A"), || {})
+            .leading_icon(an_icon("M0 0h1v1z"))
+            .colors(colors)
+            .build(ctx);
+    };
+
+    composer.compose(&scene);
+    assert_eq!(
+        icon_tints(&composer)[0],
+        Some(crate::theme::WiniaTheme::colors().primary),
+        "at rest the leading icon is Primary"
+    );
+    let flip = holder.borrow().clone().expect("the flip state");
+    flip.set(true);
+    composer.compose(&scene);
+    composer.compose(&scene);
+    assert_eq!(
+        icon_tints(&composer)[0],
+        Some(crate::graphics::Color::from_argb(255, 200, 10, 20)),
+        "a moved leading-icon colour must reach the glyph"
+    );
+}
+
+/// Two `.modifier(..)` calls both survive.
+///
+/// The setter ASSIGNED (`self.modifier = m`) where every sibling component appends
+/// (`self.modifier.then(m)`), so the second call silently discarded the first. Measured before the
+/// fix with `fill_max_width` then `fill_max_height`: `fill_w=false fill_h=true`.
+#[test]
+fn two_modifier_calls_append_to_the_chain() {
+    let (composer, idx) = chip_container(
+        Chip::assist(label("A"), || {})
+            .modifier(Modifier::new().fill_max_width())
+            .modifier(Modifier::new().fill_max_height()),
+    );
+    let els = composer.arena_nodes()[idx].modifier.elements();
+    assert!(
+        els.iter()
+            .any(|el| matches!(el, crate::modifier::ModifierElement::FillMaxWidth { .. })),
+        "the FIRST .modifier(..) call keeps its effect"
+    );
+    assert!(
+        els.iter()
+            .any(|el| matches!(el, crate::modifier::ModifierElement::FillMaxHeight { .. })),
+        "and so does the second"
+    );
+}
+
+/// An avatar WINS over a leading icon — one leading slot, not two.
+///
+/// material3's `leadingContent` is `avatar != null -> avatar // An avatar takes precedence`
+/// (`Chip.kt:3528`). winia rendered both when a caller set them together, side by side.
+#[test]
+fn an_avatar_wins_over_a_leading_icon() {
+    let (composer, _) = chip_container(
+        Chip::input(false, label("I"), || {})
+            .avatar(an_icon("M0 0h9v9z"))
+            .leading_icon(an_icon("M0 0h5v5z")),
+    );
+    assert_eq!(
+        icon_tints(&composer).len(),
+        1,
+        "exactly one leading slot paints — the avatar"
+    );
+}

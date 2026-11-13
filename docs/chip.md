@@ -89,12 +89,25 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 - **变体差异**（`ChipVariant` 分派）：Assist/Suggestion 走 ChipColors（非选择）；
   Filter/Input 走 SelectableChipColors（selected 双态）+ selected 0 边框；
   Elevated* 三个变体容器 `SurfaceContainerLow` 且默认无边框。
-- **内部结构**：容器（背景/边框/阴影/clickable/ripple）→ Row（icon → label → trailing，
-  间距 8）→ 内容经 `WiniaTheme::with_content_color` 下传各元素颜色（Icon tint Auto
-  跟随）。label 默认通过 `ProvideTextStyle(WiniaTheme::typography().label_large)`
+- **内部结构**：容器（背景/边框/阴影/clickable/ripple）→ Row（avatar **或** leading icon →
+  label → trailing，间距 8）→ 内容经 `WiniaTheme::with_content_color` 下传各元素颜色（Icon tint Auto
+  跟随）。**leading 与 trailing 用各自的色位**（assist：主色 / onSurfaceVariant），不是同一个
+  `icon_color`——三个 `trailing_icon` 槽位此前被 `ChipDefaults` 写好却从没被读过。
+  **avatar 优先于 leading icon**：两者同时给时只画 avatar，对标 `Chip.kt:3528` 的
+  `avatar != null -> avatar // An avatar takes precedence`（此前两个都画，实测图标数 2）。
+  label 默认通过 `ProvideTextStyle(WiniaTheme::typography().label_large)`
   下传 Material 3 LabelLarge（14sp/20sp/Medium/0.1sp），状态色只覆盖其 color。
-- **宏化判据**：未宏化（与 Column/Row/Button 一致——content 闭包 + 内部 scope
-  会拦截依赖注册）。
+- **内容色的参数声明**：`build_chip` 里三路内容色（label / leading / trailing）在 group 之前
+  用 `ctx.changed` 声明，**且三条声明放在 `next_key()` 之前**（与 `split_button.rs:281` 同序）；
+  两个图标色还要在内容闭包内、`Row` 启动**之前**再声明一次——`Row` 是它自己的 restartable
+  group，只比较 spacing/alignment，参数不变就 Skip，其 content 不执行，`with_content_color`
+  根本没被调用。实测（只让 `leading_icon` 变色、三帧计数闭包）：修复前闭包 3 帧只跑 1 次、
+  颜色恒为 `101,85,143`；补齐后 `seen=["101,143","200,20"]`。
+  这是 `docs/component-authoring.md` §3.2 的 caller 侧陷阱，只是这次发生在组件内部。
+- **不宏化**：chip 不标 `#[composable]`，理由是它是**透传 caller 闭包的容器**
+  （`label`/`leading`/`trailing`/`avatar` 原样交给主题 scope，闭包顶层 `State.get()` 必须注册到
+  父容器才刷新），这条记在 `docs/key-system-design.md` §7 的排除名单里。**不是**因为
+  「与 Button 一致」——Button 是 `#[composable]` 的；依赖注册这里靠上面的 `ctx.changed` 显式声明。
 
 ### 阴影（`ChipElevation`，dp）
 
@@ -124,4 +137,30 @@ assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
 - **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
+- **`horizontalArrangement` 未开放**：元素间距写死 `ChipDefaults::ELEMENT_GAP`（8dp）。
+- **`border` 未开放**：Compose 七个入口都有 `border` 参数（`ChipBorder` / `BorderStroke`），
+  winia 的边框宽度与颜色由变体分支直接算出，调用方无法覆盖。
+- **两个 colors 类缺 `copy(..)`**：Compose 的 `ChipColors.copy(..)` / `SelectableChipColors.copy(..)`
+  都存在且以 `Color.Unspecified` 表示「沿用原值」；winia 只能用结构体更新语法 `ChipColors { ..base }`。
+  （`CheckboxColors` 有 `copy`，以 `Option<Color>` 承载「沿用」，见 `docs/checkbox.md` §5。）
+- **缺四个 disabled icon 槽位**：`ChipColors` 没有 `disabled_leading_icon` / `disabled_trailing_icon`
+  （Compose 8 个字段，winia 6 个），`SelectableChipColors` 同样缺这两个（Compose 13 个，winia 11 个）。
+  当前禁用态两个图标都取 `disabled_label`，与 M3 默认的 `OnSurface` 禁用角色一致，所以视觉上没有缺口；
+  缺的是「调用方单独覆盖禁用图标色」这个能力。
+- **InputChip avatar 不做禁用降透明度**：Compose 用 `InputChipTokens.DisabledAvatarOpacity`（0.38）
+  给禁用态的 avatar 降透明度，winia 原样绘制。
 - 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。
+
+## 6. Tests
+
+```bash
+# Every unit test of this component
+cargo test -p winia --lib components::chip
+```
+
+| Test | What it pins |
+| --- | --- |
+| `a_trailing_icon_takes_the_trailing_role` | the trailing glyph takes `On surface variant`, not the leading `Primary` — the two used to share one colour slot |
+| `moving_only_an_icon_colour_recolours_the_glyph` | a colour that moves reaches the glyph: declared on the chip's group AND before the inner `Row` starts |
+| `two_modifier_calls_append_to_the_chain` | the second `.modifier(..)` appends instead of replacing the first |
+| `an_avatar_wins_over_a_leading_icon` | avatar + leading icon together paint ONE leading slot (the avatar) |

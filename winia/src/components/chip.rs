@@ -110,7 +110,6 @@ pub struct ChipDefaults;
 
 impl ChipDefaults {
     pub const HEIGHT: f32 = 32.0; // 容器高 32dp
-    pub const ICON_SIZE: f32 = 18.0; // icon 18dp
     pub const CORNER_RADIUS: f32 = 8.0; // 形状 8dp 圆角
     pub const PADDING_NO_ICON: f32 = 16.0; // 无 icon 左右 padding 16dp
     pub const PADDING_WITH_ICON: f32 = 8.0; // 有 icon 左右 padding 8dp
@@ -260,12 +259,6 @@ impl ChipDefaults {
         }
     }
 
-    pub fn elevated_input_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
-        SelectableChipColors {
-            selected_leading_icon: theme.primary,
-            ..Self::elevated_selectable_chip_colors(theme)
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -530,8 +523,12 @@ impl Chip {
         }
     }
 
+    /// Append to the modifier chain, as every other component's setter does (`Button`, `Card`,
+    /// `Badge`, …). Assigning (`self.modifier = m`) REPLACED: two calls kept only the last one, so a
+    /// caller composing a chain across two `.modifier(..)` calls silently lost the first — measured
+    /// `fill_max_width` then `fill_max_height`: `fill_w=false fill_h=true`.
     pub fn modifier(mut self, m: Modifier) -> Self {
-        self.modifier = m;
+        self.modifier = self.modifier.then(m);
         self
     }
     pub fn enabled(mut self, e: bool) -> Self {
@@ -600,7 +597,12 @@ impl Chip {
         // `FlatDisabledOutlineOpacity` (assist, suggestion), `FlatDisabledUnselectedOutlineColor` / `…Opacity`
         // (filter) and `DisabledUnselectedOutlineColor` / `…Opacity` (input) — not the enabled role's colour.
         let disabled_outline = ChipDefaults::disabled_outline(&theme);
-        let (container, label_color, icon_color, border_w, border_color) = match self.variant {
+        // The LEADING and TRAILING icons take different colour slots — M3 lists them separately in every
+        // variant's color-role table (assist: leading Primary, trailing On surface variant). Both used to be
+        // fed `icon_color`, so the three `trailing_icon` slots on the two colour structs were written by
+        // `ChipDefaults` and then never read: a trailing icon painted the leading colour.
+        let (container, label_color, leading_icon_color, trailing_icon_color, border_w, border_color) =
+            match self.variant {
             ChipVariant::Assist
             | ChipVariant::ElevatedAssist
             | ChipVariant::Suggestion
@@ -615,10 +617,19 @@ impl Chip {
                     ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
                     _ => ChipDefaults::assist_chip_colors(&theme),
                 });
-                let (container, label, icon) = if self.enabled {
-                    (c.container, c.label, c.leading_icon)
+                // A disabled chip paints both icons in `disabled_label`: M3's default
+                // `disabledLeadingIconContentColor` / `disabledTrailingIconContentColor` are both `OnSurface`
+                // at the disabled opacity, which is the same role this slot carries (winia has no separate
+                // disabled icon slots — see section 5 of `docs/chip.md`).
+                let (container, label, leading, trailing) = if self.enabled {
+                    (c.container, c.label, c.leading_icon, c.trailing_icon)
                 } else {
-                    (c.disabled_container, c.disabled_label, c.disabled_label)
+                    (
+                        c.disabled_container,
+                        c.disabled_label,
+                        c.disabled_label,
+                        c.disabled_label,
+                    )
                 };
                 // A flat assist or suggestion chip outlines with `Outline`; the elevated variants carry no
                 // outline by default. Disabled swaps in the 12 % `OnSurface` role above.
@@ -632,7 +643,7 @@ impl Chip {
                 } else {
                     disabled_outline
                 };
-                (container, label, icon, w, colour)
+                (container, label, leading, trailing, w, colour)
             }
             ChipVariant::Filter | ChipVariant::ElevatedFilter | ChipVariant::Input => {
                 let c = self
@@ -644,7 +655,7 @@ impl Chip {
                         ChipVariant::Input => ChipDefaults::input_chip_colors(&theme),
                         _ => ChipDefaults::selectable_chip_colors(&theme),
                     });
-                let (container, label, icon) = if !self.enabled {
+                let (container, label, leading, trailing) = if !self.enabled {
                     // A disabled chip keeps its selected/unselected distinction: selected fills with the 12 %
                     // `OnSurface` role, unselected stays transparent and carries the outline instead. winia
                     // used the transparent one for both, so a disabled selected chip lost its fill entirely.
@@ -653,15 +664,21 @@ impl Chip {
                     } else {
                         c.disabled_container
                     };
-                    (container, c.disabled_label, c.disabled_label)
+                    (
+                        container,
+                        c.disabled_label,
+                        c.disabled_label,
+                        c.disabled_label,
+                    )
                 } else if sel {
                     (
                         c.selected_container,
                         c.selected_label,
                         c.selected_leading_icon,
+                        c.selected_trailing_icon,
                     )
                 } else {
-                    (c.container, c.label, c.leading_icon)
+                    (c.container, c.label, c.leading_icon, c.trailing_icon)
                 };
                 // A selected chip draws no outline; unselected draws 1 dp of `Outline variant` (or the disabled
                 // role above), and the elevated variants carry none by default.
@@ -675,7 +692,7 @@ impl Chip {
                 } else {
                     disabled_outline
                 };
-                (container, label, icon, w, colour)
+                (container, label, leading, trailing, w, colour)
             }
         };
         // 左右 padding 按 specs：无 icon 16dp、有 icon 8dp；InputChip 带头像时左 4dp / 右 8dp。
@@ -723,7 +740,11 @@ impl Chip {
             ChipVariant::ElevatedAssist
             | ChipVariant::ElevatedFilter
             | ChipVariant::ElevatedSuggestion => ChipElevation::elevated(),
-            ChipVariant::Filter | ChipVariant::ElevatedFilter => ChipElevation::hover_lifting(),
+            // Only the FLAT filter chip reaches this arm: `ElevatedFilter` is matched above, and naming it
+            // here too was an unreachable pattern the compiler reported on every build. The values are the
+            // reference's either way — `filterChipElevation` lifts 1 dp on hover, `elevatedFilterChipElevation`
+            // is the `Elevated*` set.
+            ChipVariant::Filter => ChipElevation::hover_lifting(),
             _ => ChipElevation::flat(),
         });
         let container_anim = ctx.animate_color_as_state(
@@ -781,6 +802,8 @@ impl Chip {
             border_w,
             self.shape,
             label_color,
+            leading_icon_color,
+            trailing_icon_color,
             on_click,
             // material3's roles: `Chip.kt:1963` gives the non-selectable chip `Role.Button`, and the
             // selectable one `Role.Checkbox` (`:2010`, whose `Surface(selected = …)` publishes the selected
@@ -800,36 +823,64 @@ impl Chip {
                 config
             },
             move |ctx| {
+                // The `Row` is a restartable group of its own, and it compares only its OWN parameters
+                // (spacing, alignment) — none of which move when a colour does. Without these declarations
+                // the Row Skips, its content never runs, and neither `with_content_color` call below is
+                // even reached: the glyphs keep the tint they composed with. Measured with a probe that
+                // counted the leading-icon closure across three frames, with only `leading_icon` moving:
+                // before these two lines it ran ONCE (`seen=["101,143"]` on every frame); after them it
+                // re-ran and read the caller's new colour (`seen=["101,143","200,20"]`).
+                //
+                // The label colour does not need to be here — `ProvideContentColorTextStyle` sits in the
+                // outer group, and the outer group already declares `content_color` — but the two icon
+                // colours do, because their providers live inside THIS closure.
+                ctx.changed(&leading_icon_color);
+                ctx.changed(&trailing_icon_color);
                 // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
                 // 有图标（18dp）时文字会顶对齐而非垂直居中
                 crate::layout::components::Row::new()
                     .spacing(ChipDefaults::ELEMENT_GAP)
                     .alignment(crate::layout::Alignment::Center)
                     .build(ctx, |ctx| {
-                        if let Some(av) = avatar {
-                            // avatar 24dp、12dp 圆角（specs："avatar shape 12dp corner radius"——圆角方块，不是圆）
-                            crate::layout::components::Stack::new()
-                                .modifier(
-                                    Modifier::new()
-                                        .size(ChipDefaults::AVATAR_SIZE, ChipDefaults::AVATAR_SIZE)
-                                        .clip(Shape::RoundedRect {
-                                            corner_radius: ChipDefaults::AVATAR_CORNER_RADIUS,
-                                        }),
-                                )
-                                .build(ctx, |c| av(c));
-                        }
-                        if let Some(ic) = leading {
-                            crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| {
-                                ic(c)
-                            });
+                        // The avatar takes PRECEDENCE over a leading icon, and only ONE of them is drawn:
+                        // material3's `leadingContent` is
+                        // `avatar != null -> avatar // An avatar takes precedence` (`Chip.kt:3528`).
+                        // winia rendered both when a caller set them together, side by side — two leading
+                        // slots where the reference has one. Measured before this: `icons painted = 2`.
+                        match (avatar, leading) {
+                            (Some(av), _) => {
+                                // avatar 24dp、12dp 圆角（specs："avatar shape 12dp corner radius"——圆角方块，不是圆）
+                                crate::layout::components::Stack::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .size(
+                                                ChipDefaults::AVATAR_SIZE,
+                                                ChipDefaults::AVATAR_SIZE,
+                                            )
+                                            .clip(Shape::RoundedRect {
+                                                corner_radius: ChipDefaults::AVATAR_CORNER_RADIUS,
+                                            }),
+                                    )
+                                    .build(ctx, |c| av(c));
+                            }
+                            (None, Some(ic)) => {
+                                crate::theme::WiniaTheme::with_content_color(
+                                    leading_icon_color,
+                                    ctx,
+                                    |c| ic(c),
+                                );
+                            }
+                            (None, None) => {}
                         }
                         crate::theme::WiniaTheme::with_content_color(label_color, ctx, |c| {
                             label(c)
                         });
                         if let Some(ic) = trailing {
-                            crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| {
-                                ic(c)
-                            });
+                            crate::theme::WiniaTheme::with_content_color(
+                                trailing_icon_color,
+                                ctx,
+                                |c| ic(c),
+                            );
                         }
                     });
             },
@@ -855,10 +906,29 @@ fn build_chip(
     border_width: f32,
     shape: Shape,
     content_color: crate::graphics::Color,
+    leading_icon_color: crate::graphics::Color,
+    trailing_icon_color: crate::graphics::Color,
     on_click: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     semantics: crate::semantics::SemanticsConfig,
     content: impl FnOnce(&mut ComposeCtx),
 ) {
+    // `start_restartable_group` compares a WHITELIST of parameters (`docs/component-authoring.md` §3.2) —
+    // nothing is compared automatically. The three content colours are provided INSIDE the group through
+    // `ProvideContentColorTextStyle`, so the modifier chain cannot carry them and every one of them has to be
+    // declared here or a Clean slot Skips past the change.
+    //
+    // Declared BEFORE `next_key`, as `split_button` does (`ctx.changed(&direction); let key = …`): the
+    // declaration has to land on the slot the group is about to start.
+    //
+    // Measured before this existed: a caller that moved only `leading_icon` (or only `trailing_icon`) saw the
+    // glyph keep its old tint forever — 101,85,143 stayed 101,85,143 while the caller asked for (200,10,20).
+    // The label colour moved by luck rather than design: an ENABLED chip attaches the ripple, whose colour is a
+    // static `Dyn` that does enter `param_eq`, so the group re-entered for the label's sake and the icon change
+    // rode along. A DISABLED chip attaches no ripple at all, so nothing pulled the group in and even the label
+    // colour stayed stale.
+    ctx.changed(&content_color);
+    ctx.changed(&leading_icon_color);
+    ctx.changed(&trailing_icon_color);
     let key = ctx.next_key();
     // The background accepts a dynamic colour (`impl Into<BackgroundColor>`) evaluated per paint:
     // an animation tick advances the State and requests a redraw, so the renderer reads the latest
