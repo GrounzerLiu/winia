@@ -371,6 +371,51 @@ composition that reads the state itself). Those six files are listed with their 
 `components::conventions` (`CONTENT_DRIVEN_WITHOUT_CHANGED`), and adding to that list is a deliberate
 decision, not a workaround.
 
+**A `Dyn` colour in the chain carries NO change signal.** This is the one case where "the modifier
+chain already carries it" is false, and it bites a container that provides a colour to its own
+content. `param_eq` compares a background through `Dyn::same_parameter`
+(`modifier/param_eq.rs:282-294`), which answers `true` for ANY two `Dynamic` values
+(`graphics/dyn_value.rs:43-49`). That is deliberate — a dynamic value is read at paint time, so
+comparing evaluated values would report "changed" on every animation frame and re-enter forever. The
+consequence: once a component animates a colour (`ctx.animate_color_as_state`) and paints it through
+the chain, a colour change STOPS being visible to the Skip decision.
+
+Measured on `Button`, which wraps itself in two restartable groups and provides `LocalContentColor`
+from the inner one (`button.rs:1012-1032`). The outer group declares six parameters
+(`button.rs:771-783`); the inner one declares none, so `pending_len` is 0 and `params_unchanged`
+(`engine.rs:717-744`) reduces to `container_modifier_unchanged`. `WINIA_SKIP_TRACE` on the same key
+across a checked/unchecked switch:
+
+    static colour    [skip] key=1280044533 params_u=false → Enter (content runs, label repaints)
+    animated colour  [skip] key=1280044533 params_u=true  → Skip  (provider never runs, label stale)
+
+The label kept painting `on_surface` (29, 27, 32) while the container had moved to `primary`.
+
+What this is NOT: provider-key drift. `WINIA_PK_TRACE` showed the three provider keys byte-identical
+across every pass — `next_provider_key` (`engine.rs:422-452`) keys off the compiler statement id, and
+`Button::build` is `#[composable]`, so the slot-path fallback was never taken. The closure call sites
+are fine; the missing signal is in the parameter channel.
+
+The fix is the ordinary one — declare what the group PROVIDES:
+
+```rust
+|ctx| {
+    ctx.changed(&text_color);            // the colour this group hands down below
+    match ctx.start_restartable_group(key, visual, policy) { /* ... */ }
+}
+```
+
+Declare the VALUE, not the animated state: `Color` compares by value, so the extra parameter fires
+exactly when the content colour changes rather than on every animation frame. Verified — the
+regression test `a_toggled_item_repaints_its_label_in_the_new_content_colour` fails without this
+line and passes with it (measured: label switches to `on_primary` while the container is still
+mid-fade, so a container-colour assertion in the same test has to allow the transition).
+
+Sibling components are unaffected, each for its own reason: `chip` publishes `selected` through
+semantics, which `param_eq` compares by value (`param_eq.rs:229`); `icon_toggle_button` declares
+`checked` in its OUTER group and provides a static `content_color`; `top_app_bar` and
+`navigation_drawer` provide colours that do not move with the animated value.
+
 ### 3.3 Which composition entry point
 
 | Entry point | Use for |
