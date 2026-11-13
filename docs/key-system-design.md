@@ -254,16 +254,110 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 
 ---
 
-## 8. 与 Compose 对标
+## 8. Versus Compose
 
-| 维度 | Compose | Winia（定稿） |
-|---|---|---|
-| 调用点 key | 编译器生成（源码位置哈希） | 宏注入语句 id（fnv 调用链） |
-| 语句内序号 | 编译器组栈 | per-base 运行时计数（独立不漂移） |
-| 迭代 seq（循环多实例） | 编译器组栈位置 | **slot 树 child_counters 链哈希**（位置，跨帧稳定） |
-| 列表实例 | `key(index)` 用户显式 | `ctx.key()` 用户显式 |
-| 状态重置（结构变化） | 是（可预测） | 是（可预测） |
-| 未覆盖场景 | 编译期 | 运行期 panic（fail-fast） |
+Source of the Compose side: `compose-runtime` 1.12.1, read from
+`runtime-android-1.12.1-sources.jar` (`SlotTable.kt`, `Composer.kt`, `GapComposer.kt`,
+`Composables.kt`). The in-repo `reference/compose/` tree does not carry the runtime module — it
+holds foundation, material, material3 and animation-core only, and those contain no
+compiler-generated group calls — so nothing in this section comes from it.
+
+**The two systems agree that a position's identity is fixed at compile time, and disagree on what
+that identity is used for.** Compose derives it from the source location; winia derives it from a
+statement ordinal (§8.4). And where Compose spends that identity only on finding the *group* —
+inside a group its remembered values are addressed by a sequential cursor — winia spends it on
+every remembered value, because a macro cannot address a slot by position.
+
+### 8.1 What Compose does
+
+The contract on every group-open call states it plainly — `Composer.startRestartGroup(key: Int)`,
+`startReplaceGroup`, `startMovableGroup`, `startReplaceableGroup`:
+
+> `@param key A compiler generated key based on the source location of the call.`
+
+The runtime never computes this key. The Kotlin compiler plugin emits it as a constant and the
+runtime consumes it. Consequences worth knowing:
+
+| mechanism | Compose implementation | where |
+| --- | --- | --- |
+| Group match | Same position at the same index reuses the group with no lookup at all; a mismatch builds a `GapPending` from the previous frame's sibling keys | `GapComposer.start` |
+| Sibling index | `keyMap` is `by lazy`, so a run that stays in position never pays for building it | `GapPending.keyMap` |
+| Lookup on mismatch | `keyMap.removeFirst(joinedKey)` — an exact-key multimap over the previous frame's siblings, consumed in generation order | `GapPending.getNext` |
+| Skip body | `shouldExecute` / `skipToGroupEnd` walk the reader to the group's end; the body never runs | `GapComposer.shouldExecute` |
+| Remembered values | `remember` → `Composer.cache` → `nextSlotForCache` → `SlotReader.next`, i.e. **`slots[currentSlot++]`** — a position in the group, no key, no hash | `Composables.kt`, `GapComposer.cache`, `SlotTable.next` |
+| Explicit `key()` | The runtime function body is just `block()`; the compiler rewrites the call into `startMovableGroup(reuseKey, dataKey)` | `Composables.kt` |
+| Loop instances | `rGroupIndex` (this group's ordinal among its parent's children) is folded into `compositeKeyHashCode` | `GapComposer.updateCompositeKeyWhenWeEnterGroupKeyHash` |
+| `sourceInformation` | Tooling only, participates in no key, and is documented as safe for R8 to strip | `Composer.sourceInformation` |
+
+The rows most often misread are the last one and the derived hash. `sourceInformation` is not the
+key source — the key is the separate `key: Int` parameter. And `currentCompositeKeyHash` (not listed
+above because it is an output, not a mechanism) is a *derived* hash for callers that need to map
+externally stored state onto a location; it is not what the slot table matches on.
+
+### 8.2 What winia does, side by side
+
+| dimension | Compose 1.12.1 | winia |
+| --- | --- | --- |
+| Call-site key | Compiler-generated constant, derived from the source location | Macro-injected statement id, derived from an incrementing counter |
+| Key priority | Source location | Statement ordinal (see 8.4) |
+| Remembered value | Sequential slot inside the group (`slots[currentSlot++]`) | `HashMap<slot_key, value>`, probed by key |
+| Per-statement ordinal | Compiler group stack | Per-base runtime counter (`path_counters`), independent per statement |
+| Loop instance | `rGroupIndex`, folded into the composite hash | FNV over the `child_counters` chain (`sibling_position`), stable across frames |
+| Explicit key | `key(keys...)`, rewritten at compile time | `ctx.key(id, ..)`, pushed on `key_override_stack` at runtime |
+| Reuse index build | `keyMap` built lazily, only on a position mismatch | `prev_node_by_key` rebuilt after every `layout()`, plus a refill in `Composer::compose` when a second compose in one frame finds it drained |
+| Node reuse | Group match, then `MoveNode` / `InsertNode` changes | `prev_node_by_key` lookup, then a child-count structural signature, then rebuild |
+| State reset on structural change | Yes, and predictable | Yes, and predictable |
+| Failure mode when no stable key exists | None — the compiler always produces one | Runtime panic (`panic_no_stable_key`), by design |
+
+### 8.3 Why winia cannot use the sequential cursor
+
+This is the root of the divergence, not a difference in ambition.
+
+Compose can address a remembered value by position because the compiler plugin owns code
+generation for the whole function body: it knows how many slots the group contains and which one
+the current call is. `cache()` therefore needs only a cursor increment.
+
+A `#[composable]` attribute macro sees syntax, not types or generated code. It can wrap a statement
+and it can rewrite an expression, but it cannot make the runtime know "this is the third slot of
+this group" without threading that number through every call. The runtime alternative — a unique
+key per position plus a map — is what winia uses. The cost is a hash probe per remembered value
+and a key computation per `next_key()`; the gain is an attribute macro of a few hundred lines
+instead of a compiler backend, with no migration for caller code. §9 records that the
+compile-time-replacement variant was built and then dropped for this reason.
+
+### 8.4 Open difference: ordinal, not location
+
+The Compose contract is "based on the source location"; winia's statement id is a counter. The
+consequence is worth stating explicitly because it is easy to mistake for a bug:
+
+`inject_stmt_ids` increments its counter for **every** statement and only then decides whether the
+statement mentions `ctx`, so a statement that produces no guard still consumes an id. Inserting a
+pure-calculation statement in the middle of a `#[composable]` body therefore shifts every later
+id by one, and with it every later key: `remember`ed state at those positions is rebuilt,
+animations restart, nodes are re-created. Measured on a body covering every statement form: 19
+guards carried ids up to 40, the gaps being exactly the statements that were skipped.
+
+Two properties bound the damage. Ids are stable across **runtime** structure: whether an `if`
+branch or a list item is taken this frame does not move any id, so what the counter makes fragile
+is source editing, not composition. And the tail expression of a body is deliberately left
+unwrapped (wrapping it would turn the block's value into `()`), so it carries no id of its own; its
+inner blocks are still injected.
+
+Deriving the id from `Span::start()` (line, column, via `proc-macro2`'s `span-locations`) would
+match Compose's stated contract and make an unrelated edit cost nothing. Both halves of that were
+measured on stable:
+
+- A statement written by the user reports its real position, so positions distinguish siblings
+  (`5:4`, `6:4`, `7:4`, `8:4`, `12:4` for a five-statement body).
+- A statement **synthesised by a macro** reports the position of the `parse_quote!` site inside the
+  macro, not of the user's code — measured `3:0..3:20`, a legal-looking coordinate that carries no
+  user meaning. Every synthetic statement in one expansion therefore reports the *same* position.
+
+That second result is the reason this is not a drop-in change. A position id needs an explicit
+collision rule — a same-position counter mixed into the id, plus a fallback to the ordinal when a
+position is the macro's own — or a generated body would collapse every one of its statements onto
+one key. The migration also reprices every existing key once, so it belongs to a deliberate change
+rather than a drive-by edit.
 
 ---
 
