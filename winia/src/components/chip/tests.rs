@@ -843,6 +843,77 @@ fn an_avatar_wins_over_a_leading_icon() {
     );
 }
 
+// ── The 48 dp touch target (`docs/chip.md` §3) ──
+
+/// A chip reserves Compose's 48 dp touch target and keeps its 32 dp container: both sizes are asserted,
+/// because the point of the wrapper node is that the VISUAL box stays 32 while the node a caller's parent
+/// measures is 48.
+///
+/// Compose gets this from the `Surface(onClick = …)` every variant is built on (`Chip.kt:3209`, `:3258`,
+/// `:3317`), whose `Box` applies `Modifier.minimumInteractiveComponentSize()` unconditionally on the
+/// `onClick` overloads (`material3/Surface.kt:225`) — so a disabled chip reserves it too. winia's chip node
+/// used to BE the 32 dp box, which left a 32 dp click region where Compose has 48.
+#[test]
+fn a_chip_reserves_a_48_dp_touch_target() {
+    let heights = |chip: Chip| -> (Vec<f32>, Option<f32>) {
+        let mut composer = Composer::new();
+        composer.compose(|ctx: &mut ComposeCtx| {
+            // Under a Column: the composition root is special-cased and does not show the enlargement.
+            crate::layout::components::Column::new()
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx, |ctx| chip.build(ctx));
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let all = nodes
+            .iter()
+            .map(|n| n.measured_size.height)
+            .collect::<Vec<_>>();
+        // The box that paints the container is the one carrying the background.
+        let painted = nodes.iter().find_map(|n| {
+            n.modifier
+                .elements()
+                .iter()
+                .any(|el| matches!(el, crate::modifier::ModifierElement::Background { .. }))
+                .then_some(n.measured_size.height)
+        });
+        (all, painted)
+    };
+
+    for (name, chip) in [
+        ("assist", Chip::assist(label("A"), || {})),
+        ("filter (selected)", Chip::filter(true, label("F"), || {})),
+        ("suggestion", Chip::suggestion(label("S"), || {})),
+        ("input", Chip::input(true, label("I"), || {})),
+    ] {
+        let (heights, painted) = heights(chip);
+        assert!(
+            heights.iter().any(|h| (*h - 48.0).abs() < 0.5),
+            "{name}: the chip reserves the 48 dp touch target ({heights:?})"
+        );
+        assert_eq!(
+            painted,
+            Some(ChipDefaults::HEIGHT),
+            "{name}: and the box that paints the container is still {} dp",
+            ChipDefaults::HEIGHT
+        );
+    }
+
+    // A DISABLED chip keeps the target: `Surface` applies the modifier to the `onClick` overload whatever
+    // `enabled` says, so the size does not depend on it.
+    let (heights, painted) = heights(Chip::assist(label("A"), || {}).enabled(false));
+    assert!(
+        heights.iter().any(|h| (*h - 48.0).abs() < 0.5),
+        "a disabled chip reserves it too ({heights:?})"
+    );
+    assert_eq!(
+        painted,
+        Some(ChipDefaults::HEIGHT),
+        "with its container still at {} dp",
+        ChipDefaults::HEIGHT
+    );
+}
+
 // ── The API gaps closed against material3 (`docs/chip.md` §2, §4) ──
 
 /// The two disabled icon slots exist and are INDEPENDENT of the disabled label.

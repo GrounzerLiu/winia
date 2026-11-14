@@ -990,102 +990,151 @@ impl Chip {
             last_shadow.set(wanted);
             Some(ctx.animate_float_as_state(wanted, spec))
         };
-        build_chip(
+        // The 48 dp touch target, as its OWN node around the visual box — Compose gets it from the clickable
+        // `Surface` every variant is built on (`Chip.kt:3209`, `:3258`, `:3317`), whose `Box` applies
+        // `Modifier.minimumInteractiveComponentSize()` for the clickable overloads
+        // (`material3/Surface.kt:225`; the node is at `material3/InteractiveComponentSize.kt:98-140`). So a
+        // chip reserves 48 dp on both axes with its 32 dp box centred inside, and it does so whether or not
+        // it is enabled: `Surface` applies the modifier unconditionally on the `onClick` overloads.
+        //
+        // A wrapper node rather than one more element on the chip's own chain, for two reasons:
+        //  * winia decides a chain's size across the whole chain, so a `minimum_interactive_size` next to
+        //    `min_height(32)` is not what decides the box here — measured on a `Stack`, the two orderings
+        //    both resolved 48, but on the chip's chain the 32 dp box must stay the VISUAL size, and a single
+        //    node cannot be both 48 (touch) and 32 (paint).
+        //  * the renderer insets a grown node's paint back to `minimum_interactive_content`, which it only
+        //    publishes when the chain carries a FULLY declared size pair (`measure/engine.rs:1380-1385`).
+        //    A chip's width follows its label, so `fixed_size()` is `None` and nothing would be published —
+        //    `paint_rect` would be the whole node and the container would be painted as a 48 dp block.
+        //    Keeping the growth on an outer node leaves the chip's own box the thing that paints.
+        //
+        // The parameters are staged HERE, before the wrapper's group starts, because that group's content is
+        // where `build_chip` runs: if the wrapper Skips, the inner group never enters and no colour change
+        // reaches it no matter what the inner group declares. `build_chip` keeps its own declarations for the
+        // inner group's sake (a Clean inner slot with equal params would otherwise stay on the old colours).
+        ctx.changed(&label_color);
+        ctx.changed(&leading_icon_color);
+        ctx.changed(&trailing_icon_color);
+        ctx.changed(&gap);
+        ctx.changed(&self.enabled);
+        // The wrapper IS the node a parent measures, so it takes the parent-data half of the caller's chain
+        // (`weight`, `align`, …) while the visual half stays on the chip's own box — the same division
+        // `Button` and `Card` make, and for the same reason: a `Row` reads its DIRECT child's modifier. A
+        // weighted chip would otherwise collapse to its touch target.
+        let (parent_data, visual) = self.modifier.split_parent_data();
+        let wrapper = parent_data.then(Modifier::new().minimum_interactive_component_size());
+        crate::layout::components::build_container(
             ctx,
-            self.modifier.padding_start(pad.0).padding_end(pad.1),
-            self.enabled,
-            container_anim,
-            interaction,
-            elevation_anim,
-            border_color,
-            border_w,
-            self.shape,
-            label_color,
-            leading_icon_color,
-            trailing_icon_color,
-            gap,
-            on_click,
-            // material3's roles: `Chip.kt:3209` gives the non-selectable chip `Role.Button`, and the
-            // selectable one `Role.Checkbox` (`:3258`, `:3317`, whose `Surface(selected = …)` publishes the
-            // selected state beside the role).
-            {
-                let mut config = crate::semantics::SemanticsConfig::new()
-                    .role(if self.variant.is_selectable() {
-                        crate::semantics::SemanticsRole::Checkbox
-                    } else {
-                        crate::semantics::SemanticsRole::Button
-                    })
-                    .merge_descendants(true)
-                    .state(crate::semantics::SemanticsState::new().enabled(self.enabled));
-                if self.variant.is_selectable() {
-                    config = config.state(crate::semantics::SemanticsState::new().selected(sel));
-                }
-                config
-            },
-            move |ctx| {
-                // The `Row` is a restartable group of its own, and it compares only its OWN parameters
-                // (spacing, alignment) — none of which move when a colour does. Without these declarations
-                // the Row Skips, its content never runs, and neither `with_content_color` call below is
-                // even reached: the glyphs keep the tint they composed with. Measured with a probe that
-                // counted the leading-icon closure across three frames, with only `leading_icon` moving:
-                // before these two lines it ran ONCE (`seen=["101,143"]` on every frame); after them it
-                // re-ran and read the caller's new colour (`seen=["101,143","200,20"]`).
-                //
-                // The label colour does not need to be here — `ProvideContentColorTextStyle` sits in the
-                // outer group, and the outer group already declares `content_color` — but the two icon
-                // colours do, because their providers live inside THIS closure.
-                ctx.changed(&leading_icon_color);
-                ctx.changed(&trailing_icon_color);
-                // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
-                // 有图标（18dp）时文字会顶对齐而非垂直居中
-                crate::layout::components::Row::new()
-                    .spacing(gap)
-                    .alignment(crate::layout::Alignment::Center)
-                    .build(ctx, |ctx| {
-                        // The avatar takes PRECEDENCE over a leading icon, and only ONE of them is drawn:
-                        // material3's `leadingContent` is
-                        // `avatar != null -> avatar // An avatar takes precedence` (`Chip.kt:3528`).
-                        // winia rendered both when a caller set them together, side by side — two leading
-                        // slots where the reference has one. Measured before this: `icons painted = 2`.
-                        match (avatar, leading) {
-                            (Some(av), _) => {
-                                // avatar 24dp、12dp 圆角（specs："avatar shape 12dp corner radius"——圆角方块，不是圆）
-                                crate::layout::components::Stack::new()
-                                    .modifier(
-                                        Modifier::new()
-                                            .size(
-                                                ChipDefaults::AVATAR_SIZE,
-                                                ChipDefaults::AVATAR_SIZE,
+            wrapper,
+            // `propagate_min_constraints`: the wrapper IS the measured node, so a parent that FORCES a width
+            // on the chip has to get a box that width — the inner box keeps hugging its content otherwise,
+            // and the ripple, the outline and the fill would stop agreeing on how wide the chip is.
+            crate::layout::BoxLayout::new()
+                .alignment(crate::layout::Alignment::Center)
+                .propagate_min_constraints(true),
+            |ctx| {
+                build_chip(
+                    ctx,
+                    visual.padding_start(pad.0).padding_end(pad.1),
+                    self.enabled,
+                    container_anim,
+                    interaction,
+                    elevation_anim,
+                    border_color,
+                    border_w,
+                    self.shape,
+                    label_color,
+                    leading_icon_color,
+                    trailing_icon_color,
+                    gap,
+                    on_click,
+                    // material3's roles: `Chip.kt:3209` gives the non-selectable chip `Role.Button`, and the
+                    // selectable one `Role.Checkbox` (`:3258`, `:3317`, whose `Surface(selected = …)` publishes the
+                    // selected state beside the role).
+                    {
+                        let mut config = crate::semantics::SemanticsConfig::new()
+                            .role(if self.variant.is_selectable() {
+                                crate::semantics::SemanticsRole::Checkbox
+                            } else {
+                                crate::semantics::SemanticsRole::Button
+                            })
+                            .merge_descendants(true)
+                            .state(crate::semantics::SemanticsState::new().enabled(self.enabled));
+                        if self.variant.is_selectable() {
+                            config =
+                                config.state(crate::semantics::SemanticsState::new().selected(sel));
+                        }
+                        config
+                    },
+                    move |ctx| {
+                        // The `Row` is a restartable group of its own, and it compares only its OWN parameters
+                        // (spacing, alignment) — none of which move when a colour does. Without these declarations
+                        // the Row Skips, its content never runs, and neither `with_content_color` call below is
+                        // even reached: the glyphs keep the tint they composed with. Measured with a probe that
+                        // counted the leading-icon closure across three frames, with only `leading_icon` moving:
+                        // before these two lines it ran ONCE (`seen=["101,143"]` on every frame); after them it
+                        // re-ran and read the caller's new colour (`seen=["101,143","200,20"]`).
+                        //
+                        // The label colour does not need to be here — `ProvideContentColorTextStyle` sits in the
+                        // outer group, and the outer group already declares `content_color` — but the two icon
+                        // colours do, because their providers live inside THIS closure.
+                        ctx.changed(&leading_icon_color);
+                        ctx.changed(&trailing_icon_color);
+                        // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
+                        // 有图标（18dp）时文字会顶对齐而非垂直居中
+                        crate::layout::components::Row::new()
+                            .spacing(gap)
+                            .alignment(crate::layout::Alignment::Center)
+                            .build(ctx, |ctx| {
+                                // The avatar takes PRECEDENCE over a leading icon, and only ONE of them is drawn:
+                                // material3's `leadingContent` is
+                                // `avatar != null -> avatar // An avatar takes precedence` (`Chip.kt:3528`).
+                                // winia rendered both when a caller set them together, side by side — two leading
+                                // slots where the reference has one. Measured before this: `icons painted = 2`.
+                                match (avatar, leading) {
+                                    (Some(av), _) => {
+                                        // avatar 24dp、12dp 圆角（specs："avatar shape 12dp corner radius"——圆角方块，不是圆）
+                                        crate::layout::components::Stack::new()
+                                            .modifier(
+                                                Modifier::new()
+                                                    .size(
+                                                        ChipDefaults::AVATAR_SIZE,
+                                                        ChipDefaults::AVATAR_SIZE,
+                                                    )
+                                                    .clip(Shape::RoundedRect {
+                                                        corner_radius:
+                                                            ChipDefaults::AVATAR_CORNER_RADIUS,
+                                                    })
+                                                    // `graphicsLayer { alpha = … }` for the disabled case, as
+                                                    // Compose does (`Chip.kt:1210`). `.alpha()` is a no-op at 1.0.
+                                                    .alpha(avatar_alpha),
                                             )
-                                            .clip(Shape::RoundedRect {
-                                                corner_radius: ChipDefaults::AVATAR_CORNER_RADIUS,
-                                            })
-                                            // `graphicsLayer { alpha = … }` for the disabled case, as
-                                            // Compose does (`Chip.kt:1210`). `.alpha()` is a no-op at 1.0.
-                                            .alpha(avatar_alpha),
-                                    )
-                                    .build(ctx, |c| av(c));
-                            }
-                            (None, Some(ic)) => {
+                                            .build(ctx, |c| av(c));
+                                    }
+                                    (None, Some(ic)) => {
+                                        crate::theme::WiniaTheme::with_content_color(
+                                            leading_icon_color,
+                                            ctx,
+                                            |c| ic(c),
+                                        );
+                                    }
+                                    (None, None) => {}
+                                }
                                 crate::theme::WiniaTheme::with_content_color(
-                                    leading_icon_color,
+                                    label_color,
                                     ctx,
-                                    |c| ic(c),
+                                    |c| label(c),
                                 );
-                            }
-                            (None, None) => {}
-                        }
-                        crate::theme::WiniaTheme::with_content_color(label_color, ctx, |c| {
-                            label(c)
-                        });
-                        if let Some(ic) = trailing {
-                            crate::theme::WiniaTheme::with_content_color(
-                                trailing_icon_color,
-                                ctx,
-                                |c| ic(c),
-                            );
-                        }
-                    });
+                                if let Some(ic) = trailing {
+                                    crate::theme::WiniaTheme::with_content_color(
+                                        trailing_icon_color,
+                                        ctx,
+                                        |c| ic(c),
+                                    );
+                                }
+                            });
+                    },
+                );
             },
         );
     }

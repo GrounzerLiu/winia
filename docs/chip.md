@@ -23,6 +23,8 @@ Compose 路径相对
 | `Chip.kt:3869` (`ChipColors`), `:4012` (`SelectableChipColors`) | 两个 colours 类及其槽位 |
 | `Chip.kt:4169` (`ChipBorder`) | `ChipBorder` 的字段（width + color） |
 | `Chip.kt:3209`, `:3258`, `:3317` | `Role.Button`（非选择型）与 `Role.Checkbox`（可选择型）；`Surface(selected = …)` 在旁边把选中态一起发布 |
+| `Surface.kt:225` | 三个 `onClick` 重载里的 `Box` 都挂 `Modifier.minimumInteractiveComponentSize()`——chip 的 48 dp 触控目标出处，且与 `enabled` 无关 |
+| `InteractiveComponentSize.kt:71`, `:98`-`:140` | `minimumInteractiveComponentSize()` 的定义与 `MinimumInteractiveModifierNode.measure`：盒子取 `max(content, 48)`，内容居中 |
 | `Chip.kt:3528` | `avatar != null -> avatar // An avatar takes precedence`——avatar 优先于 leading icon 的判断就这一行 |
 | `Chip.kt:1205`-`:1215` | 禁用时把 avatar 包进 `graphicsLayer { alpha = … }` |
 | `internal/Elevation.kt:54`-`:59` | `val spec = when { to != null -> incoming; from != null -> outgoing; else -> null }`——阴影动画按交互**配对**取 spec，只有两端都没有交互时才 snap。chip 此前把所有下降都写成 snap，就是与这里不符 |
@@ -100,7 +102,14 @@ padding 是**按边**算的，不是一对数字：`InputChip` 左边看 avatar�
 内部结构是一个 `Row`（`spacing(gap)` + `Alignment::Center`）：avatar **或** leading icon → label →
 trailing。交叉轴必须显式 `Center`——`Row` 默认 `Alignment::Start` 会顶对齐，有 18 dp 图标时文字就不居中了。
 
-**没有预留 48 dp 触控目标**：32 dp 的节点就是最终节点（§5）。
+**48 dp 触控目标**：chip 的节点是**独立的一层 wrapper**，32 dp 的容器是它内层的视觉盒——与 Button / Card
+同一个形状。Compose 的七个变体都建立在 `Surface(onClick = …)` 上，该重载的 `Box` 无条件挂
+`Modifier.minimumInteractiveComponentSize()`（`Surface.kt:225`），所以 clickable 与 disabled 的 chip 都有
+48 dp 的可点区域，winia 此前只有 32 dp。用 wrapper 而不是往 chip 自己的链上加一个元素，是因为渲染器把撑大
+后的节点的绘制缩回 `minimum_interactive_content`，而该字段只在链上带**成对的固定尺寸**时才发布
+（`measure/engine.rs:1380-1385`）——chip 的宽度随标签，`fixed_size()` 是 `None`，什么都不会发布，
+`paint_rect` 于是取整个节点，容器会被画成 48 dp 的色块。wrapper 还接走调用方 modifier 里的 parent-data 那半
+（`split_parent_data`），否则 `Row::weight` 落深一层、带权重的 chip 会塌回触控目标的大小。
 
 ## 4. Behaviour
 
@@ -241,9 +250,6 @@ chip 不标 `#[composable]`，理由是它是**透传 caller 闭包的容器**�
   `Chip.kt` 的默认工厂同样只用这两态，所以默认观感一致，差别在调用方能不能单独覆盖）。
 - **`contentPadding` 没有开放成参数。** 16 / 8 / 4 写死按 specs 规则算（§3），
   `horizontalArrangement` 已开放为 `.horizontal_arrangement(f32)`。
-- **没有预留 48 dp 触控目标。** Compose 的 `Surface(onClick)` 会挂 `minimumInteractiveComponentSize()`
-  （`Surface.kt:225`、`:359`、`:494`），32 dp 的 chip 因此拿到 48 dp 的可点区域；winia 的 chip 节点就是
-  它画出来的 32 dp。这是 `docs/component-authoring.md` §5.3 / §14 清单里那条 48 dp 要求的现存缺口。
 - **没有 `Elevation*` 之外的自定义 elevation 重载。** Compose 的七个 `*Elevation(...)` 工厂接受逐状态
   的 dp 与动画 spec；winia 用 `ChipElevation`（六个数字）+ `.elevation(..)` 覆盖，走的是同一套
   `elevation_spec_for_pair`，不能换 spec。
@@ -282,6 +288,7 @@ cargo test -p winia --lib components::chip
 | `a_transparent_container_never_shadows` | the alpha gate: transparent shows nothing, opaque shows the token's value |
 | `a_hover_lift_ramps_in_and_fades_out` | hover fades out over the outgoing spec instead of cutting, like `Button` and `Card` |
 | `a_container_going_transparent_drops_the_shadow_at_once` | the gate outranks the outgoing spec: a container fade steps straight to zero |
+| `a_chip_reserves_a_48_dp_touch_target` | the node a parent measures is 48 dp on both axes while the box that paints the container is still 32 — and a disabled chip reserves it too |
 
 Fixtures: **no** `fixture_all` scenario, so the UI test suite never reaches this component. Its own
 page is `examples/chip_demo.rs`; `examples/animated_visibility_demo.rs` and
