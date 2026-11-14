@@ -700,7 +700,7 @@ fn label_uses_typography_label_large() {
     assert_eq!(style.3, Some(27.0));
 }
 
-// ── The behaviour fixes (recorded in section 5 of `docs/chip.md`) ──
+// ── The behaviour fixes (recorded in `docs/chip.md`, "Behaviour") ──
 
 /// Every `DrawIcon` tint the chip paints, in document order.
 fn icon_tints(composer: &Composer) -> Vec<Option<crate::graphics::Color>> {
@@ -843,7 +843,7 @@ fn an_avatar_wins_over_a_leading_icon() {
     );
 }
 
-// ── The API gaps closed against material3 (section 5 of `docs/chip.md`) ──
+// ── The API gaps closed against material3 (`docs/chip.md` §2, §4) ──
 
 /// The two disabled icon slots exist and are INDEPENDENT of the disabled label.
 ///
