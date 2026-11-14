@@ -1005,9 +1005,9 @@ impl Chip {
             trailing_icon_color,
             gap,
             on_click,
-            // material3's roles: `Chip.kt:1963` gives the non-selectable chip `Role.Button`, and the
-            // selectable one `Role.Checkbox` (`:2010`, whose `Surface(selected = …)` publishes the selected
-            // state beside the role).
+            // material3's roles: `Chip.kt:3209` gives the non-selectable chip `Role.Button`, and the
+            // selectable one `Role.Checkbox` (`:3258`, `:3317`, whose `Surface(selected = …)` publishes the
+            // selected state beside the role).
             {
                 let mut config = crate::semantics::SemanticsConfig::new()
                     .role(if self.variant.is_selectable() {
