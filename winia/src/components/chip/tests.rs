@@ -353,12 +353,13 @@ fn build_filter_chip(
     composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
 }
 
-/// The caller-supplied interaction source drives the chip's state, and the shadow it produces has two
-/// halves that are worth pinning: a hover lift RAMPS IN over the interaction-pair spec, and leaving hover
-/// drops it ON THE FIRST FRAME (`wanted <= shown` uses a Snap) so nothing lingers behind a container on its
-/// way out. The second half is what the falsification for this test removes.
+/// The caller-supplied interaction source drives the chip's state, and the shadow follows Compose's
+/// interaction-pair rule in BOTH directions: a hover lift RAMPS IN over the incoming spec, and leaving hover
+/// fades out over the outgoing one — the same 120 ms `Button` and `Card` use. A fall that the container's own
+/// transparency causes is the exception and still snaps; `a_container_going_transparent_drops_the_shadow_at_once`
+/// pins that half.
 #[test]
-fn a_hover_lift_ramps_in_and_drops_at_once() {
+fn a_hover_lift_ramps_in_and_fades_out() {
     let _g = crate::animation::tests::TEST_SERIAL
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -378,9 +379,16 @@ fn a_hover_lift_ramps_in_and_drops_at_once() {
 
     source.emit_hover_exit();
     build_filter_chip(&mut composer, source.clone(), true);
+    let after_exit = painted_shadow(&composer);
+    assert!(
+        after_exit > 0.5,
+        "leaving hover fades the lift out over the outgoing spec instead of cutting it \
+         (painted {after_exit} on the frame the state changed)"
+    );
+    settle_shadow(&mut composer, source.clone(), true);
     assert!(
         painted_shadow(&composer) <= 0.001,
-        "leaving hover drops the shadow immediately (got {})",
+        "and it is gone once the spec has run (got {})",
         painted_shadow(&composer)
     );
 
@@ -396,6 +404,56 @@ fn a_hover_lift_ramps_in_and_drops_at_once() {
         painted_shadow(&composer) > 0.5,
         "and it arrives once the spec has run (got {})",
         painted_shadow(&composer)
+    );
+}
+
+/// The transparency gate outranks the outgoing spec: once the fill starts leaving, the shadow is gone on that
+/// frame, because a lift with nothing under it reads as a smudge. Deselecting a chip whose container has just
+/// been carrying a hover lift therefore steps to zero — no in-between value, which is what tells a snap apart
+/// from the fade the test above pins.
+#[test]
+fn a_container_going_transparent_drops_the_shadow_at_once() {
+    let _g = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+    let source = crate::input::interaction::MutableInteractionSource::new();
+    let mut composer = Composer::new();
+
+    source.emit_hover_enter();
+    build_filter_chip(&mut composer, source.clone(), true);
+    settle_shadow(&mut composer, source.clone(), true);
+    assert!(
+        painted_shadow(&composer) > 0.5,
+        "the chip starts out lifted (got {})",
+        painted_shadow(&composer)
+    );
+
+    // Same hovered state, now drifting out of selection: only the container is on its way to transparent.
+    // The first build is what starts that fade, so it has to come before the frame loop — reading
+    // `update_animations` first would find nothing running and stop on the spot.
+    build_filter_chip(&mut composer, source.clone(), false);
+    let mut seen = vec![painted_shadow(&composer)];
+    for _ in 0..200 {
+        if !crate::animation::update_animations() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        build_filter_chip(&mut composer, source.clone(), false);
+        seen.push(painted_shadow(&composer));
+        if seen.last().is_some_and(|s| *s <= 0.001) {
+            break;
+        }
+    }
+    assert!(
+        seen.last().is_some_and(|s| *s <= 0.001),
+        "the shadow is gone by the time the fill has left (trail {:?})",
+        &seen[seen.len().saturating_sub(6)..]
+    );
+    assert!(
+        seen.iter().all(|s| *s <= 0.001 || *s >= 0.5),
+        "and it steps straight to zero rather than easing down behind the leaving fill (trail {:?})",
+        &seen[seen.len().saturating_sub(6)..]
     );
 }
 

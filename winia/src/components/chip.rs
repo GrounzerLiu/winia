@@ -463,11 +463,21 @@ impl ChipElevation {
         container_alpha: u8,
         elevation: &ChipElevation,
     ) -> f32 {
-        if container_alpha < ChipDefaults::SHADOW_OPAQUE_ALPHA {
+        if Self::shadow_is_gated(container_alpha) {
             0.0
         } else {
             elevation.for_state(state)
         }
+    }
+
+    /// Whether the transparency rule above is what keeps the shadow down at this container alpha.
+    ///
+    /// The animation needs it to tell its two ways DOWN apart, because they want different specs: a fall the
+    /// gate causes has to be this frame (the fill the shadow stood behind is already leaving), while a fall an
+    /// interaction causes is Compose's outgoing spec. `shadow_for` is built on this, so the threshold exists
+    /// once.
+    pub fn shadow_is_gated(container_alpha: u8) -> bool {
+        container_alpha < ChipDefaults::SHADOW_OPAQUE_ALPHA
     }
 }
 
@@ -958,11 +968,19 @@ impl Chip {
             } else {
                 None
             };
-            // The tracker records the CURRENT interaction on every change, falls included. `from` only matters
-            // for a rise that carries no interaction kind (a lift caused by the container becoming opaque),
-            // where `elevation_spec_for_pair` would otherwise pick the hover-outgoing curve for the stale kind.
+            // The tracker records the CURRENT interaction on every change, so `from` is the kind the last
+            // target came from — the half `elevation_spec_for_pair` keys its outgoing curve on. It matters for
+            // a fall an interaction causes, and for a rise that carries no interaction kind (a lift caused by
+            // the container becoming opaque), where the stale kind would otherwise pick the hover-outgoing
+            // curve.
             last_kind.set(to);
-            let spec = if wanted <= shown {
+            // Two different things push a chip's shadow down, and they want different specs:
+            //  * the container going transparent under it — that has to be this frame: the fill the shadow
+            //    stood behind is already leaving, and a lift with nothing under it reads as a smudge.
+            //  * an interaction letting go — Compose's outgoing spec, 120–150 ms, the same pair rule Button
+            //    and Card use (`material3/internal/Elevation.kt:51-61`). Keying every fall on `wanted <=
+            //    shown` made hover-out a cut on a chip and a fade on the Button beside it.
+            let spec = if wanted <= shown && ChipElevation::shadow_is_gated(shown_colour.a) {
                 crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
             } else {
                 crate::animation::elevation_spec_for_pair(from, to).unwrap_or(

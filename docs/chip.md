@@ -85,10 +85,15 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 - **边框消失**：`border_width > 0` 才挂 border modifier——`border(0.0)` 仍会
   绘制 0 宽线（可见伪影），selected 时直接不挂；elevated 变体默认也不挂。
 - **阴影**：`graphics_layer` 动态闭包读动画值（渲染期求值，不触发重组），形状跟随 chip shape。
-  升高用 `elevation_spec_for_pair`（与 Button/Card 同一套交互配对规则），回落用 `Snap`。
+  **升高和回落都走 `elevation_spec_for_pair`**（与 Button/Card 同一套交互配对规则：进入 120 ms
+  `fast_out_slow_in`，离开 120/150 ms outgoing）——只有「容器变透明」这一种下降用 `Snap`，见下条。
   **只有容器不透明时才画**（`ChipElevation::shadow_for(state, container_alpha, elevation)`）——
   透明背景后面的阴影看起来像一块脏印。判定读的是容器**动画色**的 alpha，因此过渡期行为自然正确：
-  变透明时阴影立即消失，变不透明时等颜色到位才出现。
+  变不透明时等颜色到位才出现，变透明时阴影立即消失。
+  **两种下降要分开**（`ChipElevation::shadow_is_gated` 是同一套阈值，`shadow_for` 也建立在它之上）：
+  容器变透明压下来的阴影必须当帧归零——它托着的那块填充已经在走了，悬空的抬升就是一块脏印；
+  而交互结束（hover/focus/press 离开）压下来的阴影走 Compose 的 outgoing spec。此前 `wanted <= shown`
+  一刀切成 `Snap`，结果是 chip 的 hover 离开是硬切、旁边的 Button 是淡出。
 - **变体差异**（`ChipVariant` 分派）：Assist/Suggestion 走 ChipColors（非选择）；
   Filter/Input 走 SelectableChipColors（selected 双态）+ selected 0 边框；
   Elevated* 三个变体容器 `SurfaceContainerLow` 且默认无边框。
