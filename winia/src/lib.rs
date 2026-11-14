@@ -131,6 +131,9 @@ pub use winia_macros::{app_root, composable, composable_keyed, compose, keyed_st
 pub mod prelude {
     pub use crate::components::button::{ButtonStyling, ButtonStylingScope};
     pub use crate::components::checkbox::{CheckboxStyling, CheckboxStylingScope};
+    pub use crate::components::chip::{
+        ChipStyling, ChipStylingScope, SelectableChipStyling, SelectableChipStylingScope,
+    };
     pub use crate::components::component_styles::{
         ComponentStyles, Styling, with_component_styles,
     };

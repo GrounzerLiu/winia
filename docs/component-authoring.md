@@ -582,10 +582,37 @@ module depend on every component in the crate (the opposite of the direction eve
 and would grow one file by three types per component. The registry is keyed by `TypeId` of the
 styling type instead, so adding a component touches that component's file and nothing else.
 
+**MUST** wire a component in as soon as it has an `XColors` set, which is the same test section 6
+already sets: colours the component derives from the theme through named roles are colours a caller
+may want to change for that class alone. Such a component owes the same three pieces Button and
+Checkbox have, all in its own file:
+
+- an `XStylingScope { theme, is_dark, colors, … }`, carrying anything else the styling may set (a
+  button's `border`, for instance);
+- `pub type XStyling = Styling<XStylingScope>`;
+- `pub fn x_with_styles(theme, …) -> X` starting from the theme derivation and applying the styling in
+  scope, which `build` then calls instead of the derivation.
+
+The derivation entry point is not always called `from_theme`, and the type it returns is not always
+the name at the call site — `ChipDefaults::assist_chip_colors` returns a `ChipColors`,
+`SegmentedButtonDefaults::colors` a `SegmentedButtonColors`, `SearchBarDefaults::colors` a
+`SearchBarColors`, and `MenuDefaults::item_colors` a `MenuItemColors` off `MenuItemColors::defaults()`.
+That is the point: the test is "does this component's colour come from theme roles", not the name of
+the function that derives it. A component may own several sets (a chip has `ChipColors` and
+`SelectableChipColors`, both resolved by its variants), and then each one is a class the caller may
+want to restyle.
+
+A component that derives its colours from the theme but has no styling type is not a simpler
+component — it is the one a caller cannot restyle, with the palette as their only lever. **Measured
+2026-11-14: 3 of the 19 components that own a colour set are wired (Button, Checkbox, Chip).** The
+other 16 are debt, not a decision, and a new one added without its styling type grows it.
+
 **MUST** resolve a component's default appearance through its own helper (`button_visual_with_styles`
-for a button) rather than calling the theme derivation directly: the helper is the single place
-"explicit parameter > styling > theme" is decided, and a component that bypasses it silently ignores
-every styling. The current participants are Button and Checkbox.
+for a button, `chip_visual_with_styles` for a chip) rather than calling the theme derivation directly:
+the helper is the single place "explicit parameter > styling > theme" is decided, and a component that
+bypasses it silently ignores every styling. The current participants are Button, Checkbox and Chip —
+the chip with one helper per colour set (`chip_visual_with_styles` /
+`selectable_chip_visual_with_styles`), because the two sets are two classes.
 
 **MUST NOT** let a styling replace the theme derivation wholesale: the scope starts from the theme's
 answer, so a styling that sets one field leaves the rest exactly as the role colours left them.
@@ -987,6 +1014,8 @@ Copy this into the pull request and tick it there:
      comparison (sections 13.4, 13.5)
 [ ] self.modifier appended last, semantics declared before it
 [ ] colours and text styles from WiniaTheme; token constants named after the Compose token
+[ ] a component with an XColors set also has its styling type (XStylingScope + XStyling +
+     x_with_styles, and build resolves through it) - section 6.1 makes this a MUST, not an option
 [ ] M3 geometry: 48dp touch targets, insets, RTL mirroring
 [ ] role + state declared, merge_descendants for a single-control component
 [ ] disabled state keeps the semantics

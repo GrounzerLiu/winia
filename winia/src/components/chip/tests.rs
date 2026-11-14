@@ -1128,3 +1128,226 @@ fn a_disabled_input_chips_avatar_is_dimmed() {
         ChipDefaults::DISABLED_AVATAR_OPACITY
     );
 }
+
+// ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+fn green() -> crate::graphics::Color {
+    crate::graphics::Color::from_argb(255, 0, 128, 0)
+}
+
+fn purple() -> crate::graphics::Color {
+    crate::graphics::Color::from_argb(255, 120, 40, 200)
+}
+
+fn red() -> crate::graphics::Color {
+    crate::graphics::Color::from_argb(255, 200, 10, 20)
+}
+
+/// The point of the styling layer: one styling, every chip of that class, nothing to pass per call
+/// site. The resolution `build` uses must be the one that reads it — a helper bypassed at the call site
+/// would make the styling silently inert.
+#[test]
+fn a_chip_styling_reaches_the_resolution_every_chip_uses() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::WiniaTheme::colors();
+    let plain = chip_visual_with_styles(&theme, ChipVariant::ElevatedAssist);
+    assert_eq!(
+        plain.colors.container, theme.surface_container_low,
+        "the default is still the role colour"
+    );
+
+    let styled = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| {
+            scope.container(green());
+            scope.leading_icon(purple());
+        })),
+        || chip_visual_with_styles(&theme, ChipVariant::ElevatedAssist),
+    );
+    assert_eq!(styled.colors.container, green());
+    assert_eq!(styled.colors.leading_icon, purple());
+    assert_eq!(
+        styled.colors.label, plain.colors.label,
+        "only what the styling set changed"
+    );
+}
+
+/// A styling starts from the theme's answer and touches only the slots it is given — §6.1: it must not
+/// replace the derivation wholesale.
+#[test]
+fn a_chip_styling_leaves_the_slots_it_does_not_set_alone() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::WiniaTheme::colors();
+    let plain = chip_visual_with_styles(&theme, ChipVariant::Assist);
+
+    let styled = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.disabled(green(), green()))),
+        || chip_visual_with_styles(&theme, ChipVariant::Assist),
+    );
+    assert_eq!(styled.colors.disabled_container, green());
+    assert_eq!(styled.colors.disabled_label, green());
+    assert_eq!(styled.colors.container, plain.colors.container);
+    assert_eq!(styled.colors.label, plain.colors.label);
+    assert_eq!(styled.colors.leading_icon, plain.colors.leading_icon);
+    assert_eq!(styled.border, plain.border, "the outline is untouched");
+    assert_eq!(styled.disabled_border, plain.disabled_border);
+}
+
+/// The outline colour is derived from the theme too, so a styling that recolours a chip may want it to
+/// follow — and the disabled outline is a SEPARATE slot, because the two are different roles.
+#[test]
+fn a_chip_styling_can_move_the_outline_colour() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let (enabled, e) = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.border(purple()))),
+        || chip_container(Chip::assist(label("A"), || {})),
+    );
+    assert_eq!(
+        outline_of(&enabled, e),
+        Some((1.0, purple())),
+        "the enabled outline follows the styling"
+    );
+
+    let (disabled, d) = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.disabled_border(red()))),
+        || chip_container(Chip::assist(label("A"), || {}).enabled(false)),
+    );
+    assert_eq!(
+        outline_of(&disabled, d),
+        Some((1.0, red())),
+        "and the disabled one has its own slot"
+    );
+}
+
+/// An explicit `colors(..)` still wins: explicit parameter > class styling > theme.
+#[test]
+fn an_explicit_colour_beats_the_chip_styling() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let explicit = crate::graphics::Color::from_argb(255, 0, 0, 255);
+    let (composer, idx) = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.container(green()))),
+        || {
+            let themed = ChipDefaults::elevated_assist_chip_colors(&crate::theme::WiniaTheme::colors());
+            chip_container(
+                Chip::elevated_assist(label("E"), || {}).colors(ChipColors {
+                    container: explicit,
+                    ..themed
+                }),
+            )
+        },
+    );
+    assert_eq!(
+        painted_background(&composer, idx),
+        explicit,
+        "explicit parameter > class styling > theme"
+    );
+}
+
+/// The two colour sets are two classes: a `ChipStyling` must not reach a filter chip, and a
+/// `SelectableChipStyling` must not reach an assist chip.
+#[test]
+fn the_selectable_chip_is_a_class_of_its_own() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::WiniaTheme::colors();
+
+    let (filter, f) = with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.container(green()))),
+        || chip_container(Chip::elevated_filter(true, label("F"), || {})),
+    );
+    assert_eq!(
+        painted_background(&filter, f),
+        theme.secondary_container,
+        "a non-selectable styling leaves the selectable class alone"
+    );
+
+    let (assist, a) = with_component_styles(
+        ComponentStyles::new().with(SelectableChipStyling::new(|scope| scope.container(green()))),
+        || chip_container(Chip::elevated_assist(label("A"), || {})),
+    );
+    assert_eq!(
+        painted_background(&assist, a),
+        theme.surface_container_low,
+        "and the other way round"
+    );
+
+    // The selectable one, moved: the selected fill is a slot only IT has.
+    let (selected, s) = with_component_styles(
+        ComponentStyles::new().with(SelectableChipStyling::new(|scope| {
+            scope.selected(purple(), purple());
+        })),
+        || chip_container(Chip::filter(true, label("F"), || {})),
+    );
+    assert_eq!(painted_background(&selected, s), purple());
+}
+
+/// The styling is a subtree: outside its block the theme derivation is back.
+#[test]
+fn a_chip_styling_ends_with_its_block() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::WiniaTheme::colors();
+    let plain = ChipDefaults::assist_chip_colors(&theme);
+
+    with_component_styles(
+        ComponentStyles::new().with(ChipStyling::new(|scope| scope.container(green()))),
+        || {
+            assert_eq!(
+                chip_visual_with_styles(&theme, ChipVariant::Assist).colors.container,
+                green()
+            )
+        },
+    );
+    assert_eq!(
+        chip_visual_with_styles(&theme, ChipVariant::Assist)
+            .colors
+            .container,
+        plain.container,
+        "outside the block the theme derivation is back"
+    );
+}
+
+/// With no styling in scope the resolution has to be byte-identical to the old derivation — the layer
+/// is additive, so a caller who never registers one cannot see it.
+#[test]
+fn no_chip_styling_means_the_old_derivation() {
+    let theme = crate::theme::WiniaTheme::colors();
+    for variant in [
+        ChipVariant::Assist,
+        ChipVariant::Suggestion,
+        ChipVariant::ElevatedAssist,
+        ChipVariant::ElevatedSuggestion,
+    ] {
+        let expected = match variant {
+            ChipVariant::ElevatedAssist => ChipDefaults::elevated_assist_chip_colors(&theme),
+            ChipVariant::ElevatedSuggestion => ChipDefaults::elevated_suggestion_chip_colors(&theme),
+            ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
+            _ => ChipDefaults::assist_chip_colors(&theme),
+        };
+        let visual = chip_visual_with_styles(&theme, variant);
+        assert_eq!(visual.colors, expected, "{variant:?}");
+        assert_eq!(visual.border, theme.outline, "{variant:?}");
+        assert_eq!(
+            visual.disabled_border,
+            ChipDefaults::disabled_outline(&theme),
+            "{variant:?}"
+        );
+    }
+
+    for variant in [
+        ChipVariant::Filter,
+        ChipVariant::Input,
+        ChipVariant::ElevatedFilter,
+    ] {
+        let expected = match variant {
+            ChipVariant::ElevatedFilter => ChipDefaults::elevated_selectable_chip_colors(&theme),
+            ChipVariant::Input => ChipDefaults::input_chip_colors(&theme),
+            _ => ChipDefaults::selectable_chip_colors(&theme),
+        };
+        let visual = selectable_chip_visual_with_styles(&theme, variant);
+        assert_eq!(visual.colors, expected, "{variant:?}");
+        assert_eq!(visual.border, theme.outline_variant, "{variant:?}");
+        assert_eq!(
+            visual.disabled_border,
+            ChipDefaults::disabled_outline(&theme),
+            "{variant:?}"
+        );
+    }
+}

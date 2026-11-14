@@ -89,14 +89,22 @@ second builder: shape, size and padding stay builder parameters unless a compone
 A scope type is a class key: two components that share one scope struct share one entry, and the
 later registration silently wins for both.
 
+**Coverage today: 3 of the 19 components that own a colour set are wired** (Button, Checkbox, Chip);
+the rest keep their theme derivation. `component-authoring.md` section 6.1 makes wiring a component a
+MUST once it has an `XColors` set, so this is unfinished work rather than a boundary of the design — a
+new component with a colour set owes its styling type from the start.
+
+A component with MORE than one colour set owes one styling type per set, because the scope type is the
+registry key: a chip registers `ChipStyling` for `ChipColors` (assist / suggestion) and
+`SelectableChipStyling` for `SelectableChipColors` (filter / input), and neither reaches the other's
+chips.
+
 ## What is deliberately not here yet
 
 - **State blocks** ("when pressed, use this colour") in the Compose-shim style. The colour sets winia
   components use are already stateful (`ComponentState`), and splitting them into per-state setters
   needs a resolver that runs per state - a design worth doing once there are two or three components
   that need it, not before.
-- **Per-component coverage.** Button and Checkbox are wired. Every other component keeps its theme
-  derivation until it is wired; the framework does not care which classes are registered.
 - **Instance styling shortcuts.** A single instance is still restyled through the builder
   (`Button::colors`, `Button::shape`), which is also what Compose does.
 - **Every knob.** Shape, size, padding and elevation stay builder parameters. A component may expose

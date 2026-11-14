@@ -192,6 +192,234 @@ impl SelectableChipColors {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Stylings — one per colour set (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The mutable view a [`ChipStyling`] writes into; starts from the theme's derivation.
+///
+/// The non-selectable chip's set: assist / suggestion and their elevated forms. Its outline colour
+/// travels with it because it is derived from the theme too — a styling that recolours the container
+/// usually wants the 1 dp outline to follow, and the two disabled roles are separate slots.
+pub struct ChipStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: ChipColors,
+    /// The 1 dp outline of the enabled, unselected chip — `Outline` for assist/suggestion. An elevated
+    /// variant draws no outline, so this only matters if the caller adds one.
+    pub border: crate::graphics::Color,
+    /// The disabled outline — `OnSurface` at `DISABLED_OUTLINE_OPACITY`.
+    pub disabled_border: crate::graphics::Color,
+}
+
+impl ChipStylingScope {
+    pub fn container(&mut self, color: crate::graphics::Color) {
+        self.colors.container = color;
+    }
+    pub fn label(&mut self, color: crate::graphics::Color) {
+        self.colors.label = color;
+    }
+    pub fn leading_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.leading_icon = color;
+    }
+    pub fn trailing_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.trailing_icon = color;
+    }
+    /// The disabled pair, which travel together in every M3 role table: the container and the label.
+    /// The two disabled ICON slots stay separate (`disabled_leading_icon` / `disabled_trailing_icon`).
+    pub fn disabled(&mut self, container: crate::graphics::Color, label: crate::graphics::Color) {
+        self.colors.disabled_container = container;
+        self.colors.disabled_label = label;
+    }
+    pub fn disabled_leading_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.disabled_leading_icon = color;
+    }
+    pub fn disabled_trailing_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.disabled_trailing_icon = color;
+    }
+    /// The enabled outline colour.
+    pub fn border(&mut self, color: crate::graphics::Color) {
+        self.border = color;
+    }
+    /// The disabled outline colour.
+    pub fn disabled_border(&mut self, color: crate::graphics::Color) {
+        self.disabled_border = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: ChipColors) {
+        self.colors = colors;
+    }
+}
+
+/// One styling for the non-selectable chip class.
+pub type ChipStyling = crate::components::component_styles::Styling<ChipStylingScope>;
+
+/// The mutable view a [`SelectableChipStyling`] writes into; starts from the theme's derivation.
+///
+/// The selectable chip's set: filter / input and the elevated filter. It is a SEPARATE class from
+/// [`ChipStylingScope`] because it carries the `selected` half — a caller restyling a filter chip's
+/// selected fill must not touch what a suggestion chip paints.
+pub struct SelectableChipStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    pub is_dark: bool,
+    pub colors: SelectableChipColors,
+    /// The 1 dp outline of the enabled, unselected chip — `Outline variant`.
+    pub border: crate::graphics::Color,
+    /// The disabled outline — `OnSurface` at `DISABLED_OUTLINE_OPACITY`.
+    pub disabled_border: crate::graphics::Color,
+}
+
+impl SelectableChipStylingScope {
+    pub fn container(&mut self, color: crate::graphics::Color) {
+        self.colors.container = color;
+    }
+    pub fn label(&mut self, color: crate::graphics::Color) {
+        self.colors.label = color;
+    }
+    pub fn leading_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.leading_icon = color;
+    }
+    pub fn trailing_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.trailing_icon = color;
+    }
+    /// The selected pair: the fill and its label. `selected` also detaches the outline, which is the
+    /// variant rule and not a colour.
+    pub fn selected(&mut self, container: crate::graphics::Color, label: crate::graphics::Color) {
+        self.colors.selected_container = container;
+        self.colors.selected_label = label;
+    }
+    pub fn selected_leading_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.selected_leading_icon = color;
+    }
+    pub fn selected_trailing_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.selected_trailing_icon = color;
+    }
+    /// The disabled-unselected pair.
+    pub fn disabled(&mut self, container: crate::graphics::Color, label: crate::graphics::Color) {
+        self.colors.disabled_container = container;
+        self.colors.disabled_label = label;
+    }
+    /// The disabled-SELECTED fill (`OnSurface` at 12 % by default); the label stays the disabled one.
+    pub fn disabled_selected_container(&mut self, color: crate::graphics::Color) {
+        self.colors.disabled_selected_container = color;
+    }
+    pub fn disabled_leading_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.disabled_leading_icon = color;
+    }
+    pub fn disabled_trailing_icon(&mut self, color: crate::graphics::Color) {
+        self.colors.disabled_trailing_icon = color;
+    }
+    /// The enabled outline colour.
+    pub fn border(&mut self, color: crate::graphics::Color) {
+        self.border = color;
+    }
+    /// The disabled outline colour.
+    pub fn disabled_border(&mut self, color: crate::graphics::Color) {
+        self.disabled_border = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: SelectableChipColors) {
+        self.colors = colors;
+    }
+}
+
+/// One styling for the selectable chip class (filter / input).
+pub type SelectableChipStyling =
+    crate::components::component_styles::Styling<SelectableChipStylingScope>;
+
+/// Everything the non-selectable chip resolves from the theme plus the styling: its colour set, and
+/// the two outline colours the enabled/disabled split reads.
+///
+/// The outline travels WITH the colours because it is derived from the theme too — `Outline` when
+/// enabled, `OnSurface` at 12 % when not. Its WIDTH is a variant rule (flat 1 dp, elevated none,
+/// selected none for the selectable set) and stays with the variant, not here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChipVisual {
+    pub colors: ChipColors,
+    pub border: crate::graphics::Color,
+    pub disabled_border: crate::graphics::Color,
+}
+
+/// The non-selectable chip's appearance for `theme` and `variant`, with the [`ChipStyling`] in scope
+/// applied on top when there is one.
+///
+/// This is the ONE place the precedence (explicit parameter > styling > theme) is decided for this
+/// class, so `Chip::build` must resolve through it — calling `ChipDefaults::assist_chip_colors`
+/// directly would silently ignore every styling.
+pub fn chip_visual_with_styles(
+    theme: &crate::theme::ThemeColors,
+    variant: ChipVariant,
+) -> ChipVisual {
+    let colors = match variant {
+        ChipVariant::ElevatedAssist => ChipDefaults::elevated_assist_chip_colors(theme),
+        ChipVariant::ElevatedSuggestion => ChipDefaults::elevated_suggestion_chip_colors(theme),
+        ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(theme),
+        _ => ChipDefaults::assist_chip_colors(theme),
+    };
+    let mut visual = ChipVisual {
+        colors,
+        border: theme.outline,
+        disabled_border: ChipDefaults::disabled_outline(theme),
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<ChipStyling>() {
+        let mut scope = ChipStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors: visual.colors,
+            border: visual.border,
+            disabled_border: visual.disabled_border,
+        };
+        styling.apply(&mut scope);
+        visual.colors = scope.colors;
+        visual.border = scope.border;
+        visual.disabled_border = scope.disabled_border;
+    }
+    visual
+}
+
+/// Everything the selectable chip resolves from the theme plus the styling, mirroring [`ChipVisual`]
+/// for the `selected` half. Its outline when enabled is `Outline variant`, not `Outline`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectableChipVisual {
+    pub colors: SelectableChipColors,
+    pub border: crate::graphics::Color,
+    pub disabled_border: crate::graphics::Color,
+}
+
+/// The selectable chip's appearance, with the [`SelectableChipStyling`] in scope applied on top.
+pub fn selectable_chip_visual_with_styles(
+    theme: &crate::theme::ThemeColors,
+    variant: ChipVariant,
+) -> SelectableChipVisual {
+    let colors = match variant {
+        ChipVariant::ElevatedFilter => ChipDefaults::elevated_selectable_chip_colors(theme),
+        ChipVariant::Input => ChipDefaults::input_chip_colors(theme),
+        _ => ChipDefaults::selectable_chip_colors(theme),
+    };
+    let mut visual = SelectableChipVisual {
+        colors,
+        border: theme.outline_variant,
+        disabled_border: ChipDefaults::disabled_outline(theme),
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<SelectableChipStyling>() {
+        let mut scope = SelectableChipStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors: visual.colors,
+            border: visual.border,
+            disabled_border: visual.disabled_border,
+        };
+        styling.apply(&mut scope);
+        visual.colors = scope.colors;
+        visual.border = scope.border;
+        visual.disabled_border = scope.disabled_border;
+    }
+    visual
+}
+
+// ═══════════════════════════════════════════════════════════
 // ChipDefaults — 默认值（对齐 M3 specs token）
 // ═══════════════════════════════════════════════════════════
 
@@ -770,27 +998,26 @@ impl Chip {
         // A DISABLED chip's outline is `OnSurface` at 12 % — `FlatDisabledOutlineColor` /
         // `FlatDisabledOutlineOpacity` (assist, suggestion), `FlatDisabledUnselectedOutlineColor` / `…Opacity`
         // (filter) and `DisabledUnselectedOutlineColor` / `…Opacity` (input) — not the enabled role's colour.
-        let disabled_outline = ChipDefaults::disabled_outline(&theme);
+        // Both outline colours come back from the `*_visual_with_styles` helpers below, with the colours they
+        // belong beside.
         // The LEADING and TRAILING icons take different colour slots — M3 lists them separately in every
         // variant's color-role table (assist: leading Primary, trailing On surface variant). Both used to be
         // fed `icon_color`, so the three `trailing_icon` slots on the two colour structs were written by
         // `ChipDefaults` and then never read: a trailing icon painted the leading colour.
+        //
+        // The theme derivation and the styling in scope meet in ONE place per class
+        // (`chip_visual_with_styles` / `selectable_chip_visual_with_styles`) — `docs/component-authoring.md`
+        // §6.1: resolving through anything else would silently ignore every styling. The nesting is the
+        // documented precedence, explicit parameter > styling > theme, with the explicit
+        // `.colors(..)` / `.selectable_colors(..)` on the outside.
         let (container, label_color, leading_icon_color, trailing_icon_color, border_w, border_color) =
             match self.variant {
             ChipVariant::Assist
             | ChipVariant::ElevatedAssist
             | ChipVariant::Suggestion
             | ChipVariant::ElevatedSuggestion => {
-                let c = self.flat_colors.unwrap_or_else(|| match self.variant {
-                    ChipVariant::ElevatedAssist => {
-                        ChipDefaults::elevated_assist_chip_colors(&theme)
-                    }
-                    ChipVariant::ElevatedSuggestion => {
-                        ChipDefaults::elevated_suggestion_chip_colors(&theme)
-                    }
-                    ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
-                    _ => ChipDefaults::assist_chip_colors(&theme),
-                });
+                let visual = chip_visual_with_styles(&theme, self.variant);
+                let c = self.flat_colors.unwrap_or(visual.colors);
                 // A disabled chip reads its two icon colours from the DEDICATED slots (Compose's
                 // `disabledLeadingIconContentColor` / `disabledTrailingIconContentColor`), which is what
                 // lets a caller override them independently. Both default to `OnSurface` at the disabled
@@ -813,22 +1040,15 @@ impl Chip {
                     ChipDefaults::BORDER_WIDTH
                 };
                 let colour = if self.enabled {
-                    theme.outline
+                    visual.border
                 } else {
-                    disabled_outline
+                    visual.disabled_border
                 };
                 (container, label, leading, trailing, w, colour)
             }
             ChipVariant::Filter | ChipVariant::ElevatedFilter | ChipVariant::Input => {
-                let c = self
-                    .selectable_colors
-                    .unwrap_or_else(|| match self.variant {
-                        ChipVariant::ElevatedFilter => {
-                            ChipDefaults::elevated_selectable_chip_colors(&theme)
-                        }
-                        ChipVariant::Input => ChipDefaults::input_chip_colors(&theme),
-                        _ => ChipDefaults::selectable_chip_colors(&theme),
-                    });
+                let visual = selectable_chip_visual_with_styles(&theme, self.variant);
+                let c = self.selectable_colors.unwrap_or(visual.colors);
                 let (container, label, leading, trailing) = if !self.enabled {
                     // A disabled chip keeps its selected/unselected distinction: selected fills with the 12 %
                     // `OnSurface` role, unselected stays transparent and carries the outline instead. winia
@@ -862,9 +1082,9 @@ impl Chip {
                     ChipDefaults::BORDER_WIDTH
                 };
                 let colour = if self.enabled {
-                    theme.outline_variant
+                    visual.border
                 } else {
-                    disabled_outline
+                    visual.disabled_border
                 };
                 (container, label, leading, trailing, w, colour)
             }
@@ -1012,6 +1232,13 @@ impl Chip {
         // where `build_chip` runs: if the wrapper Skips, the inner group never enters and no colour change
         // reaches it no matter what the inner group declares. `build_chip` keeps its own declarations for the
         // inner group's sake (a Clean inner slot with equal params would otherwise stay on the old colours).
+        //
+        // `container` and `border_color` are declared for the same reason the content colours are — and
+        // because a CLASS STYLING is global rather than a field of this builder. Without them a styling that
+        // moves the container colour would be invisible: the wrapper's group compares only what is declared
+        // here, finds nothing changed, Skips, and the chip keeps painting the fill it composed with.
+        ctx.changed(&container);
+        ctx.changed(&border_color);
         ctx.changed(&label_color);
         ctx.changed(&leading_icon_color);
         ctx.changed(&trailing_icon_color);

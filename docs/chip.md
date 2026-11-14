@@ -211,6 +211,32 @@ Skip，其 content 不执行，`with_content_color` 根本没被调用。实测�
 
 这是 `docs/component-authoring.md` §3.2 的 caller 侧陷阱，只是这次发生在组件内部。
 
+### 类样式（`ChipStyling` / `SelectableChipStyling`）
+
+「所有 chip 用绿色，色板仍是蓝色」这类需求走 `ComponentStyles`，不是改色板（`docs/component-styling.md`）。
+chip 有**两个**颜色集，所以有两个类、两个 scope——scope 类型即 registry key：
+
+| 类 | scope / 别名 | 覆盖的变体 |
+|---|---|---|
+| 非选择型 | `ChipStylingScope` / `ChipStyling` | assist、suggestion、elevated assist、elevated suggestion |
+| 选择型 | `SelectableChipStylingScope` / `SelectableChipStyling` | filter、elevated filter、input |
+
+两个互不串味：注册 `ChipStyling` 不会动到 filter chip，反之亦然（回归见 §6 的
+`the_selectable_chip_is_a_class_of_its_own`）。
+
+scope 除颜色集外还带 `border` / `disabled_border`——**边框颜色也是主题派生**（非选择型 enabled 是
+`Outline`、选择型是 `Outline variant`、两者 disabled 都是 `OnSurface @12%`），所以它跟着样式走；
+边框**宽度**则仍是变体规则（flat 1 dp、elevated 无、selected 无），不进样式。
+
+「显式参数 > 类样式 > 主题」这一处只在两个 helper 里决定：
+`chip_visual_with_styles` / `selectable_chip_visual_with_styles`（返回 `ChipVisual` /
+`SelectableChipVisual = { colors, border, disabled_border }`）。`build` 必须经它们取色——直接调
+`ChipDefaults::assist_chip_colors` 会静默忽略所有样式，这正是 §6.1 那条 MUST 的内容。
+
+`build` 在 wrapper group 之前声明了 `container` 与 `border_color`（连同三个内容色、gap、enabled）：
+class styling 是全局的、不是 builder 字段，不声明的话 wrapper group 比较不到变化会 Skip，样式改容器色
+将完全不可见。
+
 ### 不宏化
 
 chip 不标 `#[composable]`，理由是它是**透传 caller 闭包的容器**（`label` / `leading` / `trailing` /
@@ -257,7 +283,7 @@ chip 不标 `#[composable]`，理由是它是**透传 caller 闭包的容器**�
 ## 6. Tests
 
 ```bash
-# Every unit test of this component (25, all in chip/tests.rs)
+# Every unit test of this component (33, all in chip/tests.rs)
 cargo test -p winia --lib components::chip
 ```
 
@@ -289,6 +315,13 @@ cargo test -p winia --lib components::chip
 | `a_hover_lift_ramps_in_and_fades_out` | hover fades out over the outgoing spec instead of cutting, like `Button` and `Card` |
 | `a_container_going_transparent_drops_the_shadow_at_once` | the gate outranks the outgoing spec: a container fade steps straight to zero |
 | `a_chip_reserves_a_48_dp_touch_target` | the node a parent measures is 48 dp on both axes while the box that paints the container is still 32 — and a disabled chip reserves it too |
+| `a_chip_styling_reaches_the_resolution_every_chip_uses` | a `ChipStyling` reaches the helper `build` resolves through — a call site that bypasses it would make every styling inert |
+| `a_chip_styling_leaves_the_slots_it_does_not_set_alone` | a styling starts from the theme's answer and moves only the slots it is given (section 6.1's MUST NOT) |
+| `a_chip_styling_can_move_the_outline_colour` | the outline is theme-derived, so a styling can move it — enabled and disabled are two separate slots |
+| `an_explicit_colour_beats_the_chip_styling` | explicit parameter > class styling > theme, in that order |
+| `the_selectable_chip_is_a_class_of_its_own` | `ChipStyling` never reaches a filter chip and `SelectableChipStyling` never reaches an assist chip — the two colour sets are two registry keys |
+| `a_chip_styling_ends_with_its_block` | outside its `with_component_styles` block the theme derivation is back |
+| `no_chip_styling_means_the_old_derivation` | with nothing registered the resolution is field-for-field the old derivation, for all seven variants |
 
 Fixtures: **no** `fixture_all` scenario, so the UI test suite never reaches this component. Its own
 page is `examples/chip_demo.rs`; `examples/animated_visibility_demo.rs` and
