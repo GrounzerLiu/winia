@@ -252,6 +252,32 @@ above, and a `DropdownMenuItem` overflow row that runs the action and then dismi
 `surfaceContainer` while not (`FilledButtonTokens.SelectedContainerColor` /
 `UnselectedContainerColor`).
 
+**Class styling.** A toggleable item's colours belong to the BUTTON GROUP class, not to the Button
+one: upstream derives them from `ToggleButtonColors` (`ToggleButton.kt:1410-1416`), so `winia` keeps
+the same six slots in `ButtonGroupColors` and resolves them through
+`button_group_colors_with_styles(theme)`. Register a `ButtonGroupStyling` to restyle them:
+
+```rust
+with_component_styles(
+    ComponentStyles::new().with(ButtonGroupStyling::new(|scope| {
+        scope.checked(tertiary, on_tertiary);   // both slots only a toggle has
+        scope.unchecked(surface_container_high, on_surface);
+    })),
+    || app(ctx),
+);
+```
+
+Two consequences worth knowing:
+
+- A `ButtonStyling` reaches the CLICKABLE items (they build a plain `Button` and never pass
+  `.colors(..)`, so the class styling applies) and NOT the toggleable ones — a toggle hands the
+  Button an explicit `.colors(..)`, and an explicit parameter outranks every styling. That split is
+  deliberate: a group item's colours are the group's, which is the class this component now owns.
+  `docs/component-styling.md` records it with the other asymmetries.
+- `ButtonGroupDefaults::toggle_colors(theme, checked)` stays public for a caller drawing its own
+  item, and still answers the THEME derivation. A caller that wants its own item to follow the
+  class styling calls `button_group_colors_with_styles(theme).to_button_colors(checked)` instead.
+
 `ButtonGroupDefaults::overflow_indicator` is upstream's default indicator: a `FilledIconButton`
 showing `Icons.Filled.MoreVert` whose click TOGGLES the menu, inside a tooltip reading "More
 options" (`ButtonGroup.kt:294-333`). Pass it straight to `overflow_indicator(…)`.

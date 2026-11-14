@@ -32,7 +32,7 @@
 //! of an item that did not fit. `docs/button-group.md` records each with its source.
 
 use crate::composable;
-use crate::graphics::Shape;
+use crate::graphics::{Color, Shape};
 use crate::input::interaction::MutableInteractionSource;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
 use crate::layout::{Alignment, Arrangement, Constraints, LayoutDirection, compute_spacing};
@@ -88,6 +88,160 @@ impl ButtonGroupShapes {
             self.shape
         }
     }
+}
+
+/// How a button-group item's toggle states paint — material3's `ToggleButtonColors`
+/// (`material3/ToggleButton.kt:1410-1416`), whose six slots are these six.
+///
+/// winia's `toggle_colors` used to answer this by picking one four-field `ButtonColors` for the
+/// current `checked` value, which threw the other state's colours away: a styling could therefore
+/// not see the pair it was restyling. Keeping the six here is what makes the class restylable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ButtonGroupColors {
+    /// The unchecked, enabled container — `FilledButtonTokens.UnselectedContainerColor`.
+    pub container: Color,
+    /// The unchecked, enabled content — `UnselectedPressedLabelTextColor`.
+    pub content: Color,
+    /// Disabled, either checked state — `DisabledContainerColor` at its opacity.
+    pub disabled_container: Color,
+    /// Disabled, either checked state — `DisabledLabelTextColor` at its opacity.
+    pub disabled_content: Color,
+    /// The CHECKED container — `SelectedContainerColor`.
+    pub checked_container: Color,
+    /// The CHECKED content — `SelectedPressedLabelTextColor`.
+    pub checked_content: Color,
+}
+
+impl ButtonGroupColors {
+    pub fn new(
+        container: Color,
+        content: Color,
+        disabled_container: Color,
+        disabled_content: Color,
+        checked_container: Color,
+        checked_content: Color,
+    ) -> Self {
+        Self {
+            container,
+            content,
+            disabled_container,
+            disabled_content,
+            checked_container,
+            checked_content,
+        }
+    }
+
+    /// The four-field set one item paints in, for the `checked` it is in — material3's
+    /// `containerColor(enabled, checked)` / `contentColor(enabled, checked)` (`:1446-1452`)
+    /// resolved into the pair a `Button` takes. The two disabled slots are shared by both states.
+    pub fn to_button_colors(
+        &self,
+        checked: bool,
+    ) -> crate::components::button::ButtonColors {
+        let (container, content) = if checked {
+            (self.checked_container, self.checked_content)
+        } else {
+            (self.container, self.content)
+        };
+        crate::components::button::ButtonColors::new(
+            container,
+            content,
+            self.disabled_container,
+            self.disabled_content,
+        )
+    }
+
+    /// A copy with some slots replaced — material3's `ToggleButtonColors.copy(..)`. `None` means
+    /// "keep the source value", the contract every `copy(..)` in this crate uses.
+    pub fn copy(
+        &self,
+        container: Option<Color>,
+        content: Option<Color>,
+        disabled_container: Option<Color>,
+        disabled_content: Option<Color>,
+        checked_container: Option<Color>,
+        checked_content: Option<Color>,
+    ) -> Self {
+        Self {
+            container: container.unwrap_or(self.container),
+            content: content.unwrap_or(self.content),
+            disabled_container: disabled_container.unwrap_or(self.disabled_container),
+            disabled_content: disabled_content.unwrap_or(self.disabled_content),
+            checked_container: checked_container.unwrap_or(self.checked_container),
+            checked_content: checked_content.unwrap_or(self.checked_content),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Styling — one class, one colour set (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The mutable view a [`ButtonGroupStyling`] writes into; starts from the theme's derivation.
+pub struct ButtonGroupStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: ButtonGroupColors,
+}
+
+impl ButtonGroupStylingScope {
+    /// The unchecked pair, which an item paints while it is off.
+    pub fn unchecked(&mut self, container: Color, content: Color) {
+        self.colors.container = container;
+        self.colors.content = content;
+    }
+    /// The checked pair — the two slots only a toggle has.
+    pub fn checked(&mut self, container: Color, content: Color) {
+        self.colors.checked_container = container;
+        self.colors.checked_content = content;
+    }
+    /// The disabled pair, shared by both checked states.
+    pub fn disabled(&mut self, container: Color, content: Color) {
+        self.colors.disabled_container = container;
+        self.colors.disabled_content = content;
+    }
+    pub fn container(&mut self, color: Color) {
+        self.colors.container = color;
+    }
+    pub fn content(&mut self, color: Color) {
+        self.colors.content = color;
+    }
+    pub fn checked_container(&mut self, color: Color) {
+        self.colors.checked_container = color;
+    }
+    pub fn checked_content(&mut self, color: Color) {
+        self.colors.checked_content = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: ButtonGroupColors) {
+        self.colors = colors;
+    }
+}
+
+/// One button-group styling, registered through
+/// [`crate::components::component_styles::ComponentStyles::with`].
+pub type ButtonGroupStyling = crate::components::component_styles::Styling<ButtonGroupStylingScope>;
+
+/// The toggle item's colours for `theme`, with the [`ButtonGroupStyling`] in scope applied on top.
+///
+/// This is the ONE place the precedence (styling > theme) is decided for this class, so
+/// `compose_button` must resolve through it — calling `ButtonGroupDefaults::toggle_colors` directly
+/// would silently ignore every styling. (There is no explicit-parameter layer here: a group item
+/// takes no `colors(..)` of its own; the caller restyles the class instead.)
+pub fn button_group_colors_with_styles(theme: &crate::theme::ThemeColors) -> ButtonGroupColors {
+    let mut colors = ButtonGroupDefaults::toggle_colors_for(theme);
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<ButtonGroupStyling>() {
+        let mut scope = ButtonGroupStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors,
+        };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
 }
 
 /// Defaults for a button group (material3 `ButtonGroupDefaults`).
@@ -193,29 +347,36 @@ impl ButtonGroupDefaults {
             .align(TextAlign::Center)
     }
 
+    /// The six slots `ToggleButtonDefaults.colors()` derives, before any styling:
+    /// `SurfaceContainer` unchecked, `Primary` checked (`FilledButtonTokens.UnselectedContainerColor`
+    /// / `SelectedContainerColor`), and the two disabled roles at their opacities.
+    pub fn toggle_colors_for(theme: &crate::theme::ThemeColors) -> ButtonGroupColors {
+        let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
+        ButtonGroupColors::new(
+            theme.surface_container,
+            theme.on_surface,
+            alpha(theme.on_surface, 0.12),
+            alpha(theme.on_surface, 0.38),
+            theme.primary,
+            theme.on_primary,
+        )
+    }
+
     /// `ToggleButton`'s two containers: `SurfaceContainer` unchecked, `Primary` checked
     /// (`FilledButtonTokens.UnselectedContainerColor` / `SelectedContainerColor`).
     ///
     /// Public because a caller drawing its own toggle item has to supply the same pair — the demo
     /// did exactly that, with a hand-copied version of this function that was one token edit away
     /// from drifting from the one `toggleable` uses internally.
+    ///
+    /// This resolves the THEME only; the component itself goes through
+    /// [`button_group_colors_with_styles`], so a class styling reaches the items `toggleable` builds.
+    /// A caller that wants its own item to follow that styling calls the same entry point.
     pub fn toggle_colors(
         theme: &crate::theme::ThemeColors,
         checked: bool,
     ) -> crate::components::button::ButtonColors {
-        use crate::graphics::Color;
-        let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-        let (container, content) = if checked {
-            (theme.primary, theme.on_primary)
-        } else {
-            (theme.surface_container, theme.on_surface)
-        };
-        crate::components::button::ButtonColors::new(
-            container,
-            content,
-            alpha(theme.on_surface, 0.12),
-            alpha(theme.on_surface, 0.38),
-        )
+        Self::toggle_colors_for(theme).to_button_colors(checked)
     }
 
     /// `Icons.Filled.MoreVert` — a VERTICAL ellipsis, which is what upstream's indicator shows.
@@ -382,7 +543,14 @@ impl LabelItem {
                 let on_change = on_change.clone();
                 let now = *checked;
                 button = button.on_click(move || on_change(!now));
-                button = button.colors(ButtonGroupDefaults::toggle_colors(&theme, now));
+                // Resolve through the class helper, not `toggle_colors(&theme, ..)`: the latter is
+                // the theme derivation alone, so a `ButtonGroupStyling` could not reach an item
+                // `toggleable` builds. A toggle item takes its colours from the BUTTON GROUP class
+                // (material3 derives them from `ToggleButtonColors`, `ToggleButton.kt:1410`), so
+                // this is the right class for it even though the paint is a `Button` — a
+                // `ButtonStyling` reaches the clickable items above and deliberately not this one.
+                let colors = button_group_colors_with_styles(&theme).to_button_colors(now);
+                button = button.colors(colors);
             }
         }
         let icon = self.icon.clone();
@@ -725,6 +893,12 @@ impl ButtonGroup {
         ctx.changed(&arrangement);
         let vertical_alignment = self.vertical_alignment;
         ctx.changed(&vertical_alignment);
+        // The items' colours, resolved HERE so a class styling reaches them. A `ButtonGroupStyling`
+        // is global rather than a field of this builder, so without this declaration the slot
+        // compares nothing that moved and Skips — the items would keep painting the colours they
+        // composed with (`docs/component-authoring.md` §6.1, §3.2).
+        let item_colors = button_group_colors_with_styles(&crate::theme::WiniaTheme::colors());
+        ctx.changed(&item_colors);
         // The two POLICY inputs that are not `connected`/`spacing` either. The Skip contract is a
         // whitelist — an undeclared parameter is not compared, so a Clean slot skips past it and
         // the new value silently never executes (`docs/state-handles.md`). The children list and

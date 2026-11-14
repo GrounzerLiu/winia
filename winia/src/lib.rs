@@ -130,6 +130,7 @@ pub use winia_macros::{app_root, composable, composable_keyed, compose, keyed_st
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
     pub use crate::components::button::{ButtonStyling, ButtonStylingScope};
+    pub use crate::components::button_group::{ButtonGroupStyling, ButtonGroupStylingScope};
     pub use crate::components::card::{CardStyling, CardStylingScope};
     pub use crate::components::checkbox::{CheckboxStyling, CheckboxStylingScope};
     pub use crate::components::chip::{

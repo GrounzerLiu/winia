@@ -89,10 +89,10 @@ second builder: shape, size and padding stay builder parameters unless a compone
 A scope type is a class key: two components that share one scope struct share one entry, and the
 later registration silently wins for both.
 
-**Coverage today: 4 of the 19 components that own a colour set are wired** (Button, Card, Checkbox,
-Chip); the rest keep their theme derivation. `component-authoring.md` section 6.1 makes wiring a
-component a MUST once it has an `XColors` set, so this is unfinished work rather than a boundary of the
-design — a new component with a colour set owes its styling type from the start.
+**Coverage today: 5 of the 19 components that own a colour set are wired** (Button, ButtonGroup,
+Card, Checkbox, Chip); the rest keep their theme derivation. `component-authoring.md` section 6.1
+makes wiring a component a MUST once it has an `XColors` set, so this is unfinished work rather than
+a boundary of the design — a new component with a colour set owes its styling type from the start.
 
 A component with MORE than one colour set owes one styling type per set, because the scope type is the
 registry key: a chip registers `ChipStyling` for `ChipColors` (assist / suggestion) and
@@ -116,6 +116,13 @@ recolour them; `ButtonDefaults::button_colors` returns the THEME derivation, so 
 (`Button::colors(ButtonDefaults::button_colors(..))`) deliberately opts out of class styling;
 `SplitButton` resolves its own colours and passes `.colors(...)` down, so a Button styling does not
 reach a split button today.
+
+`ButtonGroup` is the same shape with a different answer: its CLICKABLE items build a plain `Button`
+and never pass `.colors(..)`, so a `ButtonStyling` reaches them, while its TOGGLEABLE items hand the
+Button an explicit `.colors(..)` resolved from `button_group_colors_with_styles` — an explicit
+parameter outranks every styling, so a `ButtonStyling` does not reach those. That split is why the
+group has its own class: material3 derives a toggle item's colours from `ToggleButtonColors`
+(`ToggleButton.kt:1410-1416`), not from the Button's, so `ButtonGroupStyling` is where they belong.
 
 ## Cost
 

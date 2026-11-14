@@ -93,9 +93,9 @@ pub use button::ButtonSize;
 pub use button::ButtonStyle;
 pub use button_group::{
     BUTTON_GROUP_BETWEEN_SPACE, BUTTON_GROUP_COMPRESSION_LIMIT, BUTTON_GROUP_EXPANDED_RATIO,
-    BUTTON_GROUP_HEIGHT, ButtonGroup, ButtonGroupDefaults, ButtonGroupItem, ButtonGroupMenuState,
-    ButtonGroupShapes, CONNECTED_BUTTON_GROUP_BETWEEN_SPACE, CONNECTED_INNER_CORNER_SIZE,
-    CONNECTED_PRESSED_INNER_CORNER_SIZE,
+    BUTTON_GROUP_HEIGHT, ButtonGroup, ButtonGroupColors, ButtonGroupDefaults, ButtonGroupItem,
+    ButtonGroupMenuState, ButtonGroupShapes, CONNECTED_BUTTON_GROUP_BETWEEN_SPACE,
+    CONNECTED_INNER_CORNER_SIZE, CONNECTED_PRESSED_INNER_CORNER_SIZE,
 };
 pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};

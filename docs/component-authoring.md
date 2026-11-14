@@ -604,14 +604,16 @@ want to restyle.
 
 A component that derives its colours from the theme but has no styling type is not a simpler
 component — it is the one a caller cannot restyle, with the palette as their only lever. **Measured
-2026-11-15: 4 of the 19 components that own a colour set are wired (Button, Card, Checkbox, Chip).**
-The other 15 are debt, not a decision, and a new one added without its styling type grows it.
+2026-11-15: 5 of the 19 components that own a colour set are wired (Button, ButtonGroup, Card,
+Checkbox, Chip).** The other 14 are debt, not a decision, and a new one added without its styling
+type grows it.
 
-**MUST** resolve a component's default appearance through its own helper (`button_visual_with_styles`
-for a button, `card_visual_with_styles` for a card, `chip_visual_with_styles` for a chip) rather than
-calling the theme derivation directly: the helper is the single place "explicit parameter > styling >
-theme" is decided, and a component that bypasses it silently ignores every styling. The current
-participants are Button, Card, Checkbox and Chip — the chip with one helper per colour set
+**MUST** resolve a component's default appearance through its own helper
+(`button_visual_with_styles` for a button, `button_group_colors_with_styles` for a button group,
+`card_visual_with_styles` for a card, `chip_visual_with_styles` for a chip) rather than calling the
+theme derivation directly: the helper is the single place "explicit parameter > styling > theme" is
+decided, and a component that bypasses it silently ignores every styling. The current participants
+are Button, ButtonGroup, Card, Checkbox and Chip — the chip with one helper per colour set
 (`chip_visual_with_styles` / `selectable_chip_visual_with_styles`), because the two sets are two
 classes.
 

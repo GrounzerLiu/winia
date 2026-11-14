@@ -1520,3 +1520,259 @@ fn a_toggled_item_repaints_its_label_in_the_new_content_colour() {
         "the checked item's label must be repainted in onPrimary, not the previous onSurface"
     );
 }
+
+// ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+fn green() -> Color {
+    Color::from_argb(255, 0, 128, 0)
+}
+
+fn purple() -> Color {
+    Color::from_argb(255, 120, 40, 200)
+}
+
+/// The styling reaches the resolution the items use. Before this layer `toggle_colors` answered
+/// with ONE four-field `ButtonColors` for the current state, so there was no place a styling could
+/// even be read.
+#[test]
+fn a_button_group_styling_reaches_the_resolution_the_items_use() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = button_group_colors_with_styles(&theme);
+    assert_eq!(
+        plain.container, theme.surface_container,
+        "the default is still the role colour"
+    );
+    assert_eq!(plain.checked_container, theme.primary);
+
+    let styled = with_component_styles(
+        ComponentStyles::new().with(ButtonGroupStyling::new(|scope| {
+            scope.unchecked(green(), purple());
+        })),
+        || button_group_colors_with_styles(&theme),
+    );
+    assert_eq!(styled.container, green());
+    assert_eq!(styled.content, purple());
+    assert_eq!(
+        styled.checked_container, plain.checked_container,
+        "only what the styling set changed"
+    );
+    assert_eq!(styled.checked_content, plain.checked_content);
+    assert_eq!(styled.disabled_container, plain.disabled_container);
+}
+
+/// §6.1's MUST NOT: the scope starts from the theme's answer, so a styling that sets one field
+/// leaves the rest exactly as the role colours left them.
+#[test]
+fn a_button_group_styling_leaves_the_slots_it_does_not_set_alone() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = button_group_colors_with_styles(&theme);
+
+    let styled = with_component_styles(
+        ComponentStyles::new()
+            .with(ButtonGroupStyling::new(|scope| scope.disabled(green(), purple()))),
+        || button_group_colors_with_styles(&theme),
+    );
+    assert_eq!(styled.disabled_container, green());
+    assert_eq!(styled.disabled_content, purple());
+    assert_eq!(styled.container, plain.container);
+    assert_eq!(styled.content, plain.content);
+    assert_eq!(styled.checked_container, plain.checked_container);
+    assert_eq!(styled.checked_content, plain.checked_content);
+}
+
+/// The checked and unchecked pairs are INDEPENDENT slots — a styling that touches one must leave
+/// the other painting the theme's role, which is the whole reason the set carries six fields
+/// instead of the four a `Button` takes.
+#[test]
+fn the_checked_and_unchecked_pairs_are_separate_slots() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+
+    let only_checked = with_component_styles(
+        ComponentStyles::new()
+            .with(ButtonGroupStyling::new(|scope| scope.checked(green(), purple()))),
+        || button_group_colors_with_styles(&theme),
+    );
+    assert_eq!(only_checked.checked_container, green());
+    assert_eq!(only_checked.checked_content, purple());
+    assert_eq!(only_checked.container, theme.surface_container);
+    assert_eq!(only_checked.content, theme.on_surface);
+
+    let only_unchecked = with_component_styles(
+        ComponentStyles::new().with(ButtonGroupStyling::new(|scope| {
+            scope.container(green());
+            scope.content(purple());
+        })),
+        || button_group_colors_with_styles(&theme),
+    );
+    assert_eq!(only_unchecked.container, green());
+    assert_eq!(only_unchecked.content, purple());
+    assert_eq!(only_unchecked.checked_container, theme.primary);
+    assert_eq!(only_unchecked.checked_content, theme.on_primary);
+}
+
+/// `to_button_colors` picks the pair by the state the item is in — material3's
+/// `containerColor(enabled, checked)` / `contentColor(enabled, checked)` (`ToggleButton.kt:1446-1462`).
+#[test]
+fn to_button_colors_picks_the_pair_for_the_state() {
+    let colors = ButtonGroupColors::new(
+        green(),
+        purple(),
+        Color::from_argb(100, 1, 1, 1),
+        Color::from_argb(80, 2, 2, 2),
+        purple(),
+        green(),
+    );
+    let checked = colors.to_button_colors(true);
+    assert_eq!(checked.container, purple());
+    assert_eq!(checked.content, green());
+    assert_eq!(
+        checked.disabled_container, colors.disabled_container,
+        "the disabled pair is shared by both states"
+    );
+
+    let unchecked = colors.to_button_colors(false);
+    assert_eq!(unchecked.container, green());
+    assert_eq!(unchecked.content, purple());
+    assert_eq!(unchecked.disabled_content, colors.disabled_content);
+}
+
+/// An all-`None` copy is the identity, and a supplied slot is the only one replaced — the same
+/// contract every `copy(..)` in this crate carries.
+#[test]
+fn button_group_colors_copy_replaces_exactly_the_slots_it_is_given() {
+    let base = ButtonGroupDefaults::toggle_colors_for(&crate::theme::ThemeColors::default_light());
+    let identity = base.copy(None, None, None, None, None, None);
+    assert_eq!(identity, base, "an all-`None` copy is the identity");
+
+    let one = base.copy(None, None, None, None, Some(green()), None);
+    assert_eq!(one.checked_container, green());
+    assert_eq!(one.container, base.container);
+    assert_eq!(one.content, base.content);
+    assert_eq!(one.checked_content, base.checked_content);
+    assert_eq!(one.disabled_container, base.disabled_container);
+    assert_eq!(one.disabled_content, base.disabled_content);
+}
+
+/// With nothing registered the six slots are the theme's derivation, and the four-field helper
+/// still answers exactly what it used to — the layer is additive.
+#[test]
+fn no_button_group_styling_means_the_old_derivation() {
+    let theme = crate::theme::ThemeColors::default_light();
+    let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
+
+    let colors = button_group_colors_with_styles(&theme);
+    assert_eq!(colors.container, theme.surface_container);
+    assert_eq!(colors.content, theme.on_surface);
+    assert_eq!(colors.checked_container, theme.primary);
+    assert_eq!(colors.checked_content, theme.on_primary);
+    assert_eq!(colors.disabled_container, alpha(theme.on_surface, 0.12));
+    assert_eq!(colors.disabled_content, alpha(theme.on_surface, 0.38));
+
+    // The public pre-existing entry point keeps its contract.
+    for checked in [true, false] {
+        let legacy = ButtonGroupDefaults::toggle_colors(&theme, checked);
+        let now = colors.to_button_colors(checked);
+        assert_eq!(legacy, now, "checked={checked}");
+    }
+}
+
+/// THE REGRESSION this layer exists for: a `toggleable` item's painted container follows
+/// `ButtonGroupStyling`.
+///
+/// Measured before the class existed: a `ButtonStyling` recoloured a CLICKABLE item and left a
+/// toggle alone, because `compose_button` handed the toggle an explicit `.colors(..)` — and an
+/// explicit parameter outranks every styling — while the button group itself owned no colours a
+/// styling could reach. A group is not a button, so the fix is its own class, not a wider
+/// `ButtonStyling`.
+#[test]
+fn a_toggleable_item_paints_the_class_styling() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let _guard = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::animation::clear_all_animations();
+
+    let theme = crate::theme::ThemeColors::default_light();
+    let painted = |styled: bool| -> Vec<Color> {
+        let mut composer = crate::runtime::composer::Composer::new();
+        let scene = move |ctx: &mut ComposeCtx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                ButtonGroup::new()
+                    .add(ButtonGroupItem::toggleable("On", true, |_| {}))
+                    .add(ButtonGroupItem::toggleable("Off", false, |_| {}))
+                    .build(ctx);
+            });
+        };
+        if styled {
+            with_component_styles(
+                ComponentStyles::new().with(ButtonGroupStyling::new(|scope| {
+                    scope.checked(green(), green());
+                    scope.unchecked(purple(), purple());
+                })),
+                || composer.compose(scene),
+            );
+        } else {
+            composer.compose(scene);
+        }
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer
+            .arena_nodes()
+            .iter()
+            .flat_map(|node| node.modifier.elements())
+            .filter_map(|el| match el {
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let plain = painted(false);
+    assert!(
+        plain.contains(&theme.primary),
+        "the checked item starts on primary: {plain:?}"
+    );
+    assert!(
+        plain.contains(&theme.surface_container),
+        "and the unchecked one on surfaceContainer: {plain:?}"
+    );
+
+    let styled = painted(true);
+    assert!(
+        styled.contains(&green()),
+        "the CHECKED item's container must follow the styling, not stay on primary: {styled:?}"
+    );
+    assert!(
+        styled.contains(&purple()),
+        "and the unchecked one must follow its own slot: {styled:?}"
+    );
+    assert!(
+        !styled.contains(&theme.primary),
+        "neither pair may keep the theme's role once the styling set both: {styled:?}"
+    );
+}
+
+/// The styling is a subtree: outside its block the theme derivation is back.
+#[test]
+fn a_button_group_styling_ends_with_its_block() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = button_group_colors_with_styles(&theme);
+
+    with_component_styles(
+        ComponentStyles::new().with(ButtonGroupStyling::new(|scope| scope.checked(green(), green()))),
+        || {
+            assert_eq!(
+                button_group_colors_with_styles(&theme).checked_container,
+                green()
+            )
+        },
+    );
+    assert_eq!(
+        button_group_colors_with_styles(&theme).checked_container,
+        plain.checked_container,
+        "outside the block the theme derivation is back"
+    );
+}
