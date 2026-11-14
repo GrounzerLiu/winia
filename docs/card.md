@@ -140,6 +140,17 @@ semantics → the caller's modifier → clickable/ripple.
   the Elevated container is `Surface@0.38 compositeOver Surface`, and the result is the **opaque
   Surface** itself, a different colour from the enabled SurfaceContainerLow; the Outlined container does
   not change (M3's DisabledContainerColor is its ContainerColor). Content is OnSurface@38% throughout.
+- **Class styling.** `card_visual_with_styles(theme, style)` is the ONE place the precedence
+  (explicit `.colors(..)` > `CardStyling` > theme) is decided; `build` resolves through it, because
+  calling `CardColors::from_theme` directly would silently ignore every styling
+  (`docs/component-authoring.md` §6.1). The scope carries the four colours plus `border` /
+  `disabled_border`: those are theme-derived too (`Outline variant` when enabled, `Outline` @12 % when
+  disabled), so a styling can move them. The border's WIDTH is not part of the styling — only Outlined
+  draws one and it is always 1 dp.
+- The resolved appearance is DECLARED as a parameter before the group starts (`ctx.changed(&colors)`,
+  `ctx.changed(&visual.border)`, …). A class styling is global rather than a field of the builder, so
+  without those declarations the slot compares nothing that moved and Skips past the change — the
+  container would keep painting the colour it composed with.
 
 ### 3.3 Shadow (the raise animation on hover/press)
 
@@ -251,7 +262,7 @@ cargo test -p winia --lib a_clickable_card_declares_the_button_role_and_its_enab
 cargo check -p winia --examples
 ```
 
-13 unit tests, each pinning one invariant:
+19 unit tests, each pinning one invariant:
 
 | Test | What it pins |
 |---|---|
@@ -268,13 +279,22 @@ cargo check -p winia --examples
 | `test_outlined_border_uses_theme_outline_variant` | Outlined's default border is 1dp OutlineVariant, and Outline@12% when disabled |
 | `test_card_variant_constructors` | the style and elevation each of the three constructors sets |
 | `test_card_builder` | the round-trip and defaults of the builder's fields |
+| `a_card_styling_reaches_the_resolution_every_card_uses` | a `CardStyling` reaches the helper `build` resolves through — a call site that bypassed it would make every styling inert |
+| `a_card_styling_leaves_the_slots_it_does_not_set_alone` | a styling starts from the theme's answer and moves only the slots it is given (§6.1's MUST NOT) |
+| `a_card_styling_can_move_the_outline_colour` | the outline is theme-derived so a styling can move it, enabled and disabled are two slots, and the WIDTH stays the style rule (1 dp); with no styling the theme's role comes back |
+| `an_explicit_colour_beats_the_card_styling` | explicit `.colors(..)` > `CardStyling` > theme, read off the painted background |
+| `a_card_styling_ends_with_its_block` | outside its `with_component_styles` block the theme derivation is back |
+| `no_card_styling_means_the_old_derivation` | with nothing registered all three styles resolve field-for-field as before, including both outline colours |
 
 Fixtures: **no** `fixture_all` scenario (see §4.4), so the UI test suite never reaches this component.
 
 ## 6. Maintenance conventions
 
 - Adding a builder parameter: put the default in `CardDefaults` and carry it through a modifier in
-  `build` (it does not need to be added to `changed()`); add the getter, a unit test and this document along with it.
+  `build`; and if the parameter decides what is PAINTED (a colour, the border), declare it with
+  `ctx.changed` before `next_key()` too — `start_restartable_group` compares a whitelist, so a
+  resolved value nothing declares is invisible to it (`docs/component-authoring.md` §3.2, §6.1). Add
+  the getter, a unit test and this document along with it.
 - When changing visual semantics (colour/shape/focus), keep the principle "match the M3 token first, comment any approximation".
 - A change touching focus/IME/keyboard branches must update all four paths together (Tab/arrow keys/click/Escape).
 - When changing an accessibility declaration, update the component table in `docs/semantics.md` as well (if that table later gains a Card row).

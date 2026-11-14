@@ -133,6 +133,96 @@ impl CardColors {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// Styling — one class, one colour set (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The mutable view a [`CardStyling`] writes into; starts from the theme's derivation.
+pub struct CardStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: CardColors,
+    /// The Outlined style's 1 dp outline when enabled — `Outline variant`. The other two styles draw
+    /// no border by default, so this only matters if the caller adds one.
+    pub border: Color,
+    /// The disabled outline — `Outline` at 12 % (`OutlinedCardTokens.DisabledOutlineColor`).
+    pub disabled_border: Color,
+}
+
+impl CardStylingScope {
+    pub fn container(&mut self, color: Color) {
+        self.colors.container = color;
+    }
+    pub fn content(&mut self, color: Color) {
+        self.colors.content = color;
+    }
+    /// The disabled pair, which a card always states together.
+    pub fn disabled(&mut self, container: Color, content: Color) {
+        self.colors.disabled_container = container;
+        self.colors.disabled_content = content;
+    }
+    /// The enabled outline colour.
+    pub fn border(&mut self, color: Color) {
+        self.border = color;
+    }
+    /// The disabled outline colour.
+    pub fn disabled_border(&mut self, color: Color) {
+        self.disabled_border = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: CardColors) {
+        self.colors = colors;
+    }
+}
+
+/// One card styling, registered through [`crate::components::component_styles::ComponentStyles::with`].
+pub type CardStyling = crate::components::component_styles::Styling<CardStylingScope>;
+
+/// What a card should look like: the style default for `theme`, with the styling in scope applied on
+/// top when there is one.
+///
+/// The outline travels WITH the colour set because it is theme-derived too (`Outline variant` when
+/// enabled, `Outline` @ 12 % when not). Its WIDTH stays a style rule — 1 dp on Outlined, no border at
+/// all on Filled and Elevated — so it is not part of the styling.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CardVisual {
+    pub colors: CardColors,
+    pub border: Color,
+    pub disabled_border: Color,
+}
+
+/// The card's appearance for `theme` and `style`, with the [`CardStyling`] in scope applied on top.
+///
+/// This is the ONE place the precedence (explicit parameter > styling > theme) is decided, so
+/// `Card::build` must resolve through it — calling `CardColors::from_theme` directly would silently
+/// ignore every styling.
+pub fn card_visual_with_styles(
+    theme: &crate::theme::ThemeColors,
+    style: CardStyle,
+) -> CardVisual {
+    let mut visual = CardVisual {
+        colors: CardColors::from_theme(theme, style),
+        border: CardBorder::outlined(theme, true).color,
+        disabled_border: CardBorder::outlined(theme, false).color,
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<CardStyling>() {
+        let mut scope = CardStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors: visual.colors,
+            border: visual.border,
+            disabled_border: visual.disabled_border,
+        };
+        styling.apply(&mut scope);
+        visual.colors = scope.colors;
+        visual.border = scope.border;
+        visual.disabled_border = scope.disabled_border;
+    }
+    visual
+}
+
 /// Card shadow elevation (the material3 `CardElevation` counterpart — six states: default/pressed/
 /// focused/hovered/dragged/disabled), in DP, resolved from the token LEVELS in
 /// `material3/tokens/ElevationTokens.kt:24-29`: Level0 0, Level1 1, Level2 3, Level3 6, Level4 8 dp. winia
@@ -437,16 +527,21 @@ impl Card {
     /// Surface { Column } counterpart).
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        let theme = crate::theme::WiniaTheme::colors();
+        // Resolve BEFORE declaring parameters: the resolved set is itself a parameter. A class
+        // styling is global rather than a field of this builder, so without these declarations a
+        // styling that moves the container colour would be invisible — the slot would compare
+        // nothing that changed and Skip past it (`docs/component-authoring.md` §6.1).
+        let visual = card_visual_with_styles(&theme, self.style);
+        let colors = self.colors.unwrap_or(visual.colors);
         // Stage the parameters (equal params skip — style/enabled unchanged → the container Skips)
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
+        ctx.changed(&self.colors);
+        ctx.changed(&colors);
+        ctx.changed(&visual.border);
+        ctx.changed(&visual.disabled_border);
         let key = ctx.next_key();
-        let theme = crate::theme::WiniaTheme::colors();
-        // The default colours all come from CardDefaults (the material3
-        // CardDefaults.cardColors counterpart)
-        let colors = self
-            .colors
-            .unwrap_or_else(|| CardDefaults::card_colors(&theme, self.style));
         // The interaction source: injected from outside or remembered internally (the counterpart
         // of the Compose Card's interactionSource parameter)
         let interaction = self
@@ -503,10 +598,17 @@ impl Card {
         let mut modifier = Modifier::new().background(container, shape);
         // The border: an explicit border wins, otherwise Outlined's default 1dp outline colour
         // (the counterpart of material3's OutlinedCard =
-        // Card(border = BorderStroke(1.dp, OutlineVariant)))
+        // Card(border = BorderStroke(1.dp, OutlineVariant))). The COLOUR comes from the resolved
+        // visual, so a class styling can move it; the WIDTH stays this style rule — only Outlined
+        // draws one, and it is always 1 dp.
         let border = self.border.or_else(|| {
             if self.style == CardStyle::Outlined {
-                Some(CardBorder::outlined(&theme, self.enabled))
+                let color = if self.enabled {
+                    visual.border
+                } else {
+                    visual.disabled_border
+                };
+                Some(CardBorder::new(1.0, color))
             } else {
                 None
             }
@@ -1245,5 +1347,202 @@ mod tests {
         assert_eq!(card.get_style(), CardStyle::Elevated);
         assert_eq!(card.get_shape(), Shape::rounded(12.0));
         assert!(card.get_modifier().elements().len() >= 1);
+    }
+
+    // ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+    fn green() -> Color {
+        Color::from_argb(255, 0, 128, 0)
+    }
+
+    fn purple() -> Color {
+        Color::from_argb(255, 120, 40, 200)
+    }
+
+    /// The point of the styling layer: one styling, every card of the class, nothing to pass per call
+    /// site. The resolution `build` uses must be the one that reads it.
+    #[test]
+    fn a_card_styling_reaches_the_resolution_every_card_uses() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let plain = card_visual_with_styles(&theme, CardStyle::Filled);
+        assert_eq!(
+            plain.colors.container, theme.surface_container_highest,
+            "the default is still the role colour"
+        );
+
+        let styled =
+            crate::components::component_styles::with_component_styles(
+                crate::components::component_styles::ComponentStyles::new()
+                    .with(CardStyling::new(|scope| {
+                        scope.container(green());
+                        scope.content(purple());
+                    })),
+                || card_visual_with_styles(&theme, CardStyle::Filled),
+            );
+        assert_eq!(styled.colors.container, green());
+        assert_eq!(styled.colors.content, purple());
+        assert_eq!(
+            styled.colors.disabled_container, plain.colors.disabled_container,
+            "only what the styling set changed"
+        );
+        assert_eq!(styled.colors.disabled_content, plain.colors.disabled_content);
+    }
+
+    /// §6.1's MUST NOT: the scope starts from the theme's answer, so a styling that sets one field
+    /// leaves the rest exactly as the role colours left them.
+    #[test]
+    fn a_card_styling_leaves_the_slots_it_does_not_set_alone() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let plain = card_visual_with_styles(&theme, CardStyle::Elevated);
+
+        let styled =
+            crate::components::component_styles::with_component_styles(
+                crate::components::component_styles::ComponentStyles::new()
+                    .with(CardStyling::new(|scope| scope.disabled(green(), purple()))),
+                || card_visual_with_styles(&theme, CardStyle::Elevated),
+            );
+        assert_eq!(styled.colors.disabled_container, green());
+        assert_eq!(styled.colors.disabled_content, purple());
+        assert_eq!(styled.colors.container, plain.colors.container);
+        assert_eq!(styled.colors.content, plain.colors.content);
+        assert_eq!(styled.border, plain.border, "the outline is untouched");
+        assert_eq!(styled.disabled_border, plain.disabled_border);
+    }
+
+    /// The outline colour is derived from the theme too, so a styling that recolours a card may want
+    /// it to follow — and the disabled outline is a SEPARATE slot. The WIDTH is not: only Outlined
+    /// draws a border and it is always 1 dp.
+    #[test]
+    fn a_card_styling_can_move_the_outline_colour() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let read = |enabled: bool| -> Option<(f32, Color)> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Card::outlined().enabled(enabled).build(ctx, |ctx| {
+                    crate::components::Text::new("Card").build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Border { width, color, .. } => {
+                        Some((width.to_logical_px(), color.eval()))
+                    }
+                    _ => None,
+                })
+            })
+        };
+
+        let styled = |enabled: bool| -> Option<(f32, Color)> {
+            crate::components::component_styles::with_component_styles(
+                crate::components::component_styles::ComponentStyles::new()
+                    .with(CardStyling::new(|scope| {
+                        scope.border(purple());
+                        scope.disabled_border(green());
+                    })),
+                || read(enabled),
+            )
+        };
+
+        assert_eq!(
+            styled(true),
+            Some((1.0, purple())),
+            "the enabled outline follows the styling, and its width stays the style rule"
+        );
+        assert_eq!(
+            styled(false),
+            Some((1.0, green())),
+            "and the disabled one has its own slot"
+        );
+        // The control: with no styling in scope the theme's role is back.
+        assert_eq!(read(true), Some((1.0, crate::theme::ThemeColors::default_light().outline_variant)));
+    }
+
+    /// An explicit `colors(..)` still wins: explicit parameter > class styling > theme.
+    #[test]
+    fn an_explicit_colour_beats_the_card_styling() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = crate::theme::ThemeColors::default_light();
+        let explicit = Color::from_argb(255, 0, 0, 255);
+        let painted = crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
+                .with(CardStyling::new(|scope| scope.container(green()))),
+            || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                let colors = CardColors {
+                    container: explicit,
+                    ..CardColors::from_theme(&theme, CardStyle::Filled)
+                };
+                composer.compose(|ctx| {
+                    Card::filled().colors(colors).build(ctx, |ctx| {
+                        crate::components::Text::new("Card").build(ctx);
+                    });
+                });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+                composer.arena_nodes().iter().find_map(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { color, .. } => {
+                            Some(color.eval())
+                        }
+                        _ => None,
+                    })
+                })
+            },
+        );
+        assert_eq!(
+            painted,
+            Some(explicit),
+            "explicit parameter > class styling > theme"
+        );
+    }
+
+    /// The styling is a subtree: outside its block the theme derivation is back.
+    #[test]
+    fn a_card_styling_ends_with_its_block() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let plain = CardColors::from_theme(&theme, CardStyle::Outlined);
+        crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
+                .with(CardStyling::new(|scope| scope.container(green()))),
+            || {
+                assert_eq!(
+                    card_visual_with_styles(&theme, CardStyle::Outlined)
+                        .colors
+                        .container,
+                    green()
+                )
+            },
+        );
+        assert_eq!(
+            card_visual_with_styles(&theme, CardStyle::Outlined)
+                .colors
+                .container,
+            plain.container,
+            "outside the block the theme derivation is back"
+        );
+    }
+
+    /// With no styling in scope the resolution is field-for-field the old derivation for all three
+    /// styles — the layer is additive, so a caller who never registers one cannot see it.
+    #[test]
+    fn no_card_styling_means_the_old_derivation() {
+        let theme = crate::theme::ThemeColors::default_light();
+        for style in [CardStyle::Filled, CardStyle::Elevated, CardStyle::Outlined] {
+            let visual = card_visual_with_styles(&theme, style);
+            assert_eq!(visual.colors, CardColors::from_theme(&theme, style), "{style:?}");
+            assert_eq!(
+                visual.border,
+                crate::theme::ThemeColors::default_light().outline_variant,
+                "{style:?}"
+            );
+            let disabled = CardBorder::outlined(&theme, false).color;
+            assert_eq!(visual.disabled_border, disabled, "{style:?}");
+        }
     }
 }
