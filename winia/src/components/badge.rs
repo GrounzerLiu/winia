@@ -40,6 +40,90 @@ pub const BADGE_CONTENT_OFFSET_X: f32 = 12.0;
 /// badge's bottom edge 14dp from the anchor's top edge).
 pub const BADGE_CONTENT_OFFSET_Y: f32 = 14.0;
 
+// ═══════════════════════════════════════════════════════════
+// Colours and styling (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The two colours a badge derives from theme roles.
+///
+/// `content` is derived FROM `container` — Compose's `contentColorFor(containerColor)` — so an unset
+/// content follows whichever fill is finally used, and a styling that wants the two decoupled sets both
+/// slots. The builder's two setters stay independent in the same way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BadgeColors {
+    /// `BadgeTokens.Color` = `Error`.
+    pub container: Color,
+    /// `contentColorFor(container)` — `OnError` for the default container.
+    pub content: Color,
+}
+
+impl BadgeColors {
+    pub fn new(container: Color, content: Color) -> Self {
+        Self { container, content }
+    }
+
+    /// A copy with some slots replaced. `None` means "keep the source value", the contract every
+    /// `copy(..)` in this crate uses.
+    pub fn copy(&self, container: Option<Color>, content: Option<Color>) -> Self {
+        Self {
+            container: container.unwrap_or(self.container),
+            content: content.unwrap_or(self.content),
+        }
+    }
+}
+
+/// The mutable view a [`BadgeStyling`] writes into; starts from the theme's derivation.
+pub struct BadgeStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: BadgeColors,
+}
+
+impl BadgeStylingScope {
+    /// The badge's fill.
+    pub fn container(&mut self, color: Color) {
+        self.colors.container = color;
+    }
+    /// The badge's content colour.
+    pub fn content(&mut self, color: Color) {
+        self.colors.content = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: BadgeColors) {
+        self.colors = colors;
+    }
+}
+
+/// One badge styling, registered through
+/// [`crate::components::component_styles::ComponentStyles::with`].
+pub type BadgeStyling = crate::components::component_styles::Styling<BadgeStylingScope>;
+
+/// The badge's colours for `theme`, with the [`BadgeStyling`] in scope applied on top.
+///
+/// This is the ONE place the theme derivation and the styling meet, so `Badge::build` must resolve
+/// through it — reading `theme.error` directly would silently ignore every styling.
+pub fn badge_colors_with_styles(theme: &crate::theme::ThemeColors) -> BadgeColors {
+    let container = theme.error;
+    let mut colors = BadgeColors {
+        container,
+        content: theme
+            .content_color_for(container)
+            .unwrap_or(theme.on_surface),
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<BadgeStyling>() {
+        let mut scope = BadgeStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors,
+        };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
+}
+
 /// The `Badge` builder (material3's `Badge(containerColor, contentColor, content)`) — no content
 /// means a small dot; `.content()` makes it a large badge (a number or a short label).
 pub struct Badge {
@@ -88,14 +172,30 @@ impl Badge {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let has_content = self.content.is_some();
         let theme = WiniaTheme::colors();
-        let container = self.container_color.unwrap_or(theme.error);
+        // Through the class helper, so a `BadgeStyling` reaches both slots. Precedence stays
+        // explicit parameter > styling > theme: the two builder setters below still win.
+        let colours = badge_colors_with_styles(&theme);
+        let container = self.container_color.unwrap_or(colours.container);
         // Compose's default is `contentColorFor(containerColor)`, which maps a scheme colour to its paired
         // content colour and falls back to `LocalContentColor.current` for anything else
         // (`Badge.kt:135`, `ColorScheme.kt:1064-1115`) — winia used `on_error` unconditionally.
-        let content_color = self
-            .content_color
-            .or_else(|| theme.content_color_for(container))
-            .unwrap_or_else(WiniaTheme::content_color);
+        //
+        // The derivation has to run against the FINAL container (a caller's `container_color(..)` moves
+        // it), which is why this is not simply `colours.content`. The two are told apart by asking
+        // whether the styling moved that slot: when it did not, the original derivation runs exactly as
+        // before; when it did, the styling's value is used.
+        let unstyled_content = theme
+            .content_color_for(theme.error)
+            .unwrap_or(theme.on_surface);
+        let content_color = self.content_color.unwrap_or_else(|| {
+            if colours.content == unstyled_content {
+                theme
+                    .content_color_for(container)
+                    .unwrap_or_else(WiniaTheme::content_color)
+            } else {
+                colours.content
+            }
+        });
         // Declare the RESOLVED values, not the raw `Option<Color>`s — the rule `button.rs` states
         // ("resolve BEFORE declaring parameters: the resolved set is itself a parameter"). The two
         // options compare equal while the derived content colour moves with the container, so a Clean
@@ -1049,4 +1149,200 @@ mod tests {
             "a one-digit large badge is 16×16"
         );
     }
+}
+
+// ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+fn green() -> Color {
+    Color::from_argb(255, 0, 128, 0)
+}
+
+fn purple() -> Color {
+    Color::from_argb(255, 120, 40, 200)
+}
+
+/// Compose once with (or without) a styling in scope and hand back the container the badge paints.
+fn painted_badge_container(styled: bool) -> Option<Color> {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let mut composer = crate::runtime::composer::Composer::new();
+    let scene = move |ctx: &mut ComposeCtx| {
+        WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            Badge::new().build(ctx);
+        });
+    };
+    if styled {
+        with_component_styles(
+            ComponentStyles::new().with(BadgeStyling::new(|scope| {
+                scope.container(green());
+            })),
+            || composer.compose(scene),
+        );
+    } else {
+        composer.compose(scene);
+    }
+    composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+    composer
+        .arena_nodes()
+        .iter()
+        .flat_map(|node| node.modifier.elements())
+        .find_map(|el| match el {
+            crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+            _ => None,
+        })
+}
+
+/// The styling reaches the resolution `build` uses. Both colours were reachable only through the two
+/// `Option<Color>` builder fields before.
+#[test]
+fn a_badge_styling_reaches_the_resolution_the_badge_uses() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = badge_colors_with_styles(&theme);
+    assert_eq!(
+        plain.container, theme.error,
+        "BadgeTokens.Color is still the role colour"
+    );
+    assert_eq!(plain.content, theme.on_error);
+
+    let styled = with_component_styles(
+        ComponentStyles::new().with(BadgeStyling::new(|scope| {
+            scope.container(green());
+            scope.content(purple());
+        })),
+        || badge_colors_with_styles(&theme),
+    );
+    assert_eq!(styled.container, green());
+    assert_eq!(styled.content, purple());
+}
+
+/// §6.1's MUST NOT: the scope starts from the theme's answer, so a styling that sets one slot leaves
+/// the other exactly as the roles left it.
+#[test]
+fn a_badge_styling_leaves_the_slots_it_does_not_set_alone() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = badge_colors_with_styles(&theme);
+
+    let only_content = with_component_styles(
+        ComponentStyles::new().with(BadgeStyling::new(|scope| scope.content(purple()))),
+        || badge_colors_with_styles(&theme),
+    );
+    assert_eq!(only_content.content, purple());
+    assert_eq!(only_content.container, plain.container);
+
+    let only_fill = with_component_styles(
+        ComponentStyles::new().with(BadgeStyling::new(|scope| scope.container(green()))),
+        || badge_colors_with_styles(&theme),
+    );
+    assert_eq!(only_fill.container, green());
+    assert_eq!(
+        only_fill.content, plain.content,
+        "moving the fill does not re-derive the styling's own content slot"
+    );
+}
+
+/// An all-`None` copy is the identity, and a supplied slot is the only one replaced.
+#[test]
+fn badge_colors_copy_replaces_exactly_the_slots_it_is_given() {
+    let base = button_free_base();
+    assert_eq!(
+        base.copy(None, None),
+        base,
+        "an all-`None` copy is the identity"
+    );
+
+    let one = base.copy(Some(green()), None);
+    assert_eq!(one.container, green());
+    assert_eq!(one.content, base.content);
+}
+
+fn button_free_base() -> BadgeColors {
+    badge_colors_with_styles(&crate::theme::ThemeColors::default_light())
+}
+
+/// With nothing registered the two slots are exactly the derivation the component used before the
+/// layer existed — the layer is additive.
+#[test]
+fn no_badge_styling_means_the_old_derivation() {
+    let theme = crate::theme::ThemeColors::default_light();
+    let colors = badge_colors_with_styles(&theme);
+    assert_eq!(colors.container, theme.error);
+    assert_eq!(
+        colors.content,
+        theme
+            .content_color_for(theme.error)
+            .unwrap_or(theme.on_surface),
+        "Compose's contentColorFor(containerColor)"
+    );
+}
+
+/// THE REGRESSION this layer exists for: the badge's painted fill follows `BadgeStyling`. Read off
+/// the composed tree, so a `build` that never called the helper fails here.
+#[test]
+fn a_badge_paints_the_class_styling() {
+    let theme = crate::theme::ThemeColors::default_light();
+    assert_eq!(
+        painted_badge_container(false),
+        Some(theme.error),
+        "with no styling the badge paints the role colour"
+    );
+    assert_eq!(
+        painted_badge_container(true),
+        Some(green()),
+        "and with one it paints the styling's fill"
+    );
+}
+
+/// An explicit `container_color(..)` still wins: explicit parameter > class styling > theme.
+#[test]
+fn an_explicit_colour_beats_the_badge_styling() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let explicit = Color::from_argb(255, 0, 0, 255);
+    let mut composer = crate::runtime::composer::Composer::new();
+    let painted = with_component_styles(
+        ComponentStyles::new().with(BadgeStyling::new(|scope| scope.container(green()))),
+        || {
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    Badge::new().container_color(explicit).build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            composer
+                .arena_nodes()
+                .iter()
+                .flat_map(|node| node.modifier.elements())
+                .find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color, .. } => {
+                        Some(color.eval())
+                    }
+                    _ => None,
+                })
+        },
+    );
+    assert_eq!(
+        painted,
+        Some(explicit),
+        "explicit parameter > class styling > theme"
+    );
+}
+
+/// The styling is a subtree: outside its block the theme derivation is back.
+#[test]
+fn a_badge_styling_ends_with_its_block() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = badge_colors_with_styles(&theme);
+
+    with_component_styles(
+        ComponentStyles::new().with(BadgeStyling::new(|scope| scope.container(green()))),
+        || assert_eq!(badge_colors_with_styles(&theme).container, green()),
+    );
+    assert_eq!(
+        badge_colors_with_styles(&theme).container,
+        plain.container,
+        "outside the block the theme derivation is back"
+    );
 }

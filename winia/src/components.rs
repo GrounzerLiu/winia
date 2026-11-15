@@ -81,7 +81,7 @@ pub use alert_dialog::{
     DIALOG_CONTAINER_PADDING, DIALOG_CORNER_RADIUS, DIALOG_ICON_PADDING_BOTTOM, DIALOG_ICON_SIZE,
     DIALOG_MAX_WIDTH, DIALOG_MIN_WIDTH, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_TITLE_PADDING_BOTTOM,
 };
-pub use badge::{Badge, BadgedBox};
+pub use badge::{Badge, BadgeColors, BadgedBox};
 pub use bottom_sheet::ModalBottomSheet;
 pub use bottom_sheet_scaffold::{
     BottomSheetScaffold, BottomSheetScaffoldColors, SCAFFOLD_SHEET_PEEK_HEIGHT,

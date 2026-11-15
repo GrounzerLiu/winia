@@ -82,12 +82,39 @@ BadgedBox::new(|ctx| { Badge::new().build(ctx); })   // Compose's `badge` parame
 - The badge's container colour and size are static (no animation — a badge carries no state
   transition; Compose is the same); the content colour does follow the container colour and the
   theme (see above).
-- 15 tests: structure/placement (the dot at (18,0), the large badge at (12,-2), the RTL mirror),
+- 22 tests: structure/placement (the dot at (18,0), the large badge at (12,-2), the RTL mirror),
   alignment (the content-colour derivation, baselines reporting only the anchor, the min width
   loosening only the height), reactivity (the label following a container colour that moves at
   runtime, an explicit content colour taking effect), caller-modifier semantics (shrinkable to 2dp,
-  the token size applying without an override), and pixels (the dot's Error fill, the large badge's
-  fill plus label, a render-level BadgedBox check).
+  the token size applying without an override), pixels (the dot's Error fill, the large badge's
+  fill plus label, a render-level BadgedBox check), and class styling (the styling reaching the
+  resolution `build` uses, only the slots it sets moving, `copy(..)`, the no-styling derivation
+  staying byte-identical, the painted fill following it, explicit-wins, and the subtree block).
+
+### Class styling
+
+Both colours are theme-derived, so the badge has a class styling — before it, the only way to
+restyle one was `.container_color(..)` per badge, which is the opposite of "every badge in this
+subtree is green while the palette stays blue".
+
+```rust
+with_component_styles(
+    ComponentStyles::new().with(BadgeStyling::new(|scope| {
+        scope.container(tertiary);
+        scope.content(on_tertiary);
+    })),
+    || app(ctx),
+);
+```
+
+`badge_colors_with_styles(theme)` is the one place the derivation and the styling meet, and `build`
+resolves through it (the existing `ctx.changed` calls already declared the RESOLVED colours rather
+than the raw `Option<Color>`s, so nothing had to move for the styling to be visible).
+
+`content` is derived from `container` (`contentColorFor`), and an UNSET content follows whichever
+fill is finally used — a caller's `container_color(..)` included. A styling that wants the two
+decoupled sets both slots, exactly as the builder's two setters already behave. Precedence is
+explicit parameter > class styling > theme.
 
 ## 4. Not implemented (gaps against Compose)
 

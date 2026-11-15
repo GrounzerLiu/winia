@@ -129,6 +129,7 @@ pub use winia_macros::{app_root, composable, composable_keyed, compose, keyed_st
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
+    pub use crate::components::badge::{BadgeStyling, BadgeStylingScope};
     pub use crate::components::bottom_sheet_scaffold::{
         BottomSheetScaffoldStyling, BottomSheetScaffoldStylingScope,
     };
