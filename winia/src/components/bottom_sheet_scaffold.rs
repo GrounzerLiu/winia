@@ -71,6 +71,118 @@ pub const SCAFFOLD_SHEET_SHAPE_RADIUS: f32 = 28.0;
 /// Compose's `DragHandleVerticalPadding` (`SheetDefaults.kt:543`).
 pub const SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING: f32 = 22.0;
 
+// ═══════════════════════════════════════════════════════════
+// Colours and styling (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The three colours this scaffold derives from theme roles.
+///
+/// It had no colour set of its own, which is why a caller could only reach these through the three
+/// `Option<Color>` builder fields — and the built-in drag handle had no reachable colour at all
+/// (Compose's `SheetDefaults.DragHandle` takes one, `SheetDefaults.kt:576`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BottomSheetScaffoldColors {
+    /// The sheet panel's fill — `SheetBottomTokens.DockedContainerColor` = `SurfaceContainerLow`.
+    pub sheet_container: Color,
+    /// The colour the panel's content inherits — Compose's
+    /// `contentColorFor(sheetContainerColor)`, so it is derived FROM `sheet_container` and a styling
+    /// that moves the fill usually wants to move this too.
+    pub sheet_content: Color,
+    /// The built-in drag handle — `SheetBottomTokens.DockedDragHandleColor` = `OnSurfaceVariant`.
+    pub drag_handle: Color,
+}
+
+impl BottomSheetScaffoldColors {
+    pub fn new(sheet_container: Color, sheet_content: Color, drag_handle: Color) -> Self {
+        Self {
+            sheet_container,
+            sheet_content,
+            drag_handle,
+        }
+    }
+
+    /// A copy with some slots replaced. `None` means "keep the source value", the contract every
+    /// `copy(..)` in this crate uses.
+    pub fn copy(
+        &self,
+        sheet_container: Option<Color>,
+        sheet_content: Option<Color>,
+        drag_handle: Option<Color>,
+    ) -> Self {
+        Self {
+            sheet_container: sheet_container.unwrap_or(self.sheet_container),
+            sheet_content: sheet_content.unwrap_or(self.sheet_content),
+            drag_handle: drag_handle.unwrap_or(self.drag_handle),
+        }
+    }
+}
+
+/// The mutable view a [`BottomSheetScaffoldStyling`] writes into; starts from the theme's derivation.
+pub struct BottomSheetScaffoldStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: BottomSheetScaffoldColors,
+}
+
+impl BottomSheetScaffoldStylingScope {
+    /// The panel's fill. Setting it does NOT re-derive `content`, exactly as the builder's
+    /// `sheet_container_color(..)` does not: a styling that moves both says so.
+    pub fn sheet_container(&mut self, color: Color) {
+        self.colors.sheet_container = color;
+    }
+    /// The colour the panel's content inherits.
+    pub fn sheet_content(&mut self, color: Color) {
+        self.colors.sheet_content = color;
+    }
+    /// The built-in drag handle's colour.
+    pub fn drag_handle(&mut self, color: Color) {
+        self.colors.drag_handle = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: BottomSheetScaffoldColors) {
+        self.colors = colors;
+    }
+}
+
+/// One bottom-sheet-scaffold styling, registered through
+/// [`crate::components::component_styles::ComponentStyles::with`].
+pub type BottomSheetScaffoldStyling =
+    crate::components::component_styles::Styling<BottomSheetScaffoldStylingScope>;
+
+/// The scaffold's colours for `theme`, with the [`BottomSheetScaffoldStyling`] in scope applied on
+/// top.
+///
+/// This is the ONE place the theme derivation and the styling meet. `build` resolves through it, so a
+/// component that called `theme.surface_container_low` directly would silently ignore every styling.
+///
+/// The content colour is derived from the CONTAINER first (`content_color_for`), so a styling that
+/// moves only the fill leaves the content on the role that matched the old fill — the same rule the
+/// builder's two independent setters carry.
+pub fn bottom_sheet_scaffold_colors_with_styles(
+    theme: &crate::theme::ThemeColors,
+) -> BottomSheetScaffoldColors {
+    let sheet_container = theme.surface_container_low;
+    let mut colors = BottomSheetScaffoldColors {
+        sheet_container,
+        sheet_content: theme
+            .content_color_for(sheet_container)
+            .unwrap_or_else(|| theme.on_surface),
+        drag_handle: theme.on_surface_variant,
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<BottomSheetScaffoldStyling>() {
+        let mut scope = BottomSheetScaffoldStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors,
+        };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
+}
+
 /// 常驻式底部面板宿主（对标 `BottomSheetScaffold`）
 pub struct BottomSheetScaffold {
     sheet_state: Option<SheetState>,
@@ -269,8 +381,13 @@ impl BottomSheetScaffold {
         // The sheet's own colours, resolved once: the container (Compose's
         // `SheetBottomTokens.DockedContainerColor` = `surfaceContainerLow`), its tonal overlay, and the
         // content colour derived from it.
+        //
+        // Through the class helper, so a `BottomSheetScaffoldStyling` reaches all three slots. The
+        // precedence stays explicit parameter > styling > theme: the two builder setters below still
+        // win over the resolved set.
         let theme_for_sheet = crate::theme::WiniaTheme::colors();
-        let sheet_bg = sheet_container_color.unwrap_or(theme_for_sheet.surface_container_low);
+        let colours = bottom_sheet_scaffold_colors_with_styles(&theme_for_sheet);
+        let sheet_bg = sheet_container_color.unwrap_or(colours.sheet_container);
         let sheet_bg = if sheet_tonal_elevation > 0.0
             && sheet_bg == theme_for_sheet.surface
             && crate::theme::WiniaTheme::tonal_elevation_enabled()
@@ -282,9 +399,34 @@ impl BottomSheetScaffold {
         } else {
             sheet_bg
         };
-        let sheet_content_colour = sheet_content_color
-            .or_else(|| theme_for_sheet.content_color_for(sheet_bg))
+        // The content colour: explicit parameter > styling > the theme's `contentColorFor(sheet_bg)`.
+        //
+        // The theme derivation has to run against the FINAL `sheet_bg` (the tonal overlay above can
+        // move it), which is why it is not simply `colours.sheet_content`. `colours.sheet_content`
+        // already carries the styling, so the two are told apart by asking whether the styling moved
+        // that slot: when it did not, this falls back to the original derivation exactly.
+        let themed_content = theme_for_sheet
+            .content_color_for(sheet_bg)
             .unwrap_or_else(crate::theme::WiniaTheme::content_color);
+        let unstyled_default = theme_for_sheet
+            .content_color_for(theme_for_sheet.surface_container_low)
+            .unwrap_or_else(crate::theme::WiniaTheme::content_color);
+        let sheet_content_colour = sheet_content_color.unwrap_or_else(|| {
+            if colours.sheet_content == unstyled_default {
+                themed_content
+            } else {
+                colours.sheet_content
+            }
+        });
+        // The built-in drag handle, which had no colour of its own before the styling layer.
+        let drag_handle_colour = colours.drag_handle;
+        // Declared before the container's group starts: a class styling is global rather than a field
+        // of this builder, so without these the slot compares nothing that moved and Skips
+        // (`docs/component-authoring.md` §6.1, §3.2).
+        ctx.changed(&colours);
+        ctx.changed(&sheet_content_colour);
+        ctx.changed(&drag_handle_colour);
+        ctx.changed(&container_color);
 
         let top_bar = self.top_bar;
         let snackbar = self.snackbar;
@@ -580,8 +722,10 @@ impl BottomSheetScaffold {
                                                 Modifier::new().size(32.0, 4.0).background(
                                                     // `SheetBottomTokens.DockedDragHandleColor` = `OnSurfaceVariant`
                                                     // (winia painted it with `outline_variant`, a dimmer token).
-                                                    crate::theme::WiniaTheme::colors()
-                                                        .on_surface_variant,
+                                                    // Resolved with the rest of the colours, so a class styling
+                                                    // reaches the handle — Compose's `SheetDefaults.DragHandle`
+                                                    // takes a `color` for the same reason (`SheetDefaults.kt:576`).
+                                                    drag_handle_colour,
                                                     Shape::RoundedRect { corner_radius: 2.0 },
                                                 ),
                                             )

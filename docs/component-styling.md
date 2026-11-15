@@ -89,10 +89,11 @@ second builder: shape, size and padding stay builder parameters unless a compone
 A scope type is a class key: two components that share one scope struct share one entry, and the
 later registration silently wins for both.
 
-**Coverage today: 5 of the 19 components that own a colour set are wired** (Button, ButtonGroup,
-Card, Checkbox, Chip); the rest keep their theme derivation. `component-authoring.md` section 6.1
-makes wiring a component a MUST once it has an `XColors` set, so this is unfinished work rather than
-a boundary of the design — a new component with a colour set owes its styling type from the start.
+**Coverage today: 6 of the 21 components that own a colour set are wired** (BottomSheetScaffold,
+Button, ButtonGroup, Card, Checkbox, Chip); the rest keep their theme derivation.
+`component-authoring.md` section 6.1 makes wiring a component a MUST once it has an `XColors` set, so
+this is unfinished work rather than a boundary of the design — a new component with a colour set owes
+its styling type from the start.
 
 A component with MORE than one colour set owes one styling type per set, because the scope type is the
 registry key: a chip registers `ChipStyling` for `ChipColors` (assist / suggestion) and

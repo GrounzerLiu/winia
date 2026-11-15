@@ -83,7 +83,9 @@ pub use alert_dialog::{
 };
 pub use badge::{Badge, BadgedBox};
 pub use bottom_sheet::ModalBottomSheet;
-pub use bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
+pub use bottom_sheet_scaffold::{
+    BottomSheetScaffold, BottomSheetScaffoldColors, SCAFFOLD_SHEET_PEEK_HEIGHT,
+};
 pub use button::Button;
 pub use button::ButtonBorder;
 pub use button::ButtonColors;

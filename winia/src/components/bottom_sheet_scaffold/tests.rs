@@ -1275,3 +1275,227 @@ fn the_centred_sheet_is_not_mirrored_in_rtl() {
         "and it is centred from the left edge in RTL too, not mirrored to -130"
     );
 }
+
+// ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+fn green() -> Color {
+    Color::from_argb(255, 0, 128, 0)
+}
+
+fn purple() -> Color {
+    Color::from_argb(255, 120, 40, 200)
+}
+
+/// The styling reaches the resolution `build` uses. Three colours were only reachable through
+/// `Option<Color>` builder fields before, and the built-in drag handle had no colour parameter at
+/// all — Compose's `SheetDefaults.DragHandle` takes one (`SheetDefaults.kt:576`).
+#[test]
+fn a_bottom_sheet_scaffold_styling_reaches_the_resolution_the_scaffold_uses() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = bottom_sheet_scaffold_colors_with_styles(&theme);
+    assert_eq!(
+        plain.sheet_container, theme.surface_container_low,
+        "DockedContainerColor is still the role colour"
+    );
+    assert_eq!(plain.sheet_content, theme.on_surface);
+    assert_eq!(plain.drag_handle, theme.on_surface_variant);
+
+    let styled = with_component_styles(
+        ComponentStyles::new().with(BottomSheetScaffoldStyling::new(|scope| {
+            scope.sheet_container(green());
+            scope.drag_handle(purple());
+        })),
+        || bottom_sheet_scaffold_colors_with_styles(&theme),
+    );
+    assert_eq!(styled.sheet_container, green());
+    assert_eq!(styled.drag_handle, purple());
+    assert_eq!(
+        styled.sheet_content, plain.sheet_content,
+        "only what the styling set changed"
+    );
+}
+
+/// §6.1's MUST NOT: the scope starts from the theme's answer, so a styling that sets one slot
+/// leaves the rest exactly as the roles left them.
+#[test]
+fn a_bottom_sheet_scaffold_styling_leaves_the_slots_it_does_not_set_alone() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = bottom_sheet_scaffold_colors_with_styles(&theme);
+
+    let styled = with_component_styles(
+        ComponentStyles::new()
+            .with(BottomSheetScaffoldStyling::new(|scope| scope.sheet_content(purple()))),
+        || bottom_sheet_scaffold_colors_with_styles(&theme),
+    );
+    assert_eq!(styled.sheet_content, purple());
+    assert_eq!(styled.sheet_container, plain.sheet_container);
+    assert_eq!(styled.drag_handle, plain.drag_handle);
+}
+
+/// An all-`None` copy is the identity, and a supplied slot is the only one replaced.
+#[test]
+fn bottom_sheet_scaffold_colors_copy_replaces_exactly_the_slots_it_is_given() {
+    let base =
+        bottom_sheet_scaffold_colors_with_styles(&crate::theme::ThemeColors::default_light());
+    assert_eq!(
+        base.copy(None, None, None),
+        base,
+        "an all-`None` copy is the identity"
+    );
+
+    let one = base.copy(None, None, Some(green()));
+    assert_eq!(one.drag_handle, green());
+    assert_eq!(one.sheet_container, base.sheet_container);
+    assert_eq!(one.sheet_content, base.sheet_content);
+}
+
+/// With nothing registered the three slots are exactly the derivation the component used before the
+/// layer existed — the layer is additive.
+#[test]
+fn no_bottom_sheet_scaffold_styling_means_the_old_derivation() {
+    let theme = crate::theme::ThemeColors::default_light();
+    let colors = bottom_sheet_scaffold_colors_with_styles(&theme);
+    assert_eq!(colors.sheet_container, theme.surface_container_low);
+    assert_eq!(
+        colors.sheet_content,
+        theme
+            .content_color_for(theme.surface_container_low)
+            .unwrap_or(theme.on_surface),
+        "Compose's contentColorFor(sheetContainerColor)"
+    );
+    assert_eq!(colors.drag_handle, theme.on_surface_variant);
+}
+
+/// THE REGRESSION this layer exists for: the sheet panel and the built-in drag handle paint the
+/// class styling. Read off the composed tree, not off the helper, so a `build` that never called the
+/// helper would fail here.
+#[test]
+fn the_sheet_and_its_drag_handle_paint_the_class_styling() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+
+    let backgrounds = |styled: bool| -> Vec<Color> {
+        let mut c = Composer::new();
+        let scene = move |ctx: &mut crate::runtime::composer::ComposeCtx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            BottomSheetScaffold::new().build(
+                ctx,
+                |ctx| {
+                    crate::components::Text::new("sheet").build(ctx);
+                },
+                |ctx| {
+                    crate::components::Text::new("page").build(ctx);
+                },
+            );
+        };
+        if styled {
+            with_component_styles(
+                ComponentStyles::new().with(BottomSheetScaffoldStyling::new(|scope| {
+                    scope.sheet_container(green());
+                    scope.drag_handle(purple());
+                })),
+                || c.compose(scene),
+            );
+        } else {
+            c.compose(scene);
+        }
+        c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        c.arena_nodes()
+            .iter()
+            .flat_map(|node| node.modifier.elements())
+            .filter_map(|el| match el {
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let plain = backgrounds(false);
+    assert!(
+        plain.contains(&crate::theme::ThemeColors::default_light().surface_container_low),
+        "the sheet starts on the token colour: {plain:?}"
+    );
+
+    let styled = backgrounds(true);
+    assert!(
+        styled.contains(&green()),
+        "the SHEET's panel must follow the styling: {styled:?}"
+    );
+    assert!(
+        styled.contains(&purple()),
+        "and so must the built-in drag handle, which had no colour of its own: {styled:?}"
+    );
+}
+
+/// An explicit `sheet_container_color(..)` still wins: explicit parameter > class styling > theme.
+#[test]
+fn an_explicit_sheet_colour_beats_the_class_styling() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let explicit = Color::from_argb(255, 0, 0, 255);
+
+    let backgrounds = with_component_styles(
+        ComponentStyles::new()
+            .with(BottomSheetScaffoldStyling::new(|scope| scope.sheet_container(green()))),
+        || {
+            let mut c = Composer::new();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_container_color(explicit)
+                    .build(
+                        ctx,
+                        |ctx| {
+                            crate::components::Text::new("sheet").build(ctx);
+                        },
+                        |ctx| {
+                            crate::components::Text::new("page").build(ctx);
+                        },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            c.arena_nodes()
+                .iter()
+                .flat_map(|node| node.modifier.elements())
+                .filter_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color, .. } => {
+                        Some(color.eval())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    assert!(
+        backgrounds.contains(&explicit),
+        "explicit parameter > class styling: {backgrounds:?}"
+    );
+    assert!(
+        !backgrounds.contains(&green()),
+        "and the styling's fill must not appear: {backgrounds:?}"
+    );
+}
+
+/// The styling is a subtree: outside its block the theme derivation is back.
+#[test]
+fn a_bottom_sheet_scaffold_styling_ends_with_its_block() {
+    use crate::components::component_styles::{ComponentStyles, with_component_styles};
+    let theme = crate::theme::ThemeColors::default_light();
+    let plain = bottom_sheet_scaffold_colors_with_styles(&theme);
+
+    with_component_styles(
+        ComponentStyles::new()
+            .with(BottomSheetScaffoldStyling::new(|scope| scope.sheet_container(green()))),
+        || {
+            assert_eq!(
+                bottom_sheet_scaffold_colors_with_styles(&theme).sheet_container,
+                green()
+            )
+        },
+    );
+    assert_eq!(
+        bottom_sheet_scaffold_colors_with_styles(&theme).sheet_container,
+        plain.sheet_container,
+        "outside the block the theme derivation is back"
+    );
+}

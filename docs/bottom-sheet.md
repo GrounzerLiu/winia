@@ -162,6 +162,43 @@ gesture does not dismiss outright — but it means an `Expanded` sheet closes on
 - A downward drag past the threshold, from the panel or from the list at its top.
 - The overlay's own exit animation is a 200 ms fade; the sheet's slide and the fade overlap.
 
+## Class styling (`BottomSheetScaffold`)
+
+`BottomSheetScaffold` derives three colours from theme roles, so it has a class styling of its own.
+`ModalBottomSheet` does not — it has no colour set, so it is not in `ComponentStyles`' coverage:
+
+| Slot | Default | Source |
+|---|---|---|
+| `sheet_container` | `surface_container_low` | `SheetBottomTokens.DockedContainerColor` |
+| `sheet_content` | `content_color_for(sheet_container)` | Compose's `contentColorFor(sheetContainerColor)` |
+| `drag_handle` | `on_surface_variant` | `SheetBottomTokens.DockedDragHandleColor` |
+
+The drag handle is the one that gained something: it used to read the theme directly, so there was no
+way to recolour it at all — Compose's `SheetDefaults.DragHandle` takes a `color` for exactly that
+reason (`SheetDefaults.kt:576`).
+
+```rust
+with_component_styles(
+    ComponentStyles::new().with(BottomSheetScaffoldStyling::new(|scope| {
+        scope.sheet_container(tertiary_container);
+        scope.sheet_content(on_tertiary_container);
+        scope.drag_handle(on_tertiary_container);
+    })),
+    || app(ctx),
+);
+```
+
+The precedence is the same as everywhere else — explicit parameter > class styling > theme — so
+`sheet_container_color(..)` and `sheet_content_color(..)` still win over a styling.
+
+One thing the content colour does differently from the fill: `sheet_content` is derived from the fill
+via `content_color_for`, and the derivation has to run against the FINAL fill (a `sheet_tonal_elevation`
+overlays `surface_tint` onto a `surface`-coloured panel). So the resolution asks whether the styling
+moved the `sheet_content` slot: when it did not, the theme's derivation against the final fill is used
+exactly as before; when it did, the styling's value is used. A styling that moves only the fill
+therefore leaves the content on the role that matched the OLD fill — the same contract the builder's two
+independent setters carry, where setting the container does not re-derive the content.
+
 ## Known limits
 
 - No semantics (`docs/semantics-gap.md`): the sheet has no role, no dismiss action for assistive tech.
