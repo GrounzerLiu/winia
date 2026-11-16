@@ -89,7 +89,7 @@ second builder: shape, size and padding stay builder parameters unless a compone
 A scope type is a class key: two components that share one scope struct share one entry, and the
 later registration silently wins for both.
 
-**Coverage today: 7 of the 22 components that own a colour set are wired** (Badge,
+**Coverage today: 8 of the 23 components that own a colour set are wired** (AlertDialog, Badge,
 BottomSheetScaffold, Button, ButtonGroup, Card, Checkbox, Chip); the rest keep their theme
 derivation. `component-authoring.md` section 6.1 makes wiring a component a MUST once it has an
 `XColors` set, so this is unfinished work rather than a boundary of the design — a new component with

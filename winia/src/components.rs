@@ -77,7 +77,7 @@ pub use crate::transition::{
     BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds, SharedKind,
 };
 pub use alert_dialog::{
-    AlertDialog, AlertDialogDefaults, BasicAlertDialog, DIALOG_BUTTON_SPACING,
+    AlertDialog, AlertDialogColors, AlertDialogDefaults, BasicAlertDialog, DIALOG_BUTTON_SPACING,
     DIALOG_CONTAINER_PADDING, DIALOG_CORNER_RADIUS, DIALOG_ICON_PADDING_BOTTOM, DIALOG_ICON_SIZE,
     DIALOG_MAX_WIDTH, DIALOG_MIN_WIDTH, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_TITLE_PADDING_BOTTOM,
 };

@@ -204,6 +204,33 @@ of everything after it. `alert_dialog_content` therefore carries `#[composable]`
 (`docs/component-authoring.md` section 1.2), which keeps that shift inside the slot builder instead
 of letting it move the caller's siblings.
 
+### Class styling
+
+All five colours are theme-derived, so the dialog has a class styling — `.container_color(..)` and the
+three `*_content_color(..)` setters only reach one dialog at a time, and the action-label colour had
+no setter at all (Compose's `AlertDialogImpl` passes `DialogTokens.ActionLabelTextColor` and takes no
+parameter for it), so a styling is the only way to move it.
+
+```rust
+with_component_styles(
+    ComponentStyles::new().with(AlertDialogStyling::new(|scope| {
+        scope.container(surface_container_high);
+        scope.button(tertiary);          // the slot no builder setter reaches
+    })),
+    || app(ctx),
+);
+```
+
+`alert_dialog_colors_with_styles(theme)` is the one place the derivation and the styling meet, and
+both types resolve through it: `AlertDialog` reads the five slots, and `BasicAlertDialog` reads the
+container from it when the caller passed no explicit colour — so an explicit `container_color(..)` on
+either one still wins (explicit parameter > class styling > theme).
+
+Unlike the other containers, nothing had to be declared with `ctx.changed`: this component never
+opens a restartable group. It registers an overlay whose `content` is a `Fn` that
+`sync_overlays` re-composes every frame, so a styling change reaches the surface on the next frame
+without a parameter to compare.
+
 ## Differences from Compose
 
 - **No `tonalElevation` parameter.** Compose exposes one (`AlertDialog.kt:108`, default
@@ -257,7 +284,7 @@ of letting it move the caller's siblings.
 cargo test -p winia --lib components::alert_dialog
 ```
 
-15 unit tests, all over the arena (`Modifier::test_tag` + a real overlay layout — the registered
+22 unit tests, all over the arena (`Modifier::test_tag` + a real overlay layout — the registered
 overlay's content is composed in its own `Composer`, as the app does), so they check the geometry the
 user sees rather than the builder's fields:
 

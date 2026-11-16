@@ -107,6 +107,124 @@ impl AlertDialogDefaults {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// Colours and styling (`docs/component-authoring.md` §6.1)
+// ═══════════════════════════════════════════════════════════
+
+/// The five colours a dialog derives from theme roles — `DialogTokens`.
+///
+/// `AlertDialog` let a caller override four of them one dialog at a time; the action-label colour
+/// had no override at all (Compose's `AlertDialogImpl` passes `ActionLabelTextColor` and takes no
+/// parameter for it), so a styling is the only way to reach it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlertDialogColors {
+    /// `DialogTokens.ContainerColor` = `SurfaceContainerHigh`.
+    pub container: Color,
+    /// `DialogTokens.IconColor` = `Secondary`.
+    pub icon: Color,
+    /// `DialogTokens.HeadlineColor` = `OnSurface`.
+    pub title: Color,
+    /// `DialogTokens.SupportingTextColor` = `OnSurfaceVariant`.
+    pub text: Color,
+    /// `DialogTokens.ActionLabelTextColor` = `Primary`.
+    pub button: Color,
+}
+
+impl AlertDialogColors {
+    pub fn new(container: Color, icon: Color, title: Color, text: Color, button: Color) -> Self {
+        Self {
+            container,
+            icon,
+            title,
+            text,
+            button,
+        }
+    }
+
+    /// A copy with some slots replaced. `None` means "keep the source value", the contract every
+    /// `copy(..)` in this crate uses.
+    pub fn copy(
+        &self,
+        container: Option<Color>,
+        icon: Option<Color>,
+        title: Option<Color>,
+        text: Option<Color>,
+        button: Option<Color>,
+    ) -> Self {
+        Self {
+            container: container.unwrap_or(self.container),
+            icon: icon.unwrap_or(self.icon),
+            title: title.unwrap_or(self.title),
+            text: text.unwrap_or(self.text),
+            button: button.unwrap_or(self.button),
+        }
+    }
+}
+
+/// The mutable view a [`AlertDialogStyling`] writes into; starts from the theme's derivation.
+pub struct AlertDialogStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
+    pub colors: AlertDialogColors,
+}
+
+impl AlertDialogStylingScope {
+    /// The dialog surface's fill.
+    pub fn container(&mut self, color: Color) {
+        self.colors.container = color;
+    }
+    /// The icon slot's colour.
+    pub fn icon(&mut self, color: Color) {
+        self.colors.icon = color;
+    }
+    /// The headline's colour.
+    pub fn title(&mut self, color: Color) {
+        self.colors.title = color;
+    }
+    /// The supporting text's colour.
+    pub fn text(&mut self, color: Color) {
+        self.colors.text = color;
+    }
+    /// Both action buttons' label colour — the one slot neither dialog offered a setter for.
+    pub fn button(&mut self, color: Color) {
+        self.colors.button = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: AlertDialogColors) {
+        self.colors = colors;
+    }
+}
+
+/// One alert-dialog styling, registered through
+/// [`crate::components::component_styles::ComponentStyles::with`].
+pub type AlertDialogStyling = crate::components::component_styles::Styling<AlertDialogStylingScope>;
+
+/// The dialog's colours for `theme`, with the [`AlertDialogStyling`] in scope applied on top.
+///
+/// This is the ONE place the theme derivation and the styling meet — both `AlertDialog` and
+/// `BasicAlertDialog` resolve through it, so the surface colour is decided once for the pair.
+pub fn alert_dialog_colors_with_styles(theme: &crate::theme::ThemeColors) -> AlertDialogColors {
+    let mut colors = AlertDialogColors {
+        container: AlertDialogDefaults::container_color(theme),
+        icon: AlertDialogDefaults::icon_color(theme),
+        title: AlertDialogDefaults::title_color(theme),
+        text: AlertDialogDefaults::text_color(theme),
+        button: AlertDialogDefaults::button_color(theme),
+    };
+    let styles = crate::components::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<AlertDialogStyling>() {
+        let mut scope = AlertDialogStylingScope {
+            theme: *theme,
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
+            colors,
+        };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
+}
+
 /// A dialog with arbitrary content (Compose `BasicAlertDialog`).
 ///
 /// The content defines its own styling; this provides the surface (shape, colour, the
@@ -256,9 +374,11 @@ impl BasicAlertDialog {
             return;
         }
         let shape = self.shape.unwrap_or_else(AlertDialogDefaults::shape);
+        // Through the class helper: `AlertDialog` forwards an explicit container colour to this
+        // dialog, and when it does not, both types land on the same resolved value.
         let container = self
             .container_color
-            .unwrap_or_else(|| AlertDialogDefaults::container_color(&theme));
+            .unwrap_or_else(|| alert_dialog_colors_with_styles(&theme).container);
         let content = self.content;
         let on_dismiss = self.on_dismiss_request;
         let content_padding = self.content_padding;
@@ -493,19 +613,16 @@ impl AlertDialog {
             .unwrap_or(crate::layout::direction::current());
         let has_icon = self.icon.is_some();
         let shape = self.shape;
+        // The four content colours resolve through the class helper; the explicit setters below
+        // still win over it (explicit parameter > styling > theme).
+        let colours = alert_dialog_colors_with_styles(&theme);
         let container_color = self.container_color;
-        let icon_color = self
-            .icon_content_color
-            .unwrap_or_else(|| AlertDialogDefaults::icon_color(&theme));
-        let title_color = self
-            .title_content_color
-            .unwrap_or_else(|| AlertDialogDefaults::title_color(&theme));
-        let text_color = self
-            .text_content_color
-            .unwrap_or_else(|| AlertDialogDefaults::text_color(&theme));
+        let icon_color = self.icon_content_color.unwrap_or(colours.icon);
+        let title_color = self.title_content_color.unwrap_or(colours.title);
+        let text_color = self.text_content_color.unwrap_or(colours.text);
         // Compose's `AlertDialogImpl` passes `DialogTokens.ActionLabelTextColor` here and offers no
-        // parameter for it, so this stays fixed rather than configurable.
-        let button_color = AlertDialogDefaults::button_color(&theme);
+        // parameter for it, so a class styling is the only way to reach it.
+        let button_color = colours.button;
         let title_style = WiniaTheme::typography().headline_small;
         let text_style = WiniaTheme::typography().body_medium;
         let button_style = WiniaTheme::typography().label_large;
@@ -1170,5 +1287,215 @@ mod tests {
         // The second frame's slots are the ones that must be laid out.
         let (_, _, w, _) = abs_rect(&c, "body");
         assert_eq!(w, 200.0, "the text slot of the second frame is present");
+    }
+
+    // ── Class styling (`docs/component-authoring.md` §6.1) ──
+
+    fn green() -> Color {
+        Color::from_argb(255, 0, 128, 0)
+    }
+
+    fn purple() -> Color {
+        Color::from_argb(255, 120, 40, 200)
+    }
+
+    fn styled_theme() -> crate::theme::ThemeColors {
+        crate::theme::ThemeColors::default_light()
+    }
+
+    /// The styling reaches the resolution both dialog types use.
+    #[test]
+    fn an_alert_dialog_styling_reaches_the_resolution_the_dialogs_use() {
+        use crate::components::component_styles::{ComponentStyles, with_component_styles};
+        let theme = styled_theme();
+        let plain = alert_dialog_colors_with_styles(&theme);
+        assert_eq!(
+            plain.container, theme.surface_container_high,
+            "DialogTokens.ContainerColor is still the role colour"
+        );
+        assert_eq!(plain.icon, theme.secondary);
+        assert_eq!(plain.title, theme.on_surface);
+        assert_eq!(plain.text, theme.on_surface_variant);
+        assert_eq!(plain.button, theme.primary);
+
+        let styled = with_component_styles(
+            ComponentStyles::new().with(AlertDialogStyling::new(|scope| {
+                scope.container(green());
+                scope.button(purple());
+            })),
+            || alert_dialog_colors_with_styles(&theme),
+        );
+        assert_eq!(styled.container, green());
+        assert_eq!(styled.button, purple());
+        assert_eq!(styled.icon, plain.icon, "only what the styling set changed");
+        assert_eq!(styled.title, plain.title);
+        assert_eq!(styled.text, plain.text);
+    }
+
+    /// §6.1's MUST NOT: the scope starts from the theme's answer, so a styling that sets one slot
+    /// leaves the rest exactly as the roles left them.
+    #[test]
+    fn an_alert_dialog_styling_leaves_the_slots_it_does_not_set_alone() {
+        use crate::components::component_styles::{ComponentStyles, with_component_styles};
+        let theme = styled_theme();
+        let plain = alert_dialog_colors_with_styles(&theme);
+
+        let styled = with_component_styles(
+            ComponentStyles::new().with(AlertDialogStyling::new(|scope| {
+                scope.icon(purple());
+                scope.text(green());
+            })),
+            || alert_dialog_colors_with_styles(&theme),
+        );
+        assert_eq!(styled.icon, purple());
+        assert_eq!(styled.text, green());
+        assert_eq!(styled.container, plain.container);
+        assert_eq!(styled.title, plain.title);
+        assert_eq!(styled.button, plain.button);
+    }
+
+    /// An all-`None` copy is the identity, and a supplied slot is the only one replaced.
+    #[test]
+    fn alert_dialog_colors_copy_replaces_exactly_the_slots_it_is_given() {
+        let base = alert_dialog_colors_with_styles(&styled_theme());
+        assert_eq!(
+            base.copy(None, None, None, None, None),
+            base,
+            "an all-`None` copy is the identity"
+        );
+
+        let one = base.copy(None, None, Some(green()), None, None);
+        assert_eq!(one.title, green());
+        assert_eq!(one.container, base.container);
+        assert_eq!(one.icon, base.icon);
+        assert_eq!(one.text, base.text);
+        assert_eq!(one.button, base.button);
+    }
+
+    /// With nothing registered the five slots are exactly the derivation the component used before the
+    /// layer existed — the layer is additive.
+    #[test]
+    fn no_alert_dialog_styling_means_the_old_derivation() {
+        let theme = styled_theme();
+        let colors = alert_dialog_colors_with_styles(&theme);
+        assert_eq!(
+            colors.container,
+            AlertDialogDefaults::container_color(&theme)
+        );
+        assert_eq!(colors.icon, AlertDialogDefaults::icon_color(&theme));
+        assert_eq!(colors.title, AlertDialogDefaults::title_color(&theme));
+        assert_eq!(colors.text, AlertDialogDefaults::text_color(&theme));
+        assert_eq!(colors.button, AlertDialogDefaults::button_color(&theme));
+    }
+
+    /// The colour the dialog SURFACE paints. The overlay composes in its own `Composer`, so this walks
+    /// that one — a `build` that never called the helper fails here.
+    fn painted_dialog_surface(styled: bool) -> Color {
+        use crate::components::component_styles::{ComponentStyles, with_component_styles};
+        let mut c = Composer::new();
+        let dialog = AlertDialog::new(true)
+            .title(fixed_slot("t", 100.0, 20.0))
+            // A visible dialog needs an action: `build` debug-asserts it (Compose requires
+            // `confirmButton` positionally).
+            .confirm_button(fixed_slot("ok", 60.0, 40.0));
+        if styled {
+            with_component_styles(
+                ComponentStyles::new().with(AlertDialogStyling::new(|scope| {
+                    scope.container(green());
+                })),
+                || {
+                    c.compose(move |ctx| {
+                        crate::layout::adaptive::set_window_size(800.0, 600.0);
+                        dialog.build(ctx);
+                    })
+                },
+            );
+        } else {
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(800.0, 600.0);
+                dialog.build(ctx);
+            });
+        }
+        let inner = lay_out_overlay(&mut c);
+        inner
+            .arena_nodes()
+            .iter()
+            .flat_map(|node| node.modifier.elements())
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
+                _ => None,
+            })
+            .expect("the dialog surface paints a background")
+    }
+
+    /// THE REGRESSION this layer exists for: the dialog surface follows `AlertDialogStyling`.
+    #[test]
+    fn the_dialog_surface_paints_the_class_styling() {
+        let theme = styled_theme();
+        assert_eq!(
+            painted_dialog_surface(false),
+            theme.surface_container_high,
+            "with no styling the surface is the role colour"
+        );
+        assert_eq!(
+            painted_dialog_surface(true),
+            green(),
+            "and with one it is the styling's fill"
+        );
+    }
+
+    /// An explicit `container_color(..)` still wins: explicit parameter > class styling > theme.
+    #[test]
+    fn an_explicit_colour_beats_the_alert_dialog_styling() {
+        use crate::components::component_styles::{ComponentStyles, with_component_styles};
+        let explicit = Color::from_argb(255, 0, 0, 255);
+        let mut c = Composer::new();
+        let painted = with_component_styles(
+            ComponentStyles::new().with(AlertDialogStyling::new(|scope| scope.container(green()))),
+            || {
+                let dialog = AlertDialog::new(true)
+                    .title(fixed_slot("t", 100.0, 20.0))
+                    .confirm_button(fixed_slot("ok", 60.0, 40.0))
+                    .container_color(explicit);
+                c.compose(move |ctx| {
+                    crate::layout::adaptive::set_window_size(800.0, 600.0);
+                    dialog.build(ctx);
+                });
+                let inner = lay_out_overlay(&mut c);
+                inner
+                    .arena_nodes()
+                    .iter()
+                    .flat_map(|node| node.modifier.elements())
+                    .find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { color, .. } => {
+                            Some(color.eval())
+                        }
+                        _ => None,
+                    })
+                    .expect("the dialog surface paints a background")
+            },
+        );
+        assert_eq!(
+            painted, explicit,
+            "explicit parameter > class styling > theme"
+        );
+    }
+
+    /// The styling is a subtree: outside its block the theme derivation is back.
+    #[test]
+    fn an_alert_dialog_styling_ends_with_its_block() {
+        use crate::components::component_styles::{ComponentStyles, with_component_styles};
+        let theme = styled_theme();
+        let plain = alert_dialog_colors_with_styles(&theme);
+
+        with_component_styles(
+            ComponentStyles::new().with(AlertDialogStyling::new(|scope| scope.container(green()))),
+            || assert_eq!(alert_dialog_colors_with_styles(&theme).container, green()),
+        );
+        assert_eq!(
+            alert_dialog_colors_with_styles(&theme).container,
+            plain.container,
+            "outside the block the theme derivation is back"
+        );
     }
 }

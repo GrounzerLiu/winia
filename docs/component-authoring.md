@@ -604,20 +604,20 @@ want to restyle.
 
 A component that derives its colours from the theme but has no styling type is not a simpler
 component — it is the one a caller cannot restyle, with the palette as their only lever. **Measured
-2026-11-15: 7 of the 22 components that own a colour set are wired (Badge, BottomSheetScaffold,
-Button, ButtonGroup, Card, Checkbox, Chip).** The other 15 are debt, not a decision, and a new one
-added without its styling type grows it.
+2026-11-15: 8 of the 23 components that own a colour set are wired (AlertDialog, Badge,
+BottomSheetScaffold, Button, ButtonGroup, Card, Checkbox, Chip).** The other 15 are debt, not a
+decision, and a new one added without its styling type grows it.
 
 **MUST** resolve a component's default appearance through its own helper
-(`badge_colors_with_styles` for a badge, `bottom_sheet_scaffold_colors_with_styles` for a
-bottom-sheet scaffold, `button_visual_with_styles` for a button,
-`button_group_colors_with_styles` for a button group, `card_visual_with_styles` for a card,
-`chip_visual_with_styles` for a chip) rather than calling the theme derivation directly: the helper
-is the single place "explicit parameter > styling > theme" is decided, and a component that bypasses
-it silently ignores every styling. The current participants are Badge, BottomSheetScaffold, Button,
-ButtonGroup, Card, Checkbox and Chip — the chip with one helper per colour set
-(`chip_visual_with_styles` / `selectable_chip_visual_with_styles`), because the two sets are two
-classes.
+(`alert_dialog_colors_with_styles` for a dialog, `badge_colors_with_styles` for a badge,
+`bottom_sheet_scaffold_colors_with_styles` for a bottom-sheet scaffold,
+`button_visual_with_styles` for a button, `button_group_colors_with_styles` for a button group,
+`card_visual_with_styles` for a card, `chip_visual_with_styles` for a chip) rather than calling the
+theme derivation directly: the helper is the single place "explicit parameter > styling > theme" is
+decided, and a component that bypasses it silently ignores every styling. The current participants
+are AlertDialog, Badge, BottomSheetScaffold, Button, ButtonGroup, Card, Checkbox and Chip — the chip
+with one helper per colour set (`chip_visual_with_styles` /
+`selectable_chip_visual_with_styles`), because the two sets are two classes.
 
 **MUST NOT** let a styling replace the theme derivation wholesale: the scope starts from the theme's
 answer, so a styling that sets one field leaves the rest exactly as the role colours left them.
