@@ -1267,14 +1267,13 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             transition.finish_completed_predictive();
             // The incoming scene for a predictive pop, computed from the stack MINUS its top entry.
             // Building it here keeps `calculate_scene` pure and the back stack untouched.
-            let pop_incoming = (base_len > 1)
-                .then(|| {
-                    let scene = calculate_scene(&self.scene_strategies, &entries[..base_len - 1]);
-                    SceneHolder {
-                        key: scene.scene_key(),
-                        scene: std::sync::Arc::from(scene),
-                    }
-                });
+            let pop_incoming = (base_len > 1).then(|| {
+                let scene = calculate_scene(&self.scene_strategies, &entries[..base_len - 1]);
+                SceneHolder {
+                    key: scene.scene_key(),
+                    scene: std::sync::Arc::from(scene),
+                }
+            });
             let pop_outgoing = SceneHolder {
                 key: scene_holder.key,
                 scene: std::sync::Arc::clone(scene),

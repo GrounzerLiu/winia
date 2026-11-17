@@ -4,6 +4,9 @@
 //! thread that owns the `State` values a handler writes. This queue is the only `Send + Sync`
 //! boundary between the two; nothing else in the back module may be touched from JNI.
 
+// Only the Android bridge pushes into this queue; the desktop build compiles it for tests.
+#![cfg_attr(not(target_os = "android"), allow(dead_code))]
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
@@ -40,7 +43,9 @@ static INBOX: Mutex<VecDeque<Signal>> = Mutex::new(VecDeque::new());
 /// and a fast gesture must not build a backlog. Terminal events are never dropped.
 pub(crate) fn push(signal: Signal) {
     let mut inbox = INBOX.lock().unwrap_or_else(|error| error.into_inner());
-    if matches!(signal, Signal::Progressed(_)) && matches!(inbox.back(), Some(Signal::Progressed(_))) {
+    if matches!(signal, Signal::Progressed(_))
+        && matches!(inbox.back(), Some(Signal::Progressed(_)))
+    {
         let last = inbox.len() - 1;
         inbox[last] = signal;
     } else {

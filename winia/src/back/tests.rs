@@ -56,7 +56,11 @@ fn progress_events_coalesce_in_the_inbox() {
     inbox::push(Signal::Completed);
 
     let drained = inbox::drain();
-    assert_eq!(drained.len(), 3, "the second progress frame replaces the first");
+    assert_eq!(
+        drained.len(),
+        3,
+        "the second progress frame replaces the first"
+    );
     match drained[1] {
         Signal::Progressed(event) => assert_eq!(event.progress, 0.4),
         other => panic!("expected a progress frame, got {other:?}"),
