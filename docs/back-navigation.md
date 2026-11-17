@@ -504,7 +504,9 @@ binary and the full Skia build fails in `git-sync-deps` on the read-only registr
 
 Predictive sheet and drawer motion is implemented: `ModalBottomSheet` registers an
 overlay-priority predictive handler and maps gesture progress onto the `SheetState` offset between
-the current anchor and `Hidden`; `ModalNavigationDrawer` does the same between `Open` and `Closed`.
+the current anchor and `Hidden`; `ModalNavigationDrawer` and `DismissibleNavigationDrawer` do the same between `Open` and
+`Closed` through one shared helper. The search bar and the modal navigation rail already close
+through the overlay host's `dismiss_on_back_press`, so they need no separate handler.
 The demo's "Open predictive sheet" screen follows the gesture on the phone and settles into
 `hide()` on release. A second gesture that starts while a sheet or drawer is closing is ignored, so
 it cannot drag the panel back open; the guard clears once the panel is open again (`navigation_drawer`

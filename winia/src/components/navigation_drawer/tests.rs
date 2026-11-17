@@ -368,6 +368,25 @@ fn defaults_match_the_material_tokens() {
 // ── composition ──
 
 #[test]
+fn an_open_dismissible_drawer_registers_a_back_handler() {
+    let state = DrawerState::new(DrawerValue::Open);
+    let mut c = comp();
+    let st = state.clone();
+    c.compose(move |ctx| {
+        DismissibleNavigationDrawer::new(|ctx| {
+            crate::components::Text::new("page").build(ctx);
+        })
+        .drawer_state(st)
+        .build(ctx);
+    });
+
+    assert!(
+        c.back_dispatcher().has_enabled(),
+        "an open dismissible drawer should consume back as well"
+    );
+}
+
+#[test]
 fn drawer_builds_content_sheet_and_a_live_anchor() {
     let mut c = comp();
     c.compose(|ctx| {

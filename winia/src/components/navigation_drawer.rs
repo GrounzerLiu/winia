@@ -804,6 +804,59 @@ pub type PermanentDrawerSheet = DrawerSheet;
 ///
 /// The app content stays in the tree underneath; the drawer slides over it behind a
 /// scrim, and the scrim blocks the content's input while the drawer is out.
+/// Wires a drawer's open/close state to the predictive back gesture. Both the modal and the
+/// dismissible drawer share it: either one should close on back, follow the finger while the
+/// gesture is live, and ignore a second gesture while the close animation is running.
+#[composable]
+fn drawer_predictive_back(ctx: &mut ComposeCtx, state: DrawerState) {
+    let back_state = state;
+    let settling: std::rc::Rc<std::cell::Cell<bool>> = ctx
+        .remember(|| std::rc::Rc::new(std::cell::Cell::new(false)))
+        .get();
+    let handler_settling = settling.clone();
+    crate::back::overlay_predictive_back_handler(ctx, back_state.is_open(), move |update| {
+        use crate::back::BackUpdate;
+        match update {
+            BackUpdate::Started(_) => {
+                // A drawer that is open again is no longer the one that was settling.
+                if handler_settling.get() && back_state.target_value() != DrawerValue::Closed {
+                    handler_settling.set(false);
+                }
+            }
+            BackUpdate::Progressed(event) => {
+                // A close is already running: a second gesture must not drag it back open.
+                if handler_settling.get() {
+                    if back_state.target_value() == DrawerValue::Closed {
+                        return;
+                    }
+                    handler_settling.set(false);
+                }
+                let p = event.progress.clamp(0.0, 1.0);
+                let dd = back_state.anchored_draggable();
+                let closed = dd.peek_position_of(&DrawerValue::Closed);
+                if !closed.is_nan() {
+                    // Derive the step from the LIVE offset: no remembered progress to keep in
+                    // sync, and a dropped frame cannot accumulate error. Feed it through
+                    // `drag_delta` (the pointer-drag path), which marks layout; writing the
+                    // offset state alone left the sheet parked.
+                    let delta = closed * p - back_state.current_offset();
+                    if delta.abs() > 0.01 {
+                        back_state.drag_delta(delta);
+                    }
+                }
+            }
+            BackUpdate::Cancelled => {
+                handler_settling.set(false);
+                back_state.open();
+            }
+            BackUpdate::Completed => {
+                handler_settling.set(true);
+                back_state.close();
+            }
+        }
+    });
+}
+
 pub struct ModalNavigationDrawer {
     content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
     drawer_content: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -909,52 +962,7 @@ impl ModalNavigationDrawer {
         );
         state.update_anchors(sheet_w, rtl);
 
-        let back_state = state.clone();
-        let back_settling: std::rc::Rc<std::cell::Cell<bool>> = ctx
-            .remember(|| std::rc::Rc::new(std::cell::Cell::new(false)))
-            .get();
-        let handler_settling = back_settling.clone();
-        crate::back::overlay_predictive_back_handler(ctx, back_state.is_open(), move |update| {
-            use crate::back::BackUpdate;
-            match update {
-                BackUpdate::Started(_) => {
-                    // A drawer that is open again is no longer the one that was settling.
-                    if handler_settling.get() && back_state.target_value() != DrawerValue::Closed {
-                        handler_settling.set(false);
-                    }
-                }
-                BackUpdate::Progressed(event) => {
-                    // A close is already running: a second gesture must not drag it back open.
-                    if handler_settling.get() {
-                        if back_state.target_value() == DrawerValue::Closed {
-                            return;
-                        }
-                        handler_settling.set(false);
-                    }
-                    let p = event.progress.clamp(0.0, 1.0);
-                    let dd = back_state.anchored_draggable();
-                    let closed = dd.peek_position_of(&DrawerValue::Closed);
-                    if !closed.is_nan() {
-                        // Derive the step from the LIVE offset: no remembered progress to keep in
-                        // sync, and a dropped frame cannot accumulate error. Feed it through
-                        // `drag_delta` (the pointer-drag path), which marks layout; writing the
-                        // offset state alone left the sheet parked.
-                        let delta = closed * p - back_state.current_offset();
-                        if delta.abs() > 0.01 {
-                            back_state.drag_delta(delta);
-                        }
-                    }
-                }
-                BackUpdate::Cancelled => {
-                    handler_settling.set(false);
-                    back_state.open();
-                }
-                BackUpdate::Completed => {
-                    handler_settling.set(true);
-                    back_state.close();
-                }
-            }
-        });
+        drawer_predictive_back(ctx, state.clone());
 
         let scrim_color = self.scrim_color.unwrap_or_else(DrawerDefaults::scrim_color);
         let gestures = self.gestures_enabled;
@@ -1101,6 +1109,7 @@ impl DismissibleNavigationDrawer {
             window_w,
         );
         state.update_anchors(sheet_w, rtl);
+        drawer_predictive_back(ctx, state.clone());
 
         let content = self.content;
         let drawer_content = self.drawer_content;
