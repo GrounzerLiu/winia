@@ -47,6 +47,17 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `back start <x> <y> [left\|right\|none]` | 注入一次预测返回的开始（走 JNI 同一 inbox） | `ok back` |
 | `back progress <p> [x] [y]` | 注入一帧手势进度（0..1） | `ok back` |
 | `back cancel` / `back complete` | 注入取消 / 完成 | `ok back` |
+
+预测返回的回归可以这样驱动（坐标是逻辑像素）：
+
+```text
+back start 100 400 left
+back progress 0.4 500 400
+back cancel            # 或 back complete
+```
+
+关闭中的二次手势也能复现：先 `back start` + `back complete`，紧接着再发 `back start` 和
+`back progress`——面板应当继续关闭，而不是被第二次手势拖回去。
 | `s <dy>` 或 `s <dx> <dy>` | 滚轮（双参形式测横向滚动） | `ok scroll` |
 | `r` | 请求截图：置标志 + 唤醒循环，下一帧渲染后像素可取 | `screenshot <W>x<H>` |
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |
