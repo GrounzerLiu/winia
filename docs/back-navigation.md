@@ -492,10 +492,15 @@ Review pass (2026-11-17), issues found while auditing the first cut and fixed:
 Follow-ups after the review are now implemented: overlay back handlers queue a close request that
 `PerWindow` drains through `begin_overlay_close` (host exit animation preserved), a completed event
 that finds no handler asks Java to `finishActivity`, and the plain `OnBackInvokedCallback` branch
-was exercised on the API 36 device with a demo-only `force_plain_back` flag. A real API 33 image
-could not be provisioned here: `sdkmanager` fetched both the `google_apis` and `default` x86_64
-archives as non-ZIP data ("Error on ZipFile unknown archive"), so the API 33 runtime remains
-unverified.
+was exercised on the API 36 device with a demo-only `force_plain_back` flag. The real API 33 image
+was provisioned afterwards (default and `google_apis` x86_64, both SHA-1 checked): on API 33 the
+Java bridge registers an `OnBackInvokedCallback` (confirmed by `CoreBackPreview`), and a plain test
+Activity verified that `onBackInvoked` reaches the native callback (`handlers=false`, then finish).
+The full app still cannot render on the API 33 emulator: Skia's Vulkan backend crashes inside the
+guest `libvulkan.so` at `GetDeviceQueue2` before the window appears. That is an emulator/renderer
+limitation, not the back path; the dispatcher logic is platform-independent and was verified on the
+API 36 device. A GL build would avoid it, but `skia-bindings 0.99.0` publishes no x86_64 Android GL
+binary and the full Skia build fails in `git-sync-deps` on the read-only registry checkout.
 
 Predictive sheet and drawer motion is implemented: `ModalBottomSheet` registers an
 overlay-priority predictive handler and maps gesture progress onto the `SheetState` offset between
