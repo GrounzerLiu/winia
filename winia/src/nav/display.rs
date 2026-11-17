@@ -227,6 +227,11 @@ struct NavTransition<K: NavKey> {
     /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
     /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
     active_spec: crate::runtime::state::Backchannel<Option<NavTransitionSpec>>,
+    /// Gesture-driven pop preview: the scene that would be revealed and the scene leaving it.
+    /// Present only between `begin_predictive_pop` and completion/cancellation; while set, the
+    /// build renders these two scenes and skips `detect` so the normal clock cannot fight the
+    /// gesture. The back stack stays untouched until the gesture completes.
+    predictive: crate::runtime::state::State<Option<PredictivePop<K>>>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -243,6 +248,13 @@ struct NavTransition<K: NavKey> {
 struct SceneHolder<K: NavKey> {
     key: u64,
     scene: std::sync::Arc<dyn Scene<K>>,
+}
+
+/// Scenes captured when a predictive pop starts: the stack is not touched until the gesture commits.
+#[derive(Clone, PartialEq)]
+struct PredictivePop<K: NavKey> {
+    incoming: SceneHolder<K>,
+    outgoing: SceneHolder<K>,
 }
 
 impl<K: NavKey> PartialEq for SceneHolder<K> {
@@ -264,6 +276,7 @@ impl<K: NavKey> NavTransition<K> {
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
             progress: ctx.remember(|| 0.0),
             active_spec: ctx.remember_backchannel(|| None),
+            predictive: ctx.remember(|| None),
             host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
@@ -271,6 +284,91 @@ impl<K: NavKey> NavTransition<K> {
     /// 上一过渡的场景（None = 无进行中过渡）
     fn previous_scene(&self) -> Option<SceneHolder<K>> {
         self.previous.peek().clone()
+    }
+
+    /// Start a gesture-driven pop preview. The stack is untouched; `progress` becomes gesture-driven
+    /// (1 = the leaving scene fully visible, 0 = the incoming scene settled).
+    fn begin_predictive_pop(
+        &self,
+        incoming: SceneHolder<K>,
+        outgoing: SceneHolder<K>,
+        spec: NavTransitionSpec,
+        progress: f32,
+    ) {
+        crate::animation::cancel_animation(&self.progress);
+        self.predictive.set(Some(PredictivePop {
+            incoming: incoming.clone(),
+            outgoing,
+        }));
+        self.finish_predictive_setup(incoming, spec, progress);
+    }
+
+    fn finish_predictive_setup(
+        &self,
+        incoming: SceneHolder<K>,
+        spec: NavTransitionSpec,
+        progress: f32,
+    ) {
+        self.current_key.set(incoming.key);
+        self.forward.set(false);
+        self.active_spec.set(Some(spec));
+        self.progress
+            .as_raw()
+            .set_backchannel((1.0 - progress).clamp(0.0, 1.0));
+    }
+
+    /// Apply one gesture frame; only the latest sampled progress matters.
+    fn update_predictive(&self, progress: f32) {
+        if self.predictive.peek().is_some() {
+            self.progress
+                .as_raw()
+                .set_backchannel((1.0 - progress).clamp(0.0, 1.0));
+        }
+    }
+
+    /// The gesture committed: the caller pops the stack, and this drops the preview without a second
+    /// animation (the scene key already matches).
+    fn complete_predictive(&self) {
+        if self.predictive.peek().is_some() {
+            crate::animation::cancel_animation(&self.progress);
+            self.progress.as_raw().set_backchannel(0.0);
+            self.predictive.set(None);
+            self.previous.set(None);
+            self.active_spec.set(None);
+        }
+    }
+
+    /// The gesture was abandoned: spring the leaving scene back to fully visible, then drop the
+    /// preview once the animation settles (checked at the start of each build).
+    fn cancel_predictive(&self) {
+        if self.predictive.peek().is_none() {
+            return;
+        }
+        let Some(spec) = self.active_spec.peek() else {
+            return;
+        };
+        push_animatable(
+            self.progress.clone(),
+            1.0,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                spec.duration,
+                spec.interpolator.clone(),
+            )),
+        );
+    }
+
+    /// Clear a cancelled preview once its spring-back reached the leaving scene.
+    fn finish_cancelled_predictive(&self) {
+        if self.predictive.peek().is_none() {
+            return;
+        }
+        if !crate::animation::has_animation_for_state(self.progress.state_id())
+            && self.progress.peek() > 0.999
+        {
+            self.predictive.set(None);
+            self.previous.set(None);
+            self.active_spec.set(None);
+        }
     }
 
     /// 检测导航变化并启动过渡（每帧调用——scene key 变化即导航）。
@@ -1070,6 +1168,8 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         if let Some(scene) = &scene {
             // 导航过渡状态机（跨帧 remember——scene key 维度）
             let transition = NavTransition::init(ctx, scene.scene_key());
+            // Starting or finishing a predictive gesture must re-render; progress itself stays silent.
+            let _predictive_active = transition.predictive.get();
             // 方向：isPop 列表差分（对标 NavDisplay.isPop）
             let forward = !is_pop(&prev, &stack);
             // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
@@ -1085,7 +1185,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
                 popped
                     .and_then(|m| m.pop_transition_spec.clone())
-                    .unwrap_or(self.pop_transition_spec)
+                    .unwrap_or_else(|| self.pop_transition_spec.clone())
             };
             // 上一帧渲染的场景对象（退场层来源）——读取须在 last_scene 更新前
             let last_scene = ctx.remember_backchannel(|| None);
@@ -1100,8 +1200,60 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 key: scene.scene_key(),
                 scene: std::sync::Arc::clone(scene),
             };
-            // 检测导航变化并启动过渡
-            transition.detect(&scene_holder, forward, &spec, Some(prev_frame));
+            // A cancelled gesture springs back; once it settles the preview is dropped.
+            transition.finish_cancelled_predictive();
+            // The incoming scene for a predictive pop, computed from the stack MINUS its top entry.
+            // Building it here keeps `calculate_scene` pure and the back stack untouched.
+            let pop_incoming = (base_len > 1)
+                .then(|| {
+                    let scene = calculate_scene(&self.scene_strategies, &entries[..base_len - 1]);
+                    SceneHolder {
+                        key: scene.scene_key(),
+                        scene: std::sync::Arc::from(scene),
+                    }
+                });
+            let pop_outgoing = SceneHolder {
+                key: scene_holder.key,
+                scene: std::sync::Arc::clone(scene),
+            };
+            let pop_spec = self.pop_transition_spec.clone();
+            let can_pop = base_len > 1
+                && (transition.predictive.peek().is_some() || transition.previous.peek().is_none());
+            {
+                let transition = transition.clone();
+                let stack = self.back_stack.clone();
+                let incoming = pop_incoming;
+                let outgoing = pop_outgoing;
+                let spec = pop_spec;
+                crate::back::predictive_back_handler(
+                    ctx,
+                    can_pop && incoming.is_some(),
+                    move |update| match update {
+                        crate::back::BackUpdate::Started(event) => {
+                            if let Some(incoming) = incoming.clone() {
+                                transition.begin_predictive_pop(
+                                    incoming,
+                                    outgoing.clone(),
+                                    spec.clone(),
+                                    event.progress,
+                                );
+                            }
+                        }
+                        crate::back::BackUpdate::Progressed(event) => {
+                            transition.update_predictive(event.progress)
+                        }
+                        crate::back::BackUpdate::Completed => {
+                            stack.pop();
+                            transition.complete_predictive();
+                        }
+                        crate::back::BackUpdate::Cancelled => transition.cancel_predictive(),
+                    },
+                );
+            }
+            // 检测导航变化并启动过渡（手势预览期间由手势驱动，不要让时钟抢走 progress）
+            if transition.predictive.peek().is_none() {
+                transition.detect(&scene_holder, forward, &spec, Some(prev_frame));
+            }
             // 渲染双场景过渡（Stack 层叠：旧场景退出 + 新场景进入）
             // 状态作用域：过渡期两场景的 entries 都提供（滑出层只读——draining）
             let decorators = &self.entry_decorators;
@@ -1140,14 +1292,26 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             // scene key 变化 → 渲染语句组换新 → 强制 Enter（否则语句组 params
             // 比较看不见策略变化 → Skip 重放旧子树）。内部 ctx.key(scene_key)
             // 同理作用于场景内容子树
-            ctx.key(scene_holder.key, |ctx| {
+            let preview_scene = transition
+                .predictive
+                .peek()
+                .map(|pop| pop.incoming.scene.clone());
+            let render_current: &dyn Scene<K> = match preview_scene.as_deref() {
+                Some(scene) => scene,
+                None => scene.as_ref(),
+            };
+            let render_key = preview_scene
+                .as_ref()
+                .map(|scene| scene.scene_key())
+                .unwrap_or(scene_holder.key);
+            ctx.key(render_key, |ctx| {
                 transition.render(
                     ctx,
                     transition
                         .previous_scene()
                         .as_ref()
                         .map(|h| h.scene.as_ref()),
-                    scene.as_ref(),
+                    render_current,
                     &render_entry,
                     &spec,
                 );

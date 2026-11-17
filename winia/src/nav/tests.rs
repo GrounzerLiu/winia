@@ -191,6 +191,101 @@ fn nav_entry_metadata_and_scene_default() {
     assert!(!entry.metadata_ref().contains::<String>());
 }
 
+/// A predictive pop previews the incoming scene without touching the stack; completion pops once.
+#[test]
+fn predictive_back_preview_pops_only_on_completion() {
+    use crate::back::{BackEvent, BackSwipeEdge, BackUpdate};
+
+    let _g = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+    bs.push(TestRoute::Settings);
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        NavDisplay::new(&bs, |ctx, key| match key {
+            TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                crate::components::Text::new("Home").build(ctx);
+            }),
+            TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                crate::components::Text::new("Settings").build(ctx);
+            }),
+            TestRoute::Detail(id) => {
+                let id = *id;
+                NavEntry::new(key.clone(), move |ctx, _| {
+                    crate::components::Text::new(format!("Detail{id}")).build(ctx);
+                })
+            }
+        })
+        .build(ctx);
+    });
+    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+    let dispatcher = composer.back_dispatcher();
+    assert!(
+        dispatcher.has_enabled(),
+        "a two-entry stack registers a predictive handler"
+    );
+    let event = BackEvent {
+        touch: (0.0, 0.0),
+        progress: 0.4,
+        edge: BackSwipeEdge::Left,
+        frame_time: std::time::Duration::ZERO,
+    };
+    assert!(dispatcher.dispatch(BackUpdate::Started(event)));
+    assert_eq!(bs.len(), 2, "the preview must not pop the stack");
+    assert!(dispatcher.dispatch(BackUpdate::Progressed(event)));
+    assert_eq!(bs.len(), 2, "progress frames still do not pop");
+    assert!(dispatcher.dispatch(BackUpdate::Completed));
+    assert_eq!(bs.len(), 1, "completion pops exactly one entry");
+}
+
+/// Cancelling the gesture leaves the stack untouched and closes the gesture.
+#[test]
+fn predictive_back_cancel_keeps_the_stack() {
+    use crate::back::{BackEvent, BackSwipeEdge, BackUpdate};
+
+    let _g = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+    bs.push(TestRoute::Settings);
+    let mut composer = crate::runtime::composer::Composer::new();
+    composer.compose(|ctx| {
+        NavDisplay::new(&bs, |ctx, key| match key {
+            TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                crate::components::Text::new("Home").build(ctx);
+            }),
+            TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                crate::components::Text::new("Settings").build(ctx);
+            }),
+            TestRoute::Detail(id) => {
+                let id = *id;
+                NavEntry::new(key.clone(), move |ctx, _| {
+                    crate::components::Text::new(format!("Detail{id}")).build(ctx);
+                })
+            }
+        })
+        .build(ctx);
+    });
+    composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+    let dispatcher = composer.back_dispatcher();
+    let event = BackEvent {
+        touch: (0.0, 0.0),
+        progress: 0.3,
+        edge: BackSwipeEdge::Left,
+        frame_time: std::time::Duration::ZERO,
+    };
+    assert!(dispatcher.dispatch(BackUpdate::Started(event)));
+    assert!(dispatcher.dispatch(BackUpdate::Cancelled));
+    assert_eq!(bs.len(), 2, "cancelling never pops");
+    assert!(
+        !dispatcher.dispatch(BackUpdate::Progressed(event)),
+        "no gesture is in flight after cancellation"
+    );
+}
+
 /// ResultEventBus：send/take 一次性消费 + 覆盖 + peek
 #[test]
 fn result_event_bus_send_take() {

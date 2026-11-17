@@ -24,6 +24,9 @@ impl AppState {
                     .back_dispatcher()
                     .dispatch(signal.into_update());
             }
+            if let Some(skia) = pw.skia_window.as_ref() {
+                skia.request_redraw();
+            }
         }
         let enabled = self
             .windows
