@@ -910,29 +910,26 @@ impl ModalNavigationDrawer {
         state.update_anchors(sheet_w, rtl);
 
         let back_state = state.clone();
-        let back_last: std::rc::Rc<std::cell::Cell<f32>> = ctx
-            .remember(|| std::rc::Rc::new(std::cell::Cell::new(0.0)))
-            .get();
-        let handler_last = back_last.clone();
         crate::back::overlay_predictive_back_handler(ctx, back_state.is_open(), move |update| {
             use crate::back::BackUpdate;
             match update {
-                BackUpdate::Started(_) => handler_last.set(0.0),
+                BackUpdate::Started(_) => {}
                 BackUpdate::Progressed(event) => {
                     let p = event.progress.clamp(0.0, 1.0);
-                    let last = handler_last.replace(p);
                     let dd = back_state.anchored_draggable();
                     let closed = dd.peek_position_of(&DrawerValue::Closed);
                     if !closed.is_nan() {
-                        // Feed the same drag path as a pointer drag: it marks layout properly,
-                        // whereas writing the offset state alone left the sheet parked.
-                        back_state.drag_delta(closed * (p - last));
+                        // Derive the step from the LIVE offset: no remembered progress to keep in
+                        // sync, and a dropped frame cannot accumulate error. Feed it through
+                        // `drag_delta` (the pointer-drag path), which marks layout; writing the
+                        // offset state alone left the sheet parked.
+                        let delta = closed * p - back_state.current_offset();
+                        if delta.abs() > 0.01 {
+                            back_state.drag_delta(delta);
+                        }
                     }
                 }
-                BackUpdate::Cancelled => {
-                    handler_last.set(0.0);
-                    back_state.open();
-                }
+                BackUpdate::Cancelled => back_state.open(),
                 BackUpdate::Completed => back_state.close(),
             }
         });
