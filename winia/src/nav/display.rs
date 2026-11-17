@@ -1280,8 +1280,10 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 scene: std::sync::Arc::clone(scene),
             };
             let pop_spec = self.pop_transition_spec.clone();
-            let can_pop = base_len > 1
-                && (transition.predictive.peek().is_some() || transition.previous.peek().is_none());
+            // Enabled whenever there is something to pop, including during a normal transition:
+            // disabling it there would unregister the platform callback and a back press would
+            // fall through to the system (finishing the activity) instead of popping.
+            let can_pop = base_len > 1;
             {
                 let transition = transition.clone();
                 let stack = self.back_stack.clone();

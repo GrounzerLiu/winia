@@ -24,6 +24,8 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Attach the Java bridge to the activity that owns this run.
 pub(crate) fn attach(app: &AndroidApp) {
+    // A recreated Activity starts unregistered; the pump re-enables if handlers exist.
+    ENABLED.store(false, Ordering::Release);
     let result = AndroidJni::new(app).with_env(|env| {
         let class = env.load_class(jni_str!("com.winia.back.WiniaBack"))?;
         let activity = app.activity_as_ptr() as jni::sys::jobject;
@@ -124,6 +126,16 @@ pub extern "system" fn Java_com_winia_back_WiniaBack_nativeBackCancelled(
     _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) {
+    inbox::push(Signal::Cancelled);
+}
+
+/// The Activity is going away: forget the registration and cancel any gesture in flight.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_winia_back_WiniaBack_nativeBackDetached(
+    _env: jni::EnvUnowned<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    ENABLED.store(false, Ordering::Release);
     inbox::push(Signal::Cancelled);
 }
 

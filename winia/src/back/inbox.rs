@@ -45,7 +45,18 @@ pub(crate) fn push(signal: Signal) {
         inbox[last] = signal;
     } else {
         if inbox.len() >= CAPACITY {
-            inbox.pop_front();
+            // Never drop a start or a terminal event while an older progress frame can go first.
+            match inbox
+                .iter()
+                .position(|queued| matches!(queued, Signal::Progressed(_)))
+            {
+                Some(position) => {
+                    inbox.remove(position);
+                }
+                None => {
+                    inbox.pop_front();
+                }
+            }
         }
         inbox.push_back(signal);
     }

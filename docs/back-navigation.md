@@ -475,6 +475,22 @@ Landed on branch `v2`:
 - `dd946d6 feat(back)`: overlay-priority handlers for dismissible overlays and Escape routing
   through the dispatcher when no overlay is open.
 
+Review pass (2026-11-17), issues found while auditing the first cut and fixed:
+
+- The predictive settle flags were rebuilt on every composition, so the completion callback's flag
+  was invisible to the next build and the preview (with its full-screen input blocker) never
+  cleared. Both flags are now remembered, and the motion's finish callback wakes one build.
+- Subcomposition composers (lazy items, `BoxWithConstraints`) did not inherit the window's back
+  table, so a handler there was inert. `inherit_window` now copies the dispatcher.
+- Activity recreation left the Rust `ENABLED` cache and the Java registration out of step; attach
+  resets the cache, and `detach` calls a native reset.
+- `NavDisplay` disabled its handler during a normal transition, which unregistered the platform
+  callback and let a back press finish the activity; it is now enabled whenever the stack can pop.
+- The inbox could drop a `Started` event while full, and the pump drained events before any window
+  existed. Both are fixed.
+
 Known follow-ups (out of this slice): predictive sheet/drawer motion, an API 33 legacy run, a
 `winia doctor` check for the Java bridge, and a javac template check in CI (WiniaBack only; the
-Activity template needs games-activity on the classpath).
+Activity template needs games-activity on the classpath). Android back on an overlay calls its
+`on_dismiss` directly, so overlays with a host-side exit animation (animated popups) close without
+that animation; routing it through `begin_overlay_close` needs a PerWindow-owned callback.

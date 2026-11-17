@@ -9,23 +9,25 @@ impl AppState {
     /// the table has an enabled handler.
     #[cfg(target_os = "android")]
     fn pump_back_events(&mut self) {
-        let signals = crate::back::inbox::drain();
+        // Keep the queue while there is no window yet; draining here would drop events that arrive
+        // before the first composition.
         let target = self
             .windows
             .iter()
             .find(|(_, pw)| pw.focused_id.is_some())
             .map(|(id, _)| *id)
             .or_else(|| self.windows.keys().next().copied());
-        if let Some(id) = target
-            && let Some(pw) = self.windows.get_mut(&id)
-        {
-            for signal in signals {
-                pw.composer
-                    .back_dispatcher()
-                    .dispatch(signal.into_update());
-            }
-            if let Some(skia) = pw.skia_window.as_ref() {
-                skia.request_redraw();
+        if let Some(id) = target {
+            let signals = crate::back::inbox::drain();
+            if let Some(pw) = self.windows.get_mut(&id) {
+                for signal in signals {
+                    pw.composer
+                        .back_dispatcher()
+                        .dispatch(signal.into_update());
+                }
+                if let Some(skia) = pw.skia_window.as_ref() {
+                    skia.request_redraw();
+                }
             }
         }
         let enabled = self

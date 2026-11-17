@@ -201,8 +201,17 @@ fn inherit_window(host: Option<*mut Composer>, composer: &mut Composer) {
     let Some(host) = host else { return };
     // SAFETY: LAYOUT_HOST is armed for the duration of `Composer::layout` (see `LayoutHostGuard`),
     // and this only runs from a measure pass, i.e. within that window.
-    let (window, saveable) = unsafe { ((*host).window_id(), (*host).saveable_registry()) };
+    let (window, saveable, back) = unsafe {
+        (
+            (*host).window_id(),
+            (*host).saveable_registry(),
+            (*host).back_dispatcher(),
+        )
+    };
     composer.set_window_id(window);
+    // A BackHandler inside subcomposed content (lazy items, BoxWithConstraints) must land in the
+    // window's table, not in this private composer's.
+    composer.set_back_dispatcher(back);
     // The subcomposition saves into the host's registry too: remember_saveable inside
     // BoxWithConstraints / TabRow content belongs to the page that composed it.
     if let Some(registry) = saveable {
