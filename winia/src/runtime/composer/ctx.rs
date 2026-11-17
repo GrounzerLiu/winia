@@ -100,6 +100,15 @@ impl<'a> ComposeCtx<'a> {
         self.composer.window_insets()
     }
 
+    /// This composition's back handler table.
+    ///
+    /// The dispatcher is owned by the window; the main tree and every overlay composer share it,
+    /// so a handler registered inside a dialog and one registered by the page land in the same
+    /// table (ordering and overlay priority are the dispatcher's job).
+    pub fn back(&self) -> crate::back::BackDispatcher {
+        self.composer.back_dispatcher()
+    }
+
     /// Access the Android activity that owns this composition.
     ///
     /// Returns None on desktop and on composers not attached to an Android window (for example a

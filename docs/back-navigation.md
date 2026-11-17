@@ -45,7 +45,9 @@ progress is a later phase).
 `PRIORITY_OVERLAY = 1000000` is reserved for overlays above the activity window. A `BackEvent`
 carries `progress` (0..1), `swipeEdge` (`EDGE_LEFT = 0`, `EDGE_RIGHT = 1`, `EDGE_NONE = 2`),
 `touchX`, `touchY`, and `frameTimeMillis` (API 36+). Predictive progress exists only from API 34;
-API 33 delivers the terminal event alone.
+API 33 delivers the terminal event alone. On API 34+ a hardware/three-button back also arrives as
+`onBackStarted` with `EDGE_NONE` followed by `onBackInvoked`, so the synthetic-start path in the
+Rust dispatcher is only used on API 33 or when the manifest flag is off (measured, see section 10).
 
 ### 2.2 androidx.activity
 
@@ -359,9 +361,19 @@ games-activity artifact, so a broken bridge cannot land.
 
 ## 10. Phases
 
-Phase 0 (spike, no production code): on the AVD, verify that GameActivity 4.4.0 does not register its
-own back callback, that `enableOnBackInvokedCallback` delivers started/progressed on API 36, and that
-a minimal `OnBackAnimationCallback` receives events. Log results here.
+Phase 0 (spike, no production code): **verified 2026-11-17 on the agnes36 AVD (API 36, x86_64)**
+with a GameActivity 4.4.0 probe. Results:
+
+- GameActivity 4.4.0 does not register a competing back callback; a plain `PRIORITY_DEFAULT`
+  registration is enough, no `dispatchKeyEvent` fallback is needed.
+- `android:enableOnBackInvokedCallback="true"` is honoured: `registerOnBackInvokedCallback` at
+  `PRIORITY_DEFAULT` succeeded without an exception on the GameActivity instance.
+- An edge swipe delivers `onBackStarted(progress = 0, edge = LEFT)` then a stream of
+  `onBackProgressed` frames at ~16 ms, reaching `progress ≈ 0.575` before `onBackInvoked`.
+- `adb shell input keyevent KEYCODE_BACK` delivers `onBackStarted(edge = NONE)` and
+  `onBackInvoked`, with no progress frames (the log showed `started progress=0.0 edge=2`).
+- The activity stays alive after `onBackInvoked` returns (the probe consumed back and did not call
+  `finish()`), which is the behaviour the bridge needs.
 
 Phase A: `back` module, dispatcher, priorities, effects, unit tests. Desktop debug injection.
 
@@ -395,8 +407,8 @@ activity; Escape behaviour on desktop matches the new overlay rules.
 
 ## 12. Risks and unknowns
 
-- GameActivity may register its own `OnBackInvokedCallback`; the spike decides between direct
-  registration and a `dispatchKeyEvent` fallback. Direct registration is strongly preferred.
+- GameActivity's back-callback behaviour is resolved by the Phase 0 spike: direct registration
+  works, so no `dispatchKeyEvent` fallback is planned.
 - `registerOnBackInvokedCallback` thread requirements must be honoured by posting to the UI thread.
 - The completed event has no synchronous return path to Rust; Java uses `nativeHasHandlers()` as a
   fast path and Rust asks Java to `finishActivity()` when dispatch reports the event unhandled.

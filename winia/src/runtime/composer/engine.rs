@@ -169,6 +169,8 @@ pub struct Composer {
     pub(crate) android_app: Option<winit::platform::android::activity::AndroidApp>,
     /// Insets controller owned by the window this composer belongs to.
     pub(crate) window_insets: crate::window::insets::WindowInsetsController,
+    /// The back handler table shared by this window's composers (the main tree and every overlay).
+    pub(crate) back: crate::back::BackDispatcher,
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
@@ -308,6 +310,7 @@ impl Composer {
             #[cfg(target_os = "android")]
             android_app: None,
             window_insets: crate::window::insets::WindowInsetsController::new(),
+            back: crate::back::BackDispatcher::new(),
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
@@ -374,6 +377,19 @@ impl Composer {
     /// The window-owned insets controller.
     pub(crate) fn window_insets(&self) -> crate::window::insets::WindowInsetsController {
         self.window_insets.clone()
+    }
+
+    /// Share the window-owned back dispatcher with this composer.
+    ///
+    /// The main tree and every overlay composer of one window must talk to the same table; an
+    /// overlay that created its own would make a dialog's handler invisible to the page's window.
+    pub(crate) fn set_back_dispatcher(&mut self, dispatcher: crate::back::BackDispatcher) {
+        self.back = dispatcher;
+    }
+
+    /// The window-owned back dispatcher.
+    pub(crate) fn back_dispatcher(&self) -> crate::back::BackDispatcher {
+        self.back.clone()
     }
 
     /// Attach the Android activity handle to this window's composition context.

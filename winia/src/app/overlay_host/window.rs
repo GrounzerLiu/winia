@@ -171,6 +171,9 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             #[cfg(target_os = "android")]
             composer.set_android_app(pw.composer.android_app.clone());
             composer.set_window_insets(pw.composer.window_insets());
+            // One back table per window: a handler registered inside a dialog must compete with
+            // the page's handlers, not be trapped in the overlay's private composer.
+            composer.set_back_dispatcher(pw.composer.back_dispatcher());
             composer.adaptive = pw.composer.adaptive.clone();
             // The overlay is its own composer, but it belongs to the same window: frame_clock()
             // inside it has to wait on THIS window's frames rather than on window 0's.
