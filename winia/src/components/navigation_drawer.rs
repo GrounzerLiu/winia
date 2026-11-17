@@ -910,14 +910,26 @@ impl ModalNavigationDrawer {
         state.update_anchors(sheet_w, rtl);
 
         let back_state = state.clone();
+        let back_settling: std::rc::Rc<std::cell::Cell<bool>> = ctx
+            .remember(|| std::rc::Rc::new(std::cell::Cell::new(false)))
+            .get();
+        let handler_settling = back_settling.clone();
         crate::back::overlay_predictive_back_handler(ctx, back_state.is_open(), move |update| {
             use crate::back::BackUpdate;
             match update {
-                BackUpdate::Started(_) => {}
+                BackUpdate::Started(_) => {
+                    // A drawer that is open again is no longer the one that was settling.
+                    if handler_settling.get() && back_state.target_value() != DrawerValue::Closed {
+                        handler_settling.set(false);
+                    }
+                }
                 BackUpdate::Progressed(event) => {
                     // A close is already running: a second gesture must not drag it back open.
-                    if back_state.target_value() == DrawerValue::Closed {
-                        return;
+                    if handler_settling.get() {
+                        if back_state.target_value() == DrawerValue::Closed {
+                            return;
+                        }
+                        handler_settling.set(false);
                     }
                     let p = event.progress.clamp(0.0, 1.0);
                     let dd = back_state.anchored_draggable();
@@ -933,8 +945,14 @@ impl ModalNavigationDrawer {
                         }
                     }
                 }
-                BackUpdate::Cancelled => back_state.open(),
-                BackUpdate::Completed => back_state.close(),
+                BackUpdate::Cancelled => {
+                    handler_settling.set(false);
+                    back_state.open();
+                }
+                BackUpdate::Completed => {
+                    handler_settling.set(true);
+                    back_state.close();
+                }
             }
         });
 

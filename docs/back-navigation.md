@@ -506,7 +506,9 @@ Predictive sheet and drawer motion is implemented: `ModalBottomSheet` registers 
 overlay-priority predictive handler and maps gesture progress onto the `SheetState` offset between
 the current anchor and `Hidden`; `ModalNavigationDrawer` does the same between `Open` and `Closed`.
 The demo's "Open predictive sheet" screen follows the gesture on the phone and settles into
-`hide()` on release.
+`hide()` on release. A second gesture that starts while a sheet or drawer is closing is ignored, so
+it cannot drag the panel back open; the guard clears once the panel is open again (`navigation_drawer`
+is covered by the emulator scenario, `bottom_sheet` keeps the simpler target check).
 
 The CI javac step covers the WiniaBack template only; the Activity template needs games-activity on
 the classpath. `winia doctor` now reports the bridge file and the manifest opt-in (Android projects
