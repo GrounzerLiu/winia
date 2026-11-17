@@ -497,6 +497,6 @@ could not be provisioned here: `sdkmanager` fetched both the `google_apis` and `
 archives as non-ZIP data ("Error on ZipFile unknown archive"), so the API 33 runtime remains
 unverified.
 
-Still out of scope: predictive sheet/drawer motion, a `winia doctor` check for the Java bridge, and
-a javac template check in CI (WiniaBack only; the Activity template needs games-activity on the
-classpath).
+Still out of scope: predictive sheet/drawer motion. The CI javac step covers the WiniaBack template
+only; the Activity template needs games-activity on the classpath. `winia doctor` now reports the
+bridge file and the manifest opt-in (Android projects only).
