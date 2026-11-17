@@ -209,6 +209,27 @@ pub fn predictive_back_handler(
     enabled: bool,
     on_back: impl FnMut(BackUpdate) + 'static,
 ) {
+    register_predictive(ctx, BackPriority::Default, enabled, on_back);
+}
+
+/// Like [`predictive_back_handler`], but at overlay priority: a sheet or drawer that is modal
+/// consumes the gesture before the page's navigation handler.
+#[composable]
+pub fn overlay_predictive_back_handler(
+    ctx: &mut ComposeCtx,
+    enabled: bool,
+    on_back: impl FnMut(BackUpdate) + 'static,
+) {
+    register_predictive(ctx, BackPriority::Overlay, enabled, on_back);
+}
+
+#[composable]
+fn register_predictive(
+    ctx: &mut ComposeCtx,
+    priority: BackPriority,
+    enabled: bool,
+    on_back: impl FnMut(BackUpdate) + 'static,
+) {
     let dispatcher = ctx.back();
     let dispatcher_id = dispatcher.id();
     let callback: Rc<RefCell<dyn FnMut(BackUpdate)>> = Rc::new(RefCell::new(on_back));
@@ -216,7 +237,7 @@ pub fn predictive_back_handler(
     let registration = ctx.remember(|| {
         let latest = latest.clone();
         dispatcher.register(
-            BackPriority::Default,
+            priority,
             enabled,
             BackHandlerSpec::predictive(move |update| {
                 let callback = latest.peek();

@@ -497,6 +497,12 @@ could not be provisioned here: `sdkmanager` fetched both the `google_apis` and `
 archives as non-ZIP data ("Error on ZipFile unknown archive"), so the API 33 runtime remains
 unverified.
 
-Still out of scope: predictive sheet/drawer motion. The CI javac step covers the WiniaBack template
-only; the Activity template needs games-activity on the classpath. `winia doctor` now reports the
-bridge file and the manifest opt-in (Android projects only).
+Predictive sheet and drawer motion is implemented: `ModalBottomSheet` registers an
+overlay-priority predictive handler and maps gesture progress onto the `SheetState` offset between
+the current anchor and `Hidden`; `ModalNavigationDrawer` does the same between `Open` and `Closed`.
+The demo's "Open predictive sheet" screen follows the gesture on the phone and settles into
+`hide()` on release.
+
+The CI javac step covers the WiniaBack template only; the Activity template needs games-activity on
+the classpath. `winia doctor` now reports the bridge file and the manifest opt-in (Android projects
+only).

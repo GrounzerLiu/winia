@@ -244,6 +244,30 @@ impl ModalBottomSheet {
                 std::time::Duration::from_millis(200),
             )),
             content: Box::new(move |ctx| {
+                let back_state = sheet_state.clone();
+                crate::back::overlay_predictive_back_handler(
+                    ctx,
+                    back_state.is_visible(),
+                    move |update| {
+                        use crate::back::BackUpdate;
+                        match update {
+                            BackUpdate::Started(_) | BackUpdate::Progressed(_) => {
+                                let p = update.progress().clamp(0.0, 1.0);
+                                let dd = back_state.anchored_draggable();
+                                let from = dd.peek_position_of(&back_state.current_value());
+                                let hidden = dd.peek_position_of(&SheetValue::Hidden);
+                                if !from.is_nan() && !hidden.is_nan() {
+                                    back_state.offset_state().set(from + (hidden - from) * p);
+                                }
+                            }
+                            BackUpdate::Cancelled => {
+                                let value = back_state.current_value();
+                                back_state.anchored_draggable().animate_to(value);
+                            }
+                            BackUpdate::Completed => back_state.hide(),
+                        }
+                    },
+                );
                 let theme = crate::theme::WiniaTheme::colors();
                 // 对齐 Compose BottomSheetDefaults.ContainerColor = surfaceContainerLow
                 // + ExpandedShape 28dp + Elevation 1dp（SheetBottomTokens.DockedModalContainerElevation）

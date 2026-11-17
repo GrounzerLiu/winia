@@ -909,6 +909,23 @@ impl ModalNavigationDrawer {
         );
         state.update_anchors(sheet_w, rtl);
 
+        let back_state = state.clone();
+        crate::back::overlay_predictive_back_handler(ctx, back_state.is_open(), move |update| {
+            use crate::back::BackUpdate;
+            match update {
+                BackUpdate::Started(_) | BackUpdate::Progressed(_) => {
+                    let p = update.progress().clamp(0.0, 1.0);
+                    let dd = back_state.anchored_draggable();
+                    let closed = dd.peek_position_of(&DrawerValue::Closed);
+                    if !closed.is_nan() {
+                        back_state.offset_state().set(closed * p);
+                    }
+                }
+                BackUpdate::Cancelled => back_state.open(),
+                BackUpdate::Completed => back_state.close(),
+            }
+        });
+
         let scrim_color = self.scrim_color.unwrap_or_else(DrawerDefaults::scrim_color);
         let gestures = self.gestures_enabled;
         let content = self.content;
