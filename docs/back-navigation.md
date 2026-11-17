@@ -489,8 +489,14 @@ Review pass (2026-11-17), issues found while auditing the first cut and fixed:
 - The inbox could drop a `Started` event while full, and the pump drained events before any window
   existed. Both are fixed.
 
-Known follow-ups (out of this slice): predictive sheet/drawer motion, an API 33 legacy run, a
-`winia doctor` check for the Java bridge, and a javac template check in CI (WiniaBack only; the
-Activity template needs games-activity on the classpath). Android back on an overlay calls its
-`on_dismiss` directly, so overlays with a host-side exit animation (animated popups) close without
-that animation; routing it through `begin_overlay_close` needs a PerWindow-owned callback.
+Follow-ups after the review are now implemented: overlay back handlers queue a close request that
+`PerWindow` drains through `begin_overlay_close` (host exit animation preserved), a completed event
+that finds no handler asks Java to `finishActivity`, and the plain `OnBackInvokedCallback` branch
+was exercised on the API 36 device with a demo-only `force_plain_back` flag. A real API 33 image
+could not be provisioned here: `sdkmanager` fetched both the `google_apis` and `default` x86_64
+archives as non-ZIP data ("Error on ZipFile unknown archive"), so the API 33 runtime remains
+unverified.
+
+Still out of scope: predictive sheet/drawer motion, a `winia doctor` check for the Java bridge, and
+a javac template check in CI (WiniaBack only; the Activity template needs games-activity on the
+classpath).

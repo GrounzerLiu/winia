@@ -19,12 +19,22 @@ impl AppState {
             .or_else(|| self.windows.keys().next().copied());
         if let Some(id) = target {
             let signals = crate::back::inbox::drain();
+            let app = self.platform.android_app.clone();
             if let Some(pw) = self.windows.get_mut(&id) {
                 for signal in signals {
-                    pw.composer
-                        .back_dispatcher()
-                        .dispatch(signal.into_update());
+                    let completed = matches!(signal, crate::back::inbox::Signal::Completed);
+                    let handled = pw.composer.back_dispatcher().dispatch(signal.into_update());
+                    // The Java fast path may say a handler exists while the table lost it in the
+                    // meantime; without this the completion would be swallowed and back would do
+                    // nothing. Ask the activity to finish instead.
+                    if completed
+                        && !handled
+                        && let Some(app) = app.as_ref()
+                    {
+                        crate::platform::android::back::finish_activity(app);
+                    }
                 }
+                pw.flush_back_close_requests();
                 if let Some(skia) = pw.skia_window.as_ref() {
                     skia.request_redraw();
                 }
@@ -56,6 +66,10 @@ impl ApplicationHandler for AppState {
         // Back events queued by the Java callback: this is the first UI-thread point of the pass.
         #[cfg(target_os = "android")]
         self.pump_back_events();
+        // Overlay handlers queue a host close request; run it before the frame renders.
+        for pw in self.windows.values_mut() {
+            pw.flush_back_close_requests();
+        }
         // Wait + request_redraw drives the animation itself (avoids dropping frames when racing between Poll and Wait).
         event_loop.set_control_flow(ControlFlow::Wait);
         // Advance the animations on every pass (independent of windows, so multi-window and child-window animations advance correctly).

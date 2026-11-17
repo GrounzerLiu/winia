@@ -11,12 +11,21 @@ fn wrap_overlay_content(
     content: Box<dyn Fn(&mut ComposeCtx)>,
     on_dismiss: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     enabled: bool,
+    window_id: u64,
+    overlay_id: u64,
+    defers_to_content: bool,
 ) -> Box<dyn Fn(&mut ComposeCtx)> {
     Box::new(move |ctx| {
         let callback = on_dismiss.clone();
         crate::back::overlay_back_handler(ctx, enabled, move || {
-            if let Some(callback) = callback.clone() {
-                callback();
+            if defers_to_content {
+                // The content owns the exit: hand it the dismissal request and let it stop composing.
+                if let Some(callback) = callback.clone() {
+                    callback();
+                }
+            } else {
+                // The host owns the exit animation; `on_dismiss` alone would remove it instantly.
+                super::request_back_close(window_id, overlay_id);
             }
         });
         content(ctx);
@@ -26,10 +35,14 @@ fn wrap_overlay_content(
 impl OverlayWindow {
     pub(crate) fn new_with_composer(desc: crate::overlay::OverlayDesc, composer: Composer) -> Self {
         let back_enabled = desc.dismiss_on_back_press && desc.on_dismiss.is_some();
+        let window_id = composer.window_id();
         let content = wrap_overlay_content(
             desc.content,
             desc.on_dismiss.clone(),
             back_enabled,
+            window_id,
+            desc.id,
+            desc.dismiss_defers_to_content,
         );
         Self {
             id: desc.id,
@@ -120,6 +133,9 @@ impl OverlayWindow {
             desc.content,
             self.on_dismiss.clone(),
             back_enabled,
+            self.composer.window_id(),
+            self.id,
+            self.dismiss_defers_to_content,
         );
         self.local_snapshot = desc.local_snapshot;
         // Animation spec update (when a reused overlay's specs change) — rebuild

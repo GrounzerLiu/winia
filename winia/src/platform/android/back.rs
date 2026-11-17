@@ -66,6 +66,19 @@ pub(crate) fn set_enabled(app: &AndroidApp, enabled: bool) {
     }
 }
 
+/// Finish the activity through the Java bridge. Used when a completion finds no handler (a race
+/// between `nativeHasHandlers` and the table), which would otherwise leave back doing nothing.
+pub(crate) fn finish_activity(app: &AndroidApp) {
+    let result = AndroidJni::new(app).with_env(|env| {
+        let class = env.load_class(jni_str!("com.winia.back.WiniaBack"))?;
+        env.call_static_method(class, jni_str!("finishActivity"), jni_sig!("()V"), &[])?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        log::warn!("back bridge finishActivity failed: {error:?}");
+    }
+}
+
 fn event(touch_x: f32, touch_y: f32, progress: f32, edge: i32, frame_millis: i64) -> BackEvent {
     BackEvent {
         touch: (touch_x, touch_y),

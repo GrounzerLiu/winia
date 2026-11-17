@@ -43,6 +43,20 @@ pub(crate) struct OverlayHost {
     pub(crate) suspended_focus_slot: Option<u64>,
 }
 
+thread_local! {
+    /// `(window_id, overlay_id)` close requests raised by overlay back handlers. Thread-local
+    /// because handlers run on the UI thread only; each `PerWindow` drains its own entries during
+    /// the frame, then runs the normal `begin_overlay_close` path (exit animation included).
+    static BACK_CLOSE_REQUESTS: std::cell::RefCell<Vec<(u64, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Ask the hosting window to close `overlay_id` through `begin_overlay_close` (not `on_dismiss`).
+pub(crate) fn request_back_close(window_id: u64, overlay_id: u64) {
+    BACK_CLOSE_REQUESTS.with(|queue| queue.borrow_mut().push((window_id, overlay_id)));
+    crate::runtime::state::wake_loop();
+}
+
 impl Default for OverlayHost {
     fn default() -> Self {
         Self {
@@ -135,6 +149,29 @@ pub(crate) struct OverlayWindow {
 /// Start closing an overlay (exit animation): mark `closing` + fire `on_dismiss` + drive
 /// progress 1→0 (when there is an exit spec) — keep rendering until the animation finishes
 /// (matching Compose's `AnimatedVisibility` exit semantics). With no exit spec → remove at once.
+impl PerWindow {
+    /// Close overlays whose back handler asked for the host path this frame.
+    pub(crate) fn flush_back_close_requests(&mut self) {
+        let window_id = self.composer.window_id();
+        let mut mine = Vec::new();
+        BACK_CLOSE_REQUESTS.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            let mut keep = Vec::with_capacity(queue.len());
+            for (requested_window, overlay_id) in queue.drain(..) {
+                if requested_window == window_id {
+                    mine.push(overlay_id);
+                } else {
+                    keep.push((requested_window, overlay_id));
+                }
+            }
+            *queue = keep;
+        });
+        for overlay_id in mine {
+            begin_overlay_close(self, overlay_id);
+        }
+    }
+}
+
 pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     let Some(idx) = pw.overlay.layers.iter().position(|o| o.id == id) else {
         return;
