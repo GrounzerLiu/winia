@@ -316,6 +316,16 @@ impl PerWindow {
     /// dismissed it is still where they were instead of having to tab back. Clearing the focus is
     /// what Escape does when there is nothing to close (the collapsed field loses its ring).
     pub(crate) fn escape_key(&mut self) -> bool {
+        // With no open overlay, a page-level back handler gets Escape first. Overlay dismissal keeps
+        // its existing begin-close path below so the exit animation still plays.
+        if self.overlay.layers.iter().all(|overlay| overlay.closing)
+            && self
+                .composer
+                .back_dispatcher()
+                .dispatch(crate::back::BackUpdate::Completed)
+        {
+            return true;
+        }
         if let Some(i) = self.overlay.layers.iter().rposition(|o| !o.closing) {
             // A dismissal is a REQUEST: the component hides itself in `on_dismiss` and flips the
             // caller's `visible`. With no handler nobody can complete it, and starting one anyway

@@ -2,8 +2,35 @@ use super::*;
 
 // ── Top-level popup layers (Popup/Dialog/DropdownMenu) ──
 
+/// Give every overlay that can be dismissed a back handler at `BackPriority::Overlay`.
+///
+/// The handler calls the same callback the host would call for a dismissal request. A layer with
+/// `dismiss_on_back_press = false` registers it disabled, so the event falls through to the page
+/// (Compose's behaviour: a dialog that does not consume back lets the activity handle it).
+fn wrap_overlay_content(
+    content: Box<dyn Fn(&mut ComposeCtx)>,
+    on_dismiss: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    enabled: bool,
+) -> Box<dyn Fn(&mut ComposeCtx)> {
+    Box::new(move |ctx| {
+        let callback = on_dismiss.clone();
+        crate::back::overlay_back_handler(ctx, enabled, move || {
+            if let Some(callback) = callback.clone() {
+                callback();
+            }
+        });
+        content(ctx);
+    })
+}
+
 impl OverlayWindow {
     pub(crate) fn new_with_composer(desc: crate::overlay::OverlayDesc, composer: Composer) -> Self {
+        let back_enabled = desc.dismiss_on_back_press && desc.on_dismiss.is_some();
+        let content = wrap_overlay_content(
+            desc.content,
+            desc.on_dismiss.clone(),
+            back_enabled,
+        );
         Self {
             id: desc.id,
             composer,
@@ -20,7 +47,7 @@ impl OverlayWindow {
             fit_around_anchor: desc.fit_around_anchor,
             match_anchor_width: desc.match_anchor_width,
             on_dismiss: desc.on_dismiss,
-            content: desc.content,
+            content,
             local_snapshot: desc.local_snapshot,
             screen_pos: (0.0, 0.0),
             anchor_rect: None,
@@ -88,7 +115,12 @@ impl OverlayWindow {
         self.fit_around_anchor = desc.fit_around_anchor;
         self.match_anchor_width = desc.match_anchor_width;
         self.on_dismiss = desc.on_dismiss;
-        self.content = desc.content;
+        let back_enabled = self.dismiss_on_back_press && self.on_dismiss.is_some();
+        self.content = wrap_overlay_content(
+            desc.content,
+            self.on_dismiss.clone(),
+            back_enabled,
+        );
         self.local_snapshot = desc.local_snapshot;
         // Animation spec update (when a reused overlay's specs change) — rebuild
         // progress on None<->Some flip (None->Some: new driver; Some->None:
