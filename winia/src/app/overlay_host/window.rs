@@ -124,6 +124,7 @@ impl OverlayWindow {
         self.focus_scope = desc.focus_scope;
         self.dismiss_on_outside = desc.dismiss_on_outside;
         self.dismiss_on_back_press = desc.dismiss_on_back_press;
+        self.dismiss_defers_to_content = desc.dismiss_defers_to_content;
         self.click_passthrough = desc.click_passthrough;
         self.fit_around_anchor = desc.fit_around_anchor;
         self.match_anchor_width = desc.match_anchor_width;
