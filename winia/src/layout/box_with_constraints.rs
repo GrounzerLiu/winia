@@ -369,6 +369,24 @@ mod tests {
     /// frame**, which is what the `Reactive<Constraints>` version could not do (it read its initial
     /// unbounded value and only got the real one a composition later).
     #[test]
+    fn a_back_handler_in_subcomposed_content_reaches_the_window_table() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().size(120.0, 60.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::back::back_handler(ctx, true, || {});
+                });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+
+        assert!(
+            composer.back_dispatcher().has_enabled(),
+            "a handler declared in subcomposed content belongs to the window's table"
+        );
+    }
+
+    #[test]
     fn the_content_sees_the_real_constraints_on_the_first_frame() {
         let mut composer = Composer::new();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
