@@ -166,6 +166,11 @@ register on first build, `side_effect` writes `enabled` each pass, `on_forget` r
 cleanup closure captures the id and the window id, resolves the dispatcher through the UI-thread
 registry, and stays `Send`, which `on_forget` requires.
 
+A handler registered in the application root BEFORE a `Window` composes belongs to a Composer no
+window pumps, so it never fires. Register inside the window content (or any child composer that
+shares the window dispatcher, including overlays). This is the same shape as Compose's requirement
+that a `BackHandler` live under an `OnBackPressedDispatcherOwner`.
+
 ### 4.1 Dispatch rules (Compose parity)
 
 1. Handlers are scanned newest-first; overlay-priority handlers are scanned before default ones.
@@ -452,3 +457,24 @@ introducing a migration command (maintenance for zero users).
 | Escape | `winia/src/app/per_window/core.rs` |
 | template | `winia-forge/crates/winia-cli/templates/blank/android/...`, `winia-forge/crates/winia-cli/src/commands/new.rs` |
 | CI | `winia-forge/.github/workflows/ci.yml` |
+
+## 15. Implementation status (2026-11-17)
+
+Landed on branch `v2`:
+
+- `322bded feat(back)`: dispatcher, priorities, gesture state machine, `back_handler` /
+  `overlay_back_handler` / `predictive_back_handler`, per-window Composer wiring, 18 focused tests.
+- `bc998be feat(back)`: `com.winia.back.WiniaBack`, five native methods, the cross-thread inbox,
+  pump in `new_events` / `about_to_wait`, registration sync. Verified on the agnes36 AVD (API 36,
+  x86_64) with a GameActivity probe: automatic registration after composition, key back
+  `started(edge=NONE) + invoked`, edge swipe `started(edge=LEFT) + invoked`, the Rust handler wrote
+  its on-device marker, and the activity stayed alive.
+- `8b5fdad feat(nav)`: `NavDisplay` predictive pop preview (progress from the gesture, stack
+  untouched until completion), completion handoff and cancel spring-back, plus two integration
+  tests.
+- `dd946d6 feat(back)`: overlay-priority handlers for dismissible overlays and Escape routing
+  through the dispatcher when no overlay is open.
+
+Known follow-ups (out of this slice): predictive sheet/drawer motion, an API 33 legacy run, a
+`winia doctor` check for the Java bridge, and a javac template check in CI (WiniaBack only; the
+Activity template needs games-activity on the classpath).
