@@ -302,12 +302,10 @@ fn back_close_desc() -> OverlayDesc {
 #[test]
 fn a_back_close_request_closes_the_matching_overlay() {
     let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
-    pw.overlay
-        .layers
-        .push(OverlayWindow::new_with_composer(
-            back_close_desc(),
-            Composer::new(),
-        ));
+    pw.overlay.layers.push(OverlayWindow::new_with_composer(
+        back_close_desc(),
+        Composer::new(),
+    ));
     let window_id = pw.composer.window_id();
 
     super::request_back_close(window_id, 7);
@@ -325,12 +323,10 @@ fn a_close_request_from_a_dead_window_is_dropped() {
     super::retain_back_close_requests(|window| window != 0xDEAD);
 
     let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
-    pw.overlay
-        .layers
-        .push(OverlayWindow::new_with_composer(
-            back_close_desc(),
-            Composer::new(),
-        ));
+    pw.overlay.layers.push(OverlayWindow::new_with_composer(
+        back_close_desc(),
+        Composer::new(),
+    ));
     pw.flush_back_close_requests();
 
     assert!(
