@@ -237,6 +237,10 @@ struct NavTransition<K: NavKey> {
     predictive_cancelled: std::rc::Rc<std::cell::Cell<bool>>,
     /// True while the post-release tween runs; the preview stays until it reaches 0.
     predictive_completing: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Bumped by the motion's completion callback. The progress value itself is a backchannel, so
+    /// without this wake-up the build that clears the preview (and its input blocker) would never
+    /// run after the tween lands.
+    transition_tick: crate::runtime::state::State<u64>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -282,8 +286,13 @@ impl<K: NavKey> NavTransition<K> {
             progress: ctx.remember(|| 0.0),
             active_spec: ctx.remember_backchannel(|| None),
             predictive: ctx.remember(|| None),
-            predictive_cancelled: std::rc::Rc::new(std::cell::Cell::new(false)),
-            predictive_completing: std::rc::Rc::new(std::cell::Cell::new(false)),
+            predictive_cancelled: ctx
+                .remember(|| std::rc::Rc::new(std::cell::Cell::new(false)))
+                .get(),
+            predictive_completing: ctx
+                .remember(|| std::rc::Rc::new(std::cell::Cell::new(false)))
+                .get(),
+            transition_tick: ctx.remember(|| 0u64),
             host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
@@ -360,13 +369,15 @@ impl<K: NavKey> NavTransition<K> {
             .duration
             .mul_f32(progress)
             .max(std::time::Duration::from_millis(1));
-        push_animatable(
+        let tick = self.transition_tick.clone();
+        crate::animation::push_animatable_with_done(
             self.progress.clone(),
             0.0,
             crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                 duration,
                 spec.interpolator.clone(),
             )),
+            move || tick.set(tick.peek().wrapping_add(1)),
         );
     }
 
@@ -375,9 +386,9 @@ impl<K: NavKey> NavTransition<K> {
         if self.predictive.peek().is_none() || !self.predictive_completing.get() {
             return;
         }
-        if crate::animation::has_animation_for_state(self.progress.state_id())
-            || self.progress.peek() > 0.001
-        {
+        // The completion callback can run while the motion is still registered for the frame; the
+        // value is what matters. Keeping the preview here would also keep its input blocker up.
+        if self.progress.peek() > 0.001 {
             return;
         }
         self.predictive.set(None);
@@ -396,13 +407,15 @@ impl<K: NavKey> NavTransition<K> {
         let Some(spec) = self.active_spec.peek() else {
             return;
         };
-        push_animatable(
+        let tick = self.transition_tick.clone();
+        crate::animation::push_animatable_with_done(
             self.progress.clone(),
             1.0,
             crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                 spec.duration,
                 spec.interpolator.clone(),
             )),
+            move || tick.set(tick.peek().wrapping_add(1)),
         );
     }
 
@@ -411,9 +424,7 @@ impl<K: NavKey> NavTransition<K> {
         if self.predictive.peek().is_none() || !self.predictive_cancelled.get() {
             return;
         }
-        if !crate::animation::has_animation_for_state(self.progress.state_id())
-            && self.progress.peek() > 0.999
-        {
+        if self.progress.peek() > 0.999 {
             self.predictive.set(None);
             self.previous.set(None);
             self.active_spec.set(None);
@@ -1219,6 +1230,8 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             let transition = NavTransition::init(ctx, scene.scene_key());
             // Starting or finishing a predictive gesture must re-render; progress itself stays silent.
             let _predictive_active = transition.predictive.get();
+            // Subscribe to the motion-completion wake-up (see `transition_tick`).
+            let _settled = transition.transition_tick.get();
             // 方向：isPop 列表差分（对标 NavDisplay.isPop）
             let forward = !is_pop(&prev, &stack);
             // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
