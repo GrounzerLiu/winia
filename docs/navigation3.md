@@ -253,10 +253,12 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
     CompositionLocal 提供（entry 内容经 `result_event_bus()` 读取，含 dialog
     覆盖层）。winia 组合模型下 entry 每次重组重跑——take 语义天然匹配
     "返回后处理一次结果"，无需协程订阅
-15. [ ] **navigation event**（Nav3 rememberNavigationEventState/NavigationBackHandler）：
-    依赖独立 navigationevent 库 + Android 系统 back 手势——winia 桌面场景相关性低，
-    仅可借鉴 SceneInfo/previousScenes 建模。成本：高，建议暂缓
-    ——**已评估不做（2026-09）**：同预测性返回，平台不对。
+15. [ ] **navigation event** (Nav3 rememberNavigationEventState/NavigationBackHandler):
+    requires the standalone navigationevent library plus the Android system back gesture.
+    **Reopened 2026-11-17.** The 2026-09 decision to skip it assumed a desktop-only target;
+    Android GameActivity is now a committed target, so the design is recorded in
+    [`back-navigation.md`](back-navigation.md). The borrowable piece remains SceneInfo /
+    previousScenes modelling.
 16. [x] **通用 metadata**（Nav3 NavMetadataKey + metadata{} DSL）：`NavMetadata`
     = `HashMap<TypeId, Box<dyn Any>>`（TypeId 键类型安全——Kotlin 字符串键 +
     cast 的 Rust 等价）；NavEntry::metadata()/metadata_ref()、Scene::metadata()
