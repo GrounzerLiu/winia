@@ -232,6 +232,9 @@ struct NavTransition<K: NavKey> {
     /// build renders these two scenes and skips `detect` so the normal clock cannot fight the
     /// gesture. The back stack stays untouched until the gesture completes.
     predictive: crate::runtime::state::State<Option<PredictivePop<K>>>,
+    /// True only between `cancel_predictive` and the spring-back settling; a fresh gesture starts
+    /// at progress 1 with no animation and must not be mistaken for a settled cancellation.
+    predictive_cancelled: std::rc::Rc<std::cell::Cell<bool>>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -277,6 +280,7 @@ impl<K: NavKey> NavTransition<K> {
             progress: ctx.remember(|| 0.0),
             active_spec: ctx.remember_backchannel(|| None),
             predictive: ctx.remember(|| None),
+            predictive_cancelled: std::rc::Rc::new(std::cell::Cell::new(false)),
             host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
@@ -296,10 +300,12 @@ impl<K: NavKey> NavTransition<K> {
         progress: f32,
     ) {
         crate::animation::cancel_animation(&self.progress);
+        self.predictive_cancelled.set(false);
         self.predictive.set(Some(PredictivePop {
             incoming: incoming.clone(),
-            outgoing,
+            outgoing: outgoing.clone(),
         }));
+        self.previous.set(Some(outgoing));
         self.finish_predictive_setup(incoming, spec, progress);
     }
 
@@ -331,6 +337,7 @@ impl<K: NavKey> NavTransition<K> {
     fn complete_predictive(&self) {
         if self.predictive.peek().is_some() {
             crate::animation::cancel_animation(&self.progress);
+            self.predictive_cancelled.set(false);
             self.progress.as_raw().set_backchannel(0.0);
             self.predictive.set(None);
             self.previous.set(None);
@@ -344,6 +351,7 @@ impl<K: NavKey> NavTransition<K> {
         if self.predictive.peek().is_none() {
             return;
         }
+        self.predictive_cancelled.set(true);
         let Some(spec) = self.active_spec.peek() else {
             return;
         };
@@ -359,7 +367,7 @@ impl<K: NavKey> NavTransition<K> {
 
     /// Clear a cancelled preview once its spring-back reached the leaving scene.
     fn finish_cancelled_predictive(&self) {
-        if self.predictive.peek().is_none() {
+        if self.predictive.peek().is_none() || !self.predictive_cancelled.get() {
             return;
         }
         if !crate::animation::has_animation_for_state(self.progress.state_id())
