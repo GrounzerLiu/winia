@@ -44,6 +44,9 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `c <x> <y>` | 模拟点击（内部拆 down+up） | `ok click` |
 | `d` / `m` / `u` `<x> <y>` | 指针按下 / 移动 / 释放（手势、拖拽序列） | `ok down/move/up` |
 | `k <key...>` | 键盘事件（如 `k Return`） | `ok key` |
+| `back start <x> <y> [left\|right\|none]` | 注入一次预测返回的开始（走 JNI 同一 inbox） | `ok back` |
+| `back progress <p> [x] [y]` | 注入一帧手势进度（0..1） | `ok back` |
+| `back cancel` / `back complete` | 注入取消 / 完成 | `ok back` |
 | `s <dy>` 或 `s <dx> <dy>` | 滚轮（双参形式测横向滚动） | `ok scroll` |
 | `r` | 请求截图：置标志 + 唤醒循环，下一帧渲染后像素可取 | `screenshot <W>x<H>` |
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |

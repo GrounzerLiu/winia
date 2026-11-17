@@ -252,6 +252,10 @@ impl ModalBottomSheet {
                         use crate::back::BackUpdate;
                         match update {
                             BackUpdate::Started(_) | BackUpdate::Progressed(_) => {
+                                // A hide is already running: a second gesture must not drag it open.
+                                if back_state.target_value() == SheetValue::Hidden {
+                                    return;
+                                }
                                 let p = update.progress().clamp(0.0, 1.0);
                                 let dd = back_state.anchored_draggable();
                                 let from = dd.peek_position_of(&back_state.current_value());

@@ -915,6 +915,10 @@ impl ModalNavigationDrawer {
             match update {
                 BackUpdate::Started(_) => {}
                 BackUpdate::Progressed(event) => {
+                    // A close is already running: a second gesture must not drag it back open.
+                    if back_state.target_value() == DrawerValue::Closed {
+                        return;
+                    }
                     let p = event.progress.clamp(0.0, 1.0);
                     let dd = back_state.anchored_draggable();
                     let closed = dd.peek_position_of(&DrawerValue::Closed);

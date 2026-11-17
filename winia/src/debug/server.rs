@@ -817,6 +817,48 @@ fn debug_info_json() -> String {
     .to_string()
 }
 
+/// Parse `back start|progress|cancel|complete` into an inbox signal.
+///
+/// The command feeds the same queue the JNI bridge uses, so a UI test exercises the real
+/// dispatcher and gesture state machine without a device or a system gesture.
+fn parse_back(parts: &[&str]) -> Option<crate::back::inbox::Signal> {
+    use crate::back::inbox::Signal;
+    use crate::back::{BackEvent, BackSwipeEdge};
+    let event = |touch: (f32, f32), progress: f32, edge: BackSwipeEdge| BackEvent {
+        touch,
+        progress,
+        edge,
+        frame_time: std::time::Duration::ZERO,
+    };
+    match *parts.get(1)? {
+        "start" if parts.len() >= 4 => {
+            let touch = (parts[2].parse().ok()?, parts[3].parse().ok()?);
+            let edge = match parts.get(4).copied().unwrap_or("left") {
+                "left" => BackSwipeEdge::Left,
+                "right" => BackSwipeEdge::Right,
+                "none" => BackSwipeEdge::None,
+                _ => return None,
+            };
+            Some(Signal::Started(event(touch, 0.0, edge)))
+        }
+        "progress" if parts.len() >= 3 => {
+            let progress: f32 = parts[2].parse().ok()?;
+            let touch = match (parts.get(3), parts.get(4)) {
+                (Some(x), Some(y)) => (x.parse().ok()?, y.parse().ok()?),
+                _ => (0.0, 0.0),
+            };
+            Some(Signal::Progressed(event(
+                touch,
+                progress.clamp(0.0, 1.0),
+                BackSwipeEdge::Left,
+            )))
+        }
+        "cancel" => Some(Signal::Cancelled),
+        "complete" => Some(Signal::Completed),
+        _ => None,
+    }
+}
+
 // stdin channel
 
 pub fn start_stdin_channel() {
@@ -869,6 +911,11 @@ pub fn start_stdin_channel() {
                             key: parts[1..].join(" "),
                         },
                     );
+                }
+                "back" if parts.len() >= 2 => {
+                    if let Some(signal) = parse_back(&parts) {
+                        crate::back::inbox::push(signal);
+                    }
                 }
                 "text" if parts.len() >= 2 => {
                     queue_event_for_window(
@@ -1159,6 +1206,16 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 });
                 let _ = write.send(Message::Text("ok key".into())).await;
             }
+            "back" if parts.len() >= 2 => {
+                let reply = match parse_back(&parts) {
+                    Some(signal) => {
+                        crate::back::inbox::push(signal);
+                        "ok back"
+                    }
+                    None => "bad back",
+                };
+                let _ = write.send(Message::Text(reply.into())).await;
+            }
             "s" if parts.len() >= 2 => {
                 let (dx, dy) = if parts.len() >= 3 {
                     (
@@ -1294,3 +1351,6 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
         }
     }
 }
+
+#[cfg(test)]
+mod back_command_tests;

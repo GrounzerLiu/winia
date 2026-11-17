@@ -51,6 +51,11 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Drop close requests that belong to a window that no longer exists.
+pub(crate) fn retain_back_close_requests(mut keep: impl FnMut(u64) -> bool) {
+    BACK_CLOSE_REQUESTS.with(|queue| queue.borrow_mut().retain(|(window, _)| keep(*window)));
+}
+
 /// Ask the hosting window to close `overlay_id` through `begin_overlay_close` (not `on_dismiss`).
 pub(crate) fn request_back_close(window_id: u64, overlay_id: u64) {
     BACK_CLOSE_REQUESTS.with(|queue| queue.borrow_mut().push((window_id, overlay_id)));

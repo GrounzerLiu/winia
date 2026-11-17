@@ -520,6 +520,9 @@ impl AppState {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
                 self.windows.remove(&window_id);
+                // A queued overlay close for a dead window must not survive to a later one.
+                let raw_id = window_id.into_raw() as u64;
+                crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
                 // The window is gone, so drop its frame clock too (otherwise the registry grows by one entry per window opened).
                 crate::effect::forget_window(window_id.into_raw() as u64);
                 // Clean up the debug tree entry (nothing renders after close — a leftover would mislead UI tests).
@@ -543,6 +546,8 @@ impl AppState {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
                 self.windows.remove(&window_id);
+                let raw_id = window_id.into_raw() as u64;
+                crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
                 debug::remove_tree(window_id.into_raw() as u64);
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window {

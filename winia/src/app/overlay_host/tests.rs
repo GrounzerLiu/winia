@@ -274,3 +274,67 @@ fn an_overlay_composer_inherits_its_windows_clock_identity() {
         "and saves into the same registry: remember_saveable in overlay content belongs to the page"
     );
 }
+
+fn back_close_desc() -> OverlayDesc {
+    OverlayDesc {
+        id: 7,
+        anchor_slot: None,
+        direction: None,
+        position: PopupPosition::Center,
+        offset: (0.0, 0.0),
+        anchor_slide: None,
+        modal: true,
+        focus_scope: true,
+        dismiss_on_outside: true,
+        dismiss_on_back_press: true,
+        dismiss_defers_to_content: false,
+        click_passthrough: false,
+        fit_around_anchor: false,
+        match_anchor_width: false,
+        on_dismiss: None,
+        enter_anim: None,
+        exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
+        content: Box::new(|_| {}),
+        local_snapshot: Vec::new(),
+    }
+}
+
+#[test]
+fn a_back_close_request_closes_the_matching_overlay() {
+    let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
+    pw.overlay
+        .layers
+        .push(OverlayWindow::new_with_composer(
+            back_close_desc(),
+            Composer::new(),
+        ));
+    let window_id = pw.composer.window_id();
+
+    super::request_back_close(window_id, 7);
+    pw.flush_back_close_requests();
+
+    assert!(
+        pw.overlay.layers[0].closing,
+        "the host close path ran for the requested overlay"
+    );
+}
+
+#[test]
+fn a_close_request_from_a_dead_window_is_dropped() {
+    super::request_back_close(0xDEAD, 7);
+    super::retain_back_close_requests(|window| window != 0xDEAD);
+
+    let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
+    pw.overlay
+        .layers
+        .push(OverlayWindow::new_with_composer(
+            back_close_desc(),
+            Composer::new(),
+        ));
+    pw.flush_back_close_requests();
+
+    assert!(
+        !pw.overlay.layers[0].closing,
+        "a stale request must not close another window's overlay"
+    );
+}
