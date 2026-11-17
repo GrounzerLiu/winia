@@ -1,12 +1,56 @@
 use super::*;
 use crate::layout::node::ImeEdit;
 
+impl AppState {
+    /// Drain the platform back queue and hand it to the focused window's dispatcher.
+    ///
+    /// JNI callbacks only enqueue; this is where they meet the `State` values handlers write. The
+    /// registration is re-synchronised afterwards so the platform callback exists exactly while
+    /// the table has an enabled handler.
+    #[cfg(target_os = "android")]
+    fn pump_back_events(&mut self) {
+        let signals = crate::back::inbox::drain();
+        let target = self
+            .windows
+            .iter()
+            .find(|(_, pw)| pw.focused_id.is_some())
+            .map(|(id, _)| *id)
+            .or_else(|| self.windows.keys().next().copied());
+        if let Some(id) = target
+            && let Some(pw) = self.windows.get_mut(&id)
+        {
+            for signal in signals {
+                pw.composer
+                    .back_dispatcher()
+                    .dispatch(signal.into_update());
+            }
+        }
+        let enabled = self
+            .windows
+            .values()
+            .any(|pw| pw.composer.back_dispatcher().has_enabled());
+        if let Some(app) = self.platform.android_app.as_ref() {
+            crate::platform::android::back::set_enabled(app, enabled);
+        }
+    }
+}
+
 impl ApplicationHandler for AppState {
+    /// The first composition registers back handlers after `new_events`; syncing here (and again
+    /// before each wait) keeps the Java registration in step even on an otherwise idle loop.
+    fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        self.pump_back_events();
+    }
+
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
         // Android has no winit ThemeChanged event. ConfigChanged wakes this pass, so compare the
         // latest uiMode here; a real move dirties every window's theme cell.
         #[cfg(target_os = "android")]
         self.sync_android_theme();
+        // Back events queued by the Java callback: this is the first UI-thread point of the pass.
+        #[cfg(target_os = "android")]
+        self.pump_back_events();
         // Wait + request_redraw drives the animation itself (avoids dropping frames when racing between Poll and Wait).
         event_loop.set_control_flow(ControlFlow::Wait);
         // Advance the animations on every pass (independent of windows, so multi-window and child-window animations advance correctly).

@@ -370,6 +370,7 @@ pub fn run_app_android(
     // resolve to light.
     crate::theme::note_platform_theme(crate::platform::android::theme::is_dark(&ui_android_app));
     crate::assets::init_android(android_app.asset_manager());
+    crate::platform::android::back::attach(&ui_android_app);
     let event_loop = EventLoop::builder()
         .with_android_app(android_app)
         .build()

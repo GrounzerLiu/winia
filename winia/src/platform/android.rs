@@ -5,6 +5,7 @@
 
 use crate::runtime::composer::AndroidUi;
 
+pub(crate) mod back;
 pub(crate) mod insets;
 pub mod jni;
 pub(crate) mod permissions;
