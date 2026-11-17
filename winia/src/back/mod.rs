@@ -34,6 +34,7 @@
 //!   finish it.
 
 mod dispatcher;
+pub(crate) mod inbox;
 
 #[cfg(test)]
 mod tests;

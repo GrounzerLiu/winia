@@ -46,6 +46,25 @@ fn discrete(log: Log, tag: &'static str) -> BackHandlerSpec {
 }
 
 #[test]
+fn progress_events_coalesce_in_the_inbox() {
+    use crate::back::inbox::{self, Signal};
+
+    let _ = inbox::drain();
+    inbox::push(Signal::Started(event(0.0)));
+    inbox::push(Signal::Progressed(event(0.1)));
+    inbox::push(Signal::Progressed(event(0.4)));
+    inbox::push(Signal::Completed);
+
+    let drained = inbox::drain();
+    assert_eq!(drained.len(), 3, "the second progress frame replaces the first");
+    match drained[1] {
+        Signal::Progressed(event) => assert_eq!(event.progress, 0.4),
+        other => panic!("expected a progress frame, got {other:?}"),
+    }
+    assert!(inbox::pending() == 0);
+}
+
+#[test]
 fn composed_handlers_follow_composition_order() {
     use crate::runtime::composer::Composer;
 
