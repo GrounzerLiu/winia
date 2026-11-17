@@ -235,6 +235,8 @@ struct NavTransition<K: NavKey> {
     /// True only between `cancel_predictive` and the spring-back settling; a fresh gesture starts
     /// at progress 1 with no animation and must not be mistaken for a settled cancellation.
     predictive_cancelled: std::rc::Rc<std::cell::Cell<bool>>,
+    /// True while the post-release tween runs; the preview stays until it reaches 0.
+    predictive_completing: std::rc::Rc<std::cell::Cell<bool>>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -281,6 +283,7 @@ impl<K: NavKey> NavTransition<K> {
             active_spec: ctx.remember_backchannel(|| None),
             predictive: ctx.remember(|| None),
             predictive_cancelled: std::rc::Rc::new(std::cell::Cell::new(false)),
+            predictive_completing: std::rc::Rc::new(std::cell::Cell::new(false)),
             host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
@@ -301,6 +304,7 @@ impl<K: NavKey> NavTransition<K> {
     ) {
         crate::animation::cancel_animation(&self.progress);
         self.predictive_cancelled.set(false);
+        self.predictive_completing.set(false);
         self.predictive.set(Some(PredictivePop {
             incoming: incoming.clone(),
             outgoing: outgoing.clone(),
@@ -332,17 +336,54 @@ impl<K: NavKey> NavTransition<K> {
         }
     }
 
-    /// The gesture committed: the caller pops the stack, and this drops the preview without a second
-    /// animation (the scene key already matches).
+    /// The gesture committed: the caller has popped the stack, and the remaining transition is
+    /// finished by a short tween from the hand-off progress to 0. The preview stays up until that
+    /// tween completes, so releasing mid-gesture does not snap to the destination.
     fn complete_predictive(&self) {
-        if self.predictive.peek().is_some() {
-            crate::animation::cancel_animation(&self.progress);
-            self.predictive_cancelled.set(false);
-            self.progress.as_raw().set_backchannel(0.0);
-            self.predictive.set(None);
-            self.previous.set(None);
-            self.active_spec.set(None);
+        if self.predictive.peek().is_none() {
+            return;
         }
+        self.predictive_cancelled.set(false);
+        self.predictive_completing.set(true);
+        let progress = self.progress.peek().clamp(0.0, 1.0);
+        if progress <= 0.001 {
+            self.finish_completed_predictive();
+            return;
+        }
+        crate::animation::cancel_animation(&self.progress);
+        let Some(spec) = self.active_spec.peek() else {
+            self.finish_completed_predictive();
+            return;
+        };
+        // Only the remaining distance is animated: a gesture released at 80% should settle quickly.
+        let duration = spec
+            .duration
+            .mul_f32(progress)
+            .max(std::time::Duration::from_millis(1));
+        push_animatable(
+            self.progress.clone(),
+            0.0,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                duration,
+                spec.interpolator.clone(),
+            )),
+        );
+    }
+
+    /// Drop the preview once the post-release tween has settled at 0.
+    fn finish_completed_predictive(&self) {
+        if self.predictive.peek().is_none() || !self.predictive_completing.get() {
+            return;
+        }
+        if crate::animation::has_animation_for_state(self.progress.state_id())
+            || self.progress.peek() > 0.001
+        {
+            return;
+        }
+        self.predictive.set(None);
+        self.previous.set(None);
+        self.active_spec.set(None);
+        self.predictive_completing.set(false);
     }
 
     /// The gesture was abandoned: spring the leaving scene back to fully visible, then drop the
@@ -1208,8 +1249,9 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 key: scene.scene_key(),
                 scene: std::sync::Arc::clone(scene),
             };
-            // A cancelled gesture springs back; once it settles the preview is dropped.
+            // A cancelled gesture springs back; a committed one finishes its remaining tween.
             transition.finish_cancelled_predictive();
+            transition.finish_completed_predictive();
             // The incoming scene for a predictive pop, computed from the stack MINUS its top entry.
             // Building it here keeps `calculate_scene` pure and the back stack untouched.
             let pop_incoming = (base_len > 1)
