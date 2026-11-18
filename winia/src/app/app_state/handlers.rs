@@ -18,7 +18,14 @@ impl AppState {
             .iter()
             .find(|(_, pw)| pw.focused_id.is_some())
             .map(|(id, _)| *id);
-        let fallback = self.windows.keys().next().copied();
+        // Android composites several winit windows into one Activity surface in creation order;
+        // with no focused window, back belongs to the most recently created (topmost) one, not to
+        // whatever HashMap iteration happens to return first.
+        let fallback = self
+            .windows
+            .iter()
+            .max_by_key(|(_, pw)| pw.created_id.unwrap_or(0))
+            .map(|(id, _)| *id);
         let signals = crate::back::inbox::drain();
         #[cfg(target_os = "android")]
         let app = self.platform.android_app.clone();

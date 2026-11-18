@@ -31,11 +31,13 @@ fn window_with_back(id: u64, tag: &'static str, log: Rc<RefCell<Vec<&'static str
     pw
 }
 
-fn state_with_two_windows() -> (AppState, Rc<RefCell<Vec<&'static str>>>) {
+fn state_with_two_windows(focus_first: bool) -> (AppState, Rc<RefCell<Vec<&'static str>>>) {
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut first = window_with_back(1, "one", log.clone());
-    first.focused_id = Some(1);
-    let second = window_with_back(2, "two", log.clone());
+    first.focused_id = focus_first.then_some(1);
+    first.created_id = Some(1);
+    let mut second = window_with_back(2, "two", log.clone());
+    second.created_id = Some(2);
 
     let mut windows = HashMap::new();
     windows.insert(test_window_id(1), first);
@@ -54,7 +56,7 @@ fn state_with_two_windows() -> (AppState, Rc<RefCell<Vec<&'static str>>>) {
 
 #[test]
 fn a_targeted_back_event_reaches_only_that_window() {
-    let (mut state, log) = state_with_two_windows();
+    let (mut state, log) = state_with_two_windows(true);
     let _ = inbox::drain();
 
     inbox::push_for(2, Signal::Completed);
@@ -64,7 +66,7 @@ fn a_targeted_back_event_reaches_only_that_window() {
 
 #[test]
 fn a_global_back_event_goes_to_the_focused_window() {
-    let (mut state, log) = state_with_two_windows();
+    let (mut state, log) = state_with_two_windows(true);
     let _ = inbox::drain();
 
     inbox::push(Signal::Completed);
@@ -73,8 +75,22 @@ fn a_global_back_event_goes_to_the_focused_window() {
 }
 
 #[test]
+fn a_global_event_without_focus_goes_to_the_topmost_window() {
+    let (mut state, log) = state_with_two_windows(false);
+    let _ = inbox::drain();
+
+    inbox::push(Signal::Completed);
+    state.pump_back_events();
+    assert_eq!(
+        *log.borrow(),
+        vec!["two"],
+        "without focus, back belongs to the most recently created (topmost) window"
+    );
+}
+
+#[test]
 fn a_target_with_no_window_is_dropped() {
-    let (mut state, log) = state_with_two_windows();
+    let (mut state, log) = state_with_two_windows(true);
     let _ = inbox::drain();
 
     inbox::push_for(99, Signal::Completed);

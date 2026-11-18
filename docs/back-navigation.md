@@ -32,7 +32,9 @@ observable ordering and completion rules:
 
 Non-goals: iOS, browser back, forward navigation, and Android freeform/multi-display routing. The
 inbox itself routes by window id and desktop multi-window is covered; the Android JNI bridge still
-targets the focused window. Predictive sheet/drawer motion is implemented (section 8).
+targets the focused window. Note that multiple winit windows on Android are composited into one
+Activity surface in creation order, so when none has focus the pump falls back to the most recently
+created (topmost) window. Predictive sheet/drawer motion is implemented (section 8).
 
 ## 2. The Compose reference chain
 
@@ -114,9 +116,9 @@ JNI. JNI methods do exactly two things: append to the inbox and call the existin
 (`APP_PROXY.wake_up()` through `runtime::state::set_wake_fn`).
 
 A queued signal may name a target window. Android JNI events leave it unset and therefore go to
-the focused window (falling back to the first window when none has focus); the debug server can
-send `target <window id>` first to address one window explicitly. A targeted event never falls
-back to another window, and a targeted `Completed` does not finish the activity.
+the focused window (falling back to the most recently created window when none has focus); the debug
+server can send `target <window id>` first to address one window explicitly. A targeted event never
+falls back to another window, and a targeted `Completed` does not finish the activity.
 
 ## 4. Rust API
 
@@ -283,8 +285,10 @@ fn pump_back_events(&mut self) {
 The pump runs from `new_events` and `about_to_wait`, on the loop thread after the wake and before
 window events, which is exactly where a UI-thread-only dispatcher is legal. Dispatch may mark `State`
 values dirty, so the frame that follows picks the update up. A targeted event never falls back to a
-different window; global events go to the focused window, or to the first one before anything has
-focus. Events that arrive before the first window exists stay in the inbox until the first turn.
+different window; global events go to the focused window, or to the most recently created window
+before anything has focus. That order matches Android, where several winit windows are composited
+into one Activity surface in creation order. Events that arrive before the first window exists stay
+in the inbox until the first turn.
 
 Lifecycle: winit's `resumed` / `suspended` toggle the bridge. While suspended, `setEnabled(false)`
 is called, incoming events are dropped, and the in-flight gesture is cancelled; on resume the
@@ -535,8 +539,8 @@ only).
 Multi-window routing landed afterwards:
 
 - A queued signal carries an optional target window. The pump resolves it through
-  `composer.window_id()`; global events go focused -> first, targeted events never fall back, and a
-  targeted `Completed` does not finish the activity.
+  `composer.window_id()`; global events go focused -> topmost (highest `created_id`), targeted events
+  never fall back, and a targeted `Completed` does not finish the activity.
 - The debug server's `target <window id>` works on stdin and, per connection, on WebSocket; the docs
   call out that a WebSocket target must be set on the same connection as the `back` command.
 - `winia/src/app/app_state/back_routing_tests.rs` builds two real `PerWindow`s with independent
