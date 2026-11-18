@@ -102,19 +102,22 @@ impl AppState {
         pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
-        // A window re-opened at the same declaration site picks up what the last one saved. The key
-        // is the caller's stable one; `created_id` is a fallback for openers that have nothing better,
-        // and it cannot survive a reopen on its own.
-        let saveable_key = pending.saveable_key.or(pending.created_id);
-        if let Some(key) = saveable_key {
+        // A window re-opened with the same key picks up what the last one saved. `created_id` is
+        // deliberately NOT a fallback: it is minted fresh for every window, so using it would key
+        // saved state by "the Nth window ever opened" and quietly restore the wrong data. A window
+        // without a key keeps its state in memory only.
+        let memory_key = pending.saveable_key;
+        let persist_key = pending.persist_key;
+        if memory_key.is_some() || persist_key.is_some() {
             // In-memory first (a window re-opened in this process), then whatever a previous RUN
-            // left on disk. Both are best-effort: a missing or corrupt file is just an empty map.
-            let restored = self
-                .saveable
-                .remove(&key)
-                .or_else(|| crate::runtime::saveable::persist::load_saved(key))
+            // left on disk under the APPLICATION's key. Both are best-effort: a missing or corrupt
+            // file is just an empty map.
+            let restored = memory_key
+                .and_then(|key| self.saveable.remove(&key))
+                .or_else(|| persist_key.and_then(crate::runtime::saveable::persist::load_saved))
                 .unwrap_or_default();
-            pw.saveable_key = Some(key);
+            pw.saveable_key = memory_key;
+            pw.persist_key = persist_key;
             pw.composer.set_saveable_registry(
                 crate::runtime::saveable::SaveableStateRegistry::new(restored),
             );

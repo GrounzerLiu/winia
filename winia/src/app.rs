@@ -63,9 +63,13 @@ pub(crate) struct PendingWindow {
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
-    /// Stable key for saveable state, when the caller has one (the declaring call site's salted key).
-    /// `created_id` is minted fresh for every window, so it cannot carry state across a reopen.
+    /// In-memory key for saveable state: the declaring call site's salted key, which is stable while
+    /// the tree keeps its shape. `created_id` is minted fresh for every window, so it is never used.
     pub saveable_key: Option<u64>,
+    /// Disk key, present only when the caller asked for persistence with `.key(..)`. The salted key is
+    /// positional, so writing saved state under it would attach it to whatever window later lands in
+    /// that slot.
+    pub persist_key: Option<u64>,
     pub theme: Option<crate::theme::WindowTheme>,
 }
 use skiwin::capture::{request_capture, take_capture};
@@ -278,6 +282,38 @@ pub fn open_window_with_saveable_key(
     saveable_key: Option<u64>,
     theme: Option<crate::theme::WindowTheme>,
 ) {
+    open_window_with_keys(
+        width,
+        height,
+        title,
+        options,
+        content,
+        on_close,
+        created_id,
+        saveable_key,
+        None,
+        theme,
+    );
+}
+
+/// [`open_window_with_saveable_key`] plus a separate key for state that outlives the process.
+///
+/// The two are split on purpose: `saveable_key` is the declaration site's salted key and is only
+/// valid while the tree keeps its shape, while `persist_key` comes from an application-chosen
+/// `.key(..)` and is the only one written to disk.
+#[allow(clippy::too_many_arguments)]
+pub fn open_window_with_keys(
+    width: f32,
+    height: f32,
+    title: String,
+    options: WindowOptions,
+    content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
+    on_close: Option<Box<dyn FnMut() + Send>>,
+    created_id: Option<u64>,
+    saveable_key: Option<u64>,
+    persist_key: Option<u64>,
+    theme: Option<crate::theme::WindowTheme>,
+) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow {
         width,
         height,
@@ -287,6 +323,7 @@ pub fn open_window_with_saveable_key(
         on_close,
         created_id,
         saveable_key,
+        persist_key,
         theme,
     });
     wake_impl();

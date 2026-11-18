@@ -305,7 +305,8 @@ pub mod prelude {
     };
     pub use crate::app::window::Window;
     pub use crate::app::window_state::{
-        CloseReason, WindowCapabilities, WindowId, WindowPlacement, WindowPosition, WindowState,
+        CloseReason, LastWindowPolicy, WindowCapabilities, WindowId, WindowPlacement, WindowPosition,
+        WindowState,
     };
     pub use crate::components::dropdown_menu::{
         DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,

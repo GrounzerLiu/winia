@@ -112,11 +112,8 @@ Two types carry behaviour, one builder builds, three context calls configure the
 `WindowHandle`, no `WindowKey`, no `WindowScope`, no `WindowOptions` and no `WindowManager`: each
 would be a second name for something already reachable.
 
-Implemented today, and therefore in the tree rather than in this sketch: `WindowId::is_realized`,
-`is_focused`, `state`, `capabilities`, `close`, `destroy`, every `WindowState` getter and setter,
-`ctx.window_id()`, `on_close_requested`, the single close pipeline, and `build` returning the id.
-Still design only: `insets`, `ctx.windows()`, `ctx.set_last_window_policy()`, and the `.key(..)`
-builder method.
+The whole surface in this section is implemented. `insets` is the one exception: it is still
+`ctx.window_insets()` inside window content rather than a method on `WindowId`.
 
 ## 4. Identity
 
@@ -196,6 +193,11 @@ debug builds, which is diagnosable rather than a crash.
 One rule for every builder setter: **it seeds the initial value and is ignored once the window is
 realized; live changes go through `WindowState`.** That is what today's code does implicitly, now
 stated as a contract.
+
+`.key("settings")` is the only thing that makes saved state leave the process: it is hashed into the
+saveable store, and everything else is in-memory for the run. Persistence also needs a store to be
+configured once at startup (`persist::set_store(PersistStore::for_app(..))`); without one nothing is
+written, which is the right default for tests and previews.
 
 `resizable` and `always_on_top` are runtime-toggleable on Windows and macOS, so `resizable` lives
 in the state (the builder setter seeds it) rather than being presented as an immutable option.
@@ -322,6 +324,14 @@ Phases 1 and 2 are also in the tree. The close pipeline was verified on desktop 
 native close request to a probe window: with an `on_close_requested` handler that does not act, the
 window stayed open and its title changed to the value the handler wrote; with a handler that calls
 `destroy()`, the process exited. Both runs printed `close requested: User for WindowId(1)`.
+
+Phase 3 is in the tree as well. Saved state was verified across two runs with a probe window that
+declared `.key("probe-persist")`: the first run restored 0 and wrote
+`window-ab3491ae05cd0306.json`, the second restored 1 from disk. Two things the implementation had
+to get right: the in-memory key is still the declaration site's salted key (so close-and-reopen in
+one process keeps working), while the disk key is only the application's `.key(..)` - and the
+silent `saveable_key.or(created_id)` fallback is gone, because a per-instance id would attach saved
+state to "the Nth window ever opened".
 
 Two facts found while implementing, which the remaining phases depend on:
 

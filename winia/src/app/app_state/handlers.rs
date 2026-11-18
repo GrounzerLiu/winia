@@ -21,13 +21,15 @@ impl AppState {
         if let Some(ref mut cb) = pw.on_close {
             cb();
         }
-        if let Some(key) = pw.saveable_key
-            && let Some(registry) = pw.composer.saveable_registry()
-        {
+        if let Some(registry) = pw.composer.saveable_registry() {
             let saved = registry.perform_save();
             if !saved.is_empty() {
-                crate::runtime::saveable::persist::save_saved(key, &saved);
-                self.saveable.insert(key, saved);
+                if let Some(key) = pw.persist_key {
+                    crate::runtime::saveable::persist::save_saved(key, &saved);
+                }
+                if let Some(key) = pw.saveable_key {
+                    self.saveable.insert(key, saved);
+                }
             }
         }
         if let Some(ref sw) = pw.skia_window {
@@ -50,7 +52,13 @@ impl AppState {
                 sw.request_redraw();
             }
         }
-        if closing_last || is_parent {
+        // Hiding never gets here, so this is destruction only: the policy decides whether an
+        // application that just lost its last window ends or keeps running (tray style).
+        let exit_on_last = matches!(
+            crate::app::window_state::last_window_policy(),
+            crate::app::window_state::LastWindowPolicy::Exit
+        );
+        if is_parent || (closing_last && exit_on_last) {
             debug::force_shutdown();
             event_loop.exit();
         }

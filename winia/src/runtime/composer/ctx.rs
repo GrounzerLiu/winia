@@ -109,6 +109,21 @@ impl<'a> ComposeCtx<'a> {
         crate::app::window_state::WindowId::new(self.composer.created_id())
     }
 
+    /// Every live window, in creation order.
+    ///
+    /// On Android this is also the compositing order inside the single Activity surface.
+    pub fn windows(&self) -> Vec<crate::app::window_state::WindowId> {
+        crate::app::window_state::windows_in_creation_order()
+    }
+
+    /// Choose what happens when the last window is destroyed.
+    ///
+    /// Process-wide, and `LastWindowPolicy::Exit` by default. Hiding a window never triggers it:
+    /// only destruction does.
+    pub fn set_last_window_policy(&self, policy: crate::app::window_state::LastWindowPolicy) {
+        crate::app::window_state::set_last_window_policy(policy);
+    }
+
     /// This composition's back handler table.
     ///
     /// The dispatcher is owned by the window; the main tree and every overlay composer share it,

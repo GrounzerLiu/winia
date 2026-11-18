@@ -39,6 +39,7 @@ pub struct Window {
     options: crate::app::WindowOptions,
     on_close: Option<Box<dyn FnMut() + Send>>,
     on_close_requested: Option<std::rc::Rc<dyn Fn(WindowId, window_state::CloseReason)>>,
+    persist_key: Option<u64>,
 }
 
 /// The values a `Window` declaration carries. Renamed from the old `WindowState`, whose name now
@@ -66,6 +67,7 @@ impl Window {
             options: crate::app::WindowOptions::default(),
             on_close: None,
             on_close_requested: None,
+            persist_key: None,
         }
     }
 
@@ -94,6 +96,16 @@ impl Window {
 
     pub fn on_close(mut self, f: impl FnMut() + Send + 'static) -> Self {
         self.on_close = Some(Box::new(f));
+        self
+    }
+
+    /// A stable key for this window's saved state.
+    ///
+    /// Without one the window keeps its state in memory only: closing and re-opening it starts
+    /// empty. The key has to be unique per window and stable across runs; it is hashed into the
+    /// saveable store, so renaming it discards whatever the old name saved.
+    pub fn key(mut self, key: &str) -> Self {
+        self.persist_key = Some(window_state::persist_key(key));
         self
     }
 
@@ -162,13 +174,15 @@ impl Window {
                 window_state::forget(WindowId::new(wid));
                 // A programmatic close (the declarer stopped declaring the window) is the usual way a
                 // window goes away, so it has to snapshot saveable state too.
-                if let Some(key) = pw.saveable_key
-                    && let Some(registry) = pw.composer.saveable_registry()
-                {
+                if let Some(registry) = pw.composer.saveable_registry() {
                     let saved = registry.perform_save();
                     if !saved.is_empty() {
-                        crate::runtime::saveable::persist::save_saved(key, &saved);
-                        saveable.insert(key, saved);
+                        if let Some(key) = pw.persist_key {
+                            crate::runtime::saveable::persist::save_saved(key, &saved);
+                        }
+                        if let Some(key) = pw.saveable_key {
+                            saveable.insert(key, saved);
+                        }
                     }
                 }
                 // Drop the debug tree entry: a logical close never goes through winit's Destroyed, and a
@@ -265,6 +279,7 @@ impl Window {
                     visible: true,
                     placement: WindowPlacement::Windowed,
                     on_close_requested: self.on_close_requested,
+                    persist_key: self.persist_key,
                 },
             );
             let mut on_close = self.on_close;
@@ -281,7 +296,7 @@ impl Window {
             // content in it, so this stays a plain closure.
             // The saveable key is the DECLARATION SITE's salted key, not the freshly minted window id:
             // a re-opened window has to be matched against the site that declared it.
-            app::open_window_with_saveable_key(
+            app::open_window_with_keys(
                 w,
                 h,
                 self.spec.title.clone(),
@@ -292,6 +307,7 @@ impl Window {
                 wrapped,
                 Some(id),
                 Some(key),
+                self.persist_key,
                 Some(theme),
             );
         }

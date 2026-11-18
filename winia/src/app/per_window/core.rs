@@ -26,6 +26,8 @@ pub(crate) struct PerWindow {
     pub(crate) created_id: Option<u64>,
     /// Stable key this window saves its saveable state under (see `PendingWindow::saveable_key`).
     pub(crate) saveable_key: Option<u64>,
+    /// Key for state written to disk: only set when the window declared `.key(..)`.
+    pub(crate) persist_key: Option<u64>,
 
     /// slot_key of the focused node.
     pub(crate) focused_slot_key: Option<u64>,
@@ -103,6 +105,7 @@ impl PerWindow {
             on_close: None,
             created_id: None,
             saveable_key: None,
+            persist_key: None,
             theme,
             focused_slot_key: None,
             input: GestureState::default(),

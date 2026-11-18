@@ -263,6 +263,45 @@ pub(crate) enum Command {
     Destroy,
 }
 
+/// What happens when the last window is destroyed.
+///
+/// Hiding a window is not destruction, so it never triggers this: an application that only hides
+/// keeps running until it destroys something.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LastWindowPolicy {
+    /// End the process (the default for an ordinary application).
+    Exit,
+    /// Keep running with no visible window (tray applications).
+    StayResident,
+}
+
+thread_local! {
+    static LAST_WINDOW_POLICY: Cell<LastWindowPolicy> = const { Cell::new(LastWindowPolicy::Exit) };
+}
+
+/// Choose what happens when the last window is destroyed.
+pub(crate) fn set_last_window_policy(policy: LastWindowPolicy) {
+    LAST_WINDOW_POLICY.with(|cell| cell.set(policy));
+}
+
+pub(crate) fn last_window_policy() -> LastWindowPolicy {
+    LAST_WINDOW_POLICY.with(|cell| cell.get())
+}
+
+/// Turn an application-chosen key into the number the saveable store is keyed by.
+///
+/// FNV-1a rather than `DefaultHasher`: the value has to be identical across runs, and
+/// `RandomState` is seeded per process. The prefix keeps these keys in their own space, away from
+/// the declaration-site salted keys the framework mints internally.
+pub(crate) fn persist_key(key: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in b"winia.window.".iter().chain(key.as_bytes()) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
+}
+
 /// The values a window starts with.
 pub(crate) struct WindowSeed {
     pub(crate) size: (f32, f32),
@@ -277,6 +316,8 @@ pub(crate) struct WindowSeed {
     /// (`destroy()`, `state().set_visible(false)`), and capturing it would require a `State` dance
     /// in the declaring scope.
     pub(crate) on_close_requested: Option<Rc<dyn Fn(WindowId, CloseReason)>>,
+    /// The application-chosen persistence key (`.key("settings")`), when there is one.
+    pub(crate) persist_key: Option<u64>,
 }
 
 impl Default for WindowSeed {
@@ -288,6 +329,7 @@ impl Default for WindowSeed {
             visible: true,
             placement: WindowPlacement::Windowed,
             on_close_requested: None,
+            persist_key: None,
         }
     }
 }
@@ -305,6 +347,7 @@ struct WindowCell {
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
     on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
+    persist_key: Option<u64>,
 }
 
 impl WindowCell {
@@ -322,6 +365,7 @@ impl WindowCell {
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
             on_close_requested: RefCell::new(seed.on_close_requested),
+            persist_key: seed.persist_key,
         }
     }
 
@@ -382,6 +426,23 @@ pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
 /// The platform reported a focus change.
 pub(crate) fn observed_focus(id: WindowId, focused: bool) {
     with_cell(id, |cell| cell.focused.set(focused));
+}
+
+/// The application-chosen persistence key of a window, when it declared one.
+pub(crate) fn persist_key_of(id: WindowId) -> Option<u64> {
+    with_cell(id, |cell| cell.persist_key).flatten()
+}
+
+/// Every live window, in creation order.
+///
+/// Ids are minted in declaration order and never reused, so ascending id order is creation order -
+/// which is also the order Android composites several windows into its single Activity surface.
+pub(crate) fn windows_in_creation_order() -> Vec<WindowId> {
+    CELLS.with(|cells| {
+        let mut ids: Vec<u64> = cells.borrow().keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter().map(WindowId::new).collect()
+    })
 }
 
 /// The application's close-request notification, if it registered one.
@@ -498,6 +559,43 @@ mod tests {
             "close is a request, destroy is a command"
         );
         forget(id);
+    }
+
+    #[test]
+    fn a_persist_key_is_stable_and_distinct() {
+        assert_eq!(persist_key("settings"), persist_key("settings"));
+        assert_ne!(persist_key("settings"), persist_key("preview"));
+        assert_ne!(
+            persist_key("settings"),
+            0,
+            "zero is the 'no key' sentinel used elsewhere"
+        );
+    }
+
+    #[test]
+    fn windows_are_listed_in_creation_order() {
+        let a = WindowId::new(9_101);
+        let b = WindowId::new(9_102);
+        let c = WindowId::new(9_103);
+        // Registered out of order on purpose: ids are minted by the declaration, so they are the
+        // order Android also composites in.
+        declare(c, WindowSeed::default());
+        declare(a, WindowSeed::default());
+        declare(b, WindowSeed::default());
+
+        assert_eq!(windows_in_creation_order(), vec![a, b, c]);
+        forget(a);
+        forget(b);
+        forget(c);
+    }
+
+    #[test]
+    fn the_last_window_policy_is_process_wide_and_defaults_to_exit() {
+        assert_eq!(last_window_policy(), LastWindowPolicy::Exit);
+        set_last_window_policy(LastWindowPolicy::StayResident);
+        assert_eq!(last_window_policy(), LastWindowPolicy::StayResident);
+        set_last_window_policy(LastWindowPolicy::Exit);
+        assert_eq!(last_window_policy(), LastWindowPolicy::Exit);
     }
 
     #[test]
