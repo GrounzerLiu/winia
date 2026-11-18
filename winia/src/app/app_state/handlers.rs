@@ -7,45 +7,70 @@ impl AppState {
     /// JNI callbacks only enqueue; this is where they meet the `State` values handlers write. The
     /// registration is re-synchronised afterwards so the platform callback exists exactly while
     /// the table has an enabled handler.
-    #[cfg(target_os = "android")]
     fn pump_back_events(&mut self) {
         // Keep the queue while there is no window yet; draining here would drop events that arrive
         // before the first composition.
-        let target = self
+        if self.windows.is_empty() {
+            return;
+        }
+        let focused = self
             .windows
             .iter()
             .find(|(_, pw)| pw.focused_id.is_some())
-            .map(|(id, _)| *id)
-            .or_else(|| self.windows.keys().next().copied());
-        if let Some(id) = target {
-            let signals = crate::back::inbox::drain();
-            let app = self.platform.android_app.clone();
-            if let Some(pw) = self.windows.get_mut(&id) {
-                for signal in signals {
-                    let completed = matches!(signal, crate::back::inbox::Signal::Completed);
-                    let handled = pw.composer.back_dispatcher().dispatch(signal.into_update());
-                    // The Java fast path may say a handler exists while the table lost it in the
-                    // meantime; without this the completion would be swallowed and back would do
-                    // nothing. Ask the activity to finish instead.
-                    if completed
-                        && !handled
-                        && let Some(app) = app.as_ref()
-                    {
-                        crate::platform::android::back::finish_activity(app);
-                    }
-                }
-                pw.flush_back_close_requests();
-                if let Some(skia) = pw.skia_window.as_ref() {
-                    skia.request_redraw();
-                }
+            .map(|(id, _)| *id);
+        let fallback = self.windows.keys().next().copied();
+        let signals = crate::back::inbox::drain();
+        #[cfg(target_os = "android")]
+        let app = self.platform.android_app.clone();
+        for queued in signals {
+            // An explicit target wins; a global (JNI) event goes to the focused window, or to
+            // the first one when no window has focus yet.
+            let target = match queued.window {
+                Some(raw) => self
+                    .windows
+                    .iter()
+                    .find(|(_, pw)| pw.composer.window_id() == raw)
+                    .map(|(id, _)| *id),
+                None => focused.or(fallback),
+            };
+            let Some(target) = target else { continue };
+            let Some(pw) = self.windows.get_mut(&target) else {
+                continue;
+            };
+            #[cfg(target_os = "android")]
+            let completed = matches!(queued.signal, crate::back::inbox::Signal::Completed);
+            let handled = pw
+                .composer
+                .back_dispatcher()
+                .dispatch(queued.signal.into_update());
+            // The Java fast path may say a handler exists while the table lost it in the
+            // meantime; without this the completion would be swallowed and back would do
+            // nothing. Ask the activity to finish instead. A targeted debug event must not
+            // finish the whole activity when its window is gone.
+            #[cfg(target_os = "android")]
+            if completed
+                && !handled
+                && queued.window.is_none()
+                && let Some(app) = app.as_ref()
+            {
+                crate::platform::android::back::finish_activity(app);
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = handled;
+            pw.flush_back_close_requests();
+            if let Some(skia) = pw.skia_window.as_ref() {
+                skia.request_redraw();
             }
         }
-        let enabled = self
-            .windows
-            .values()
-            .any(|pw| pw.composer.back_dispatcher().has_enabled());
-        if let Some(app) = self.platform.android_app.as_ref() {
-            crate::platform::android::back::set_enabled(app, enabled);
+        #[cfg(target_os = "android")]
+        {
+            let enabled = self
+                .windows
+                .values()
+                .any(|pw| pw.composer.back_dispatcher().has_enabled());
+            if let Some(app) = self.platform.android_app.as_ref() {
+                crate::platform::android::back::set_enabled(app, enabled);
+            }
         }
     }
 }
@@ -54,7 +79,6 @@ impl ApplicationHandler for AppState {
     /// The first composition registers back handlers after `new_events`; syncing here (and again
     /// before each wait) keeps the Java registration in step even on an otherwise idle loop.
     fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        #[cfg(target_os = "android")]
         self.pump_back_events();
     }
 
@@ -63,8 +87,8 @@ impl ApplicationHandler for AppState {
         // latest uiMode here; a real move dirties every window's theme cell.
         #[cfg(target_os = "android")]
         self.sync_android_theme();
-        // Back events queued by the Java callback: this is the first UI-thread point of the pass.
-        #[cfg(target_os = "android")]
+        // Back events queued by the Java callback or the debug server: the first UI-thread point
+        // of the pass. Desktop debug injection needs this too, not only Android.
         self.pump_back_events();
         // Overlay handlers queue a host close request; run it before the frame renders.
         for pw in self.windows.values_mut() {

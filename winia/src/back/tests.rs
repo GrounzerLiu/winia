@@ -61,11 +61,34 @@ fn progress_events_coalesce_in_the_inbox() {
         3,
         "the second progress frame replaces the first"
     );
-    match drained[1] {
+    match drained[1].signal {
         Signal::Progressed(event) => assert_eq!(event.progress, 0.4),
         other => panic!("expected a progress frame, got {other:?}"),
     }
     assert!(inbox::pending() == 0);
+}
+
+#[test]
+fn targeted_progress_stays_separate_from_global_progress() {
+    use crate::back::inbox::{self, Signal};
+
+    let _ = inbox::drain();
+    inbox::push(Signal::Progressed(event(0.2)));
+    inbox::push_for(7, Signal::Progressed(event(0.5)));
+    inbox::push_for(7, Signal::Progressed(event(0.6)));
+
+    let drained = inbox::drain();
+    assert_eq!(
+        drained.len(),
+        2,
+        "global and targeted frames do not coalesce"
+    );
+    assert_eq!(drained[0].window, None);
+    assert_eq!(drained[1].window, Some(7));
+    match drained[1].signal {
+        Signal::Progressed(event) => assert_eq!(event.progress, 0.6),
+        other => panic!("expected a progress frame, got {other:?}"),
+    }
 }
 
 #[test]

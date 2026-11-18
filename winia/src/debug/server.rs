@@ -914,7 +914,11 @@ pub fn start_stdin_channel() {
                 }
                 "back" if parts.len() >= 2 => {
                     if let Some(signal) = parse_back(&parts) {
-                        crate::back::inbox::push(signal);
+                        if target_window != 0 {
+                            crate::back::inbox::push_for(target_window, signal);
+                        } else {
+                            crate::back::inbox::push(signal);
+                        }
                     }
                 }
                 "text" if parts.len() >= 2 => {
@@ -1158,6 +1162,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
         Err(_) => return,
     };
     let (mut write, mut read) = ws.split();
+    let mut target_window: u64 = 0;
     while let Some(msg) = read.next().await {
         if is_shutdown() {
             break;
@@ -1206,10 +1211,18 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 });
                 let _ = write.send(Message::Text("ok key".into())).await;
             }
+            "target" if parts.len() >= 2 => {
+                target_window = parts[1].parse().unwrap_or(0);
+                let _ = write.send(Message::Text("ok target".into())).await;
+            }
             "back" if parts.len() >= 2 => {
                 let reply = match parse_back(&parts) {
                     Some(signal) => {
-                        crate::back::inbox::push(signal);
+                        if target_window != 0 {
+                            crate::back::inbox::push_for(target_window, signal);
+                        } else {
+                            crate::back::inbox::push(signal);
+                        }
                         "ok back"
                     }
                     None => "bad back",

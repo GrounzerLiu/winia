@@ -83,7 +83,8 @@ Android system
 com.winia.back.WiniaBack (generated Java, com.winia package, like WiniaPermissions)
         |  five native methods: enqueue + wake_loop(); never touch UI state
         v
-BackInbox (process-wide, Mutex<VecDeque<BackSignal>>, Send + Sync)
+BackInbox (process-wide, Mutex<VecDeque<QueuedSignal>>, Send + Sync)
+        |  each entry: optional target window id + signal
         |  event-loop thread: AppState::new_events drains it each turn
         v
 BackDispatcher (one per window, Rc/RefCell, UI thread only)
@@ -109,6 +110,11 @@ Threading rule: `BackInbox` is the only `Send + Sync` boundary. `BackDispatcher`
 the `State`/Backchannel values they write live on the event-loop thread and are never touched from
 JNI. JNI methods do exactly two things: append to the inbox and call the existing wake hook
 (`APP_PROXY.wake_up()` through `runtime::state::set_wake_fn`).
+
+A queued signal may name a target window. Android JNI events leave it unset and therefore go to
+the focused window (falling back to the first window when none has focus); the debug server can
+send `target <window id>` first to address one window explicitly. A targeted event never falls
+back to another window, and a targeted `Completed` does not finish the activity.
 
 ## 4. Rust API
 

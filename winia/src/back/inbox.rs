@@ -32,28 +32,48 @@ impl Signal {
     }
 }
 
+/// One queued event plus the window it is addressed to. `None` means "the focused window",
+/// which is what the Android bridge produces; a debug injection can name a window explicitly.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QueuedSignal {
+    pub(crate) window: Option<u64>,
+    pub(crate) signal: Signal,
+}
+
 /// Enough for a slow frame; the queue never grows with gesture duration because progress coalesces.
 const CAPACITY: usize = 64;
 
-static INBOX: Mutex<VecDeque<Signal>> = Mutex::new(VecDeque::new());
+static INBOX: Mutex<VecDeque<QueuedSignal>> = Mutex::new(VecDeque::new());
 
 /// Queue one platform event and wake the event loop.
 ///
 /// A progress frame replaces an undrained predecessor: only the latest value drives an animation,
 /// and a fast gesture must not build a backlog. Terminal events are never dropped.
 pub(crate) fn push(signal: Signal) {
+    push_target(None, signal);
+}
+
+/// Queue one platform event for a specific window (the debug server uses this).
+#[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+pub(crate) fn push_for(window: u64, signal: Signal) {
+    push_target(Some(window), signal);
+}
+
+fn push_target(window: Option<u64>, signal: Signal) {
     let mut inbox = INBOX.lock().unwrap_or_else(|error| error.into_inner());
     if matches!(signal, Signal::Progressed(_))
-        && matches!(inbox.back(), Some(Signal::Progressed(_)))
+        && inbox.back().is_some_and(|queued| {
+            queued.window == window && matches!(queued.signal, Signal::Progressed(_))
+        })
     {
         let last = inbox.len() - 1;
-        inbox[last] = signal;
+        inbox[last] = QueuedSignal { window, signal };
     } else {
         if inbox.len() >= CAPACITY {
             // Never drop a start or a terminal event while an older progress frame can go first.
             match inbox
                 .iter()
-                .position(|queued| matches!(queued, Signal::Progressed(_)))
+                .position(|queued| matches!(queued.signal, Signal::Progressed(_)))
             {
                 Some(position) => {
                     inbox.remove(position);
@@ -63,14 +83,14 @@ pub(crate) fn push(signal: Signal) {
                 }
             }
         }
-        inbox.push_back(signal);
+        inbox.push_back(QueuedSignal { window, signal });
     }
     drop(inbox);
     crate::runtime::state::wake_loop();
 }
 
-/// Take everything queued since the last drain.
-pub(crate) fn drain() -> Vec<Signal> {
+/// Take everything queued since the last drain, with its target window.
+pub(crate) fn drain() -> Vec<QueuedSignal> {
     let mut inbox = INBOX.lock().unwrap_or_else(|error| error.into_inner());
     inbox.drain(..).collect()
 }

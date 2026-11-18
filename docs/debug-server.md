@@ -47,17 +47,7 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `back start <x> <y> [left\|right\|none]` | 注入一次预测返回的开始（走 JNI 同一 inbox） | `ok back` |
 | `back progress <p> [x] [y]` | 注入一帧手势进度（0..1） | `ok back` |
 | `back cancel` / `back complete` | 注入取消 / 完成 | `ok back` |
-
-预测返回的回归可以这样驱动（坐标是逻辑像素）：
-
-```text
-back start 100 400 left
-back progress 0.4 500 400
-back cancel            # 或 back complete
-```
-
-关闭中的二次手势也能复现：先 `back start` + `back complete`，紧接着再发 `back start` 和
-`back progress`——面板应当继续关闭，而不是被第二次手势拖回去。
+| `target <window id>` | 后续 `back` 只投递到该窗口；`0` 或不设置表示 focused 窗口 | `ok target` |
 | `s <dy>` 或 `s <dx> <dy>` | 滚轮（双参形式测横向滚动） | `ok scroll` |
 | `r` | 请求截图：置标志 + 唤醒循环，下一帧渲染后像素可取 | `screenshot <W>x<H>` |
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |
@@ -74,6 +64,20 @@ back cancel            # 或 back complete
 
 上表所有命令两条通道都支持，只有两处例外：`p` 的**二进制帧**只有 WebSocket 能承载
 （stdin 侧用 `px`/`save`），`q` 只有 stdin 有。
+
+预测返回的回归可以这样驱动（坐标是逻辑像素）：
+
+```text
+back start 100 400 left
+back progress 0.4 500 400
+back cancel            # 或 back complete
+```
+
+关闭中的二次手势也能复现：先 `back start` + `back complete`，紧接着再发 `back start` 和
+`back progress`——面板应当继续关闭，而不是被第二次手势拖回去。
+
+多窗口时先 `target <window id>`（窗口 id 可从 `t` 的 `window` 字段取），再发 `back`；
+不设置 target 的事件仍然投给 focused 窗口。
 
 ⚠ **坐标均为逻辑像素**（非物理像素；HiDPI 下物理 = 逻辑 × scale_factor，
 demo 截图 1350x720 = 窗口 900x480 × 1.5）。**例外：`px` 与 `p` 的坐标是帧/物理像素**
