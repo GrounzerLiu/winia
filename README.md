@@ -77,6 +77,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [架构文档](docs/architecture.md) — 当前的模块分层、一帧的流程、各子系统与 Compose 对照
 - [Permission design](docs/permissions-design.md) — capability model, platform backends, special permissions, and request flow
 - [Back navigation design](docs/back-navigation.md) — Android back gesture and predictive back: dispatcher, JNI bridge, NavDisplay preview pop, overlay unification
+- [Windowing design](docs/windowing-design.md) — window identity, lifetime and state: four invariants, one authority per attribute, close pipeline, command queue
 - [组件编写契约](docs/component-authoring.md) — 新增组件的 MUST/SHOULD 规则，每条附上它防住的那种失败
 - [v2 设计稿](docs/v2-design-notes.md) — v1→v2 那轮的设计意图与决策记录（历史，路径已过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
