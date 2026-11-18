@@ -28,6 +28,9 @@ mod lazy_ops_demo;
 #[path = "../../examples/lazy_staggered_demo.rs"]
 mod lazy_staggered_demo;
 
+#[path = "window_lifecycle.rs"]
+mod window_lifecycle;
+
 #[path = "../../examples/text_demo.rs"]
 mod text_demo;
 
@@ -48,6 +51,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("flexbox", flexbox_demo::main),
     ("text", text_demo::main),
     ("selection", selection_demo::main),
+    ("window_lifecycle", window_lifecycle::main),
 ];
 
 fn main() {

@@ -339,6 +339,10 @@ a real bug on the first cut: `is_parent` short-circuited the policy, so `StayRes
 The back pump now takes its unfocused fallback from the recorded window list, so it and
 `ctx.windows()` cannot disagree about creation order.
 
+These probes are checked in now: `tests/window_lifecycle_test.rs` drives `fixture_all
+window_lifecycle` through live size echo, close veto/accept, `LastWindowPolicy`, and state restored
+across two processes. Five scenarios, all passing locally.
+
 Two facts found while implementing, worth remembering for future window work:
 
 - A composer carries two id spaces: `window_id` is the platform handle (frame clocks, focus,
