@@ -113,9 +113,10 @@ Two types carry behaviour, one builder builds, three context calls configure the
 would be a second name for something already reachable.
 
 Implemented today, and therefore in the tree rather than in this sketch: `WindowId::is_realized`,
-`is_focused`, `state`, `capabilities`, every `WindowState` getter and setter, `ctx.window_id()`, and
-`build` returning the id. Still design only: `close`, `destroy`, `insets`, `ctx.windows()`,
-`ctx.set_last_window_policy()`, the `.key(..)` builder method, and `on_close_requested`.
+`is_focused`, `state`, `capabilities`, `close`, `destroy`, every `WindowState` getter and setter,
+`ctx.window_id()`, `on_close_requested`, the single close pipeline, and `build` returning the id.
+Still design only: `insets`, `ctx.windows()`, `ctx.set_last_window_policy()`, and the `.key(..)`
+builder method.
 
 ## 4. Identity
 
@@ -210,9 +211,10 @@ id.destroy();   // command: no notification, always destroys
 
 ```rust
 Window::new()
-    .on_close_requested(move |reason| {
+    .on_close_requested(move |id, reason| {
         // A notification, not a decision. Agreement means changing state:
         // set_visible(false), or drop the declaration, or call destroy().
+        // The id is passed in because the handler acts on its own window.
         unsaved.set(true);
     })
     .build(ctx, |ctx| { /* ... */ });
@@ -315,6 +317,11 @@ and an outer size of 535x371 for an inner request of 520x333), and the platform 
 `WindowState` and `window_size()` in the next composition. That removes the hardest limitation
 (`winia/src/app/window.rs:223-259`: configuration was read once), because live changes no longer go
 through the builder at all.
+
+Phases 1 and 2 are also in the tree. The close pipeline was verified on desktop by sending a
+native close request to a probe window: with an `on_close_requested` handler that does not act, the
+window stayed open and its title changed to the value the handler wrote; with a handler that calls
+`destroy()`, the process exited. Both runs printed `close requested: User for WindowId(1)`.
 
 Two facts found while implementing, which the remaining phases depend on:
 

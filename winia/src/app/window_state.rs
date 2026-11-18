@@ -50,6 +50,21 @@ impl WindowId {
     pub fn capabilities(self) -> WindowCapabilities {
         WindowCapabilities::platform()
     }
+
+    /// Ask to close the window.
+    ///
+    /// This is a request: `on_close_requested` runs and the application may ignore it, in which
+    /// case nothing happens. Use [`WindowId::destroy`] to close without asking.
+    pub fn close(self) {
+        with_cell(self, |cell| {
+            cell.push(Command::CloseRequest(CloseReason::Command))
+        });
+    }
+
+    /// Close the window now, without asking.
+    pub fn destroy(self) {
+        with_cell(self, |cell| cell.push(Command::Destroy));
+    }
 }
 
 impl std::fmt::Debug for WindowId {
@@ -221,6 +236,18 @@ impl std::fmt::Debug for WindowState {
     }
 }
 
+/// Why a close was requested.
+///
+/// Only these two reach `on_close_requested`: a declaration removal and an application exit do not
+/// ask for permission, they simply proceed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CloseReason {
+    /// The user closed the window from its chrome.
+    User,
+    /// The application called `WindowId::close()`.
+    Command,
+}
+
 /// One queued platform mutation.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Command {
@@ -230,16 +257,26 @@ pub(crate) enum Command {
     Visible(bool),
     Title(String),
     Resizable(bool),
+    /// Ask the application whether the window may close.
+    CloseRequest(CloseReason),
+    /// Close without asking.
+    Destroy,
 }
 
 /// The values a window starts with.
-#[derive(Clone, Debug)]
 pub(crate) struct WindowSeed {
     pub(crate) size: (f32, f32),
     pub(crate) title: String,
     pub(crate) resizable: bool,
     pub(crate) visible: bool,
     pub(crate) placement: WindowPlacement,
+    /// A notification, not a decision: the application expresses agreement by hiding, destroying,
+    /// or dropping the declaration. No handler registered means "close without asking".
+    ///
+    /// The window id is passed in because the handler almost always acts on its own window
+    /// (`destroy()`, `state().set_visible(false)`), and capturing it would require a `State` dance
+    /// in the declaring scope.
+    pub(crate) on_close_requested: Option<Rc<dyn Fn(WindowId, CloseReason)>>,
 }
 
 impl Default for WindowSeed {
@@ -250,6 +287,7 @@ impl Default for WindowSeed {
             resizable: true,
             visible: true,
             placement: WindowPlacement::Windowed,
+            on_close_requested: None,
         }
     }
 }
@@ -266,6 +304,7 @@ struct WindowCell {
     pending: RefCell<Vec<Command>>,
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
+    on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
 }
 
 impl WindowCell {
@@ -282,6 +321,7 @@ impl WindowCell {
             pending: RefCell::new(Vec::new()),
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
+            on_close_requested: RefCell::new(seed.on_close_requested),
         }
     }
 
@@ -342,6 +382,11 @@ pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
 /// The platform reported a focus change.
 pub(crate) fn observed_focus(id: WindowId, focused: bool) {
     with_cell(id, |cell| cell.focused.set(focused));
+}
+
+/// The application's close-request notification, if it registered one.
+pub(crate) fn close_handler(id: WindowId) -> Option<Rc<dyn Fn(WindowId, CloseReason)>> {
+    with_cell(id, |cell| cell.on_close_requested.borrow().clone()).flatten()
 }
 
 /// Take the queued mutations for one window, oldest first.
@@ -419,6 +464,40 @@ mod tests {
         assert!(!id.is_realized());
         assert_eq!(id.state().size(), (0.0, 0.0));
         assert!(take_commands(id).is_empty());
+    }
+
+    #[test]
+    fn a_close_handler_is_stored_with_its_window() {
+        let id = WindowId::new(9_005);
+        declare(
+            id,
+            WindowSeed {
+                on_close_requested: Some(Rc::new(|_, _| {})),
+                ..WindowSeed::default()
+            },
+        );
+        assert!(close_handler(id).is_some());
+        assert!(
+            close_handler(WindowId::new(9_006)).is_none(),
+            "an unregistered window has no handler"
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn close_and_destroy_queue_their_commands() {
+        let id = fresh(9_007);
+        id.close();
+        id.destroy();
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::CloseRequest(CloseReason::Command),
+                Command::Destroy
+            ],
+            "close is a request, destroy is a command"
+        );
+        forget(id);
     }
 
     #[test]

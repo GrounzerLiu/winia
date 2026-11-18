@@ -2,12 +2,68 @@ use super::*;
 use crate::layout::node::ImeEdit;
 
 impl AppState {
+    /// The one close pipeline.
+    ///
+    /// Snapshot saveable state while the composition is still alive to provide it, run the
+    /// application's after-the-fact callback, unregister the window and drop everything keyed by it.
+    /// The native close request and `WindowId::destroy` both run this, so the hook order is the same
+    /// on every path.
+    fn close_window_now(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        window_id: winit::window::WindowId,
+    ) {
+        let is_parent = self.parent_window_id == Some(window_id);
+        let closing_last = self.windows.len() == 1;
+        let Some(pw) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        if let Some(ref mut cb) = pw.on_close {
+            cb();
+        }
+        if let Some(key) = pw.saveable_key
+            && let Some(registry) = pw.composer.saveable_registry()
+        {
+            let saved = registry.perform_save();
+            if !saved.is_empty() {
+                crate::runtime::saveable::persist::save_saved(key, &saved);
+                self.saveable.insert(key, saved);
+            }
+        }
+        if let Some(ref sw) = pw.skia_window {
+            crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
+        }
+        if let Some(created_id) = pw.created_id {
+            crate::app::window_state::forget(crate::app::window_state::WindowId::new(created_id));
+        }
+        self.windows.remove(&window_id);
+        // A queued overlay close for a dead window must not survive to a later one.
+        let raw_id = window_id.into_raw() as u64;
+        crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
+        // The window is gone, so drop its frame clock too (otherwise the registry grows by one entry
+        // per window opened), and clean up the debug tree entry: nothing renders after close, and a
+        // leftover would mislead UI tests.
+        crate::effect::forget_window(raw_id);
+        debug::remove_tree(raw_id);
+        for pw in self.windows.values() {
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
+        }
+        if closing_last || is_parent {
+            debug::force_shutdown();
+            event_loop.exit();
+        }
+    }
+
     /// Apply the queued `WindowState` writes.
     ///
     /// Runs once per frame before that frame renders, so a setter called during composition never
     /// touches the platform window from inside the composition. Commands are applied in submission
     /// order, one window at a time.
-    fn apply_window_commands(&mut self) {
+    fn apply_window_commands(&mut self, event_loop: &dyn ActiveEventLoop) {
+        use crate::app::window_state::Command;
+
         fn apply(window: &dyn winit::window::Window, command: crate::app::window_state::Command) {
             use crate::app::window_state::{Command, WindowPlacement, WindowPosition};
             match command {
@@ -36,9 +92,13 @@ impl AppState {
                 Command::Visible(visible) => window.set_visible(visible),
                 Command::Title(title) => window.set_title(&title),
                 Command::Resizable(resizable) => window.set_resizable(resizable),
+                // Handled by the caller before a command reaches the platform: a close decides
+                // whether the window should exist at all, it is not a property write.
+                Command::CloseRequest(_) | Command::Destroy => {}
             }
         }
 
+        let mut to_close: Vec<winit::window::WindowId> = Vec::new();
         let windows: Vec<(winit::window::WindowId, u64, bool)> = self
             .windows
             .iter()
@@ -53,6 +113,27 @@ impl AppState {
             if commands.is_empty() {
                 continue;
             }
+            let mut platform = Vec::new();
+            for command in commands {
+                match command {
+                    Command::CloseRequest(reason) => {
+                        // A registered handler is a veto point; without one the window closes.
+                        match crate::app::window_state::close_handler(
+                            crate::app::window_state::WindowId::new(raw),
+                        ) {
+                            Some(notify) => {
+                                notify(crate::app::window_state::WindowId::new(raw), reason)
+                            }
+                            None => to_close.push(winit_id),
+                        }
+                    }
+                    Command::Destroy => to_close.push(winit_id),
+                    other => platform.push(other),
+                }
+            }
+            if platform.is_empty() {
+                continue;
+            }
             let Some(pw) = self.windows.get_mut(&winit_id) else {
                 continue;
             };
@@ -60,10 +141,13 @@ impl AppState {
                 continue;
             };
             let window: &dyn winit::window::Window = &**skia;
-            for command in commands {
+            for command in platform {
                 apply(window, command);
             }
             window.request_redraw();
+        }
+        for id in to_close {
+            self.close_window_now(event_loop, id);
         }
     }
 
@@ -150,9 +234,9 @@ impl AppState {
 impl ApplicationHandler for AppState {
     /// The first composition registers back handlers after `new_events`; syncing here (and again
     /// before each wait) keeps the Java registration in step even on an otherwise idle loop.
-    fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.pump_back_events();
-        self.apply_window_commands();
+        self.apply_window_commands(event_loop);
     }
 
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
@@ -164,7 +248,7 @@ impl ApplicationHandler for AppState {
         // of the pass. Desktop debug injection needs this too, not only Android.
         self.pump_back_events();
         // Window-state writes queued by the previous frame's composition.
-        self.apply_window_commands();
+        self.apply_window_commands(event_loop);
         // Overlay handlers queue a host close request; run it before the frame renders.
         for pw in self.windows.values_mut() {
             pw.flush_back_close_requests();
@@ -602,44 +686,21 @@ impl AppState {
                 }
             }
             WindowEvent::CloseRequested => {
-                if let Some(ref mut cb) = pw.on_close {
-                    cb();
-                }
-                // Snapshot saveable state while the composition is still alive to provide it.
-                if let Some(key) = pw.saveable_key
-                    && let Some(registry) = pw.composer.saveable_registry()
-                {
-                    let saved = registry.perform_save();
-                    if !saved.is_empty() {
-                        crate::runtime::saveable::persist::save_saved(key, &saved);
-                        self.saveable.insert(key, saved);
-                    }
-                }
-                if let Some(ref sw) = pw.skia_window {
-                    crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
-                }
-                if let Some(created_id) = pw.created_id {
-                    crate::app::window_state::forget(crate::app::window_state::WindowId::new(
-                        created_id,
-                    ));
-                }
-                self.windows.remove(&window_id);
-                // A queued overlay close for a dead window must not survive to a later one.
-                let raw_id = window_id.into_raw() as u64;
-                crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
-                // The window is gone, so drop its frame clock too (otherwise the registry grows by one entry per window opened).
-                crate::effect::forget_window(window_id.into_raw() as u64);
-                // Clean up the debug tree entry (nothing renders after close — a leftover would mislead UI tests).
-                debug::remove_tree(window_id.into_raw() as u64);
-                // Ask the other windows to redraw (state may have changed).
-                for pw in self.windows.values() {
-                    if let Some(ref sw) = pw.skia_window {
-                        sw.request_redraw();
-                    }
-                }
-                if closing_last || is_parent {
-                    debug::force_shutdown();
-                    event_loop.exit();
+                // A registered handler is a veto point: it runs and decides by changing state or
+                // calling destroy(). With no handler the window closes, which is what every
+                // existing application expects.
+                let created = pw.created_id;
+                let handler = created.and_then(|raw| {
+                    crate::app::window_state::close_handler(
+                        crate::app::window_state::WindowId::new(raw),
+                    )
+                });
+                match (created, handler) {
+                    (Some(raw), Some(notify)) => notify(
+                        crate::app::window_state::WindowId::new(raw),
+                        crate::app::window_state::CloseReason::User,
+                    ),
+                    _ => self.close_window_now(event_loop, window_id),
                 }
             }
             WindowEvent::Destroyed => {

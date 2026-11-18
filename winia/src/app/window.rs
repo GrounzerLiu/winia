@@ -38,6 +38,7 @@ pub struct Window {
     spec: WindowSpec,
     options: crate::app::WindowOptions,
     on_close: Option<Box<dyn FnMut() + Send>>,
+    on_close_requested: Option<std::rc::Rc<dyn Fn(WindowId, window_state::CloseReason)>>,
 }
 
 /// The values a `Window` declaration carries. Renamed from the old `WindowState`, whose name now
@@ -64,6 +65,7 @@ impl Window {
             spec: WindowSpec::default(),
             options: crate::app::WindowOptions::default(),
             on_close: None,
+            on_close_requested: None,
         }
     }
 
@@ -92,6 +94,19 @@ impl Window {
 
     pub fn on_close(mut self, f: impl FnMut() + Send + 'static) -> Self {
         self.on_close = Some(Box::new(f));
+        self
+    }
+
+    /// Register a close-request notification.
+    ///
+    /// A notification, not a decision: agree by hiding the window
+    /// (`state().set_visible(false)`), destroying it (`destroy()`), or dropping the declaration.
+    /// Doing nothing keeps the window open. Without a handler, closing the window closes it.
+    pub fn on_close_requested(
+        mut self,
+        f: impl Fn(WindowId, window_state::CloseReason) + 'static,
+    ) -> Self {
+        self.on_close_requested = Some(std::rc::Rc::new(f));
         self
     }
 
@@ -249,6 +264,7 @@ impl Window {
                     resizable: self.options.resizable,
                     visible: true,
                     placement: WindowPlacement::Windowed,
+                    on_close_requested: self.on_close_requested,
                 },
             );
             let mut on_close = self.on_close;
