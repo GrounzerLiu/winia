@@ -1,4 +1,5 @@
 use crate::app;
+use crate::app::window_state::{self, WindowId, WindowPlacement, WindowSeed};
 use crate::composable;
 use crate::prelude::*;
 use std::collections::HashSet;
@@ -34,20 +35,22 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The declarative window builder.
 pub struct Window {
-    state: WindowState,
+    spec: WindowSpec,
     options: crate::app::WindowOptions,
     on_close: Option<Box<dyn FnMut() + Send>>,
 }
 
-pub struct WindowState {
+/// The values a `Window` declaration carries. Renamed from the old `WindowState`, whose name now
+/// belongs to the live state handle (`crate::app::window_state`).
+pub struct WindowSpec {
     pub width: f32,
     pub height: f32,
     pub title: String,
 }
 
-impl Default for WindowState {
+impl Default for WindowSpec {
     fn default() -> Self {
-        WindowState {
+        WindowSpec {
             width: 300.0,
             height: 200.0,
             title: String::new(),
@@ -58,20 +61,20 @@ impl Default for WindowState {
 impl Window {
     pub fn new() -> Self {
         Window {
-            state: WindowState::default(),
+            spec: WindowSpec::default(),
             options: crate::app::WindowOptions::default(),
             on_close: None,
         }
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.state.title = title.into();
+        self.spec.title = title.into();
         self
     }
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
-        self.state.width = width;
-        self.state.height = height;
+        self.spec.width = width;
+        self.spec.height = height;
         self
     }
 
@@ -141,6 +144,7 @@ impl Window {
             .collect();
         for w in to_close {
             if let Some(mut pw) = windows.remove(&w) {
+                window_state::forget(WindowId::new(wid));
                 // A programmatic close (the declarer stopped declaring the window) is the usual way a
                 // window goes away, so it has to snapshot saveable state too.
                 if let Some(key) = pw.saveable_key
@@ -172,7 +176,11 @@ impl Window {
     }
 
     #[composable]
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
+    pub fn build(
+        self,
+        ctx: &mut ComposeCtx,
+        content: impl Fn(&mut ComposeCtx) + Send + 'static,
+    ) -> WindowId {
         // The placeholder leaf and created_id share one salted key, for two reasons: (1) it keeps them
         // in a separate key space from content nodes, so a structural change cannot silently reuse an
         // old slot; (2) it is per-Window (remember_at_key(u64::MAX) would make several Windows share
@@ -228,8 +236,21 @@ impl Window {
             created_id.as_raw().set_backchannel(id); // Backchannel: window-creation marker must not notify (would avalanche keys / collapse the tree mid-compose)
             CREATED.lock().unwrap().insert(id);
 
-            let w = self.state.width;
-            let h = self.state.height;
+            let w = self.spec.width;
+            let h = self.spec.height;
+            // Publish the live state now: the declaration owns the id before the platform window
+            // exists, so `WindowState` is usable from the very first composition. `realize` fills
+            // in the values the platform actually chose.
+            window_state::declare(
+                WindowId::new(id),
+                WindowSeed {
+                    size: (w, h),
+                    title: self.spec.title.clone(),
+                    resizable: self.options.resizable,
+                    visible: true,
+                    placement: WindowPlacement::Windowed,
+                },
+            );
             let mut on_close = self.on_close;
             let id_close = id;
             let wrapped: Option<Box<dyn FnMut() + Send>> = Some(Box::new(move || {
@@ -247,7 +268,7 @@ impl Window {
             app::open_window_with_saveable_key(
                 w,
                 h,
-                self.state.title.clone(),
+                self.spec.title.clone(),
                 self.options,
                 Some(Box::new(move |ctx| {
                     sub_window_content(ctx, &content);
@@ -263,5 +284,9 @@ impl Window {
 
         // After end_node: mark that Window::build has been called.
         lifecycle.mark_rebuilt();
+
+        // The handle is valid from the first frame: the id was minted above, and `is_realized()`
+        // stays false until the platform creates the window.
+        WindowId::new(created_id.get())
     }
 }

@@ -15,6 +15,7 @@ use overlay_host::{
 };
 pub mod scroll;
 pub mod window;
+pub mod window_state;
 
 use scroll::{
     DragScroll, dispatch_nested_scroll_delta, dispatch_nested_scroll_fling, find_scroll_target,

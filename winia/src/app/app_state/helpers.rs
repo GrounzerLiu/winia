@@ -129,6 +129,18 @@ impl AppState {
         // here as well: an effect that captures ctx.frame_clock() on that pass would otherwise bind
         // to window 0 (which never ticks) and never be re-run.
         pw.composer.set_window_id(window_id.into_raw() as u64);
+        if let Some(created_id) = pw.created_id {
+            pw.composer.set_created_id(created_id);
+        }
+        // The declaration minted the id before the platform created anything; this is the frame the
+        // window becomes real, so the live state adopts what the platform actually chose.
+        if let Some(created_id) = pw.created_id {
+            crate::app::window_state::realize(
+                crate::app::window_state::WindowId::new(created_id),
+                (pw.width, pw.height),
+                &pending.title,
+            );
+        }
         // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
         let density = crate::runtime::density::density_with_system_font_scale(sf as f32);
         crate::runtime::density::with_density(density, || {

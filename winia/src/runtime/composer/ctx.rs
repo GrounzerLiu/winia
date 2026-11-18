@@ -100,6 +100,15 @@ impl<'a> ComposeCtx<'a> {
         self.composer.window_insets()
     }
 
+    /// The window this composition belongs to.
+    ///
+    /// Window content always has one. A composer that is not bound to a window (the application
+    /// root before any `Window` is declared, or a test composer) reports the zero id, which every
+    /// `WindowId` accessor treats as unrealized.
+    pub fn window_id(&self) -> crate::app::window_state::WindowId {
+        crate::app::window_state::WindowId::new(self.composer.created_id())
+    }
+
     /// This composition's back handler table.
     ///
     /// The dispatcher is owned by the window; the main tree and every overlay composer share it,

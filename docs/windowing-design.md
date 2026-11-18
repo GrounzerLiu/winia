@@ -1,6 +1,8 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: design record, rev 2, 2026-11-18. Not implemented yet.
+> Status: design record, rev 2, 2026-11-18. Phase 1 is implemented (identity, live state, frame-end
+> command queue); the close pipeline, persistence key and window policy are still design only - see
+> section 14 for what exists and what does not.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
 > wrapper, no key type, no scope type, no options struct, no window manager, one creation entry.
 > Section 15 records what was removed and why.
@@ -109,6 +111,11 @@ WindowCapabilities { position, placement, multi_window, native_close }
 Two types carry behaviour, one builder builds, three context calls configure the app. There is no
 `WindowHandle`, no `WindowKey`, no `WindowScope`, no `WindowOptions` and no `WindowManager`: each
 would be a second name for something already reachable.
+
+Implemented today, and therefore in the tree rather than in this sketch: `WindowId::is_realized`,
+`is_focused`, `state`, `capabilities`, every `WindowState` getter and setter, `ctx.window_id()`, and
+`build` returning the id. Still design only: `close`, `destroy`, `insets`, `ctx.windows()`,
+`ctx.set_last_window_policy()`, the `.key(..)` builder method, and `on_close_requested`.
 
 ## 4. Identity
 
@@ -302,8 +309,21 @@ These must be settled before any code changes:
 | 3 | One close pipeline; `on_close` wired to the merged path; `.key(..)` for persistence | behaviour change on the native-close path only |
 | 4 | `LastWindowPolicy`, recorded z-order, remove the `created_id` sort in the back pump | structural |
 
-Phase 1 already removes the hardest limitation (`winia/src/app/window.rs:223-259`: configuration
-is read once), because live changes stop going through the builder at all.
+Phase 1 is in the tree. Verified on desktop with a probe window: a `set_title` and a `set_size`
+issued from a `side_effect` reached the OS window (the title read back through the window handle,
+and an outer size of 535x371 for an inner request of 520x333), and the platform echo updated both
+`WindowState` and `window_size()` in the next composition. That removes the hardest limitation
+(`winia/src/app/window.rs:223-259`: configuration was read once), because live changes no longer go
+through the builder at all.
+
+Two facts found while implementing, which the remaining phases depend on:
+
+- A composer carries two id spaces: `window_id` is the platform handle (frame clocks, focus,
+  accessibility) while the declaration mints its own `created_id`. `ctx.window_id()` must report the
+  latter; conflating them made the first cut look up a state table entry that did not exist.
+- This winit fork exposes no window-focus event, so `is_focused()` reports whether the window held a
+  focused node as of the last frame. That is the signal the loop actually has, and it is what the
+  back pump already uses to choose a target window.
 
 ## 15. Decisions, removed surface, rejected alternatives
 

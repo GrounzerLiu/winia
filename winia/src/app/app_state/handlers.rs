@@ -2,6 +2,71 @@ use super::*;
 use crate::layout::node::ImeEdit;
 
 impl AppState {
+    /// Apply the queued `WindowState` writes.
+    ///
+    /// Runs once per frame before that frame renders, so a setter called during composition never
+    /// touches the platform window from inside the composition. Commands are applied in submission
+    /// order, one window at a time.
+    fn apply_window_commands(&mut self) {
+        fn apply(window: &dyn winit::window::Window, command: crate::app::window_state::Command) {
+            use crate::app::window_state::{Command, WindowPlacement, WindowPosition};
+            match command {
+                Command::Size(width, height) => {
+                    let _ = window.request_surface_size(winit::dpi::Size::Logical(
+                        winit::dpi::LogicalSize::new(width as f64, height as f64),
+                    ));
+                }
+                Command::Position(WindowPosition::At(x, y)) => {
+                    window.set_outer_position(winit::dpi::Position::Logical(
+                        winit::dpi::LogicalPosition::new(x as f64, y as f64),
+                    ));
+                }
+                Command::Position(WindowPosition::Default) => {}
+                Command::Placement(placement) => match placement {
+                    WindowPlacement::Windowed => {
+                        window.set_fullscreen(None);
+                        window.set_maximized(false);
+                    }
+                    WindowPlacement::Maximized => window.set_maximized(true),
+                    WindowPlacement::Fullscreen => {
+                        window.set_fullscreen(Some(winit::monitor::Fullscreen::Borderless(None)));
+                    }
+                    WindowPlacement::Minimized => window.set_minimized(true),
+                },
+                Command::Visible(visible) => window.set_visible(visible),
+                Command::Title(title) => window.set_title(&title),
+                Command::Resizable(resizable) => window.set_resizable(resizable),
+            }
+        }
+
+        let windows: Vec<(winit::window::WindowId, u64, bool)> = self
+            .windows
+            .iter()
+            .filter_map(|(id, pw)| pw.created_id.map(|raw| (*id, raw, pw.focused_id.is_some())))
+            .collect();
+        for (winit_id, raw, focused) in windows {
+            let public_id = crate::app::window_state::WindowId::new(raw);
+            // Focus comes from whether the window holds a focused node: this winit fork has no
+            // window-focus event, so that is the only signal the loop actually has.
+            crate::app::window_state::observed_focus(public_id, focused);
+            let commands = crate::app::window_state::take_commands(public_id);
+            if commands.is_empty() {
+                continue;
+            }
+            let Some(pw) = self.windows.get_mut(&winit_id) else {
+                continue;
+            };
+            let Some(skia) = pw.skia_window.as_ref() else {
+                continue;
+            };
+            let window: &dyn winit::window::Window = &**skia;
+            for command in commands {
+                apply(window, command);
+            }
+            window.request_redraw();
+        }
+    }
+
     /// Drain the platform back queue and hand it to the focused window's dispatcher.
     ///
     /// JNI callbacks only enqueue; this is where they meet the `State` values handlers write. The
@@ -87,6 +152,7 @@ impl ApplicationHandler for AppState {
     /// before each wait) keeps the Java registration in step even on an otherwise idle loop.
     fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
         self.pump_back_events();
+        self.apply_window_commands();
     }
 
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
@@ -97,6 +163,8 @@ impl ApplicationHandler for AppState {
         // Back events queued by the Java callback or the debug server: the first UI-thread point
         // of the pass. Desktop debug injection needs this too, not only Android.
         self.pump_back_events();
+        // Window-state writes queued by the previous frame's composition.
+        self.apply_window_commands();
         // Overlay handlers queue a host close request; run it before the frame renders.
         for pw in self.windows.values_mut() {
             pw.flush_back_close_requests();
@@ -550,6 +618,11 @@ impl AppState {
                 if let Some(ref sw) = pw.skia_window {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
+                if let Some(created_id) = pw.created_id {
+                    crate::app::window_state::forget(crate::app::window_state::WindowId::new(
+                        created_id,
+                    ));
+                }
                 self.windows.remove(&window_id);
                 // A queued overlay close for a dead window must not survive to a later one.
                 let raw_id = window_id.into_raw() as u64;
@@ -572,6 +645,7 @@ impl AppState {
             WindowEvent::Destroyed => {
                 if let Some(cid) = pw.created_id {
                     crate::app::window::CREATED.lock().unwrap().remove(&cid);
+                    crate::app::window_state::forget(crate::app::window_state::WindowId::new(cid));
                 }
                 if let Some(ref sw) = pw.skia_window {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
@@ -1081,6 +1155,13 @@ impl AppState {
                 // NavigationSuiteScaffold) as dirty, so incremental recomposition switches their form.
                 if let Some(s) = pw.window_size_state.borrow().as_ref() {
                     s.set((l.width, l.height));
+                }
+                // The live state reports what the window has, not what a setter asked for.
+                if let Some(created_id) = pw.created_id {
+                    crate::app::window_state::observed_size(
+                        crate::app::window_state::WindowId::new(created_id),
+                        (l.width, l.height),
+                    );
                 }
                 if let Some(ref sw) = pw.skia_window {
                     sw.request_redraw();

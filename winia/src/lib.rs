@@ -304,6 +304,9 @@ pub mod prelude {
         exponential_decay, push_decay, push_decay_vector,
     };
     pub use crate::app::window::Window;
+    pub use crate::app::window_state::{
+        WindowCapabilities, WindowId, WindowPlacement, WindowPosition, WindowState,
+    };
     pub use crate::components::dropdown_menu::{
         DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
         ExposedDropdownMenuDefaults, MenuDefaults, MenuItemColors,

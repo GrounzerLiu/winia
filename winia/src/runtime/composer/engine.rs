@@ -164,6 +164,8 @@ pub struct Composer {
     /// The winit window this composer belongs to; 0 when unwired (a test, an overlay composer).
     /// `ComposeCtx::frame_clock` hands out this window's clock.
     pub(crate) window_id: u64,
+    /// Declaration-side window identity: 0 when this composer was not created by a `Window`.
+    pub(crate) created_id: u64,
     /// Android activity handle for UI code; set when a window is created on Android.
     #[cfg(target_os = "android")]
     pub(crate) android_app: Option<winit::platform::android::activity::AndroidApp>,
@@ -307,6 +309,7 @@ impl Composer {
             known_registrars: Vec::new(),
             lifecycle: crate::runtime::lifecycle::LifecycleState::default(),
             window_id: 0,
+            created_id: 0,
             #[cfg(target_os = "android")]
             android_app: None,
             window_insets: crate::window::insets::WindowInsetsController::new(),
@@ -344,6 +347,19 @@ impl Composer {
     /// Bind this composer to the window whose frames should drive `ComposeCtx::frame_clock`.
     pub(crate) fn set_window_id(&mut self, window: u64) {
         self.window_id = window;
+    }
+
+    /// Bind the declaration-side identity of this window.
+    ///
+    /// `window_id` is the platform handle (an HWND on Windows, used for frame clocks and focus);
+    /// `created_id` is the id the `Window` declaration minted, which is what `WindowId` exposes. They
+    /// are two id spaces and conflating them made `ctx.window_id()` miss its own state table.
+    pub(crate) fn set_created_id(&mut self, created: u64) {
+        self.created_id = created;
+    }
+
+    pub fn created_id(&self) -> u64 {
+        self.created_id
     }
 
     pub fn window_id(&self) -> u64 {
