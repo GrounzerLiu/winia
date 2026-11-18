@@ -7,7 +7,7 @@ impl AppState {
     /// JNI callbacks only enqueue; this is where they meet the `State` values handlers write. The
     /// registration is re-synchronised afterwards so the platform callback exists exactly while
     /// the table has an enabled handler.
-    fn pump_back_events(&mut self) {
+    pub(crate) fn pump_back_events(&mut self) {
         // Keep the queue while there is no window yet; draining here would drop events that arrive
         // before the first composition.
         if self.windows.is_empty() {
