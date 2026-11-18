@@ -270,7 +270,9 @@ pub fn open_window_with_title(
 ///
 /// The key has to survive a close: it is what a re-opened window is matched against. `created_id`
 /// cannot do that job (a fresh one is minted per window), so the declarative `Window` passes the
-/// salted key of its own call site.
+/// salted key of its own call site. For compatibility this wrapper also uses the key for disk
+/// persistence; new code should call [`open_window_with_keys`] (or `Window::key`) to keep the two
+/// keys separate.
 pub fn open_window_with_saveable_key(
     width: f32,
     height: f32,
@@ -291,7 +293,9 @@ pub fn open_window_with_saveable_key(
         on_close,
         created_id,
         saveable_key,
-        None,
+        // The wrapper predates the split and wrote this key to disk; keep that behaviour so an
+        // existing caller does not silently lose persistence.
+        saveable_key,
         theme,
     );
 }

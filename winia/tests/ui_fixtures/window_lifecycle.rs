@@ -6,7 +6,10 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use winia::prelude::*;
+
+static FIRST_WINDOW: AtomicBool = AtomicBool::new(true);
 
 fn write_out(text: &str) {
     if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
@@ -25,6 +28,9 @@ pub fn main() {
         }
     }
     winia::run_app!(move |ctx| {
+        if mode == "destroy-stay" {
+            ctx.set_last_window_policy(LastWindowPolicy::StayResident);
+        }
         window(ctx, &mode);
     });
 }
@@ -49,6 +55,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "size" => size_scenario(ctx, id),
                 "close-veto" | "close-accept" => close_scenario(ctx, id),
                 "policy-exit" | "policy-stay" => policy_scenario(ctx, id, &mode_for_close),
+                "destroy-stay" => destroy_stay_scenario(ctx, id),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 other => {
                     write_out(&format!("unknown-mode={other}\n"));
@@ -100,6 +107,19 @@ fn policy_scenario(ctx: &mut ComposeCtx, id: WindowId, mode: &str) {
         });
     }
     Text::new("policy").build(ctx);
+}
+
+/// Destroy the window while its declaration still composes. The declaration must not mint a
+/// replacement on the next frame.
+fn destroy_stay_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let first = FIRST_WINDOW.swap(false, Ordering::Relaxed);
+    write_out(if first { "created\n" } else { "recreated\n" });
+    let destroyed = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !destroyed.get() {
+        destroyed.set(true);
+        winia::effect::side_effect(ctx, move || id.destroy());
+    }
+    Text::new("destroy").build(ctx);
 }
 
 fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {

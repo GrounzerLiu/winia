@@ -163,6 +163,25 @@ fn destroying_the_last_window_obeys_the_policy() {
 }
 
 #[test]
+fn a_destroyed_declaration_does_not_recreate_the_window() {
+    let mut fixture = Fixture::spawn("destroy-stay", "destroy-stay");
+    std::thread::sleep(Duration::from_millis(1_800));
+    assert!(
+        fixture.is_alive(),
+        "StayResident should keep the process alive"
+    );
+    let text = fixture.text();
+    assert!(
+        text.contains("created"),
+        "the fixture did not compose: {text:?}"
+    );
+    assert!(
+        !text.contains("recreated"),
+        "destroy() was undone by the still-present declaration: {text:?}"
+    );
+}
+
+#[test]
 fn a_keyed_window_restores_its_saved_state_across_runs() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch_dir("persist");

@@ -316,8 +316,6 @@ pub(crate) struct WindowSeed {
     /// (`destroy()`, `state().set_visible(false)`), and capturing it would require a `State` dance
     /// in the declaring scope.
     pub(crate) on_close_requested: Option<Rc<dyn Fn(WindowId, CloseReason)>>,
-    /// The application-chosen persistence key (`.key("settings")`), when there is one.
-    pub(crate) persist_key: Option<u64>,
 }
 
 impl Default for WindowSeed {
@@ -329,7 +327,6 @@ impl Default for WindowSeed {
             visible: true,
             placement: WindowPlacement::Windowed,
             on_close_requested: None,
-            persist_key: None,
         }
     }
 }
@@ -347,7 +344,6 @@ struct WindowCell {
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
     on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
-    persist_key: Option<u64>,
 }
 
 impl WindowCell {
@@ -365,7 +361,6 @@ impl WindowCell {
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
             on_close_requested: RefCell::new(seed.on_close_requested),
-            persist_key: seed.persist_key,
         }
     }
 
@@ -426,11 +421,6 @@ pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
 /// The platform reported a focus change.
 pub(crate) fn observed_focus(id: WindowId, focused: bool) {
     with_cell(id, |cell| cell.focused.set(focused));
-}
-
-/// The application-chosen persistence key of a window, when it declared one.
-pub(crate) fn persist_key_of(id: WindowId) -> Option<u64> {
-    with_cell(id, |cell| cell.persist_key).flatten()
 }
 
 /// Every live window, in creation order.

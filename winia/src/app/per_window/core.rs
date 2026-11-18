@@ -79,6 +79,57 @@ impl PerWindow {
         }
     }
 
+    /// The one teardown shared by every close path.
+    ///
+    /// Snapshot saveable state while the composition is alive, run the application's after-the-fact
+    /// callback, unregister the window, and drop everything keyed by it. The caller removes the
+    /// entry from the window map and decides whether the last window ends the process.
+    pub(crate) fn finalize(
+        &mut self,
+        window_id: winit::window::WindowId,
+        saveable: &mut std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
+        >,
+    ) {
+        // The documented order: snapshot first, then the after-the-fact callback. The callback is
+        // not a veto point and must not be able to change what the window saves.
+        if let Some(registry) = self.composer.saveable_registry() {
+            let saved = registry.perform_save();
+            if !saved.is_empty() {
+                if let Some(key) = self.persist_key {
+                    crate::runtime::saveable::persist::save_saved(key, &saved);
+                }
+                if let Some(key) = self.saveable_key {
+                    saveable.insert(key, saved);
+                }
+            }
+        }
+        if let Some(ref mut cb) = self.on_close {
+            cb();
+        }
+        if let Some(ref sw) = self.skia_window {
+            crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
+        }
+        if let Some(created_id) = self.created_id {
+            let was_created = crate::app::window::CREATED
+                .lock()
+                .unwrap()
+                .remove(&created_id);
+            // A tombstone only makes sense while the declaration is still composing. The
+            // declaration-removal path unregisters the id before calling this, so it must not leave
+            // one behind.
+            if was_created {
+                crate::app::window::mark_destroyed(created_id);
+            }
+            crate::app::window_state::forget(crate::app::window_state::WindowId::new(created_id));
+        }
+        let raw = window_id.into_raw() as u64;
+        crate::app::overlay_host::retain_back_close_requests(|w| w != raw);
+        crate::effect::forget_window(raw);
+        crate::debug::remove_tree(raw);
+    }
+
     pub(crate) fn new(
         content: Box<dyn Fn(&mut ComposeCtx)>,
         width: f32,

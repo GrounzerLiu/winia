@@ -18,35 +18,8 @@ impl AppState {
         let Some(pw) = self.windows.get_mut(&window_id) else {
             return;
         };
-        if let Some(ref mut cb) = pw.on_close {
-            cb();
-        }
-        if let Some(registry) = pw.composer.saveable_registry() {
-            let saved = registry.perform_save();
-            if !saved.is_empty() {
-                if let Some(key) = pw.persist_key {
-                    crate::runtime::saveable::persist::save_saved(key, &saved);
-                }
-                if let Some(key) = pw.saveable_key {
-                    self.saveable.insert(key, saved);
-                }
-            }
-        }
-        if let Some(ref sw) = pw.skia_window {
-            crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
-        }
-        if let Some(created_id) = pw.created_id {
-            crate::app::window_state::forget(crate::app::window_state::WindowId::new(created_id));
-        }
+        pw.finalize(window_id, &mut self.saveable);
         self.windows.remove(&window_id);
-        // A queued overlay close for a dead window must not survive to a later one.
-        let raw_id = window_id.into_raw() as u64;
-        crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
-        // The window is gone, so drop its frame clock too (otherwise the registry grows by one entry
-        // per window opened), and clean up the debug tree entry: nothing renders after close, and a
-        // leftover would mislead UI tests.
-        crate::effect::forget_window(raw_id);
-        debug::remove_tree(raw_id);
         for pw in self.windows.values() {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();
@@ -725,17 +698,11 @@ impl AppState {
                 }
             }
             WindowEvent::Destroyed => {
-                if let Some(cid) = pw.created_id {
-                    crate::app::window::CREATED.lock().unwrap().remove(&cid);
-                    crate::app::window_state::forget(crate::app::window_state::WindowId::new(cid));
-                }
-                if let Some(ref sw) = pw.skia_window {
-                    crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
-                }
+                // The OS tore the window down itself: it still has to snapshot, run the close hook
+                // and drop the per-window registries, or a platform-initiated close loses state and
+                // leaks a frame clock.
+                pw.finalize(window_id, &mut self.saveable);
                 self.windows.remove(&window_id);
-                let raw_id = window_id.into_raw() as u64;
-                crate::app::overlay_host::retain_back_close_requests(|w| w != raw_id);
-                debug::remove_tree(window_id.into_raw() as u64);
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();

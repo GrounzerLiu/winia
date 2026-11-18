@@ -233,6 +233,10 @@ Window::new()
 `CloseReason` has two variants because only two are reachable: a declaration removal and an
 application exit never ask for permission, they simply proceed.
 
+Destroying a window whose declaration is still composing leaves that declaration inert rather than
+re-creating the window on the next frame. The marker is cleared when the declaration disappears, so
+removing and re-adding it is the supported way to get a fresh window.
+
 There is exactly one pipeline, and its order is fixed:
 
 ```

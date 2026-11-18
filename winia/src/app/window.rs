@@ -31,6 +31,16 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
 /// The set of window IDs created so far, globally.
 pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// IDs whose platform window was destroyed while their declaration still composes.
+///
+/// Without this, `Window::build` sees the id missing from `CREATED` and mints a fresh window on the
+/// very next frame, so `id.destroy()` would be undone before the application could observe it.
+static DESTROYED: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) fn mark_destroyed(id: u64) {
+    DESTROYED.lock().unwrap().insert(id);
+}
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The declarative window builder.
@@ -171,36 +181,23 @@ impl Window {
             .collect();
         for w in to_close {
             if let Some(mut pw) = windows.remove(&w) {
-                window_state::forget(WindowId::new(wid));
-                // A programmatic close (the declarer stopped declaring the window) is the usual way a
-                // window goes away, so it has to snapshot saveable state too.
-                if let Some(registry) = pw.composer.saveable_registry() {
-                    let saved = registry.perform_save();
-                    if !saved.is_empty() {
-                        if let Some(key) = pw.persist_key {
-                            crate::runtime::saveable::persist::save_saved(key, &saved);
-                        }
-                        if let Some(key) = pw.saveable_key {
-                            saveable.insert(key, saved);
-                        }
-                    }
-                }
-                // Drop the debug tree entry: a logical close never goes through winit's Destroyed, and a
-                // stale entry would confuse later checks.
-                crate::debug::remove_tree(w.into_raw() as u64);
-                if let Some(ref mut cb) = pw.on_close {
-                    cb();
-                }
-                for pw2 in windows.values() {
-                    if let Some(ref sw) = pw2.skia_window {
-                        sw.request_redraw();
-                    }
-                }
-                if windows.is_empty() {
-                    force_shutdown();
-                    event_loop.exit();
-                }
+                pw.finalize(w, saveable);
             }
+        }
+        for pw in windows.values() {
+            if let Some(ref sw) = pw.skia_window {
+                sw.request_redraw();
+            }
+        }
+        // Declaration removal is a teardown like any other: the last-window policy decides whether
+        // the process ends, and a resident application keeps running with no window.
+        let exit = matches!(
+            window_state::last_window_policy(),
+            window_state::LastWindowPolicy::Exit
+        );
+        if windows.is_empty() && exit {
+            force_shutdown();
+            event_loop.exit();
         }
     }
 
@@ -230,8 +227,13 @@ impl Window {
         let remove_lifecycle = lifecycle.clone();
         crate::effect::on_forget(ctx, move || {
             let wid = cid.get();
-            if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
-                remove_lifecycle.set_pending_remove(wid);
+            if wid != 0 {
+                // The declaration is gone, so its tombstone must not leak into a later window that
+                // happens to reuse the same slot.
+                DESTROYED.lock().unwrap().remove(&wid);
+                if CREATED.lock().unwrap().contains(&wid) {
+                    remove_lifecycle.set_pending_remove(wid);
+                }
             }
         });
 
@@ -258,7 +260,10 @@ impl Window {
         }
 
         let wid = created_id.get();
-        let need_new = wid == 0 || !CREATED.lock().unwrap().contains(&wid);
+        let destroyed = wid != 0 && DESTROYED.lock().unwrap().contains(&wid);
+        // A destroyed window keeps its declaration but not its platform window; only a fresh
+        // declaration (a new created_id) may create one again.
+        let need_new = wid == 0 || (!destroyed && !CREATED.lock().unwrap().contains(&wid));
 
         if need_new {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -279,7 +284,6 @@ impl Window {
                     visible: true,
                     placement: WindowPlacement::Windowed,
                     on_close_requested: self.on_close_requested,
-                    persist_key: self.persist_key,
                 },
             );
             let mut on_close = self.on_close;
