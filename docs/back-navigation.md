@@ -1,11 +1,13 @@
 # Back Navigation and Predictive Back
 
-> Status: design record, 2026-11-17. Not implemented yet.
+> Status: implemented; this document is the design record plus the current status (last updated
+> 2026-11-18). The phase list in section 10 is kept as the original plan; section 15 records what
+> landed.
 > Supersedes gap 15 in `docs/navigation3.md` ("navigation event / predictive back, deliberately
 > not done"), which was written when Android was not a committed target. The platform is now real:
 > the template targets API 36 through GameActivity, so the earlier conclusion no longer holds.
-> Scope: Android first; the Rust dispatcher itself is platform-agnostic so a desktop event source can
-> feed it later.
+> Scope: Android and desktop. Android supplies the system gesture; desktop supplies Escape and the
+> debug-server injection path. Both feed the same platform-agnostic dispatcher.
 > References used to pin the behaviour: androidx.activity 1.13.0 sources (`BackHandler.kt`,
 > `PredictiveBackHandler.kt`, `OnBackPressedDispatcher.kt`, `ComponentActivity.kt`),
 > androidx.navigationevent 1.0.0 (`OnBackInvokedInput.android.kt`, `NavigationEventProcessor.kt`),
@@ -28,9 +30,9 @@ observable ordering and completion rules:
 - Predictive back drives the navigation pop animation while the top entry stays on the back stack.
   The stack is modified only when the gesture completes, so cancellation needs no rollback.
 
-Non-goals for this slice: iOS, browser back, forward navigation, multi-window Android, and gesture-
-driven sheet/drawer motion (sheets and drawers register discrete handlers first; animating them with
-progress is a later phase).
+Non-goals: iOS, browser back, forward navigation, and Android freeform/multi-display routing. The
+inbox itself routes by window id and desktop multi-window is covered; the Android JNI bridge still
+targets the focused window. Predictive sheet/drawer motion is implemented (section 8).
 
 ## 2. The Compose reference chain
 
@@ -190,8 +192,9 @@ that a `BackHandler` live under an `OnBackPressedDispatcherOwner`.
    `Started` (edge `None`, progress 0) followed immediately by `Completed` when the owner is
    predictive, and as a bare `Completed` when it is discrete.
 6. `enabled` changes apply to new events only; they never complete an owned gesture early.
-7. On desktop, `predictive_back_handler` can be registered but receives no events unless something
-   calls `BackDispatcher::dispatch`; the debug server gains injection commands for tests.
+7. On desktop, Escape dispatches a synthetic `Completed` through the page table when no overlay is
+   open; the debug server can inject `Started`/`Progressed`/`Completed`/`Cancelled` for tests. There
+   is no OS edge gesture, so desktop handlers never see progress from a real pointer.
 
 ### 4.2 Why callbacks and not a suspend/flow API
 
@@ -252,25 +255,36 @@ predictive back by default, but the template sets the attribute explicitly.
 
 Threading: every callback above runs on the Java main thread. The native side must not touch `State`
 or dispatcher internals; it appends to the inbox and wakes the loop. Progressed events are coalesced
-(replace the tail when it is also `Progressed`), so a fast gesture cannot build a backlog; terminal
-events are never dropped. Queue capacity 64.
+only when the tail is a `Progressed` for the same target window, so a fast gesture cannot build a
+backlog and two windows cannot overwrite each other's progress. Terminal events are never dropped.
+Queue capacity 64.
 
 ## 6. Event loop integration
 
 ```rust
-fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-    for signal in crate::back::drain() {
-        if let Some(pw) = self.active_window_mut() {
-            pw.back.dispatch(signal);
-        }
+fn pump_back_events(&mut self) {
+    if self.windows.is_empty() { return; }
+    let focused = self.windows.iter().find(|(_, pw)| pw.focused_id.is_some()).map(|(id, _)| *id);
+    let fallback = self.windows.keys().next().copied();
+    for queued in crate::back::inbox::drain() {
+        let target = match queued.window {
+            Some(raw) => self.windows.iter()
+                .find(|(_, pw)| pw.composer.window_id() == raw)
+                .map(|(id, _)| *id),
+            None => focused.or(fallback),
+        };
+        let Some(pw) = target.and_then(|id| self.windows.get_mut(&id)) else { continue };
+        pw.composer.back_dispatcher().dispatch(queued.signal.into_update());
+        pw.flush_back_close_requests();
     }
 }
 ```
 
-`new_events` runs on the loop thread after the wake and before window events, which is exactly the
-point where a UI-thread-only dispatcher is legal. Dispatch may mark `State` values dirty, so the
-frame that follows picks the update up. Events that arrive before the first window exists stay in the
-inbox until the first turn.
+The pump runs from `new_events` and `about_to_wait`, on the loop thread after the wake and before
+window events, which is exactly where a UI-thread-only dispatcher is legal. Dispatch may mark `State`
+values dirty, so the frame that follows picks the update up. A targeted event never falls back to a
+different window; global events go to the focused window, or to the first one before anything has
+focus. Events that arrive before the first window exists stay in the inbox until the first turn.
 
 Lifecycle: winit's `resumed` / `suspended` toggle the bridge. While suspended, `setEnabled(false)`
 is called, incoming events are dropped, and the in-flight gesture is cancelled; on resume the
@@ -322,35 +336,28 @@ pane.
 
 ## 8. Overlays and Escape
 
-Today overlay dismissal lives in `PerWindow::escape_key`: it closes the topmost layer that has an
-`on_dismiss` callback, swallows when `dismiss_on_back_press` is false, and clears focus when nothing
-is open. That is Escape semantics, not Compose back semantics, and it must not leak into Android.
+Android back and desktop Escape reach overlays differently, and the difference is intentional.
 
-The unified model:
+On Android, dismissible overlays register `BackPriority::Overlay` handlers while visible. Dialog,
+AlertDialog, ModalBottomSheet, NavigationDrawer, Popup and DropdownMenu use the overlay host's
+wrapper, which is enabled only when `on_dismiss` exists and `dismiss_on_back_press` is true. Its
+`on_back` either calls the content's `on_dismiss` (`dismiss_defers_to_content`) or runs
+`begin_overlay_close`, so the host exit animation is preserved. With `dismiss_on_back_press = false`
+the handler is disabled and back falls through to the page, matching Compose.
 
-- `BackPriority::Overlay` handlers are scanned before default handlers. Dialog, AlertDialog,
-  ModalBottomSheet, NavigationDrawer, Popup and DropdownMenu register a discrete handler at overlay
-  priority while visible, with `enabled = visible && dismiss_on_back_press`.
-- Their `on_back` calls the existing `on_dismiss`/`begin_overlay_close` path, so
-  `dismiss_defers_to_content` keeps working.
-- `dismiss_on_back_press = false` now means "handler disabled", so the event falls through to the
-  page below. That is Compose behaviour (the dialog simply does not consume back) and replaces the
-  current "swallow the key" rule. The old rule existed because winia draws overlays in the same
-  window as the page; for Android back that reason does not apply.
-- Escape inherits the same rule: with `dismiss_on_back_press = false` the key falls through to the
-  page (and the focus fallback may run) instead of being swallowed behind the scrim. This is an
-  accepted behaviour change, recorded here so it is not mistaken for a regression.
-- Escape dispatches a synthetic discrete back (`edge = None`, progress 0) through the same
-  dispatcher. If no handler consumes it, `PerWindow` keeps its winia-specific fallback: clear focus.
-  The overlay branch inside `escape_key` is deleted.
+`PerWindow::escape_key` is the desktop source. With no open overlay it dispatches a synthetic
+`Completed` to the page table first, so `BackHandler` and `NavDisplay` see Escape; if nothing handles
+it, the winia-specific fallback clears focus. With an open overlay it keeps the Escape branch: no
+`on_dismiss` returns false, `dismiss_on_back_press = false` swallows the key, deferred content gets
+`on_dismiss`, otherwise `begin_overlay_close` starts the host exit. Escape is therefore not a second
+implementation of Android's overlay priority chain; it is the conventional dismiss key plus a
+synthetic Completed for page handlers.
 
-Affected docs and tests that assert the old Escape behaviour: `docs/dropdown-menu.md` (Escape closes
-the menu), `winia/src/app/overlay_host/tests.rs` (`escape_respects_dismiss_on_back_press`), and the
-AlertDialog tests that forward `dismiss_on_back_press`. They are updated with the refactor.
-
-Predictive sheets and drawers (Material3 drives their offset from gesture progress) are a follow-up:
-the API exists, but this slice registers them as discrete handlers, so the system shows its own
-preview and no in-app motion.
+Predictive sheet and drawer motion is implemented: `ModalBottomSheet` maps gesture progress from the
+current anchor to `Hidden`; `ModalNavigationDrawer` and `DismissibleNavigationDrawer` map `Open` to
+`Closed` through one shared helper. A second gesture that starts while the close animation is running
+is ignored, and the guard clears once the panel is open again. The search bar and the modal navigation
+rail already dismiss through the overlay host's `dismiss_on_back_press`.
 
 ## 9. winia-forge changes
 
@@ -410,7 +417,10 @@ activity; Escape behaviour on desktop matches the new overlay rules.
 - Composer tests: two `back_handler` calls, registration/removal across recomposition, `on_forget`
   cleanup.
 - Debug server: `back start|progress|cancel|complete` commands feed the same dispatcher; a UI fixture
-  drives NavDisplay and asserts the final stack and progress samples.
+  drives NavDisplay and asserts the final stack and progress samples. `target <window id>` scopes the
+  injection to one window (same WebSocket connection).
+- Multi-window: `back_routing_tests` dispatches through two real `PerWindow` tables; a desktop
+  two-window fixture is used for the end-to-end check.
 - Android: AVD checklist for gesture navigation and three-button navigation, dialog dismissal,
   activity recreation, and API 33 vs 34+ behaviour (a debug variant with targetSdk 33 exercises the
   legacy path if needed).
@@ -464,7 +474,7 @@ introducing a migration command (maintenance for zero users).
 | template | `winia-forge/crates/winia-cli/templates/blank/android/...`, `winia-forge/crates/winia-cli/src/commands/new.rs` |
 | CI | `winia-forge/.github/workflows/ci.yml` |
 
-## 15. Implementation status (2026-11-17)
+## 15. Implementation status (2026-11-18)
 
 Landed on branch `v2`:
 
@@ -521,3 +531,17 @@ is covered by the emulator scenario, `bottom_sheet` keeps the simpler target che
 The CI javac step covers the WiniaBack template only; the Activity template needs games-activity on
 the classpath. `winia doctor` now reports the bridge file and the manifest opt-in (Android projects
 only).
+
+Multi-window routing landed afterwards:
+
+- A queued signal carries an optional target window. The pump resolves it through
+  `composer.window_id()`; global events go focused -> first, targeted events never fall back, and a
+  targeted `Completed` does not finish the activity.
+- The debug server's `target <window id>` works on stdin and, per connection, on WebSocket; the docs
+  call out that a WebSocket target must be set on the same connection as the `back` command.
+- `winia/src/app/app_state/back_routing_tests.rs` builds two real `PerWindow`s with independent
+  handlers and verifies target-only, focused-global and stale-target behavior in-process.
+- A desktop fixture with two real windows was driven through debug injection: targeting window A
+  changed only A's count, targeting B only B, and a stale target changed neither.
+- Commits: `ba0cfb6` (routing), `43141d6` (two-window test), `006dfea` (target scope), `be0a578`
+  (drawer close guard), `0639c4d` (Dismissible drawer support).
