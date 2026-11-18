@@ -58,7 +58,7 @@ impl AppState {
             crate::app::window_state::last_window_policy(),
             crate::app::window_state::LastWindowPolicy::Exit
         );
-        if is_parent || (closing_last && exit_on_last) {
+        if (is_parent || closing_last) && exit_on_last {
             debug::force_shutdown();
             event_loop.exit();
         }
@@ -728,7 +728,13 @@ impl AppState {
                         sw.request_redraw();
                     }
                 }
-                if self.windows.is_empty() {
+                // The OS tore the window down itself (not our pipeline): the policy still decides
+                // whether an application that lost its last window ends or stays resident.
+                let exit_on_last = matches!(
+                    crate::app::window_state::last_window_policy(),
+                    crate::app::window_state::LastWindowPolicy::Exit
+                );
+                if self.windows.is_empty() && exit_on_last {
                     event_loop.exit();
                 }
             }
