@@ -77,7 +77,8 @@ back cancel            # 或 back complete
 `back progress`——面板应当继续关闭，而不是被第二次手势拖回去。
 
 多窗口时先 `target <window id>`（窗口 id 可从 `t` 的 `window` 字段取），再发 `back`；
-不设置 target 的事件仍然投给 focused 窗口。
+不设置 target 的事件仍然投给 focused 窗口。`target` 是连接级状态：stdin 在整个进程内有效，
+WebSocket 则每条连接各自维护，必须在同一个连接里先 `target` 再发 `back`。
 
 ⚠ **坐标均为逻辑像素**（非物理像素；HiDPI 下物理 = 逻辑 × scale_factor，
 demo 截图 1350x720 = 窗口 900x480 × 1.5）。**例外：`px` 与 `p` 的坐标是帧/物理像素**
