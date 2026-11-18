@@ -1,8 +1,8 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: design record, rev 2, 2026-11-18. Phase 1 is implemented (identity, live state, frame-end
-> command queue); the close pipeline, persistence key and window policy are still design only - see
-> section 14 for what exists and what does not.
+> Status: implemented, rev 2, 2026-11-18. All four phases are in the tree; the only sketched method
+> that stayed on another surface is `WindowId::insets`, which is still `ctx.window_insets()` inside
+> window content. Section 14 records what landed and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
 > wrapper, no key type, no scope type, no options struct, no window manager, one creation entry.
 > Section 15 records what was removed and why.
@@ -286,23 +286,22 @@ own close entry through the back handler (`docs/back-navigation.md`). Reporting 
 `WindowCapabilities` is the point - `title`, `decorations` and `resizable` are accepted on Android
 today and have no effect.
 
-A second Android consequence: the back pump currently routes unfocused events to the window with
-the highest `created_id` (`winia/src/app/app_state/handlers.rs`). Once the window table records
-creation order and focus explicitly, that sort can be replaced by the same order the compositor
-uses.
+A second Android consequence: the back pump routes unfocused events to the most recently created
+window. That order now comes from the recorded window list (`windows_in_creation_order`), the same
+list `ctx.windows()` returns; only windows opened through the platform-level API, which have no
+declaration, still fall back to their `created_id`.
 
-## 13. Compatibility checklist
+## 13. Compatibility facts (settled)
 
-These must be settled before any code changes:
-
-1. Is `WindowState` re-exported from `prelude`? If not, its public fields can be reshaped freely;
-   if it is, the fields stay and gain `#[deprecated]` accessors.
+1. `WindowState` was not in `prelude` before this work; it and the other new types are exported
+   from it now, so they are part of the public surface.
 2. `build` returns `WindowId` instead of `()`. Ignoring a return value is legal in Rust, so no call
-   site changes, but `#[must_use]` must not be added.
-3. `app::open_window_with_title` / `app::open_window_with_saveable_key` stay as thin wrappers
-   (`winia/src/app.rs:242`, `:269`).
-4. Creation moves from the first `need_new` frame to the frame-end queue, so the z-order of several
-   windows created in one frame needs a test either way.
+   site had to change; `#[must_use]` was deliberately not added.
+3. `app::open_window_with_title` and `app::open_window_with_saveable_key` stay as wrappers
+   (`winia/src/app.rs`); the new `open_window_with_keys` carries the separate disk key.
+4. Creation still begins in `Window::build`, but it only pushes a `PendingWindow` into the existing
+   global queue; the loop creates the platform windows from that queue in submission order. The
+   frame-end command queue added here covers mutations and close, not creation.
 
 ## 14. Migration phases
 
@@ -311,7 +310,7 @@ These must be settled before any code changes:
 | 1 | `WindowId`, `WindowState`, frame-end command queue, `build` returns the id | additive; no call site changes |
 | 2 | `ctx.window_id()`, `on_close_requested` as a notification | additive |
 | 3 | One close pipeline; `on_close` wired to the merged path; `.key(..)` for persistence | behaviour change on the native-close path only |
-| 4 | `LastWindowPolicy`, recorded z-order, remove the `created_id` sort in the back pump | structural |
+| 4 | `LastWindowPolicy`, recorded z-order, back pump uses the recorded order | structural |
 
 Phase 1 is in the tree. Verified on desktop with a probe window: a `set_title` and a `set_size`
 issued from a `side_effect` reached the OS window (the title read back through the window handle,
@@ -333,7 +332,14 @@ one process keeps working), while the disk key is only the application's `.key(.
 silent `saveable_key.or(created_id)` fallback is gone, because a per-instance id would attach saved
 state to "the Nth window ever opened".
 
-Two facts found while implementing, which the remaining phases depend on:
+Phase 4 is in the tree too. `LastWindowPolicy` was verified with a probe that destroys its only
+window: with the default `Exit` the process ended, with `StayResident` it stayed alive. The policy
+governs both teardown paths (the shared close pipeline and winit's own `Destroyed` event), which was
+a real bug on the first cut: `is_parent` short-circuited the policy, so `StayResident` still exited.
+The back pump now takes its unfocused fallback from the recorded window list, so it and
+`ctx.windows()` cannot disagree about creation order.
+
+Two facts found while implementing, worth remembering for future window work:
 
 - A composer carries two id spaces: `window_id` is the platform handle (frame clocks, focus,
   accessibility) while the declaration mints its own `created_id`. `ctx.window_id()` must report the

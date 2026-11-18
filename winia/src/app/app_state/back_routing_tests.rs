@@ -25,6 +25,13 @@ fn test_window_id(raw: u64) -> winit::window::WindowId {
 fn window_with_back(id: u64, tag: &'static str, log: Rc<RefCell<Vec<&'static str>>>) -> PerWindow {
     let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
     pw.composer.set_window_id(id);
+    pw.composer.set_created_id(id);
+    // Register the declaration-side state too: the pump's unfocused fallback now takes its order
+    // from this table, not from sorting the window map.
+    crate::app::window_state::declare(
+        crate::app::window_state::WindowId::new(id),
+        crate::app::window_state::WindowSeed::default(),
+    );
     pw.composer.compose(move |ctx| {
         crate::back::back_handler(ctx, true, move || log.borrow_mut().push(tag));
     });

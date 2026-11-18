@@ -175,14 +175,27 @@ impl AppState {
             .iter()
             .find(|(_, pw)| pw.focused_id.is_some())
             .map(|(id, _)| *id);
-        // Android composites several winit windows into one Activity surface in creation order;
-        // with no focused window, back belongs to the most recently created (topmost) one, not to
-        // whatever HashMap iteration happens to return first.
-        let fallback = self
-            .windows
-            .iter()
-            .max_by_key(|(_, pw)| pw.created_id.unwrap_or(0))
-            .map(|(id, _)| *id);
+        // Android composites several winit windows into one Activity surface in creation order, so
+        // with no focused window back belongs to the most recently created (topmost) one. The order
+        // comes from the recorded window list rather than from sorting the table, which also makes
+        // `ctx.windows()` and the back pump agree by construction.
+        let fallback = crate::app::window_state::windows_in_creation_order()
+            .last()
+            .and_then(|public| {
+                let raw = public.raw();
+                self.windows
+                    .iter()
+                    .find(|(_, pw)| pw.composer.created_id() == raw)
+                    .map(|(id, _)| *id)
+            })
+            // Windows opened through the platform-level API have no declaration and therefore no
+            // entry in the state table; keep their creation order as the only available signal.
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .max_by_key(|(_, pw)| pw.created_id.unwrap_or(0))
+                    .map(|(id, _)| *id)
+            });
         let signals = crate::back::inbox::drain();
         #[cfg(target_os = "android")]
         let app = self.platform.android_app.clone();
