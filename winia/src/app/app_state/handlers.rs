@@ -20,10 +20,13 @@ impl AppState {
         };
         pw.finalize(window_id, &mut self.saveable);
         self.windows.remove(&window_id);
-        for pw in self.windows.values() {
+        for pw in self.windows.values_mut() {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();
             }
+            // A sibling close can change reactive reads in the remaining windows (ctx.windows(),
+            // close-button enablement); a redraw alone renders the stale composition.
+            pw.composer.request_recomposition(0);
         }
         // Hiding never gets here, so this is destruction only: the policy decides whether an
         // application that just lost its last window ends or keeps running (tray style).
@@ -703,10 +706,11 @@ impl AppState {
                 // leaks a frame clock.
                 pw.finalize(window_id, &mut self.saveable);
                 self.windows.remove(&window_id);
-                for pw in self.windows.values() {
+                for pw in self.windows.values_mut() {
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();
                     }
+                    pw.composer.request_recomposition(0);
                 }
                 // The OS tore the window down itself (not our pipeline): the policy still decides
                 // whether an application that lost its last window ends or stays resident.

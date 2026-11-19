@@ -198,10 +198,11 @@ impl Window {
                 pw.finalize(w, saveable);
             }
         }
-        for pw in windows.values() {
+        for pw in windows.values_mut() {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();
             }
+            pw.composer.request_recomposition(0);
         }
         // Declaration removal is a teardown like any other: the last-window policy decides whether
         // the process ends, and a resident application keeps running with no window.
