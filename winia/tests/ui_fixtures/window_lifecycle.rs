@@ -66,6 +66,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "policy-exit" | "policy-stay" => policy_scenario(ctx, id, &mode_for_close),
                 "destroy-stay" => destroy_stay_scenario(ctx, id),
                 "nested-close" => nested_close_scenario(ctx, id),
+                "sibling-close" => sibling_close_scenario(ctx, id),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 other => {
                     write_out(&format!("unknown-mode={other}\n"));
@@ -159,6 +160,36 @@ fn nested_close_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
         }
     }
     Text::new("parent").build(ctx);
+}
+
+/// The window API demo's shape: the primary window's content reads a `State<bool>` and declares a
+/// secondary window behind it. The secondary window closes itself (the same write its Close button
+/// makes), and the primary window must re-render without any pointer input.
+fn sibling_close_scenario(ctx: &mut ComposeCtx, primary: WindowId) {
+    let open = ctx.remember(|| true);
+    append_out(&format!("parent={}\n", if open.get() { "open" } else { "closed" }));
+    if open.get() {
+        let open_for_child = open.clone();
+        Window::new()
+            .title("sibling")
+            .size(260.0, 180.0)
+            .build(ctx, move |ctx| {
+                let open = open_for_child.clone();
+                append_out("child=composed\n");
+                let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+                if !once.get() {
+                    once.set(true);
+                    // The write a Close button handler makes: outside compose, on the UI thread.
+                    winia::effect::side_effect(ctx, move || open.set(false));
+                }
+                Text::new("child").build(ctx);
+            });
+    } else {
+        // Reaching this line at all means the primary window re-ran after the sibling closed.
+        append_out("parent-saw-closed\n");
+    }
+    let _ = primary;
+    Text::new(if open.get() { "declared" } else { "not declared" }).build(ctx);
 }
 
 fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {

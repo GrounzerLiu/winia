@@ -197,6 +197,23 @@ fn closing_a_parent_finalizes_its_child_windows() {
 }
 
 #[test]
+fn closing_a_sibling_window_reruns_the_remaining_content() {
+    let mut fixture = Fixture::spawn("sibling-close", "sibling-close");
+    std::thread::sleep(Duration::from_millis(2_500));
+    let text = fixture.text();
+    assert!(
+        text.contains("child=composed"),
+        "the secondary window never composed: {text:?}"
+    );
+    // The secondary window closes itself (the write its Close button makes). Seeing this marker
+    // means the primary window re-ran its content without any pointer input.
+    assert!(
+        text.contains("parent-saw-closed"),
+        "the primary window kept its stale composition after the sibling closed: {text:?}"
+    );
+}
+
+#[test]
 fn a_keyed_window_restores_its_saved_state_across_runs() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch_dir("persist");
