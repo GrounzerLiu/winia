@@ -42,8 +42,10 @@ pub fn main() {
 #[composable]
 fn app(ctx: &mut ComposeCtx) {
     let show_second = ctx.remember(|| false);
+    let refresh = ctx.remember(|| 0u32);
     let veto_close = ctx.remember(|| false);
     let body_show = show_second.clone();
+    let body_refresh = refresh.clone();
     let body_veto = veto_close.clone();
     let handler_veto = veto_close.clone();
     Window::new()
@@ -61,9 +63,10 @@ fn app(ctx: &mut ComposeCtx) {
         })
         .build(ctx, move |ctx| {
             let show = body_show.clone();
+            let refresh = body_refresh.clone();
             let veto = body_veto.clone();
             settings::shell("Window API", ctx, move |ctx, padding| {
-                body(ctx, padding, show, veto);
+                body(ctx, padding, show, refresh, veto);
             });
         });
 
@@ -71,22 +74,28 @@ fn app(ctx: &mut ComposeCtx) {
     // multi_window = false, so it keeps one window there.
     #[cfg(not(target_os = "android"))]
     if show_second.get() {
-        second_window(ctx, show_second.clone());
+        second_window(ctx, show_second.clone(), refresh.clone());
     }
 }
 
 #[composable]
-fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>) {
+fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>, refresh: State<u32>) {
     let close_show = show_second.clone();
+    let close_refresh = refresh.clone();
     let body_show = show_second.clone();
+    let body_refresh = refresh.clone();
     Window::new()
         .title("Window API demo — second window")
         .size(620.0, 480.0)
-        .on_close_requested(move |_id, _reason| close_show.set(false))
+        .on_close_requested(move |_id, _reason| {
+            close_show.set(false);
+            close_refresh.set(close_refresh.get() + 1);
+        })
         .build(ctx, move |ctx| {
             let show = body_show.clone();
+            let refresh = body_refresh.clone();
             settings::shell("Second window", ctx, move |ctx, padding| {
-                second_body(ctx, padding, show);
+                second_body(ctx, padding, show, refresh);
             });
         });
 }
@@ -96,12 +105,12 @@ fn body(
     ctx: &mut ComposeCtx,
     scaffold: ScaffoldContentPadding,
     show_second: State<bool>,
+    refresh: State<u32>,
     veto_close: State<bool>,
 ) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
-    let refresh = ctx.remember(|| 0u32);
     let multi_open = show_second.get();
     let scroll = ctx.remember(ScrollState::new).get();
     let runs = winia::runtime::saveable::remember_saveable::<i64>(ctx, "runs", || 0);
@@ -312,7 +321,12 @@ fn body(
 }
 
 #[composable]
-fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: State<bool>) {
+fn second_body(
+    ctx: &mut ComposeCtx,
+    scaffold: ScaffoldContentPadding,
+    show_second: State<bool>,
+    refresh: State<u32>,
+) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
@@ -346,8 +360,11 @@ fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_seco
                 );
                 Button::filled()
                     .on_click({
-                        clone!(show_second);
-                        move || show_second.set(false)
+                        clone!(refresh, show_second);
+                        move || {
+                            show_second.set(false);
+                            refresh.set(refresh.get() + 1);
+                        }
                     })
                     .build(ctx, |ctx| Text::new("Close this window").build(ctx));
                 Text::new(
