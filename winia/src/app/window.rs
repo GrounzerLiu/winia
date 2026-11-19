@@ -164,7 +164,8 @@ impl Window {
             .filter_map(|(window_id, pw)| pw.created_id.map(|id| (*window_id, id)))
             .collect();
         for (window_id, created_id) in children {
-            if !CREATED.lock().unwrap().remove(&created_id) {
+            let removed = CREATED.lock().unwrap().remove(&created_id);
+            if !removed {
                 continue;
             }
             if let Some(mut pw) = windows.remove(&window_id) {
@@ -194,6 +195,9 @@ impl Window {
             let Some(pw) = windows.get(&owner_window_id) else {
                 continue;
             };
+            // Reset BEFORE closing, not after: an `on_close` handler that registers another close on
+            // the same composer must survive this pass and land in the next one. Clearing afterwards
+            // would silently drop it.
             pw.composer.reset_pending_window_remove();
             for wid in ids {
                 Self::close_detached_window(windows, event_loop, force_shutdown, wid, saveable);
@@ -211,11 +215,11 @@ impl Window {
             std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
         >,
     ) {
-        // Window::build was not called for the Composer that owns this request.
-        if !CREATED.lock().unwrap().contains(&wid) {
+        // One lock for the gate and the removal: a declaration that is already gone (its
+        // `Window::build` never ran, or something else finalized it first) must not close anything.
+        if !CREATED.lock().unwrap().remove(&wid) {
             return;
         }
-        CREATED.lock().unwrap().remove(&wid);
         let to_close: Vec<winit::window::WindowId> = windows
             .iter()
             .filter(|(_, pw)| pw.created_id() == Some(wid))

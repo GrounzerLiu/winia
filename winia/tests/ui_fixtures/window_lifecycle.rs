@@ -12,12 +12,9 @@ use winia::prelude::*;
 
 static FIRST_WINDOW: AtomicBool = AtomicBool::new(true);
 
-fn write_out(text: &str) {
-    if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
-        let _ = std::fs::write(path, text);
-    }
-}
-
+/// Every observation is appended. A scenario runs one process against a fresh output file, so an
+/// append is also its first write; using a truncating write somewhere would silently erase the
+/// markers another scope already recorded.
 fn append_out(text: &str) {
     if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
         if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -53,7 +50,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
         .size(400.0, 300.0)
         .key("fixture-persist")
         .on_close_requested(move |id, reason| {
-            write_out(&format!("requested={reason:?}\n"));
+            append_out(&format!("requested={reason:?}\n"));
             if mode_for_handler == "close-accept" {
                 id.destroy();
             }
@@ -69,7 +66,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "sibling-close" => sibling_close_scenario(ctx),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 other => {
-                    write_out(&format!("unknown-mode={other}\n"));
+                    append_out(&format!("unknown-mode={other}\n"));
                     std::process::exit(2);
                 }
             }
@@ -87,7 +84,7 @@ fn size_scenario(ctx: &mut ComposeCtx, id: WindowId) {
     let layout = winia::layout::window_size();
     let size = id.state().size();
     if (size.0 - 520.0).abs() < 1.0 && (size.1 - 333.0).abs() < 1.0 {
-        write_out(&format!("state={size:?}\nlayout={layout:?}\n"));
+        append_out(&format!("state={size:?}\nlayout={layout:?}\n"));
         std::process::exit(0);
     }
     Text::new("size").build(ctx);
@@ -98,7 +95,7 @@ fn close_scenario(ctx: &mut ComposeCtx, id: WindowId) {
     if !requested.get() {
         requested.set(true);
         winia::effect::side_effect(ctx, move || {
-            write_out("closing\n");
+            append_out("closing\n");
             id.close();
         });
     }
@@ -113,7 +110,7 @@ fn policy_scenario(ctx: &mut ComposeCtx, id: WindowId, mode: &str) {
     if !destroyed.get() {
         destroyed.set(true);
         winia::effect::side_effect(ctx, move || {
-            write_out("destroying\n");
+            append_out("destroying\n");
             id.destroy();
         });
     }
@@ -124,7 +121,7 @@ fn policy_scenario(ctx: &mut ComposeCtx, id: WindowId, mode: &str) {
 /// replacement on the next frame.
 fn destroy_stay_scenario(ctx: &mut ComposeCtx, id: WindowId) {
     let first = FIRST_WINDOW.swap(false, Ordering::Relaxed);
-    write_out(if first { "created\n" } else { "recreated\n" });
+    append_out(if first { "created\n" } else { "recreated\n" });
     let destroyed = ctx.remember(|| Rc::new(Cell::new(false))).get();
     if !destroyed.get() {
         destroyed.set(true);
@@ -212,7 +209,7 @@ fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {
     if !written.get() {
         written.set(true);
         let value = counter.get();
-        write_out(&format!("counter={value}\n"));
+        append_out(&format!("counter={value}\n"));
         let target = counter.clone();
         winia::effect::side_effect(ctx, move || {
             target.set(value + 1);
