@@ -167,15 +167,21 @@ fn nested_close_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
 /// makes), and the primary window must re-render without any pointer input.
 fn sibling_close_scenario(ctx: &mut ComposeCtx) {
     let open = ctx.remember(|| true);
-    // `ctx.windows()` is a plain call with no subscription, so this marker only refreshes when the
-    // content re-runs. It records that the primary saw the new window list, not which route made it
-    // re-run (the shared `State` also dirties this content).
+    // The label sits in its own group and reads nothing reactive: a recompose triggered by the
+    // shared `State` skips it (its parameters did not change), so only a whole-content rebuild
+    // reaches it. That is the mechanism this scenario exists to pin.
+    let seq = ctx.remember(|| Rc::new(Cell::new(0usize))).get();
     let seen = ctx.remember(|| Rc::new(Cell::new(usize::MAX))).get();
-    let count = ctx.windows().len();
-    if seen.get() != count {
-        seen.set(count);
-        append_out(&format!("windows={count}\n"));
-    }
+    Column::new().build(ctx, |ctx| {
+        let count = ctx.windows().len();
+        if seen.get() != count {
+            seen.set(count);
+            let n = seq.get() + 1;
+            seq.set(n);
+            append_out(&format!("seq={n} windows={count}\n"));
+        }
+        Text::new(format!("windows {count}")).build(ctx);
+    });
     append_out(&format!("parent={}\n", if open.get() { "open" } else { "closed" }));
     if open.get() {
         let open_for_child = open.clone();

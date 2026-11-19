@@ -90,6 +90,21 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// Poll the fixture's observation file until `done` accepts it, so a check does not depend on a
+    /// fixed sleep matching this machine's startup time.
+    fn wait_for_text(&mut self, timeout: Duration, done: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let text = self.text();
+            if done(&text) || Instant::now() >= deadline {
+                return text;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -199,8 +214,10 @@ fn closing_a_parent_finalizes_its_child_windows() {
 #[test]
 fn closing_a_sibling_window_reruns_the_remaining_content() {
     let mut fixture = Fixture::spawn("sibling-close", "sibling-close");
-    std::thread::sleep(Duration::from_millis(2_500));
-    let text = fixture.text();
+    let text = fixture.wait_for_text(Duration::from_secs(15), |text| {
+        text.lines().any(|line| line.starts_with("seq=") && line.contains("windows=1"))
+            && text.matches("seq=").count() >= 3
+    });
     assert!(
         text.contains("child=composed"),
         "the secondary window never composed: {text:?}"
@@ -211,11 +228,17 @@ fn closing_a_sibling_window_reruns_the_remaining_content() {
         text.contains("parent-saw-closed"),
         "the primary window kept its stale composition after the sibling closed: {text:?}"
     );
-    // `ctx.windows()` is a plain call with no subscription: this label is only correct if the
-    // content re-ran after the close, by whatever route.
+    // The window-list label lives in a group that reads nothing reactive: the State-driven
+    // recompose skips it, so only the close path's whole-content rebuild refreshes it. Removing
+    // that rebuild leaves the label at `windows=2` and this assertion fails.
+    let last_seq = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("seq="))
+        .last()
+        .unwrap_or_default();
     assert!(
-        text.contains("windows=1"),
-        "the primary window never re-read its window list after the sibling closed: {text:?}"
+        last_seq.contains("windows=1"),
+        "the window list label still counts the closed sibling: {text:?}"
     );
 }
 
