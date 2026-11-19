@@ -70,6 +70,9 @@ pub(crate) struct PendingWindow {
     /// positional, so writing saved state under it would attach it to whatever window later lands in
     /// that slot.
     pub persist_key: Option<u64>,
+    /// The composer (`window_id`) that declared the window; `None` for the platform-level API. The
+    /// root composer is `Some(0)`.
+    pub owner: Option<u64>,
     pub theme: Option<crate::theme::WindowTheme>,
 }
 use skiwin::capture::{request_capture, take_capture};
@@ -318,6 +321,37 @@ pub fn open_window_with_keys(
     persist_key: Option<u64>,
     theme: Option<crate::theme::WindowTheme>,
 ) {
+    open_window_with_keys_owned(
+        width,
+        height,
+        title,
+        options,
+        content,
+        on_close,
+        created_id,
+        saveable_key,
+        persist_key,
+        None,
+        theme,
+    );
+}
+
+/// The internal form, carrying the composer that declared the window (`None` for the platform-level
+/// API). The root-level lifecycle uses it to tell which live windows its declarations own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn open_window_with_keys_owned(
+    width: f32,
+    height: f32,
+    title: String,
+    options: WindowOptions,
+    content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
+    on_close: Option<Box<dyn FnMut() + Send>>,
+    created_id: Option<u64>,
+    saveable_key: Option<u64>,
+    persist_key: Option<u64>,
+    owner: Option<u64>,
+    theme: Option<crate::theme::WindowTheme>,
+) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow {
         width,
         height,
@@ -328,6 +362,7 @@ pub fn open_window_with_keys(
         created_id,
         saveable_key,
         persist_key,
+        owner,
         theme,
     });
     wake_impl();
@@ -391,7 +426,7 @@ fn take_pending_windows() -> Vec<PendingWindow> {
 /// hit_test hit the outer content node, not the inner one, so drag_scroll's target selection (walk the
 /// path in reverse for a scroll) picks the outer node.
 
-pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
+pub fn run_app(app: impl Fn(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
     run_app_with_event_loop(event_loop, app, PlatformState::default());
 }
@@ -401,7 +436,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
 #[cfg(target_os = "android")]
 pub fn run_app_android(
     android_app: winit::platform::android::activity::AndroidApp,
-    app: impl FnOnce(&mut ComposeCtx) + 'static,
+    app: impl Fn(&mut ComposeCtx) + 'static,
 ) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
@@ -428,7 +463,7 @@ pub fn run_app_android(
 
 fn run_app_with_event_loop(
     event_loop: EventLoop,
-    app: impl FnOnce(&mut ComposeCtx) + 'static,
+    app: impl Fn(&mut ComposeCtx) + 'static,
     platform: PlatformState,
 ) {
     #[cfg(not(target_os = "android"))]
@@ -460,6 +495,7 @@ fn run_app_with_event_loop(
     let state = AppState {
         platform,
         init: Some(Box::new(app)),
+        root: None,
         was_animating: false,
         saveable: HashMap::new(),
         windows: HashMap::new(),

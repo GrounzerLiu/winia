@@ -27,8 +27,12 @@ pub(crate) struct AppState {
     pub(crate) pending_content: Vec<PendingWindow>,
     /// Parent window id (for the `is_parent` check — not derived from HashMap order).
     pub(crate) parent_window_id: Option<WindowId>,
-    /// Initialisation callback (run once only, to create the main window declaratively).
-    pub(crate) init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
+    /// The application root closure. It is re-run when root State changes, so declarative windows
+    /// behind a State flag can appear and disappear after startup.
+    pub(crate) init: Option<Box<dyn Fn(&mut ComposeCtx)>>,
+    /// The persistent root composition. Dropping it after the first frame made dynamic root
+    /// declarations impossible.
+    pub(crate) root: Option<crate::runtime::composer::Composer>,
     /// Whether animations were active on the previous pass (forces a final frame when they stop).
     pub(crate) was_animating: bool,
 }

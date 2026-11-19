@@ -56,6 +56,7 @@ fn state_with_two_windows(focus_first: bool) -> (AppState, Rc<RefCell<Vec<&'stat
         pending_content: Vec::new(),
         parent_window_id: None,
         init: None,
+        root: None,
         was_animating: false,
     };
     (state, log)

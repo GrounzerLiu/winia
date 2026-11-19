@@ -28,6 +28,8 @@ pub(crate) struct PerWindow {
     pub(crate) saveable_key: Option<u64>,
     /// Key for state written to disk: only set when the window declared `.key(..)`.
     pub(crate) persist_key: Option<u64>,
+    /// The declaring composer's window id; `Some(0)` for a root declaration.
+    pub(crate) owner: Option<u64>,
 
     /// slot_key of the focused node.
     pub(crate) focused_slot_key: Option<u64>,
@@ -157,6 +159,7 @@ impl PerWindow {
             created_id: None,
             saveable_key: None,
             persist_key: None,
+            owner: None,
             theme,
             focused_slot_key: None,
             input: GestureState::default(),

@@ -1,21 +1,44 @@
 use super::*;
 
 impl AppState {
-    /// Drain the window requests queued by `app::open_window`, plus the first-time initialisation.
+    /// Drain the window requests queued by `app::open_window`, plus the root composition.
     pub(crate) fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
-        // First pass: run the init callback to collect the main window's creation request.
-        if self.windows.is_empty()
-            && let Some(init) = self.init.take()
-        {
+        if self.root.is_none() {
             let mut composer = Composer::new();
             #[cfg(target_os = "android")]
             composer.set_android_app(self.platform.android_app.clone());
-            composer.compose(|ctx| init(ctx));
-            // Temporary composer: `compose` already took the deps (registered in its slot_deps) —
-            // taking them again here is a defensive no-op (buffer empty) that resets DEP_MODE.
-            crate::runtime::state::take_deps();
-            // The temporary initialization Composer is not an active
-            // window owner; its lifecycle state is dropped with it.
+            if let Some(init) = self.init.as_ref() {
+                composer.compose(|ctx| init(ctx));
+            }
+            self.root = Some(composer);
+        } else if let Some(init) = self.init.as_ref() {
+            if let Some(root) = self.root.as_mut() {
+                root.recompose(|ctx| init(ctx));
+            }
+        }
+        // `compose` already took the deps into its slot_deps; this clears any leftover buffer.
+        crate::runtime::state::take_deps();
+
+        // A root declaration that disappeared closes its own window. Doing this by active-id diff
+        // (rather than the slot forget callback) works even when several root declarations share
+        // one composer: a still-composed sibling must not keep the removed one alive.
+        if let Some(active) = self.root.as_ref().map(|root| root.active_window_ids()) {
+            let stale: Vec<u64> = self
+                .windows
+                .values()
+                .filter(|pw| pw.owner == Some(0))
+                .filter_map(|pw| pw.created_id)
+                .filter(|id| !active.contains(id))
+                .collect();
+            for id in stale {
+                crate::app::window::Window::process_pending_remove(
+                    &mut self.windows,
+                    event_loop,
+                    &|| crate::debug::force_shutdown(),
+                    &mut self.saveable,
+                    id,
+                );
+            }
         }
 
         for item in take_pending_windows() {
@@ -102,6 +125,7 @@ impl AppState {
         pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
+        pw.owner = pending.owner;
         // A window re-opened with the same key picks up what the last one saved. `created_id` is
         // deliberately NOT a fallback: it is minted fresh for every window, so using it would key
         // saved state by "the Nth window ever opened" and quietly restore the wrong data. A window

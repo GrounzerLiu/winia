@@ -370,6 +370,10 @@ impl Composer {
         self.lifecycle.pending_close_id()
     }
 
+    pub(crate) fn active_window_ids(&self) -> std::collections::HashSet<u64> {
+        self.lifecycle.active_ids()
+    }
+
     pub(crate) fn reset_pending_window_remove(&self) {
         self.lifecycle.reset_pending_remove();
     }

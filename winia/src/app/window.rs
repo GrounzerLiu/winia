@@ -133,6 +133,20 @@ impl Window {
     }
 
     /// Called at the end of compose to check whether a window asked to close.
+    /// Close one window whose declaration no longer exists in `owner`.
+    pub(crate) fn process_pending_remove(
+        windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        force_shutdown: &dyn Fn(),
+        saveable: &mut std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
+        >,
+        id: u64,
+    ) {
+        Self::close_detached_window(windows, event_loop, force_shutdown, id, saveable);
+    }
+
     pub(crate) fn process_detached(
         windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
         event_loop: &dyn winit::event_loop::ActiveEventLoop,
@@ -300,7 +314,7 @@ impl Window {
             // content in it, so this stays a plain closure.
             // The saveable key is the DECLARATION SITE's salted key, not the freshly minted window id:
             // a re-opened window has to be matched against the site that declared it.
-            app::open_window_with_keys(
+            app::open_window_with_keys_owned(
                 w,
                 h,
                 self.spec.title.clone(),
@@ -312,14 +326,15 @@ impl Window {
                 Some(id),
                 Some(key),
                 self.persist_key,
+                Some(ctx.window_id().raw()),
                 Some(theme),
             );
         }
 
         ctx.end_node();
 
-        // After end_node: mark that Window::build has been called.
-        lifecycle.mark_rebuilt();
+        // After end_node: mark that this window's declaration was rebuilt this pass.
+        lifecycle.mark_rebuilt(created_id.get());
 
         // The handle is valid from the first frame: the id was minted above, and `is_realized()`
         // stays false until the platform creates the window.
