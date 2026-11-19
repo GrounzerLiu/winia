@@ -5,7 +5,6 @@
 //! can keep them apart is the one that runs the pass. `app/window.rs` sets and reads it.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Per-Composer lifecycle state for declarative Window nodes.
@@ -15,17 +14,23 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 pub(crate) struct LifecycleState {
     rebuilt: Arc<Mutex<HashSet<u64>>>,
-    pending_remove_id: Arc<AtomicU64>,
+    pending_remove: Arc<Mutex<HashSet<u64>>>,
 }
 
 impl LifecycleState {
     pub(crate) fn reset_for_compose(&self) {
         self.rebuilt.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        self.pending_remove_id.store(0, Ordering::Release);
+        self.pending_remove
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     pub(crate) fn reset_pending_remove(&self) {
-        self.pending_remove_id.store(0, Ordering::Release);
+        self.pending_remove
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     pub(crate) fn mark_rebuilt(&self, id: u64) {
@@ -43,13 +48,22 @@ impl LifecycleState {
 
     pub(crate) fn set_pending_remove(&self, id: u64) {
         if id != 0 {
-            self.pending_remove_id.store(id, Ordering::Release);
+            self.pending_remove
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id);
         }
     }
 
-    pub(crate) fn pending_close_id(&self) -> Option<u64> {
-        let id = self.pending_remove_id.load(Ordering::Acquire);
+    pub(crate) fn pending_close_ids(&self) -> Vec<u64> {
         let rebuilt = self.rebuilt.lock().unwrap_or_else(|e| e.into_inner());
-        (id != 0 && !rebuilt.contains(&id)).then_some(id)
+        let pending = self.pending_remove.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ids: Vec<u64> = pending
+            .iter()
+            .copied()
+            .filter(|id| !rebuilt.contains(id))
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 }

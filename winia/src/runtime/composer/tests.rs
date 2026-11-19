@@ -246,26 +246,24 @@ mod core_tests {
         let composer_b = Composer::new();
 
         composer_a.lifecycle.set_pending_remove(7);
-        assert_eq!(composer_a.pending_window_close_id(), Some(7));
-        assert_eq!(
-            composer_b.pending_window_close_id(),
-            None,
+        assert_eq!(composer_a.pending_window_close_ids(), vec![7]);
+        assert!(
+            composer_b.pending_window_close_ids().is_empty(),
             "window close request must stay scoped to the owning Composer"
         );
 
+        // Two declarations in one composer: rebuilding 9 must not hide 7's removal, and both
+        // pending ids are visible to the caller (a single-id API dropped one of them).
+        composer_b.lifecycle.set_pending_remove(7);
         composer_b.lifecycle.set_pending_remove(9);
+        composer_b.lifecycle.set_pending_remove(11);
         composer_b.lifecycle.mark_rebuilt(9);
-        composer_b.lifecycle.mark_rebuilt(11);
-        assert_eq!(
-            composer_b.pending_window_close_id(),
-            None,
-            "rebuilt window should not report pending close"
-        );
-        assert_eq!(composer_b.active_window_ids().len(), 2);
-        assert_eq!(composer_a.pending_window_close_id(), Some(7));
+        assert_eq!(composer_b.pending_window_close_ids(), vec![7, 11]);
+        assert_eq!(composer_b.active_window_ids().len(), 1);
+        assert_eq!(composer_a.pending_window_close_ids(), vec![7]);
 
         composer_a.reset_pending_window_remove();
-        assert_eq!(composer_a.pending_window_close_id(), None);
+        assert!(composer_a.pending_window_close_ids().is_empty());
     }
 
     #[test]

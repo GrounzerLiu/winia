@@ -156,20 +156,21 @@ impl Window {
             std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
         >,
     ) {
-        let pending: Vec<(winit::window::WindowId, u64)> = windows
+        let pending: Vec<(winit::window::WindowId, Vec<u64>)> = windows
             .iter()
             .filter_map(|(window_id, pw)| {
-                pw.composer
-                    .pending_window_close_id()
-                    .map(|id| (*window_id, id))
+                let ids = pw.composer.pending_window_close_ids();
+                (!ids.is_empty()).then_some((*window_id, ids))
             })
             .collect();
-        for (owner_window_id, wid) in pending {
+        for (owner_window_id, ids) in pending {
             let Some(pw) = windows.get(&owner_window_id) else {
                 continue;
             };
             pw.composer.reset_pending_window_remove();
-            Self::close_detached_window(windows, event_loop, force_shutdown, wid, saveable);
+            for wid in ids {
+                Self::close_detached_window(windows, event_loop, force_shutdown, wid, saveable);
+            }
         }
     }
 

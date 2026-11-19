@@ -1636,7 +1636,7 @@ impl AppState {
                     }
                 } // end frame-rate limit else (render + IME sync)
                 // Check whether compose left a window pending close.
-                if pw.composer.pending_window_close_id().is_some()
+                if !pw.composer.pending_window_close_ids().is_empty()
                     && let Some(ref proxy) = *APP_PROXY.lock().unwrap()
                 {
                     proxy.wake_up();

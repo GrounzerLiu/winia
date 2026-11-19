@@ -107,17 +107,22 @@ impl PerWindow {
                 }
             }
         }
+        // Read the registration before `on_close`: its wrapper unregisters the id, so checking after
+        // the callback would always say "not created" and leave `destroy()` without a tombstone.
+        let created_id = self.created_id;
+        let was_created = created_id.is_some_and(|id| {
+            crate::app::window::CREATED
+                .lock()
+                .unwrap()
+                .remove(&id)
+        });
         if let Some(ref mut cb) = self.on_close {
             cb();
         }
         if let Some(ref sw) = self.skia_window {
             crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
         }
-        if let Some(created_id) = self.created_id {
-            let was_created = crate::app::window::CREATED
-                .lock()
-                .unwrap()
-                .remove(&created_id);
+        if let Some(created_id) = created_id {
             // A tombstone only makes sense while the declaration is still composing. The
             // declaration-removal path unregisters the id before calling this, so it must not leave
             // one behind.
