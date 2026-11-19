@@ -202,7 +202,7 @@ impl Window {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();
             }
-            pw.composer.request_recomposition(0);
+            pw.composer.mark_content_dirty();
         }
         // Declaration removal is a teardown like any other: the last-window policy decides whether
         // the process ends, and a resident application keeps running with no window.

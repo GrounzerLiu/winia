@@ -25,8 +25,9 @@ impl AppState {
                 sw.request_redraw();
             }
             // A sibling close can change reactive reads in the remaining windows (ctx.windows(),
-            // close-button enablement); a redraw alone renders the stale composition.
-            pw.composer.request_recomposition(0);
+            // close-button enablement); a redraw alone renders the stale composition, and a keyed
+            // recompose can still skip groups whose parameters look unchanged. Rebuild the content.
+            pw.composer.mark_content_dirty();
         }
         // Hiding never gets here, so this is destruction only: the policy decides whether an
         // application that just lost its last window ends or keeps running (tray style).
@@ -710,7 +711,7 @@ impl AppState {
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();
                     }
-                    pw.composer.request_recomposition(0);
+                    pw.composer.mark_content_dirty();
                 }
                 // The OS tore the window down itself (not our pipeline): the policy still decides
                 // whether an application that lost its last window ends or stays resident.
@@ -740,7 +741,7 @@ impl AppState {
                 // are converted with current_density() and written into the modifier during composition,
                 // so without a re-run of build the px values keep the old density (text and sizes would
                 // not follow DPI scaling). Full recomposition — DPI changes are rare, the cost is fine.
-                pw.composer.request_recomposition(0);
+                pw.composer.mark_content_dirty();
                 if let Some(ref sw) = pw.skia_window {
                     sw.request_redraw();
                 }
