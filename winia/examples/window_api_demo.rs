@@ -89,6 +89,7 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
     let state = id.state();
     let caps = id.capabilities();
     let refresh = ctx.remember(|| 0u32);
+    let second_destroyed = ctx.remember(|| false);
     let second_visible = second.map(|window| window.state().visible());
     let scroll = ctx.remember(ScrollState::new).get();
     let runs = winia::runtime::saveable::remember_saveable::<i64>(ctx, "runs", || 0);
@@ -116,11 +117,13 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
         .map(|window| window.raw().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let second_status = match (second, second_visible) {
-        (None, _) => "not declared on this platform".to_string(),
-        (Some(window), Some(true)) => format!("WindowId {} visible", window.raw()),
-        (Some(window), Some(false)) => format!("WindowId {} hidden", window.raw()),
-        (Some(window), None) => format!("WindowId {}", window.raw()),
+    let destroyed = second_destroyed.get();
+    let second_status = match (second, destroyed, second_visible) {
+        (None, _, _) => "not declared on this platform".to_string(),
+        (Some(window), true, _) => format!("WindowId {} destroyed", window.raw()),
+        (Some(window), false, Some(true)) => format!("WindowId {} visible", window.raw()),
+        (Some(window), false, Some(false)) => format!("WindowId {} hidden", window.raw()),
+        (Some(window), false, None) => format!("WindowId {}", window.raw()),
     };
 
     Column::new()
@@ -161,7 +164,7 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
                 metric(ctx, "declared windows", format!("{}: {window_list}", windows.len()));
                 Row::new().spacing(8.0).build(ctx, |ctx| {
                     Button::filled()
-                        .enabled(second.is_some() && second_visible != Some(true))
+                        .enabled(second.is_some() && !destroyed && second_visible != Some(true))
                         .on_click({
                             clone!(refresh);
                             move || {
@@ -173,7 +176,7 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
                         })
                         .build(ctx, |ctx| Text::new("Show second window").build(ctx));
                     Button::outlined()
-                        .enabled(second_visible == Some(true))
+                        .enabled(second.is_some() && !destroyed && second_visible == Some(true))
                         .on_click({
                             clone!(refresh);
                             move || {
@@ -184,9 +187,24 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
                             }
                         })
                         .build(ctx, |ctx| Text::new("Hide second window").build(ctx));
+                    Button::text()
+                        .enabled(second.is_some() && !destroyed)
+                        .on_click({
+                            clone!(second_destroyed, refresh);
+                            move || {
+                                if let Some(window) = second {
+                                    second_destroyed.set(true);
+                                    window.destroy();
+                                    refresh.set(refresh.get() + 1);
+                                }
+                            }
+                        })
+                        .build(ctx, |ctx| Text::new("Destroy second window").build(ctx));
                 });
                 Text::new(if !caps.multi_window {
                     "This platform reports multi_window = false: several declarations share one Activity surface, so the demo keeps a single window."
+                } else if destroyed {
+                    "The second window is destroyed. Its declaration stays inert; relaunch the demo to declare it again. Hide/Show only work while it is realized."
                 } else if second_visible == Some(true) {
                     "The second window is visible. Hiding it is a live-state write, not a teardown; the declaration and its WindowId stay."
                 } else {
