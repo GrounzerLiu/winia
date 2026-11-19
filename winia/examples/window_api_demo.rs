@@ -42,20 +42,28 @@ pub fn main() {
 #[composable]
 fn app(ctx: &mut ComposeCtx) {
     let show_second = ctx.remember(|| false);
+    let veto_close = ctx.remember(|| false);
     let body_show = show_second.clone();
+    let body_veto = veto_close.clone();
+    let handler_veto = veto_close.clone();
     Window::new()
         .title("Window API demo")
         .size(900.0, 760.0)
         .key("window-api-demo")
-        .on_close_requested(|id, reason| {
-            // A veto: doing nothing keeps the window open. The title makes the request visible.
-            id.state()
-                .set_title(&format!("Window API demo — {reason:?} close vetoed"));
+        .on_close_requested(move |id, reason| {
+            if handler_veto.get() {
+                // A veto: doing nothing keeps the window open. The title makes it visible.
+                id.state()
+                    .set_title(&format!("Window API demo — {reason:?} close vetoed"));
+            } else {
+                id.destroy();
+            }
         })
         .build(ctx, move |ctx| {
             let show = body_show.clone();
+            let veto = body_veto.clone();
             settings::shell("Window API", ctx, move |ctx, padding| {
-                body(ctx, padding, show);
+                body(ctx, padding, show, veto);
             });
         });
 
@@ -84,7 +92,12 @@ fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>) {
 }
 
 #[composable]
-fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: State<bool>) {
+fn body(
+    ctx: &mut ComposeCtx,
+    scaffold: ScaffoldContentPadding,
+    show_second: State<bool>,
+    veto_close: State<bool>,
+) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
@@ -247,10 +260,19 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: Sta
             });
 
             card(ctx, "Close negotiation", |ctx| {
+                Row::new().spacing(8.0).build(ctx, |ctx| {
+                    Text::new("Veto close requests").font_size(14.0).build(ctx);
+                    Switch::new(veto_close.get())
+                        .on_checked_change({
+                            clone!(veto_close);
+                            move |on| veto_close.set(on)
+                        })
+                        .build(ctx, |_| {});
+                });
                 Text::new(
-                    "id.close() sends a request. The handler above neither destroys nor hides the \
-                     window, so the request is vetoed; it writes the reason into the OS title instead. \
-                     id.destroy() would skip the handler and close this window.",
+                    "With veto on, native close and id.close() only report the reason in the OS title. \
+                     Turn it off to let the handler destroy the window; Destroy this window always \
+                     bypasses the handler.",
                 )
                 .font_size(14.0)
                 .build(ctx);
@@ -260,7 +282,7 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: Sta
                             clone!(id);
                             move || id.close()
                         })
-                        .build(ctx, |ctx| Text::new("Request close (vetoed)").build(ctx));
+                        .build(ctx, |ctx| Text::new("Request close").build(ctx));
                     Button::outlined()
                         .on_click({
                             clone!(id);
