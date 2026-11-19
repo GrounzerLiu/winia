@@ -386,11 +386,22 @@ Phase 5 is in the tree. A probe declared a second window behind a root `State`, 
 effect, then cleared the state: debug-server `t` showed two windows after the open and one after the
 close, with no panic. Window-content declarations now use a pending-id set, so removing two in one
 pass closes both instead of only the last id. `mark_content_dirty` rebuilds the remaining windows after
-a sibling closes, which is what makes a close-button/label update without pointer motion.
+a sibling closes, which is what makes a close-button/label update without pointer motion. It is not redundant with
+the `State` subscription: `ctx.windows()`, `id.is_realized()` and `id.state()` are plain calls that
+subscribe to nothing, so a group reading only those keeps its first value when the `State`-driven
+recompose skips it. `tests/ui_fixtures/window_lifecycle.rs` pins that: with the rebuild removed the
+window-list label keeps the old count and `closing_a_sibling_window_reruns_the_remaining_content`
+fails. It is not
+redundant with the `State` subscription: `ctx.windows()`, `id.is_realized()` and `id.state()` are
+plain calls that subscribe to nothing, so a group that reads only those keeps its first value when
+the `State`-driven recompose skips it. `tests/ui_fixtures/window_lifecycle.rs` pins that: with the
+rebuild removed the window-list label stays at the old count and
+`closing_a_sibling_window_reruns_the_remaining_content` fails.
 
 These probes are checked in now: `tests/window_lifecycle_test.rs` drives `fixture_all
 window_lifecycle` through live size echo, close veto/accept, `LastWindowPolicy`, and state restored
-across two processes. Five scenarios, all passing locally.
+across two processes, parent/child cascade, and a sibling close. Eight scenarios, all passing
+locally.
 
 Two facts found while implementing, worth remembering for future window work:
 
