@@ -1,6 +1,6 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: implemented, rev 2, 2026-11-18. All four phases are in the tree; the only sketched method
+> Status: implemented, rev 3, 2026-11-19. All five phases are in the tree; the only sketched method
 > that stayed on another surface is `WindowId::insets`, which is still `ctx.window_insets()` inside
 > window content. Section 14 records what landed and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
@@ -11,10 +11,11 @@
 > Companion reading: `docs/architecture.md` (module layout), `docs/back-navigation.md` (per-window
 > runtime state), `docs/saveable.md` (persistence).
 
-## 1. What the component is today
+## 1. What the component was before this work
 
-`Window` is a declaration that carries creation parameters. It is not a window object, and that
-single fact explains most of its limitations:
+`Window` is a declaration that carries creation parameters. It is not a window object; that fact
+still explains the model. The table below records the pre-work behaviour, not the implemented one
+(sections 2-15 define what replaced it):
 
 | Current behaviour | Where |
 | --- | --- |
@@ -58,17 +59,17 @@ wins.
 // One identity. Everything that acts on a window is a method on it.
 pub struct WindowId(u64);
 impl WindowId {
-    pub fn is_realized(&self) -> bool;
-    pub fn is_focused(&self) -> bool;
-    pub fn state(&self) -> WindowState;
-    pub fn insets(&self) -> WindowInsets;
-    pub fn capabilities(&self) -> WindowCapabilities;
-    pub fn close(&self);      // request: notifies on_close_requested, may be ignored
-    pub fn destroy(&self);    // command: always destroys
+    pub fn raw(self) -> u64;
+    pub fn is_realized(self) -> bool;
+    pub fn is_focused(self) -> bool;
+    pub fn state(self) -> WindowState;
+    pub fn capabilities(self) -> WindowCapabilities;
+    pub fn close(self);      // request: notifies on_close_requested, may be ignored
+    pub fn destroy(self);    // command: always destroys
 }
 
 // One state handle. Getters read, setters queue a command.
-pub struct WindowState;
+pub struct WindowState { id: WindowId }
 impl WindowState {
     pub fn size(&self) -> (f32, f32);
     pub fn set_size(&self, width: f32, height: f32);
@@ -86,12 +87,10 @@ impl WindowState {
 
 // One builder, one creation entry.
 let id = Window::new()
-    .title("Settings").size(600.0, 400.0).position(WindowPosition::Default)
-    .placement(WindowPlacement::Windowed).visible(true)
-    .resizable(true).decorations(true).transparent(false)
-    .window_type(WindowType::Regular).parent(parent_id).key("settings")
-    .on_close(|| {})                  // after the fact (kept for compatibility)
-    .on_close_requested(|reason| {})  // notification only
+    .title("Settings").size(600.0, 400.0).resizable(true).decorations(true)
+    .key("settings")
+    .on_close(|| {})                              // after the fact (compatibility)
+    .on_close_requested(|id, reason| {})          // notification only
     .build(ctx, |ctx| { /* content */ });
 
 // Context accessors.
@@ -100,7 +99,6 @@ ctx.windows()                           // every live window, in creation order
 ctx.set_last_window_policy(LastWindowPolicy::Exit)
 
 // Enums.
-WindowType      { Regular, Dialog, Tooltip, Popup }
 WindowPlacement { Windowed, Maximized, Fullscreen, Minimized }
 WindowPosition  { Default, At(f32, f32) }
 CloseReason     { User, Command }
@@ -112,8 +110,8 @@ Two types carry behaviour, one builder builds, three context calls configure the
 `WindowHandle`, no `WindowKey`, no `WindowScope`, no `WindowOptions` and no `WindowManager`: each
 would be a second name for something already reachable.
 
-The whole surface in this section is implemented. `insets` is the one exception: it is still
-`ctx.window_insets()` inside window content rather than a method on `WindowId`.
+The whole surface in this section is implemented. Window insets are the one exception: they are
+still `ctx.window_insets()` inside window content; there is deliberately no `WindowId::insets` yet.
 
 ## 4. Identity
 
@@ -147,6 +145,16 @@ The root Composer is kept alive and recomposed, so this also works in `run_app!`
 `show_tools` after startup adds or removes the declaration. Multiple root declarations are tracked by
 active id; removing one closes its window even while a sibling declaration is rebuilt.
 
+Ownership is explicit on every pending window: `owner = Some(0)` for a root declaration,
+`Some(window_id)` for a declaration inside a window's content, and `None` for the platform-level
+`app::open_window_*` entry. Root declarations are reconciled by active-id diff after each root
+recompose. A window-content declaration is reconciled through its composer's pending-close set, so
+removing two declarations in one pass closes both.
+
+`run_app` / `run_app_android` take `Fn` rather than `FnOnce` because the root is re-run. A root
+closure that moves and consumes a non-`Clone` capture no longer type-checks; build the value inside
+the closure or clone it.
+
 Visibility is state, not existence:
 
 | Intent | Expression | Composition | State |
@@ -168,10 +176,10 @@ how ownership ambiguity starts; a method can carry a rule.
 `placement` is `Fullscreen` or `Maximized`, `set_size` and `set_position` only update that memory
 and take effect when the window returns to `Windowed`; the call logs a debug line.
 
-**Ownership during platform interaction.** While the user drags an edge, or the system animates a
-placement change, the platform wins and programmatic writes are dropped (debug log). This mirrors
-the existing rule that a sheet or drawer ignores a second gesture while it is settling, so the
-framework keeps one convention for conflicting input instead of two.
+**Platform interaction.** There is no gesture-level suppression yet: a setter always queues a
+command, and the platform's next size/position observation overwrites the local projection. A future
+interaction gate must be documented here before it is implemented; the earlier claim that writes are
+dropped while the user drags an edge described intended, not actual, behaviour.
 
 ## 7. Reaching the window from content
 
@@ -198,15 +206,19 @@ One rule for every builder setter: **it seeds the initial value and is ignored o
 realized; live changes go through `WindowState`.** That is what today's code does implicitly, now
 stated as a contract.
 
-`.key("settings")` is the only thing that makes saved state leave the process: it is hashed into the
-saveable store, and everything else is in-memory for the run. Persistence also needs a store to be
-configured once at startup (`persist::set_store(PersistStore::for_app(..))`); without one nothing is
-written, which is the right default for tests and previews.
+`.key("settings")` is the declarative way to make saved state leave the process: it is hashed into
+the saveable store, and everything else is in-memory for the run. Persistence also needs a store to
+be configured once at startup (`persist::set_store(PersistStore::for_app(..))`); without one nothing
+is written, which is the right default for tests and previews.
 
-`resizable` and `always_on_top` are runtime-toggleable on Windows and macOS, so `resizable` lives
-in the state (the builder setter seeds it) rather than being presented as an immutable option.
-`WindowCapabilities` reports what the current platform honours, so an application can branch on
-`native_close` or `multi_window` instead of on `#[cfg]`.
+`app::open_window_with_saveable_key` predates the split and keeps its old behaviour: it uses the
+same explicit key for memory and disk persistence. That is a compatibility exception, not a second
+declarative entry; new code uses `.key(..)` or `open_window_with_keys`.
+
+`resizable` is runtime-toggleable on Windows and macOS, so it lives in the state (the builder setter
+seeds it). There is no `always_on_top` builder method today. `WindowCapabilities` reports what the
+current platform honours, so an application can branch on `native_close` or `multi_window` instead of
+on `#[cfg]`.
 
 ## 9. The close pipeline
 
@@ -231,6 +243,7 @@ Window::new()
 | The user closing the window | yes, `CloseReason::User` | `set_visible(false)`, drop the declaration, or `destroy()` |
 | `id.close()` | yes, `CloseReason::Command` | same |
 | `id.destroy()` | no | applied immediately |
+| The OS destroying the window (`Destroyed`) | no | finalizer runs, then the table entry is removed |
 | The declaration disappearing | no (`on_close` still runs) | applied immediately |
 | Application exit | no | applied immediately |
 
@@ -241,16 +254,17 @@ Destroying a window whose declaration is still composing leaves that declaration
 re-creating the window on the next frame. The marker is cleared when the declaration disappears, so
 removing and re-adding it is the supported way to get a fresh window.
 
-There is exactly one pipeline, and its order is fixed:
+There is one teardown (`PerWindow::finalize`) with several entry points, and its order is fixed:
 
 ```
 request -> on_close_requested(reason) -> [application agrees] -> saveable snapshot
         -> on_close() -> composition disposal -> removed from the window table
 ```
 
-This merges the two current implementations, which disagree on whether the snapshot happens before
-or after the callback. The existing `on_close` builder method keeps its meaning (after the fact,
-no reason), so its behaviour does not change.
+The two older implementations that disagreed about snapshot/callback order are gone. The existing
+`on_close` builder method keeps its meaning (after the fact, no reason). Root declarations reconcile
+by active-id diff after the root recompose; window-content declarations use the per-composer pending
+set and close every removed id in the same pass.
 
 ## 10. The command queue
 
@@ -316,6 +330,14 @@ declaration, still fall back to their `created_id`.
 4. Creation still begins in `Window::build`, but it only pushes a `PendingWindow` into the existing
    global queue; the loop creates the platform windows from that queue in submission order. The
    frame-end command queue added here covers mutations and close, not creation.
+5. `run_app` and `run_app_android` now take `Fn`, not `FnOnce`, and the root Composer is retained in
+   `AppState.root`. This is a source-breaking change for a root closure that consumes a non-`Clone`
+   capture; it is required for declarations behind a State flag to be re-evaluated.
+6. Pending windows carry an `owner`: `Some(0)` for the root, the declaring window's platform id for
+   content, `None` for the platform-level API. Root removals reconcile by active id; window-content
+   removals use a pending-id set, not a single id.
+7. `open_window_with_saveable_key` still writes the same key to disk for compatibility; the strict
+   “only `.key(..)` persists” rule applies to the declarative path and to `open_window_with_keys`.
 
 ## 14. Migration phases
 
@@ -325,6 +347,7 @@ declaration, still fall back to their `created_id`.
 | 2 | `ctx.window_id()`, `on_close_requested` as a notification | additive |
 | 3 | One close pipeline; `on_close` wired to the merged path; `.key(..)` for persistence | behaviour change on the native-close path only |
 | 4 | `LastWindowPolicy`, recorded z-order, back pump uses the recorded order | structural |
+| 5 | Persistent root Composer, owner-aware declarations, active-id cleanup, multi pending close | structural; `run_app` closure becomes `Fn` |
 
 Phase 1 is in the tree. Verified on desktop with a probe window: a `set_title` and a `set_size`
 issued from a `side_effect` reached the OS window (the title read back through the window handle,
@@ -352,6 +375,12 @@ governs both teardown paths (the shared close pipeline and winit's own `Destroye
 a real bug on the first cut: `is_parent` short-circuited the policy, so `StayResident` still exited.
 The back pump now takes its unfocused fallback from the recorded window list, so it and
 `ctx.windows()` cannot disagree about creation order.
+
+Phase 5 is in the tree. A probe declared a second window behind a root `State`, opened it from a side
+effect, then cleared the state: debug-server `t` showed two windows after the open and one after the
+close, with no panic. Window-content declarations now use a pending-id set, so removing two in one
+pass closes both instead of only the last id. `mark_content_dirty` rebuilds the remaining windows after
+a sibling closes, which is what makes a close-button/label update without pointer motion.
 
 These probes are checked in now: `tests/window_lifecycle_test.rs` drives `fixture_all
 window_lifecycle` through live size echo, close veto/accept, `LastWindowPolicy`, and state restored
