@@ -182,6 +182,21 @@ fn a_destroyed_declaration_does_not_recreate_the_window() {
 }
 
 #[test]
+fn closing_a_parent_finalizes_its_child_windows() {
+    let mut fixture = Fixture::spawn("nested-close", "nested-close");
+    let status = fixture.wait(Duration::from_secs(15));
+    let text = fixture.text();
+    assert!(
+        status.is_some(),
+        "parent close left a child window alive; observations: {text:?}"
+    );
+    assert!(
+        text.contains("child-closed"),
+        "the child window was not finalized by the owner cascade: {text:?}"
+    );
+}
+
+#[test]
 fn a_keyed_window_restores_its_saved_state_across_runs() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch_dir("persist");

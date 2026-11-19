@@ -147,6 +147,33 @@ impl Window {
         Self::close_detached_window(windows, event_loop, force_shutdown, id, saveable);
     }
 
+    /// Finalize every window declared inside the window identified by `owner` (its platform
+    /// `created_id`), recursively. Child declarations are removed from `CREATED` first so the
+    /// gesture is a declaration removal, not a `destroy()` that leaves a tombstone.
+    pub(crate) fn close_owned_children(
+        windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+        saveable: &mut std::collections::HashMap<
+            u64,
+            std::collections::HashMap<String, crate::runtime::saveable::SavedValue>,
+        >,
+        owner: u64,
+    ) {
+        let children: Vec<(winit::window::WindowId, u64)> = windows
+            .iter()
+            .filter(|(_, pw)| pw.owner == Some(owner))
+            .filter_map(|(window_id, pw)| pw.created_id.map(|id| (*window_id, id)))
+            .collect();
+        for (window_id, created_id) in children {
+            if !CREATED.lock().unwrap().remove(&created_id) {
+                continue;
+            }
+            if let Some(mut pw) = windows.remove(&window_id) {
+                pw.finalize(window_id, saveable);
+            }
+            Self::close_owned_children(windows, saveable, created_id);
+        }
+    }
+
     pub(crate) fn process_detached(
         windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
         event_loop: &dyn winit::event_loop::ActiveEventLoop,
@@ -199,6 +226,7 @@ impl Window {
                 pw.finalize(w, saveable);
             }
         }
+        Self::close_owned_children(windows, saveable, wid);
         for pw in windows.values_mut() {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();

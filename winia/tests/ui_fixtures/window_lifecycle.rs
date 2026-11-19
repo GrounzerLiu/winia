@@ -5,6 +5,7 @@
 //! vetoed close or a resident policy did not end the process.
 
 use std::cell::Cell;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use winia::prelude::*;
@@ -14,6 +15,14 @@ static FIRST_WINDOW: AtomicBool = AtomicBool::new(true);
 fn write_out(text: &str) {
     if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
         let _ = std::fs::write(path, text);
+    }
+}
+
+fn append_out(text: &str) {
+    if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(text.as_bytes());
+        }
     }
 }
 
@@ -56,6 +65,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "close-veto" | "close-accept" => close_scenario(ctx, id),
                 "policy-exit" | "policy-stay" => policy_scenario(ctx, id, &mode_for_close),
                 "destroy-stay" => destroy_stay_scenario(ctx, id),
+                "nested-close" => nested_close_scenario(ctx, id),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 other => {
                     write_out(&format!("unknown-mode={other}\n"));
@@ -120,6 +130,35 @@ fn destroy_stay_scenario(ctx: &mut ComposeCtx, id: WindowId) {
         winia::effect::side_effect(ctx, move || id.destroy());
     }
     Text::new("destroy").build(ctx);
+}
+
+/// A child window declared inside a parent's content. The parent waits until the child has
+/// realized, then destroys itself; the child must be finalized by the owner cascade.
+fn nested_close_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
+    let child_ready = ctx.remember(|| false);
+    let child_ready_for_child = child_ready.clone();
+    Window::new()
+        .title("nested child")
+        .size(260.0, 180.0)
+        .on_close(|| append_out("child-closed\n"))
+        .build(ctx, move |ctx| {
+            let ready = child_ready_for_child.clone();
+            let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+            if !once.get() {
+                once.set(true);
+                winia::effect::side_effect(ctx, move || ready.set(true));
+            }
+            Text::new("child").build(ctx);
+        });
+
+    if child_ready.get() {
+        let destroyed = ctx.remember(|| Rc::new(Cell::new(false))).get();
+        if !destroyed.get() {
+            destroyed.set(true);
+            winia::effect::side_effect(ctx, move || parent.destroy());
+        }
+    }
+    Text::new("parent").build(ctx);
 }
 
 fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {

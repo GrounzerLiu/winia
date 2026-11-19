@@ -13,13 +13,19 @@ impl AppState {
         event_loop: &dyn ActiveEventLoop,
         window_id: winit::window::WindowId,
     ) {
-        let is_parent = self.parent_window_id == Some(window_id);
-        let closing_last = self.windows.len() == 1;
         let Some(pw) = self.windows.get_mut(&window_id) else {
             return;
         };
+        let created_id = pw.created_id;
         pw.finalize(window_id, &mut self.saveable);
         self.windows.remove(&window_id);
+        if let Some(created_id) = created_id {
+            crate::app::window::Window::close_owned_children(
+                &mut self.windows,
+                &mut self.saveable,
+                created_id,
+            );
+        }
         for pw in self.windows.values_mut() {
             if let Some(ref sw) = pw.skia_window {
                 sw.request_redraw();
@@ -30,12 +36,13 @@ impl AppState {
             pw.composer.mark_content_dirty();
         }
         // Hiding never gets here, so this is destruction only: the policy decides whether an
-        // application that just lost its last window ends or keeps running (tray style).
+        // application that just lost its last window ends or keeps running (tray style). Children
+        // have already been finalized above, so a parent close cannot skip their snapshots.
         let exit_on_last = matches!(
             crate::app::window_state::last_window_policy(),
             crate::app::window_state::LastWindowPolicy::Exit
         );
-        if (is_parent || closing_last) && exit_on_last {
+        if self.windows.is_empty() && exit_on_last {
             debug::force_shutdown();
             event_loop.exit();
         }
@@ -706,7 +713,15 @@ impl AppState {
                 // and drop the per-window registries, or a platform-initiated close loses state and
                 // leaks a frame clock.
                 pw.finalize(window_id, &mut self.saveable);
+                let created_id = pw.created_id;
                 self.windows.remove(&window_id);
+                if let Some(created_id) = created_id {
+                    crate::app::window::Window::close_owned_children(
+                        &mut self.windows,
+                        &mut self.saveable,
+                        created_id,
+                    );
+                }
                 for pw in self.windows.values_mut() {
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();

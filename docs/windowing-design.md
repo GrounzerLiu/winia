@@ -149,7 +149,9 @@ Ownership is explicit on every pending window: `owner = Some(0)` for a root decl
 `Some(window_id)` for a declaration inside a window's content, and `None` for the platform-level
 `app::open_window_*` entry. Root declarations are reconciled by active-id diff after each root
 recompose. A window-content declaration is reconciled through its composer's pending-close set, so
-removing two declarations in one pass closes both.
+removing two declarations in one pass closes both. Closing a window also finalizes every window whose
+`owner` is that window, recursively, on all three teardown entry points; a parent close cannot skip a
+child's saveable snapshot or `on_close`.
 
 `run_app` / `run_app_android` take `Fn` rather than `FnOnce` because the root is re-run. A root
 closure that moves and consumes a non-`Clone` capture no longer type-checks; build the value inside
@@ -249,6 +251,9 @@ Window::new()
 
 `CloseReason` has two variants because only two are reachable: a declaration removal and an
 application exit never ask for permission, they simply proceed.
+
+`LastWindowPolicy` is thread-local to the UI thread, not process-wide: it is read while the window
+table is touched there. Setting it from another thread does not change the teardown decision.
 
 Destroying a window whose declaration is still composing leaves that declaration inert rather than
 re-creating the window on the next frame. The marker is cleared when the declaration disappears, so
@@ -371,8 +376,9 @@ state to "the Nth window ever opened".
 
 Phase 4 is in the tree too. `LastWindowPolicy` was verified with a probe that destroys its only
 window: with the default `Exit` the process ended, with `StayResident` it stayed alive. The policy
-governs both teardown paths (the shared close pipeline and winit's own `Destroyed` event), which was
-a real bug on the first cut: `is_parent` short-circuited the policy, so `StayResident` still exited.
+governs every teardown entry point (the shared close pipeline, declaration removal, and winit's own
+`Destroyed` event). `is_parent` no longer short-circuits it: a parent close first finalizes its
+owned children, then the ordinary empty-table policy decides.
 The back pump now takes its unfocused fallback from the recorded window list, so it and
 `ctx.windows()` cannot disagree about creation order.
 
