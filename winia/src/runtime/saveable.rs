@@ -181,13 +181,11 @@ impl SaveableStateRegistry {
 
     fn register(self: &Arc<Self>, key: &str, provider: Provider) -> SaveableRegistration {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        debug_assert!(
-            !inner
-                .providers
-                .iter()
-                .any(|(_, existing, _)| existing == key),
-            "two composition points registered the same saveable key: {key}"
-        );
+        // A slot can be disposed and recreated in one composition pass when a conditional sibling
+        // changes the structure (a dynamic Window is the common case). The old registration is
+        // dropped later, so the new call site must replace it now; keeping both would make the
+        // first provider win and save the stale State forever.
+        inner.providers.retain(|(_, existing, _)| existing != key);
         let id = inner.next_id;
         inner.next_id += 1;
         inner.providers.push((id, key.to_string(), provider));
@@ -406,6 +404,27 @@ mod tests {
         assert!(
             !saved.contains_key("tab.a"),
             "and the old one no longer does"
+        );
+    }
+
+    /// A re-created slot replaces its previous registration instead of panicking.
+    ///
+    /// Structural changes can dispose a slot and rebuild it in the same pass; the old registration
+    /// is still present when the new one is made. The newest provider is the live State.
+    #[test]
+    fn a_duplicate_key_replaces_the_previous_registration() {
+        let registry = SaveableStateRegistry::new(HashMap::new());
+        let first: Provider = Arc::new(|| Some(SavedValue::I64(1)));
+        let second: Provider = Arc::new(|| Some(SavedValue::I64(2)));
+        let old = registry.register("count", first);
+        let new = registry.register("count", second);
+        let saved = registry.perform_save();
+        assert_eq!(saved.get("count"), Some(&SavedValue::I64(2)));
+        drop(new);
+        drop(old);
+        assert!(
+            registry.perform_save().is_empty(),
+            "both registrations are gone"
         );
     }
 
