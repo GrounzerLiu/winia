@@ -41,10 +41,8 @@ pub fn main() {
 
 #[composable]
 fn app(ctx: &mut ComposeCtx) {
-    // Declare the first window first so it keeps WindowId 1; the second id is published through a
-    // State because the first window's content needs it for the hide/show controls.
-    let second_slot = ctx.remember(|| None::<WindowId>);
-    let body_slot = second_slot.clone();
+    let show_second = ctx.remember(|| false);
+    let body_show = show_second.clone();
     Window::new()
         .title("Window API demo")
         .size(900.0, 760.0)
@@ -55,42 +53,43 @@ fn app(ctx: &mut ComposeCtx) {
                 .set_title(&format!("Window API demo — {reason:?} close vetoed"));
         })
         .build(ctx, move |ctx| {
-            let slot = body_slot.clone();
+            let show = body_show.clone();
             settings::shell("Window API", ctx, move |ctx, padding| {
-                body(ctx, padding, slot.get());
+                body(ctx, padding, show);
             });
         });
 
-    // The second window is a static declaration on desktop. Android reports multi_window = false
-    // (several declarations share one Activity surface), so it keeps one window there.
+    // The second window is a root declaration behind a State flag. Android reports
+    // multi_window = false, so it keeps one window there.
     #[cfg(not(target_os = "android"))]
-    {
-        let second = second_window(ctx);
-        second_slot.set(Some(second));
+    if show_second.get() {
+        second_window(ctx, show_second.clone());
     }
 }
 
-/// The second declaration. Closing it hides it rather than destroying it, so the first window can
-/// show it again; the declaration stays alive and keeps its WindowId.
 #[composable]
-fn second_window(ctx: &mut ComposeCtx) -> WindowId {
+fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>) {
+    let close_show = show_second.clone();
+    let body_show = show_second.clone();
     Window::new()
         .title("Window API demo — second window")
         .size(620.0, 480.0)
-        .on_close_requested(|id, _reason| id.state().set_visible(false))
-        .build(ctx, |ctx| {
-            settings::shell("Second window", ctx, second_body);
-        })
+        .on_close_requested(move |_id, _reason| close_show.set(false))
+        .build(ctx, move |ctx| {
+            let show = body_show.clone();
+            settings::shell("Second window", ctx, move |ctx, padding| {
+                second_body(ctx, padding, show);
+            });
+        });
 }
 
 #[composable]
-fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<WindowId>) {
+fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: State<bool>) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
     let refresh = ctx.remember(|| 0u32);
-    let second_destroyed = ctx.remember(|| false);
-    let second_visible = second.map(|window| window.state().visible());
+    let multi_open = show_second.get();
     let scroll = ctx.remember(ScrollState::new).get();
     let runs = winia::runtime::saveable::remember_saveable::<i64>(ctx, "runs", || 0);
 
@@ -117,13 +116,12 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
         .map(|window| window.raw().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let destroyed = second_destroyed.get();
-    let second_status = match (second, destroyed, second_visible) {
-        (None, _, _) => "not declared on this platform".to_string(),
-        (Some(window), true, _) => format!("WindowId {} destroyed", window.raw()),
-        (Some(window), false, Some(true)) => format!("WindowId {} visible", window.raw()),
-        (Some(window), false, Some(false)) => format!("WindowId {} hidden", window.raw()),
-        (Some(window), false, None) => format!("WindowId {}", window.raw()),
+    let second_status = if !caps.multi_window {
+        "not available on this platform".to_string()
+    } else if multi_open {
+        "declared".to_string()
+    } else {
+        "not declared".to_string()
     };
 
     Column::new()
@@ -164,51 +162,32 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
                 metric(ctx, "declared windows", format!("{}: {window_list}", windows.len()));
                 Row::new().spacing(8.0).build(ctx, |ctx| {
                     Button::filled()
-                        .enabled(second.is_some() && !destroyed && second_visible != Some(true))
+                        .enabled(caps.multi_window && !multi_open)
                         .on_click({
-                            clone!(refresh);
+                            clone!(show_second, refresh);
                             move || {
-                                if let Some(window) = second {
-                                    window.state().set_visible(true);
-                                    refresh.set(refresh.get() + 1);
-                                }
+                                show_second.set(true);
+                                refresh.set(refresh.get() + 1);
                             }
                         })
-                        .build(ctx, |ctx| Text::new("Show second window").build(ctx));
+                        .build(ctx, |ctx| Text::new("Open second window").build(ctx));
                     Button::outlined()
-                        .enabled(second.is_some() && !destroyed && second_visible == Some(true))
+                        .enabled(multi_open)
                         .on_click({
-                            clone!(refresh);
+                            clone!(show_second, refresh);
                             move || {
-                                if let Some(window) = second {
-                                    window.state().set_visible(false);
-                                    refresh.set(refresh.get() + 1);
-                                }
+                                show_second.set(false);
+                                refresh.set(refresh.get() + 1);
                             }
                         })
-                        .build(ctx, |ctx| Text::new("Hide second window").build(ctx));
-                    Button::text()
-                        .enabled(second.is_some() && !destroyed)
-                        .on_click({
-                            clone!(second_destroyed, refresh);
-                            move || {
-                                if let Some(window) = second {
-                                    second_destroyed.set(true);
-                                    window.destroy();
-                                    refresh.set(refresh.get() + 1);
-                                }
-                            }
-                        })
-                        .build(ctx, |ctx| Text::new("Destroy second window").build(ctx));
+                        .build(ctx, |ctx| Text::new("Close second window").build(ctx));
                 });
                 Text::new(if !caps.multi_window {
                     "This platform reports multi_window = false: several declarations share one Activity surface, so the demo keeps a single window."
-                } else if destroyed {
-                    "The second window is destroyed. Its declaration stays inert; relaunch the demo to declare it again. Hide/Show only work while it is realized."
-                } else if second_visible == Some(true) {
-                    "The second window is visible. Hiding it is a live-state write, not a teardown; the declaration and its WindowId stay."
+                } else if multi_open {
+                    "The second window is declared. Close removes the declaration; the root composer then closes the platform window."
                 } else {
-                    "The second window is hidden. Showing it maps the same window again; ctx.windows() still reports both declarations."
+                    "Open adds a root Window declaration; ctx.windows() then reports both live ids."
                 })
                 .font_size(14.0)
                 .build(ctx);
@@ -311,7 +290,7 @@ fn body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, second: Option<W
 }
 
 #[composable]
-fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
+fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: State<bool>) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
@@ -345,12 +324,12 @@ fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding) {
                 );
                 Button::filled()
                     .on_click({
-                        clone!(id);
-                        move || id.state().set_visible(false)
+                        clone!(show_second);
+                        move || show_second.set(false)
                     })
-                    .build(ctx, |ctx| Text::new("Hide this window").build(ctx));
+                    .build(ctx, |ctx| Text::new("Close this window").build(ctx));
                 Text::new(
-                    "The first window's Multi-window card can show it again. Hiding keeps the declaration and the WindowId.",
+                    "Closing clears the declaration flag. The root composer removes this declaration and closes the platform window; the first window can open a fresh one.",
                 )
                 .font_size(14.0)
                 .build(ctx);
