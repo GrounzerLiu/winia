@@ -211,6 +211,12 @@ fn closing_a_sibling_window_reruns_the_remaining_content() {
         text.contains("parent-saw-closed"),
         "the primary window kept its stale composition after the sibling closed: {text:?}"
     );
+    // `ctx.windows()` is a plain call with no subscription: this label is only correct if the
+    // content re-ran after the close, by whatever route.
+    assert!(
+        text.contains("windows=1"),
+        "the primary window never re-read its window list after the sibling closed: {text:?}"
+    );
 }
 
 #[test]

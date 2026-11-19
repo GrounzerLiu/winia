@@ -66,7 +66,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "policy-exit" | "policy-stay" => policy_scenario(ctx, id, &mode_for_close),
                 "destroy-stay" => destroy_stay_scenario(ctx, id),
                 "nested-close" => nested_close_scenario(ctx, id),
-                "sibling-close" => sibling_close_scenario(ctx, id),
+                "sibling-close" => sibling_close_scenario(ctx),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 other => {
                     write_out(&format!("unknown-mode={other}\n"));
@@ -165,8 +165,17 @@ fn nested_close_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
 /// The window API demo's shape: the primary window's content reads a `State<bool>` and declares a
 /// secondary window behind it. The secondary window closes itself (the same write its Close button
 /// makes), and the primary window must re-render without any pointer input.
-fn sibling_close_scenario(ctx: &mut ComposeCtx, primary: WindowId) {
+fn sibling_close_scenario(ctx: &mut ComposeCtx) {
     let open = ctx.remember(|| true);
+    // `ctx.windows()` is a plain call with no subscription, so this marker only refreshes when the
+    // content re-runs. It records that the primary saw the new window list, not which route made it
+    // re-run (the shared `State` also dirties this content).
+    let seen = ctx.remember(|| Rc::new(Cell::new(usize::MAX))).get();
+    let count = ctx.windows().len();
+    if seen.get() != count {
+        seen.set(count);
+        append_out(&format!("windows={count}\n"));
+    }
     append_out(&format!("parent={}\n", if open.get() { "open" } else { "closed" }));
     if open.get() {
         let open_for_child = open.clone();
@@ -188,7 +197,6 @@ fn sibling_close_scenario(ctx: &mut ComposeCtx, primary: WindowId) {
         // Reaching this line at all means the primary window re-ran after the sibling closed.
         append_out("parent-saw-closed\n");
     }
-    let _ = primary;
     Text::new(if open.get() { "declared" } else { "not declared" }).build(ctx);
 }
 
