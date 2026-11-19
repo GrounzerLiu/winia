@@ -143,6 +143,10 @@ if show_tools.get() {
 }
 ```
 
+The root Composer is kept alive and recomposed, so this also works in `run_app!`: changing
+`show_tools` after startup adds or removes the declaration. Multiple root declarations are tracked by
+active id; removing one closes its window even while a sibling declaration is rebuilt.
+
 Visibility is state, not existence:
 
 | Intent | Expression | Composition | State |
