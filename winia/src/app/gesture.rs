@@ -567,6 +567,100 @@ pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     fire_in_gesture_arena(pw, arena, slot, action)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn losing_focus_cancels_the_pointer_gesture_without_a_fling() {
+        let mut pw = PerWindow::new(
+            Box::new(|_| {}),
+            400.0,
+            400.0,
+            crate::theme::ThemeColors::default_light(),
+        );
+        let now = std::time::Instant::now();
+        pw.input.last_pos = Some((10.0, 20.0));
+        pw.input.down = Some(PtrDownState {
+            node_id: 7,
+            position: (10.0, 20.0),
+            time: now,
+            selection_anchor: None,
+            anchor_registrar: None,
+            selection_scroll_slot: Some(9),
+            anchor_text_node: None,
+        });
+        pw.input.down_slot = Some(7);
+        pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(
+            7,
+            (10.0, 20.0),
+            true,
+            None,
+        ));
+        pw.input.node = Some(7);
+        pw.input.slot = Some(7);
+        pw.input.arena = Some(3);
+        pw.input.axis = Some(crate::input::gesture::ScrollAxis::Vertical);
+        pw.input.scroll_slot = Some(9);
+        pw.input.arena_origin = (1.0, 2.0);
+        pw.input.tap_ctx = Some((7, now, (10.0, 20.0)));
+        pw.input.selection_click = Some((now, (10.0, 20.0), 2));
+        pw.input
+            .pending_taps
+            .push(crate::input::gesture::PendingTap::new(
+                7,
+                7,
+                (10.0, 20.0),
+                None,
+            ));
+        pw.input.drag_scroll = Some(DragScroll::new(9, (10.0, 20.0)));
+        pw.input.selection_autoscroll = Some(SelectionAutoScroll {
+            slot: 9,
+            velocity: 100.0,
+            last_tick: now,
+        });
+        pw.wheel = WheelPager {
+            key: Some((0, 9, true)),
+            travel: 30.0,
+            last: Some(now),
+        };
+
+        pw.overlay.click = Some((0, (1.0, 2.0), 11));
+        pw.overlay.drag = Some((0, 11, (1.0, 2.0)));
+        pw.overlay.drag_origin = (3.0, 4.0);
+        pw.overlay.drag_started = true;
+        pw.overlay.drag_last = Some((5.0, 6.0));
+        pw.overlay.drag_scroll = Some(DragScroll::new(11, (5.0, 6.0)));
+
+        cancel_pointer_gesture(&mut pw);
+
+        assert!(pw.input.last_pos.is_none());
+        assert!(pw.input.down.is_none());
+        assert!(pw.input.down_slot.is_none());
+        assert!(pw.input.tracker.is_none());
+        assert!(pw.input.node.is_none());
+        assert!(pw.input.slot.is_none());
+        assert!(pw.input.arena.is_none());
+        assert!(pw.input.axis.is_none());
+        assert!(pw.input.scroll_slot.is_none());
+        assert_eq!(pw.input.arena_origin, (0.0, 0.0));
+        assert!(pw.input.tap_ctx.is_none());
+        assert!(pw.input.selection_click.is_none());
+        assert!(pw.input.pending_taps.is_empty());
+        assert!(pw.input.drag_scroll.is_none());
+        assert!(pw.input.selection_autoscroll.is_none());
+        assert_eq!(pw.wheel.travel, 0.0);
+        assert!(pw.wheel.key.is_none());
+        assert!(pw.wheel.last.is_none());
+        assert!(pw.overlay.click.is_none());
+        assert!(pw.overlay.drag.is_none());
+        assert_eq!(pw.overlay.drag_origin, (0.0, 0.0));
+        assert!(!pw.overlay.drag_started);
+        assert!(pw.overlay.drag_last.is_none());
+        assert!(pw.overlay.drag_scroll.is_none());
+    }
+}
+
 /// Drop the gesture state (tracker + target) without firing anything.
 pub(crate) fn end_gesture(pw: &mut PerWindow) {
     pw.input.tracker = None;
@@ -576,6 +670,31 @@ pub(crate) fn end_gesture(pw: &mut PerWindow) {
     pw.input.axis = None;
     pw.input.scroll_slot = None;
     pw.input.arena_origin = (0.0, 0.0);
+}
+
+/// Cancel every pointer-owned session when the OS window loses focus. The release that belongs to
+/// the old gesture may never arrive (the user clicked another window), so keeping any of this state
+/// lets the next press/move inherit an old drag or fling.
+pub(crate) fn cancel_pointer_gesture(pw: &mut PerWindow) {
+    pw.input.last_pos = None;
+    pw.input.down = None;
+    pw.input.down_slot = None;
+    end_gesture(pw);
+    pw.input.tap_ctx = None;
+    pw.input.selection_click = None;
+    pw.input.pending_taps.clear();
+    pw.input.drag_scroll = None;
+    pw.input.selection_autoscroll = None;
+    pw.wheel = WheelPager::default();
+
+    pw.overlay.click = None;
+    pw.overlay.drag = None;
+    pw.overlay.drag_origin = (0.0, 0.0);
+    pw.overlay.drag_started = false;
+    pw.overlay.drag_last = None;
+    pw.overlay.drag_scroll = None;
+
+    release_pressed_interaction(pw);
 }
 
 /// Drag-scroll end: enough velocity → inertial fling (content velocity = -finger velocity — flicking the finger up

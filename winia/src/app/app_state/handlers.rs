@@ -742,16 +742,7 @@ impl AppState {
             // stale down/tracker/drag_scroll survives the focus switch, and the next click can be read
             // as the tail of the old gesture (a fling lands the scroll at the end of the content).
             WindowEvent::Focused(false) => {
-                pw.input.last_pos = None;
-                pw.input.down = None;
-                pw.input.down_slot = None;
-                pw.input.tracker = None;
-                pw.input.node = None;
-                pw.input.tap_ctx = None;
-                pw.input.drag_scroll = None;
-                pw.input.selection_autoscroll = None;
-                pw.overlay.drag_scroll = None;
-                release_pressed_interaction(pw);
+                gesture::cancel_pointer_gesture(pw);
             }
             // Moving across screens: Moved fires at a high rate while dragging — debounced inside with 300 ms.
             WindowEvent::Moved { .. } => {
