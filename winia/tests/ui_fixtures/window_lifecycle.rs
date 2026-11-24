@@ -17,7 +17,11 @@ static FIRST_WINDOW: AtomicBool = AtomicBool::new(true);
 /// markers another scope already recorded.
 fn append_out(text: &str) {
     if let Ok(path) = std::env::var("WINDOW_FIXTURE_OUT") {
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = file.write_all(text.as_bytes());
         }
     }
@@ -25,7 +29,7 @@ fn append_out(text: &str) {
 
 pub fn main() {
     let mode = std::env::var("WINDOW_FIXTURE_MODE").unwrap_or_default();
-    if mode == "persist" || mode == "persist-again" {
+    if mode == "persist" || mode == "persist-again" || mode == "persist-clear" {
         // Persistence is opt-in; the test points this at a scratch directory.
         if let Ok(dir) = std::env::var("WINDOW_FIXTURE_STATE") {
             winia::runtime::saveable::persist::set_store(Some(
@@ -34,7 +38,7 @@ pub fn main() {
         }
     }
     winia::run_app!(move |ctx| {
-        if mode == "destroy-stay" {
+        if mode == "destroy-stay" || mode == "pending-child-close" {
             ctx.set_last_window_policy(LastWindowPolicy::StayResident);
         }
         window(ctx, &mode);
@@ -45,8 +49,13 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     let mode = mode.to_owned();
     let mode_for_handler = mode.clone();
     let mode_for_close = mode.clone();
-    Window::new()
-        .title("window fixture")
+    let title = if mode == "empty-title" {
+        ""
+    } else {
+        "window fixture"
+    };
+    let declared_id = Window::new()
+        .title(title)
         .size(400.0, 300.0)
         .key("fixture-persist")
         .on_close_requested(move |id, reason| {
@@ -64,13 +73,20 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "destroy-stay" => destroy_stay_scenario(ctx, id),
                 "nested-close" => nested_close_scenario(ctx, id),
                 "sibling-close" => sibling_close_scenario(ctx),
+                "content-update" => content_update_scenario(ctx),
+                "pending-child-close" => pending_child_close_scenario(ctx, id),
+                "empty-title" => empty_title_scenario(ctx, id),
                 "persist" | "persist-again" => persist_scenario(ctx, id),
+                "persist-clear" => persist_clear_scenario(ctx, id),
                 other => {
                     append_out(&format!("unknown-mode={other}\n"));
                     std::process::exit(2);
                 }
             }
         });
+    if mode == "empty-title" {
+        append_out(&format!("declared-title={}\n", declared_id.state().title()));
+    }
 }
 
 fn size_scenario(ctx: &mut ComposeCtx, id: WindowId) {
@@ -179,7 +195,10 @@ fn sibling_close_scenario(ctx: &mut ComposeCtx) {
         }
         Text::new(format!("windows {count}")).build(ctx);
     });
-    append_out(&format!("parent={}\n", if open.get() { "open" } else { "closed" }));
+    append_out(&format!(
+        "parent={}\n",
+        if open.get() { "open" } else { "closed" }
+    ));
     if open.get() {
         let open_for_child = open.clone();
         Window::new()
@@ -200,7 +219,87 @@ fn sibling_close_scenario(ctx: &mut ComposeCtx) {
         // Reaching this line at all means the primary window re-ran after the sibling closed.
         append_out("parent-saw-closed\n");
     }
-    Text::new(if open.get() { "declared" } else { "not declared" }).build(ctx);
+    Text::new(if open.get() {
+        "declared"
+    } else {
+        "not declared"
+    })
+    .build(ctx);
+}
+
+/// The declaration recomposes with a new closure capturing a plain value. The child must replace
+/// its old PerWindow.content rather than keeping the first closure forever.
+fn content_update_scenario(ctx: &mut ComposeCtx) {
+    let version = ctx.remember(|| 0u32);
+    let child_ready = ctx.remember(|| false);
+    let ready_for_child = child_ready.clone();
+    let value = version.get();
+    Window::new().title("content child").build(ctx, move |ctx| {
+        append_out(&format!("content={value}\n"));
+        if value == 1 {
+            std::process::exit(0);
+        }
+        let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+        if !once.get() {
+            once.set(true);
+            let ready = ready_for_child.clone();
+            winia::effect::side_effect(ctx, move || ready.set(true));
+        }
+        Text::new("child").build(ctx);
+    });
+    if child_ready.get() && version.get() == 0 {
+        let version = version.clone();
+        winia::effect::side_effect(ctx, move || version.set(1));
+    }
+}
+
+/// Destroy the parent in the same composition that declares a child. The child is still in
+/// GLOBAL_PENDING and must be canceled instead of opening as an orphan.
+fn pending_child_close_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
+    Window::new()
+        .title("pending orphan")
+        .on_close(|| {
+            append_out("pending-child-closed\n");
+            // Re-enter the public creation API from the callback. Cancellation must release the
+            // global pending lock before invoking user code.
+            winia::app::open_window_with_title(
+                120.0,
+                90.0,
+                "reentrant".to_owned(),
+                Some(Box::new(|ctx| {
+                    append_out("reentrant-composed\n");
+                    Text::new("reentrant").build(ctx);
+                })),
+                None,
+                None,
+                None,
+            );
+        })
+        .build(ctx, |ctx| {
+            append_out("pending-child-composed\n");
+            Text::new("orphan").build(ctx);
+        });
+    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !once.get() {
+        once.set(true);
+        winia::effect::side_effect(ctx, move || parent.destroy());
+    }
+}
+
+fn empty_title_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    append_out(&format!("title={}\n", id.state().title()));
+    std::process::exit(0);
+}
+
+/// Close a keyed window without registering any saveable provider. The empty snapshot must replace
+/// the previous run's disk snapshot.
+fn persist_clear_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !once.get() {
+        once.set(true);
+        winia::effect::side_effect(ctx, move || id.destroy());
+    }
+    Text::new("clear").build(ctx);
 }
 
 fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {

@@ -164,15 +164,70 @@ impl Window {
             .filter_map(|(window_id, pw)| pw.created_id.map(|id| (*window_id, id)))
             .collect();
         for (window_id, created_id) in children {
-            let removed = CREATED.lock().unwrap().remove(&created_id);
-            if !removed {
-                continue;
-            }
+            let _ = CREATED.lock().unwrap().remove(&created_id);
             if let Some(mut pw) = windows.remove(&window_id) {
                 pw.finalize(window_id, saveable);
             }
+            // Recurse even when CREATED no longer contains the child: a half-torn-down child must
+            // not strand its grandchildren.
             Self::close_owned_children(windows, saveable, created_id);
         }
+        // Children still waiting in GLOBAL_PENDING have no PerWindow to find above.
+        Self::cancel_pending_subtree(owner);
+    }
+
+    /// Remove a not-yet-created window and every pending descendant from the global creation queue.
+    pub(crate) fn cancel_pending_subtree(root: u64) {
+        let mut doomed = HashSet::from([root]);
+        loop {
+            let mut canceled = {
+                let mut pending = crate::app::GLOBAL_PENDING.lock().unwrap();
+                let mut kept = Vec::with_capacity(pending.len());
+                let mut canceled: Vec<crate::app::PendingWindow> = Vec::new();
+                for item in pending.drain(..) {
+                    let remove = item.created_id.is_some_and(|id| doomed.contains(&id))
+                        || item.owner.is_some_and(|id| doomed.contains(&id));
+                    if remove {
+                        if let Some(id) = item.created_id {
+                            doomed.insert(id);
+                        }
+                        canceled.push(item);
+                    } else {
+                        kept.push(item);
+                    }
+                }
+                *pending = kept;
+                canceled
+            };
+            if canceled.is_empty() {
+                break;
+            }
+            // A never-realized window still has an after-the-fact callback. Run it outside the
+            // global lock while its declaration cell exists, matching finalize's ordering.
+            canceled.sort_by_key(|item| item.created_id.unwrap_or(u64::MAX));
+            for item in canceled {
+                if let Some(mut on_close) = item.on_close {
+                    on_close();
+                }
+            }
+            // Rescan: a callback may have queued another descendant under the canceled owner.
+        }
+        for id in doomed {
+            let _ = CREATED.lock().unwrap().remove(&id);
+            window_state::forget(WindowId::new(id));
+        }
+    }
+
+    /// Root declarations can disappear before they ever enter AppState::windows.
+    pub(crate) fn stale_pending_root_ids(active: &HashSet<u64>) -> Vec<u64> {
+        crate::app::GLOBAL_PENDING
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|item| item.owner == Some(0))
+            .filter_map(|item| item.created_id)
+            .filter(|id| !active.contains(id))
+            .collect()
     }
 
     pub(crate) fn process_detached(
@@ -230,6 +285,9 @@ impl Window {
                 pw.finalize(w, saveable);
             }
         }
+        // Finalize first so on_close can still read WindowState; then cancel any creation that
+        // never reached PerWindow and drop the declaration cell if it is still present.
+        Self::cancel_pending_subtree(wid);
         Self::close_owned_children(windows, saveable, wid);
         for pw in windows.values_mut() {
             if let Some(ref sw) = pw.skia_window {
@@ -320,6 +378,11 @@ impl Window {
 
             let w = self.spec.width;
             let h = self.spec.height;
+            let title = if self.spec.title.is_empty() {
+                "Winia".to_owned()
+            } else {
+                self.spec.title.clone()
+            };
             // Publish the live state now: the declaration owns the id before the platform window
             // exists, so `WindowState` is usable from the very first composition. `realize` fills
             // in the values the platform actually chose.
@@ -327,7 +390,7 @@ impl Window {
                 WindowId::new(id),
                 WindowSeed {
                     size: (w, h),
-                    title: self.spec.title.clone(),
+                    title: title.clone(),
                     resizable: self.options.resizable,
                     visible: true,
                     placement: WindowPlacement::Windowed,
@@ -351,17 +414,25 @@ impl Window {
             app::open_window_with_keys_owned(
                 w,
                 h,
-                self.spec.title.clone(),
+                title,
                 self.options,
-                Some(Box::new(move |ctx| {
-                    sub_window_content(ctx, &content);
-                })),
+                None,
                 wrapped,
                 Some(id),
                 Some(key),
                 self.persist_key,
                 Some(ctx.window_id().raw()),
                 Some(theme),
+            );
+        }
+
+        // Publish the latest closure on every recomposition. The initial creation takes it from the
+        // cell in open_window; later frames replace PerWindow.content at the frame boundary.
+        let content_id = created_id.get();
+        if content_id != 0 && !DESTROYED.lock().unwrap().contains(&content_id) {
+            window_state::set_pending_content(
+                WindowId::new(content_id),
+                Box::new(move |ctx| sub_window_content(ctx, &content)),
             );
         }
 

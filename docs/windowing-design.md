@@ -9,7 +9,8 @@
 > Scope: the `Window` component's identity, lifetime, state, and open/close surface on Windows,
 > macOS, Linux and Android.
 > Companion reading: `docs/architecture.md` (module layout), `docs/back-navigation.md` (per-window
-> runtime state), `docs/saveable.md` (persistence).
+> runtime state), `docs/saveable.md` (persistence), and `docs/windowing-review.md` (known gaps and
+> repair status).
 
 ## 1. What the component was before this work
 

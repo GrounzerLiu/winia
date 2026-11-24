@@ -2,6 +2,8 @@ use super::*;
 
 // ── PerWindow ──
 
+static NEXT_WINDOW_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub(crate) struct PerWindow {
     pub(crate) composer: Composer,
     /// The window's insets controller: platform code writes system insets here, and the
@@ -30,6 +32,8 @@ pub(crate) struct PerWindow {
     pub(crate) persist_key: Option<u64>,
     /// The declaring composer's window id; `Some(0)` for a root declaration.
     pub(crate) owner: Option<u64>,
+    /// Monotonic platform-window creation order, independent of declarative and native id spaces.
+    pub(crate) creation_order: u64,
 
     /// slot_key of the focused node.
     pub(crate) focused_slot_key: Option<u64>,
@@ -98,24 +102,20 @@ impl PerWindow {
         // not a veto point and must not be able to change what the window saves.
         if let Some(registry) = self.composer.saveable_registry() {
             let saved = registry.perform_save();
-            if !saved.is_empty() {
-                if let Some(key) = self.persist_key {
-                    crate::runtime::saveable::persist::save_saved(key, &saved);
-                }
-                if let Some(key) = self.saveable_key {
-                    saveable.insert(key, saved);
-                }
+            // An empty snapshot is still authoritative: it clears a previous disk/memory snapshot
+            // when the new composition no longer registers any saveable values.
+            if let Some(key) = self.persist_key {
+                crate::runtime::saveable::persist::save_saved(key, &saved);
+            }
+            if let Some(key) = self.saveable_key {
+                saveable.insert(key, saved);
             }
         }
         // Read the registration before `on_close`: its wrapper unregisters the id, so checking after
         // the callback would always say "not created" and leave `destroy()` without a tombstone.
         let created_id = self.created_id;
-        let was_created = created_id.is_some_and(|id| {
-            crate::app::window::CREATED
-                .lock()
-                .unwrap()
-                .remove(&id)
-        });
+        let was_created =
+            created_id.is_some_and(|id| crate::app::window::CREATED.lock().unwrap().remove(&id));
         if let Some(ref mut cb) = self.on_close {
             cb();
         }
@@ -165,6 +165,7 @@ impl PerWindow {
             saveable_key: None,
             persist_key: None,
             owner: None,
+            creation_order: NEXT_WINDOW_ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             theme,
             focused_slot_key: None,
             input: GestureState::default(),

@@ -9,6 +9,7 @@
 //! they report what the window is, not what the last setter asked for, except for the attributes the
 //! application owns outright (title, visibility, resizable, placement).
 
+use crate::runtime::composer::ComposeCtx;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -344,6 +345,9 @@ struct WindowCell {
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
     on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
+    /// Latest content published by the declaration. Consumed at the frame boundary so compose
+    /// never replaces a live window's composer directly.
+    pending_content: RefCell<Option<Box<dyn Fn(&mut ComposeCtx) + Send>>>,
 }
 
 impl WindowCell {
@@ -361,6 +365,7 @@ impl WindowCell {
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
             on_close_requested: RefCell::new(seed.on_close_requested),
+            pending_content: RefCell::new(None),
         }
     }
 
@@ -391,6 +396,19 @@ pub(crate) fn declare(id: WindowId, seed: WindowSeed) {
             .borrow_mut()
             .insert(id.0, Rc::new(WindowCell::new(seed, false)));
     });
+}
+
+/// Publish the latest content closure for a declared window. The last write before the frame
+/// boundary wins, including recompositions that happen before the platform window exists.
+pub(crate) fn set_pending_content(id: WindowId, content: Box<dyn Fn(&mut ComposeCtx) + Send>) {
+    with_cell(id, |cell| {
+        *cell.pending_content.borrow_mut() = Some(content)
+    });
+}
+
+/// Take the latest content published for a window, if its declaration recomposed.
+pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut ComposeCtx) + Send>> {
+    with_cell(id, |cell| cell.pending_content.borrow_mut().take()).flatten()
 }
 
 /// Mark a declared window as created by the platform, with the values it actually has.

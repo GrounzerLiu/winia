@@ -3,6 +3,9 @@ use super::*;
 impl AppState {
     /// Drain the window requests queued by `app::open_window`, plus the root composition.
     pub(crate) fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if crate::debug::is_shutdown() {
+            return;
+        }
         if self.root.is_none() {
             let mut composer = Composer::new();
             #[cfg(target_os = "android")]
@@ -19,10 +22,24 @@ impl AppState {
         // `compose` already took the deps into its slot_deps; this clears any leftover buffer.
         crate::runtime::state::take_deps();
 
+        // Window-content declarations can disappear before their pending platform window exists.
+        crate::app::window::Window::process_detached(
+            &mut self.windows,
+            event_loop,
+            &|| crate::debug::force_shutdown(),
+            &mut self.saveable,
+        );
+        if crate::debug::is_shutdown() {
+            return;
+        }
+
         // A root declaration that disappeared closes its own window. Doing this by active-id diff
         // (rather than the slot forget callback) works even when several root declarations share
         // one composer: a still-composed sibling must not keep the removed one alive.
         if let Some(active) = self.root.as_ref().map(|root| root.active_window_ids()) {
+            for id in crate::app::window::Window::stale_pending_root_ids(&active) {
+                crate::app::window::Window::cancel_pending_subtree(id);
+            }
             let stale: Vec<u64> = self
                 .windows
                 .values()
@@ -47,20 +64,33 @@ impl AppState {
 
         // Consume the pending queue: create the windows.
         while self.pending_content.len() > 0 {
-            // drain-like: pop from front
+            if crate::debug::is_shutdown() {
+                self.pending_content.clear();
+                break;
+            }
             let pending = self.pending_content.remove(0);
             self.open_window(event_loop, pending);
         }
+        // Initial compositions run above and can queue declaration removals. Reconcile them before
+        // returning to either proxy_wake_up or can_create_surfaces.
+        crate::app::window::Window::process_detached(
+            &mut self.windows,
+            event_loop,
+            &|| crate::debug::force_shutdown(),
+            &mut self.saveable,
+        );
+        self.refresh_parent_window_id();
     }
 
     pub(crate) fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, pending: PendingWindow) {
         let mut a = winit::window::WindowAttributes::default();
         a.window_icon = crate::assets::window_icon();
-        a.title = if pending.title.is_empty() {
-            "Winia".into()
+        let title = if pending.title.is_empty() {
+            "Winia".to_owned()
         } else {
             pending.title.clone()
         };
+        a.title = title.clone();
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
             pending.width as f64,
             pending.height as f64,
@@ -95,7 +125,12 @@ impl AppState {
         // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
         // otherwise, and unconditional at the call site so nothing here needs feature gates).
         crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);
-        let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
+        let content = pending
+            .created_id
+            .map(crate::app::window_state::WindowId::new)
+            .and_then(crate::app::window_state::take_pending_content)
+            .or(pending.content)
+            .unwrap_or_else(|| Box::new(|_| {}));
         // How this window resolves its theme. A `Window` node passes the cell it shares with its declaring
         // tree; a window opened directly follows the system (`Auto`), which is what an unspecified theme
         // means everywhere else in the API.
@@ -165,7 +200,7 @@ impl AppState {
             crate::app::window_state::realize(
                 crate::app::window_state::WindowId::new(created_id),
                 (pw.width, pw.height),
-                &pending.title,
+                &title,
             );
         }
         // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
@@ -223,5 +258,91 @@ impl AppState {
             self.parent_window_id = Some(window_id);
             crate::debug::set_legacy_target(window_id.into_raw() as u64);
         }
+    }
+
+    /// Keep the debug/legacy parent bound to a window that still exists.
+    pub(crate) fn refresh_parent_window_id(&mut self) {
+        let replacement = Self::replacement_parent_window_id(self.parent_window_id, &self.windows);
+        if replacement != self.parent_window_id {
+            self.parent_window_id = replacement;
+            if let Some(id) = replacement {
+                crate::debug::set_legacy_target(id.into_raw() as u64);
+            }
+        }
+    }
+
+    fn replacement_parent_window_id(
+        parent: Option<WindowId>,
+        windows: &std::collections::HashMap<WindowId, crate::app::PerWindow>,
+    ) -> Option<WindowId> {
+        if parent.is_some_and(|id| !windows.contains_key(&id)) {
+            windows
+                .iter()
+                .filter(|(_, pw)| pw.owner.is_none() || pw.owner == Some(0))
+                .min_by_key(|(_, pw)| pw.creation_order)
+                .map(|(window_id, _)| *window_id)
+        } else {
+            parent
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    fn test_window_id(raw: u64) -> winit::window::WindowId {
+        unsafe { std::mem::transmute::<usize, winit::window::WindowId>(raw as usize) }
+    }
+
+    #[cfg(not(windows))]
+    fn test_window_id(raw: u64) -> winit::window::WindowId {
+        winit::window::WindowId::from(raw)
+    }
+
+    fn window_with_owner(
+        created_id: Option<u64>,
+        creation_order: u64,
+        owner: Option<u64>,
+    ) -> PerWindow {
+        let mut pw = PerWindow::new(
+            Box::new(|_| {}),
+            100.0,
+            100.0,
+            crate::theme::ThemeColors::default_light(),
+        );
+        pw.created_id = created_id;
+        pw.owner = owner;
+        pw.creation_order = creation_order;
+        pw
+    }
+
+    #[test]
+    fn closing_the_parent_rebinds_to_the_earliest_remaining_root() {
+        let first = test_window_id(1);
+        let later_root = test_window_id(2);
+        let child = test_window_id(3);
+        let earliest_root = test_window_id(4);
+        let platform_root = test_window_id(5);
+        let mut windows = std::collections::HashMap::new();
+        windows.insert(child, window_with_owner(Some(30), 30, Some(20)));
+        windows.insert(later_root, window_with_owner(Some(20), 20, Some(0)));
+        windows.insert(earliest_root, window_with_owner(Some(10), 10, Some(0)));
+        windows.insert(platform_root, window_with_owner(None, 5, None));
+
+        assert_eq!(
+            AppState::replacement_parent_window_id(Some(first), &windows),
+            Some(platform_root),
+            "a child must never become the legacy parent"
+        );
+        assert_eq!(
+            AppState::replacement_parent_window_id(Some(earliest_root), &windows),
+            Some(earliest_root)
+        );
+        assert_eq!(
+            AppState::replacement_parent_window_id(Some(first), &std::collections::HashMap::new()),
+            None
+        );
     }
 }

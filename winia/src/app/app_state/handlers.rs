@@ -38,6 +38,7 @@ impl AppState {
         // Hiding never gets here, so this is destruction only: the policy decides whether an
         // application that just lost its last window ends or keeps running (tray style). Children
         // have already been finalized above, so a parent close cannot skip their snapshots.
+        self.refresh_parent_window_id();
         let exit_on_last = matches!(
             crate::app::window_state::last_window_policy(),
             crate::app::window_state::LastWindowPolicy::Exit
@@ -101,6 +102,16 @@ impl AppState {
             // Focus comes from whether the window holds a focused node: this winit fork has no
             // window-focus event, so that is the only signal the loop actually has.
             crate::app::window_state::observed_focus(public_id, focused);
+            if let Some(content) = crate::app::window_state::take_pending_content(public_id)
+                && let Some(pw) = self.windows.get_mut(&winit_id)
+            {
+                let theme = pw.theme.cell.clone();
+                pw.content = Box::new(move |ctx| theme.provide(ctx, |ctx| content(ctx)));
+                pw.composer.mark_content_dirty();
+                if let Some(ref sw) = pw.skia_window {
+                    sw.request_redraw();
+                }
+            }
             let commands = crate::app::window_state::take_commands(public_id);
             if commands.is_empty() {
                 continue;
@@ -469,13 +480,6 @@ impl ApplicationHandler for AppState {
             return;
         }
         AppState::process_pending_windows(self, event_loop);
-        // Consume pending closes (pushed by on_remove; the end of compose consumes them too).
-        crate::app::window::Window::process_detached(
-            &mut self.windows,
-            event_loop,
-            &|| debug::force_shutdown(),
-            &mut self.saveable,
-        );
         // Redraw requests raised from OUTSIDE the window they concern: a `Window` node publishing a new
         // theme intent runs in its DECLARING tree, which leaves the window's own composer with nothing
         // pending — without this its frame would never be scheduled and the new theme would sit unseen.
@@ -722,6 +726,7 @@ impl AppState {
                         created_id,
                     );
                 }
+                self.refresh_parent_window_id();
                 for pw in self.windows.values_mut() {
                     if let Some(ref sw) = pw.skia_window {
                         sw.request_redraw();

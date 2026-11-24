@@ -215,7 +215,8 @@ fn closing_a_parent_finalizes_its_child_windows() {
 fn closing_a_sibling_window_reruns_the_remaining_content() {
     let mut fixture = Fixture::spawn("sibling-close", "sibling-close");
     let text = fixture.wait_for_text(Duration::from_secs(15), |text| {
-        text.lines().any(|line| line.starts_with("seq=") && line.contains("windows=1"))
+        text.lines()
+            .any(|line| line.starts_with("seq=") && line.contains("windows=1"))
             && text.matches("seq=").count() >= 3
     });
     assert!(
@@ -239,6 +240,92 @@ fn closing_a_sibling_window_reruns_the_remaining_content() {
     assert!(
         last_seq.contains("windows=1"),
         "the window list label still counts the closed sibling: {text:?}"
+    );
+}
+
+#[test]
+fn an_existing_window_receives_the_latest_content_closure() {
+    let mut fixture = Fixture::spawn("content-update", "content-update");
+    let status = fixture.wait(Duration::from_secs(15));
+    let text = fixture.text();
+    assert!(
+        status.is_some(),
+        "updated child content never composed: {text:?}"
+    );
+    assert!(
+        text.contains("content=1"),
+        "the child kept its original content closure: {text:?}"
+    );
+}
+
+#[test]
+fn closing_a_parent_cancels_its_pending_child() {
+    let mut fixture = Fixture::spawn("pending-child-close", "pending-child-close");
+    std::thread::sleep(Duration::from_millis(1_800));
+    assert!(
+        fixture.is_alive(),
+        "StayResident should keep the process alive after the parent closes"
+    );
+    let text = fixture.text();
+    assert!(
+        !text.contains("pending-child-composed"),
+        "a pending child escaped the owner cascade: {text:?}"
+    );
+    assert!(
+        text.contains("pending-child-closed"),
+        "canceling a pending child skipped its on_close callback: {text:?}"
+    );
+    assert!(
+        text.contains("reentrant-composed"),
+        "on_close could not re-enter window creation: {text:?}"
+    );
+}
+
+#[test]
+fn an_empty_title_is_reflected_in_window_state() {
+    let mut fixture = Fixture::spawn("empty-title", "empty-title");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the empty-title fixture should finish");
+    let text = fixture.text();
+    assert!(
+        text.contains("declared-title=Winia") && text.contains("title=Winia"),
+        "state did not reflect the platform default title: {text:?}"
+    );
+}
+
+#[test]
+fn an_empty_snapshot_clears_the_previous_persisted_state() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch_dir("persist-clear");
+    let out = dir.join("out.txt");
+    let mut port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+
+    let mut run = |mode: &str| {
+        let _ = std::fs::remove_file(&out);
+        let mut child = Command::new(fixture_exe())
+            .arg("window_lifecycle")
+            .env("WINDOW_FIXTURE_MODE", mode)
+            .env("WINDOW_FIXTURE_OUT", &out)
+            .env("WINDOW_FIXTURE_STATE", dir.join("state"))
+            .env("WINIA_DEBUG_PORT", port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn persist-clear run");
+        port += 1;
+        let status = child.wait().expect("persist-clear run");
+        assert!(status.success(), "{mode} failed: {status:?}");
+        std::fs::read_to_string(&out).unwrap_or_default()
+    };
+
+    let first = run("persist");
+    assert!(first.contains("counter=0"), "first run: {first:?}");
+    run("persist-clear");
+    let third = run("persist");
+    assert!(
+        third.contains("counter=0"),
+        "the empty snapshot did not clear the old value: {third:?}"
     );
 }
 
