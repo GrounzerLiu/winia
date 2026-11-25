@@ -50,6 +50,9 @@ pub struct Window {
     on_close: Option<Box<dyn FnMut() + Send>>,
     on_close_requested: Option<std::rc::Rc<dyn Fn(WindowId, window_state::CloseReason)>>,
     persist_key: Option<u64>,
+    position: window_state::WindowPosition,
+    placement: window_state::WindowPlacement,
+    visible: bool,
 }
 
 /// The values a `Window` declaration carries. Renamed from the old `WindowState`, whose name now
@@ -78,6 +81,9 @@ impl Window {
             on_close: None,
             on_close_requested: None,
             persist_key: None,
+            position: window_state::WindowPosition::Default,
+            placement: window_state::WindowPlacement::Windowed,
+            visible: true,
         }
     }
 
@@ -89,6 +95,25 @@ impl Window {
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.spec.width = width;
         self.spec.height = height;
+        self
+    }
+
+    /// Initial outer position in logical desktop coordinates. Unsupported platforms keep the
+    /// platform-chosen position.
+    pub fn position(mut self, position: window_state::WindowPosition) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Initial platform placement.
+    pub fn placement(mut self, placement: window_state::WindowPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// Whether the window should be revealed after its first drawn frame.
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
         self
     }
 
@@ -386,16 +411,31 @@ impl Window {
             // Publish the live state now: the declaration owns the id before the platform window
             // exists, so `WindowState` is usable from the very first composition. `realize` fills
             // in the values the platform actually chose.
-            window_state::declare(
+            let caps = WindowCapabilities::platform();
+            let position = if caps.position {
+                self.position
+            } else {
+                window_state::WindowPosition::Default
+            };
+            let placement = if caps.placement {
+                self.placement
+            } else {
+                WindowPlacement::Windowed
+            };
+            let owner_raw = ctx.window_id().raw();
+            let owner = (owner_raw != 0).then_some(WindowId::new(owner_raw));
+            window_state::declare_owned(
                 WindowId::new(id),
                 WindowSeed {
                     size: (w, h),
                     title: title.clone(),
                     resizable: self.options.resizable,
-                    visible: true,
-                    placement: WindowPlacement::Windowed,
+                    visible: self.visible,
+                    placement,
+                    position,
                     on_close_requested: self.on_close_requested,
                 },
+                owner,
             );
             let mut on_close = self.on_close;
             let id_close = id;
@@ -421,6 +461,9 @@ impl Window {
                 Some(id),
                 Some(key),
                 self.persist_key,
+                position,
+                placement,
+                self.visible,
                 Some(ctx.window_id().raw()),
                 Some(theme),
             );

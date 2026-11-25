@@ -137,8 +137,32 @@ impl AppState {
         )));
         a.resizable = pending.options.resizable;
         a.decorations = pending.options.decorations;
+        let initial_position = pending
+            .created_id
+            .map(|raw| {
+                crate::app::window_state::requested_position(
+                    crate::app::window_state::WindowId::new(raw),
+                )
+            })
+            .unwrap_or(pending.position);
+        a.position = match initial_position {
+            crate::app::window_state::WindowPosition::At(x, y) => Some(
+                winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x as f64, y as f64)),
+            ),
+            crate::app::window_state::WindowPosition::Default => None,
+        };
+        a.maximized = pending.placement == crate::app::window_state::WindowPlacement::Maximized;
+        a.fullscreen = if pending.placement == crate::app::window_state::WindowPlacement::Fullscreen
+        {
+            Some(winit::monitor::Fullscreen::Borderless(None))
+        } else {
+            None
+        };
         a.visible = false;
         let w = Arc::new(event_loop.create_window(a).expect("window"));
+        if pending.placement == crate::app::window_state::WindowPlacement::Minimized {
+            let _ = winit::window::Window::set_minimized(&**w, true);
+        }
         let window_id = w.id();
         let sf = w.scale_factor();
         // Match the frame interval to the screen refresh rate (refresh_rate_millihertz: 60000 = 60 Hz) — must be read before `w` is moved.
@@ -187,6 +211,11 @@ impl AppState {
                 as Box<dyn Fn(&mut ComposeCtx)>
         };
         let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
+        if let Some(raw) = pending.created_id {
+            let insets = crate::app::window_state::WindowId::new(raw).insets();
+            pw.insets = insets.clone();
+            pw.composer.set_window_insets(insets);
+        }
         #[cfg(target_os = "android")]
         {
             pw.composer

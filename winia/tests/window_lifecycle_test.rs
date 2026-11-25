@@ -330,6 +330,68 @@ fn an_empty_snapshot_clears_the_previous_persisted_state() {
 }
 
 #[test]
+fn builder_position_and_visibility_are_initial_state() {
+    let mut fixture = Fixture::spawn("initial-state", "initial-state");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the initial-state fixture should finish");
+    let text = fixture.text();
+    assert!(
+        text.contains("builder-position=At(120.0, 80.0)"),
+        "{text:?}"
+    );
+    assert!(text.contains("builder-placement=Windowed"), "{text:?}");
+    assert!(text.contains("builder-visible=false"), "{text:?}");
+}
+
+#[test]
+fn a_pre_realization_default_position_cancels_the_builder_seed() {
+    let mut fixture = Fixture::spawn("initial-position-reset", "initial-position-reset");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the position-reset fixture should finish");
+    assert!(
+        !fixture.text().contains("builder-position=At(120.0, 80.0)"),
+        "pre-realization Default did not cancel the builder seed: {:?}",
+        fixture.text()
+    );
+}
+
+#[test]
+fn builder_placement_is_applied_before_the_first_frame() {
+    let mut fixture = Fixture::spawn("initial-placement", "initial-placement");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(
+        status.is_some(),
+        "the initial-placement fixture should finish"
+    );
+    assert!(
+        fixture.text().contains("builder-placement=Maximized"),
+        "{:?}",
+        fixture.text()
+    );
+}
+
+#[test]
+fn window_id_and_content_share_the_same_reactive_insets() {
+    let mut fixture = Fixture::spawn("insets-share", "insets-share");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the insets-share fixture should finish");
+    let text = fixture.text();
+    assert!(text.contains("insets-shared=true"), "{text:?}");
+    assert!(text.contains("left: 1.0"), "{text:?}");
+    assert!(text.contains("top: 2.0"), "{text:?}");
+}
+
+#[test]
+fn window_owner_is_the_declaring_window_not_the_native_parent() {
+    let mut fixture = Fixture::spawn("owner-query", "owner-query");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the owner-query fixture should finish");
+    let text = fixture.text();
+    assert!(text.contains("root-owner=None"), "{text:?}");
+    assert!(text.contains("child-owner=Some(WindowId("), "{text:?}");
+}
+
+#[test]
 fn commands_queued_before_realization_apply_before_the_first_frame() {
     let mut fixture = Fixture::spawn("initial-commands", "initial-commands");
     let status = fixture.wait(Duration::from_secs(10));

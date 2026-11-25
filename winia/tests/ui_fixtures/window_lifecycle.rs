@@ -61,10 +61,19 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     } else {
         "window fixture"
     };
-    let declared_id = Window::new()
+    let mut builder = Window::new()
         .title(title)
         .size(400.0, 300.0)
-        .key("fixture-persist")
+        .key("fixture-persist");
+    if mode == "initial-state" || mode == "initial-position-reset" {
+        builder = builder
+            .position(WindowPosition::At(120.0, 80.0))
+            .visible(false);
+    }
+    if mode == "initial-placement" {
+        builder = builder.placement(WindowPlacement::Maximized).visible(false);
+    }
+    let declared_id = builder
         .on_close_requested(move |id, reason| {
             append_out(&format!("requested={reason:?}\n"));
             if mode_for_handler == "close-accept" {
@@ -97,6 +106,11 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "initial-destroy" | "persist-initial-destroy" => initial_destroy_scenario(ctx, id),
                 "reactive-title" => reactive_title_scenario(ctx, id),
                 "reactive-size" => reactive_size_scenario(ctx, id),
+                "initial-state" | "initial-placement" | "initial-position-reset" => {
+                    initial_state_scenario(ctx, id)
+                }
+                "insets-share" => insets_share_scenario(ctx, id),
+                "owner-query" => owner_query_scenario(ctx, id),
                 "existing-command-new-root" => {
                     let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
                     if !once.get() {
@@ -116,6 +130,9 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
         });
     if mode == "empty-title" {
         append_out(&format!("declared-title={}\n", declared_id.state().title()));
+    }
+    if mode == "initial-position-reset" {
+        declared_id.state().set_position(WindowPosition::Default);
     }
     if mode == "initial-commands" {
         declared_id.state().set_title("early title");
@@ -181,6 +198,40 @@ fn reactive_size_scenario(ctx: &mut ComposeCtx, id: WindowId) {
         winia::effect::side_effect(ctx, move || id.state().set_size(560.0, 360.0));
     }
     Text::new("size").build(ctx);
+}
+
+fn initial_state_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let state = id.state();
+    append_out(&format!(
+        "builder-position={:?}\nbuilder-placement={:?}\nbuilder-visible={}\n",
+        state.position(),
+        state.placement(),
+        state.visible(),
+    ));
+    std::process::exit(0);
+}
+
+fn insets_share_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let external = id.insets();
+    let content = ctx.window_insets();
+    let expected = winia::window::insets::Insets::new(1.0, 2.0, 3.0, 4.0);
+    external.set_status_bar_insets(expected);
+    append_out(&format!(
+        "insets-shared={}\nstatus={:?}\n",
+        external.current() == content.current(),
+        content.current().status_bars,
+    ));
+    std::process::exit(0);
+}
+
+fn owner_query_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
+    append_out(&format!("root-owner={:?}\n", parent.owner()));
+    Window::new().title("owned child").build(ctx, move |ctx| {
+        let child = ctx.window_id();
+        append_out(&format!("child-owner={:?}\n", child.owner()));
+        Text::new("child").build(ctx);
+        std::process::exit(0);
+    });
 }
 
 fn size_scenario(ctx: &mut ComposeCtx, id: WindowId) {

@@ -1,8 +1,8 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: implemented, rev 4, 2026-11-26. All five phases are in the tree; the only sketched method
-> that stayed on another surface is `WindowId::insets`, which is still `ctx.window_insets()` inside
-> window content. Section 14 records what landed and how it was verified.
+> Status: implemented, rev 5, 2026-11-26. All five phases are in the tree; `WindowId::insets()`
+> now exposes the same reactive controller as `ctx.window_insets()`. Section 14 records what landed
+> and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
 > wrapper, no key type, no scope type, no options struct, no window manager, one creation entry.
 > Section 15 records what was removed and why.
@@ -111,8 +111,10 @@ Two types carry behaviour, one builder builds, three context calls configure the
 `WindowHandle`, no `WindowKey`, no `WindowScope`, no `WindowOptions` and no `WindowManager`: each
 would be a second name for something already reachable.
 
-The whole surface in this section is implemented. Window insets are the one exception: they are
-still `ctx.window_insets()` inside window content; there is deliberately no `WindowId::insets` yet.
+The whole surface in this section is implemented. `WindowId::insets()` returns the window's reactive
+`WindowInsetsController`; content can use the same controller through `ctx.window_insets()`. Unknown
+or destroyed ids return an independent zero controller, while a controller retained across destruction
+is reset to zero.
 
 ## 4. Identity
 
@@ -213,8 +215,10 @@ debug builds, which is diagnosable rather than a crash.
 ## 8. Building a window
 
 One rule for every builder setter: **it seeds the initial value and is ignored once the window is
-realized; live changes go through `WindowState`.** That is what today's code does implicitly, now
-stated as a contract.
+realized; live changes go through `WindowState`.** The builder also accepts initial
+`.position(WindowPosition)`, `.placement(WindowPlacement)`, and `.visible(bool)`. These values flow
+through the declaration seed and native `WindowAttributes`; visibility is revealed only after the first
+draw. Unsupported position/placement capabilities fall back to the platform default.
 
 `.key("settings")` is the declarative way to make saved state leave the process: it is hashed into
 the saveable store, and everything else is in-memory for the run. Persistence also needs a store to
@@ -224,6 +228,10 @@ is written, which is the right default for tests and previews.
 `app::open_window_with_saveable_key` predates the split and keeps its old behaviour: it uses the
 same explicit key for memory and disk persistence. That is a compatibility exception, not a second
 declarative entry; new code uses `.key(..)` or `open_window_with_keys`.
+
+`WindowId::owner()` reports the declaration that owns the window's lifetime: root windows return
+`None`, and a child returns its declaring `WindowId`. This is deliberately not a native parent/modal
+relationship; that surface remains part of the dialog work.
 
 `resizable` is runtime-toggleable on Windows and macOS, so it lives in the state (the builder setter
 seeds it). There is no `always_on_top` builder method today. `WindowCapabilities` reports what the

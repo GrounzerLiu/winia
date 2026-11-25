@@ -44,6 +44,19 @@ impl WindowId {
         with_cell(self, |cell| cell.snapshot.get().focused).unwrap_or(false)
     }
 
+    /// Reactive insets for this window. Unrealized declarations share the controller that the
+    /// future platform window will use. Unknown or destroyed ids return an independent zero controller.
+    pub fn insets(self) -> crate::window::insets::WindowInsetsController {
+        with_cell(self, |cell| cell.insets.clone())
+            .unwrap_or_else(crate::window::insets::WindowInsetsController::new)
+    }
+
+    /// The declaration that owns this window's lifetime. Root windows return `None`.
+    /// This is not a native parent/modal relationship; that API is not implemented yet.
+    pub fn owner(self) -> Option<WindowId> {
+        with_cell(self, |cell| cell.owner).flatten()
+    }
+
     /// The live state of this window.
     pub fn state(self) -> WindowState {
         WindowState { id: self }
@@ -166,6 +179,7 @@ impl WindowState {
         if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
             return;
         }
+        with_cell(self.id, |cell| cell.requested_position.set(position));
         if position == WindowPosition::Default {
             with_cell(self.id, |cell| cell.deferred_position.set(None));
             return;
@@ -476,6 +490,7 @@ pub(crate) struct WindowSeed {
     pub(crate) resizable: bool,
     pub(crate) visible: bool,
     pub(crate) placement: WindowPlacement,
+    pub(crate) position: WindowPosition,
     /// A notification, not a decision: the application expresses agreement by hiding, destroying,
     /// or dropping the declaration. No handler registered means "close without asking".
     ///
@@ -493,6 +508,7 @@ impl Default for WindowSeed {
             resizable: true,
             visible: true,
             placement: WindowPlacement::Windowed,
+            position: WindowPosition::Default,
             on_close_requested: None,
         }
     }
@@ -502,6 +518,8 @@ struct WindowCell {
     snapshot: State<WindowSnapshot>,
     /// Application intent, separate from the platform-observed placement in snapshot.
     requested_placement: Cell<WindowPlacement>,
+    /// Position request used to seed native creation before the platform reports an observation.
+    requested_position: Cell<WindowPosition>,
     /// Last placement command handed to the platform, waiting for its observation.
     awaiting_placement: Cell<Option<WindowPlacement>>,
     /// Once an unconditional terminal command is queued, later setters are ignored.
@@ -513,6 +531,10 @@ struct WindowCell {
     /// Latest content published by the declaration. Consumed at the frame boundary so compose
     /// never replaces a live window's composer directly.
     pending_content: RefCell<Option<Box<dyn Fn(&mut ComposeCtx) + Send>>>,
+    /// Reactive insets shared by WindowId and the window's composer.
+    insets: crate::window::insets::WindowInsetsController,
+    /// Declaration owner; root windows have none.
+    owner: Option<WindowId>,
 }
 
 impl WindowCell {
@@ -521,6 +543,7 @@ impl WindowCell {
             realized,
             size: seed.size,
             placement: seed.placement,
+            position: seed.position,
             visible: seed.visible,
             resizable: seed.resizable,
             title: seed.title,
@@ -529,6 +552,7 @@ impl WindowCell {
         WindowCell {
             snapshot: State::new(snapshot),
             requested_placement: Cell::new(seed.placement),
+            requested_position: Cell::new(seed.position),
             awaiting_placement: Cell::new(None),
             terminal: Cell::new(false),
             pending: RefCell::new(Vec::new()),
@@ -536,6 +560,8 @@ impl WindowCell {
             deferred_position: Cell::new(None),
             on_close_requested: RefCell::new(seed.on_close_requested),
             pending_content: RefCell::new(None),
+            insets: crate::window::insets::WindowInsetsController::new(),
+            owner: None,
         }
     }
 
@@ -597,10 +623,14 @@ fn with_cell<R>(id: WindowId, f: impl FnOnce(&WindowCell) -> R) -> Option<R> {
 
 /// Register a declared window that the platform has not created yet.
 pub(crate) fn declare(id: WindowId, seed: WindowSeed) {
+    declare_owned(id, seed, None);
+}
+
+pub(crate) fn declare_owned(id: WindowId, seed: WindowSeed, owner: Option<WindowId>) {
     CELLS.with(|cells| {
-        cells
-            .borrow_mut()
-            .insert(id.0, Rc::new(WindowCell::new(seed, false)));
+        let mut cell = WindowCell::new(seed, false);
+        cell.owner = owner;
+        cells.borrow_mut().insert(id.0, Rc::new(cell));
     });
     publish_window_ids();
 }
@@ -639,10 +669,17 @@ pub(crate) fn forget(id: WindowId) {
         if let Some(cell) = cell {
             // Notify readers before dropping the cell so they recompose to the documented defaults.
             cell.snapshot.set(WindowSnapshot::default());
+            cell.insets
+                .set(crate::window::insets::WindowInsets::default());
         }
         cells.borrow_mut().remove(&id.0);
     });
     publish_window_ids();
+}
+
+/// Position request to seed native creation, including a pre-realization reset to Default.
+pub(crate) fn requested_position(id: WindowId) -> WindowPosition {
+    with_cell(id, |cell| cell.requested_position.get()).unwrap_or(WindowPosition::Default)
 }
 
 /// Untracked application-owned visibility, for the event loop's first-frame decision.
@@ -1088,6 +1125,21 @@ mod tests {
     }
 
     #[test]
+    fn default_position_cancels_a_pre_realization_seed() {
+        let id = WindowId::new(9_215);
+        declare(
+            id,
+            WindowSeed {
+                position: WindowPosition::At(120.0, 80.0),
+                ..WindowSeed::default()
+            },
+        );
+        id.state().set_position(WindowPosition::Default);
+        assert_eq!(requested_position(id), WindowPosition::Default);
+        forget(id);
+    }
+
+    #[test]
     fn default_position_clears_a_deferred_request() {
         let id = fresh(9_208);
         observed_placement(id, WindowPlacement::Maximized);
@@ -1096,6 +1148,31 @@ mod tests {
         observed_placement(id, WindowPlacement::Windowed);
         assert!(take_commands(id).is_empty());
         forget(id);
+    }
+
+    #[test]
+    fn owner_and_insets_follow_the_declaration_lifetime() {
+        let parent = fresh(9_213);
+        let child = WindowId::new(9_214);
+        declare_owned(child, WindowSeed::default(), Some(parent));
+        assert_eq!(parent.owner(), None);
+        assert_eq!(child.owner(), Some(parent));
+
+        let insets = child.insets();
+        insets.set_status_bar_insets(crate::window::insets::Insets::all(12.0));
+        assert_eq!(child.insets().current().status_bars.top, 12.0);
+
+        forget(child);
+        assert_eq!(child.owner(), None);
+        assert_eq!(
+            insets.current(),
+            crate::window::insets::WindowInsets::default()
+        );
+        assert_eq!(
+            child.insets().current(),
+            crate::window::insets::WindowInsets::default()
+        );
+        forget(parent);
     }
 
     #[test]

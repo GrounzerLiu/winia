@@ -386,7 +386,7 @@ The first batch is implemented and covered by targeted regressions; see the repa
 
 ## Repair status
 
-Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10) and second batch (D3-D6, D8) are implemented and covered by targeted regressions. API gaps remain backlog unless marked otherwise.
+Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3-D6, D8), and third batch (G2, G3, declaration-owner part of G4) are implemented and covered by targeted regressions. Remaining API gaps stay backlog unless marked otherwise.
 
 ### Defects
 
@@ -408,9 +408,9 @@ Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10) and second batch 
 | ID | Status | Dependency/notes |
 | --- | --- | --- |
 | G1 Observable state | Partially addressed | Existing getters and `ctx.windows()` are tracked; an explicit snapshot/flow API remains backlog |
-| G2 Initial position/placement/visible | Backlog | Depends on atomic creation (D3) |
-| G3 Insets on `WindowId` | Backlog | Reuse the existing reactive inset controller |
-| G4 Owner/parent | Backlog | Separate lifecycle ownership from native parent/modal |
+| G2 Initial position/placement/visible | Fixed - third batch | Builder seeds flow through native attributes; reveal waits for first draw |
+| G3 Insets on `WindowId` | Fixed - third batch | Declaration and PerWindow share one reactive controller; destruction resets it |
+| G4 Owner/parent | Partially addressed | `WindowId::owner()` exposes declaration ownership; native parent/modal remains backlog |
 | G5 Activate/focus | Backlog | Depends on OS-focus observation (D6) |
 | G6 Always-on-top/transparent/decorations | Backlog | Decorations exist only at creation today |
 | G7 Size constraints | Backlog | Coordinate with content-driven sizing (G11) |
@@ -429,6 +429,16 @@ Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10) and second batch 
 - The window API demo no longer carries a manual refresh tick.
 
 Targeted validation: `window_lifecycle_test` 18/18, `window_state` 21/21, command planner 4/4, parent/initial-visibility helpers 2/2, and the debug-server example check passed. Changed-file rustfmt and `git diff --check` also passed.
+
+### Third-batch implementation
+
+- `Window::position`, `Window::placement`, and `Window::visible` seed initial state before native creation.
+- Initial position uses the latest pre-realization request, so `set_position(Default)` can cancel a builder seed.
+- Initial placement is applied through native attributes, with minimized state applied while still hidden.
+- `WindowId::insets()` exposes the same reactive controller used by window content; destruction resets retained controllers.
+- `WindowId::owner()` exposes declaration ownership without conflating it with native parent/modal relationships.
+
+Targeted validation: `window_lifecycle_test` 23/23 and `window_state` 23/23 passed; the debug-server example check, changed-file rustfmt, and `git diff --check` also passed.
 
 ### First-batch implementation
 
