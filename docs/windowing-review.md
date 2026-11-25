@@ -386,7 +386,7 @@ The first batch is implemented and covered by targeted regressions; see the repa
 
 ## Repair status
 
-Status as of 2026-11-24: the first batch (D1, D2, D7, D9, D10) is implemented and covered by targeted regressions. The remaining defects and API gaps are backlog.
+Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10) and second batch (D3-D6, D8) are implemented and covered by targeted regressions. API gaps remain backlog unless marked otherwise.
 
 ### Defects
 
@@ -394,12 +394,12 @@ Status as of 2026-11-24: the first batch (D1, D2, D7, D9, D10) is implemented an
 | --- | --- | --- | --- | --- |
 | D1 | High | Fixed - first batch | Publish the latest content closure to the existing window | `an_existing_window_receives_the_latest_content_closure` |
 | D2 | High | Fixed - first batch | Include pending requests in recursive owner cancellation | `closing_a_parent_cancels_its_pending_child` |
-| D3 | Medium | Backlog | Make creation and pre-realization command application atomic | No wrong first frame |
-| D4 | High | Backlog | Add tracked window-state snapshots/version notifications | No manual refresh tick |
-| D5 | Medium | Backlog | Observe initial and subsequent outer position | Move/DPI echo |
-| D6 | High | Backlog | Separate requested/observed placement and OS/content focus | Native chrome and Alt-Tab |
+| D3 | Medium | Fixed - second batch | Create hidden, apply globally ordered commands, then compose/reveal | `commands_queued_before_realization_apply_before_the_first_frame`; `destroying_before_realization_skips_content_but_runs_on_close` |
+| D4 | High | Fixed - second batch | Track all reads through per-window and window-list State snapshots | `a_window_title_read_recomposes_without_a_manual_refresh`; `a_window_size_read_recomposes_without_a_manual_refresh` |
+| D5 | Medium | Fixed - second batch | Observe initial position, Moved events, and DPI changes | `platform_observations_update_the_snapshot`; desktop move/DPI matrix remains recommended |
+| D6 | High | Fixed - second batch | Separate requested placement, poll observed placement, and use OS focus | `native_restore_applies_deferred_geometry`; `windowed_placement_clears_every_other_placement_in_order` |
 | D7 | High | Fixed - first batch | Treat an empty current snapshot as a clearing snapshot | `an_empty_snapshot_clears_the_previous_persisted_state` |
-| D8 | Medium | Backlog | Preserve terminal-command order and define cross-window order | Recording fake window |
+| D8 | Medium | Fixed - second batch | Stamp global sequence; terminal commands drop later same-window commands | `destroy_drops_later_commands_at_its_submitted_position`; `vetoed_close_keeps_later_commands` |
 | D9 | Low | Fixed - first batch | Canonicalize the title before declaration and creation | `an_empty_title_is_reflected_in_window_state` |
 | D10 | Medium | Fixed - first batch | Recompute parent and legacy debug target after removal | `closing_the_parent_rebinds_to_a_remaining_window` |
 
@@ -407,7 +407,7 @@ Status as of 2026-11-24: the first batch (D1, D2, D7, D9, D10) is implemented an
 
 | ID | Status | Dependency/notes |
 | --- | --- | --- |
-| G1 Observable state | Backlog | Shared foundation with D4-D6 |
+| G1 Observable state | Partially addressed | Existing getters and `ctx.windows()` are tracked; an explicit snapshot/flow API remains backlog |
 | G2 Initial position/placement/visible | Backlog | Depends on atomic creation (D3) |
 | G3 Insets on `WindowId` | Backlog | Reuse the existing reactive inset controller |
 | G4 Owner/parent | Backlog | Separate lifecycle ownership from native parent/modal |
@@ -418,6 +418,17 @@ Status as of 2026-11-24: the first batch (D1, D2, D7, D9, D10) is implemented an
 | G9 Geometry persistence | Backlog | Depends on position/placement observation (D5-D6) |
 | G10 `DialogWindow` | Backlog | Depends on parent/modal and activation APIs |
 | G11 Content-driven size | Backlog | Reuse intrinsic measurement; define feedback-loop policy |
+
+### Second-batch implementation
+
+- Native windows are created hidden. All pre-realization commands are applied in one global submission order before any window composes or becomes visible.
+- Terminal commands close at their submitted position and drop later commands for that window. Close handlers remain veto points; handler-enqueued commands run in the next batch.
+- `WindowCell` stores a tracked `WindowSnapshot`. WindowState getters, realization, OS focus, and the global window list now notify Compose automatically.
+- Initial and subsequent outer position, placement, and OS focus are observed. Requested placement is kept separate from platform placement; native restore applies deferred geometry.
+- `WindowPosition::Default` clears deferred position intent. Saveable restore is delayed until first content composition, so destruction before content cannot publish an empty snapshot over old state.
+- The window API demo no longer carries a manual refresh tick.
+
+Targeted validation: `window_lifecycle_test` 18/18, `window_state` 21/21, command planner 4/4, parent/initial-visibility helpers 2/2, and the debug-server example check passed. Changed-file rustfmt and `git diff --check` also passed.
 
 ### First-batch implementation
 
@@ -445,7 +456,7 @@ changes persistence semantics, D9 changes initial normalization, and D10 changes
 
 ## Suggested validation plan
 
-No build or UI test was run for this documentation-only task. Follow-up repairs should use:
+The original review was documentation-only. Subsequent repair batches ran the targeted checks listed above. Follow-up work should continue to use:
 
 - Focused state/unit coverage, for example:
   `cargo test -p winia --lib app::window_state::tests`.

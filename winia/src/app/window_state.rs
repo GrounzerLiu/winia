@@ -4,15 +4,17 @@
 //! appears, so a handle is always valid; [`WindowId::is_realized`] answers the platform question
 //! separately.
 //!
-//! Everything here is UI-thread state. Writes are queued and applied once per frame by `AppState`,
-//! so a setter never touches the platform window from inside a composition. Reads are projections:
-//! they report what the window is, not what the last setter asked for, except for the attributes the
-//! application owns outright (title, visibility, resizable, placement).
+//! Everything here is UI-thread state. Platform writes are queued and applied by `AppState`, so a
+//! setter never touches the platform window from inside a composition. Reads use tracked snapshots:
+//! size, position, placement, realization, and focus report platform observations, while title,
+//! visibility, and resizable report application-owned requests.
 
 use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One window, for the lifetime of the process.
 ///
@@ -34,12 +36,12 @@ impl WindowId {
 
     /// Whether the platform window exists right now.
     pub fn is_realized(self) -> bool {
-        with_cell(self, |cell| cell.realized.get()).unwrap_or(false)
+        with_cell(self, |cell| cell.snapshot.get().realized).unwrap_or(false)
     }
 
-    /// Whether this window currently holds focus.
+    /// Whether the OS currently gives this window keyboard focus.
     pub fn is_focused(self) -> bool {
-        with_cell(self, |cell| cell.focused.get()).unwrap_or(false)
+        with_cell(self, |cell| cell.snapshot.get().focused).unwrap_or(false)
     }
 
     /// The live state of this window.
@@ -88,7 +90,7 @@ pub enum WindowPlacement {
 pub enum WindowPosition {
     /// The platform decides (the usual choice for a first window).
     Default,
-    /// Logical pixels from the top-left corner of the display's work area.
+    /// Logical pixels from the top-left corner of the desktop.
     At(f32, f32),
 }
 
@@ -130,55 +132,83 @@ pub struct WindowState {
 impl WindowState {
     /// The current inner size in logical pixels.
     pub fn size(&self) -> (f32, f32) {
-        with_cell(self.id, |cell| cell.size.get()).unwrap_or((0.0, 0.0))
+        with_cell(self.id, |cell| cell.snapshot.get().size).unwrap_or((0.0, 0.0))
     }
 
     /// Request an inner size. Only meaningful while the window is `Windowed`: with another
     /// placement the value is remembered and applied when the window returns to `Windowed`.
     pub fn set_size(&self, width: f32, height: f32) {
-        match with_cell(self.id, |cell| cell.placement.get()) {
-            Some(WindowPlacement::Windowed) => {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
+        match self.geometry_placement() {
+            WindowPlacement::Windowed => {
                 with_cell(self.id, |cell| cell.push(Command::Size(width, height)));
             }
-            Some(other) => {
+            other => {
                 // Remember it for the return to `Windowed`; do not fight the placement.
                 with_cell(self.id, |cell| {
                     cell.deferred_size.set(Some((width, height)))
                 });
                 crate::debug_log!("[window] size deferred, placement {:?}", other);
             }
-            None => {}
         }
     }
 
     /// The current outer position, when the platform reports one.
     pub fn position(&self) -> WindowPosition {
-        with_cell(self.id, |cell| cell.position.get()).unwrap_or(WindowPosition::Default)
+        with_cell(self.id, |cell| cell.snapshot.get().position).unwrap_or(WindowPosition::Default)
     }
 
-    /// Request an outer position. Remembered while the window is not `Windowed`.
+    /// Request an outer position. `Default` clears a deferred request and otherwise leaves
+    /// the platform-chosen position untouched; there is no portable "reset position" API.
     pub fn set_position(&self, position: WindowPosition) {
-        match with_cell(self.id, |cell| cell.placement.get()) {
-            Some(WindowPlacement::Windowed) => {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
+        if position == WindowPosition::Default {
+            with_cell(self.id, |cell| cell.deferred_position.set(None));
+            return;
+        }
+        match self.geometry_placement() {
+            WindowPlacement::Windowed => {
                 with_cell(self.id, |cell| cell.push(Command::Position(position)));
             }
-            Some(other) => {
+            other => {
                 with_cell(self.id, |cell| cell.deferred_position.set(Some(position)));
                 crate::debug_log!("[window] position deferred, placement {:?}", other);
             }
-            None => {}
         }
     }
 
-    /// The current placement.
+    /// Placement that governs geometry writes: application intent while it is non-windowed,
+    /// otherwise the platform observation.
+    fn geometry_placement(&self) -> WindowPlacement {
+        with_cell(self.id, |cell| {
+            let requested = cell.requested_placement.get();
+            let observed = cell.snapshot.peek().placement;
+            if requested == WindowPlacement::Windowed {
+                observed
+            } else {
+                requested
+            }
+        })
+        .unwrap_or(WindowPlacement::Windowed)
+    }
+
+    /// The placement reported by the platform. Before realization this is the initial seed.
     pub fn placement(&self) -> WindowPlacement {
-        with_cell(self.id, |cell| cell.placement.get()).unwrap_or(WindowPlacement::Windowed)
+        with_cell(self.id, |cell| cell.snapshot.get().placement)
+            .unwrap_or(WindowPlacement::Windowed)
     }
 
     /// Request a placement. Leaving `Windowed` applies any deferred size and position on return.
     pub fn set_placement(&self, placement: WindowPlacement) {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
         with_cell(self.id, |cell| {
-            cell.placement.set(placement);
+            cell.requested_placement.set(placement);
             cell.push(Command::Placement(placement));
             if placement == WindowPlacement::Windowed {
                 if let Some((width, height)) = cell.deferred_size.take() {
@@ -191,41 +221,52 @@ impl WindowState {
         });
     }
 
-    /// Whether the window is mapped by the platform.
+    /// The application's current visibility request.
     pub fn visible(&self) -> bool {
-        with_cell(self.id, |cell| cell.visible.get()).unwrap_or(false)
+        with_cell(self.id, |cell| cell.snapshot.get().visible).unwrap_or(false)
     }
 
     /// Show or hide the window. Hiding is not destruction: the composition and its state survive.
     pub fn set_visible(&self, visible: bool) {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
         with_cell(self.id, |cell| {
-            cell.visible.set(visible);
+            cell.snapshot.update(|snapshot| snapshot.visible = visible);
             cell.push(Command::Visible(visible));
         });
     }
 
     /// The window title.
     pub fn title(&self) -> String {
-        with_cell(self.id, |cell| cell.title.borrow().clone()).unwrap_or_default()
+        with_cell(self.id, |cell| cell.snapshot.get().title).unwrap_or_default()
     }
 
     /// Set the window title.
     pub fn set_title(&self, title: &str) {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
         with_cell(self.id, |cell| {
-            *cell.title.borrow_mut() = title.to_owned();
+            cell.snapshot
+                .update(|snapshot| snapshot.title = title.to_owned());
             cell.push(Command::Title(title.to_owned()));
         });
     }
 
     /// Whether the user may resize the window by dragging its edges.
     pub fn resizable(&self) -> bool {
-        with_cell(self.id, |cell| cell.resizable.get()).unwrap_or(true)
+        with_cell(self.id, |cell| cell.snapshot.get().resizable).unwrap_or(true)
     }
 
     /// Allow or forbid user resizing.
     pub fn set_resizable(&self, resizable: bool) {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
         with_cell(self.id, |cell| {
-            cell.resizable.set(resizable);
+            cell.snapshot
+                .update(|snapshot| snapshot.resizable = resizable);
             cell.push(Command::Resizable(resizable));
         });
     }
@@ -262,6 +303,131 @@ pub(crate) enum Command {
     CloseRequest(CloseReason),
     /// Close without asking.
     Destroy,
+}
+
+/// A command stamped at submission time so batches from different windows share one order.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct QueuedCommand {
+    pub(crate) sequence: u64,
+    pub(crate) command: Command,
+}
+
+static NEXT_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// The platform operations WindowState can request. Kept small so command ordering can be tested
+/// without constructing a native window.
+pub(crate) trait WindowCommandTarget {
+    fn request_surface_size(&self, size: winit::dpi::Size);
+    fn set_outer_position(&self, position: winit::dpi::Position);
+    fn set_fullscreen(&self, fullscreen: Option<winit::monitor::Fullscreen>);
+    fn set_maximized(&self, maximized: bool);
+    fn set_minimized(&self, minimized: bool);
+    fn set_visible(&self, visible: bool);
+    fn set_title(&self, title: &str);
+    fn set_resizable(&self, resizable: bool);
+    fn request_redraw(&self);
+}
+
+impl WindowCommandTarget for dyn winit::window::Window {
+    fn request_surface_size(&self, size: winit::dpi::Size) {
+        let _ = winit::window::Window::request_surface_size(self, size);
+    }
+
+    fn set_outer_position(&self, position: winit::dpi::Position) {
+        let _ = winit::window::Window::set_outer_position(self, position);
+    }
+
+    fn set_fullscreen(&self, fullscreen: Option<winit::monitor::Fullscreen>) {
+        let _ = winit::window::Window::set_fullscreen(self, fullscreen);
+    }
+
+    fn set_maximized(&self, maximized: bool) {
+        let _ = winit::window::Window::set_maximized(self, maximized);
+    }
+
+    fn set_minimized(&self, minimized: bool) {
+        let _ = winit::window::Window::set_minimized(self, minimized);
+    }
+
+    fn set_visible(&self, visible: bool) {
+        winit::window::Window::set_visible(self, visible);
+    }
+
+    fn set_title(&self, title: &str) {
+        winit::window::Window::set_title(self, title);
+    }
+
+    fn set_resizable(&self, resizable: bool) {
+        let _ = winit::window::Window::set_resizable(self, resizable);
+    }
+
+    fn request_redraw(&self) {
+        winit::window::Window::request_redraw(self);
+    }
+}
+
+pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command: Command) {
+    use winit::monitor::Fullscreen;
+    match command {
+        Command::Size(width, height) => target.request_surface_size(winit::dpi::Size::Logical(
+            winit::dpi::LogicalSize::new(width as f64, height as f64),
+        )),
+        Command::Position(WindowPosition::At(x, y)) => {
+            target.set_outer_position(winit::dpi::Position::Logical(
+                winit::dpi::LogicalPosition::new(x as f64, y as f64),
+            ));
+        }
+        Command::Position(WindowPosition::Default) => {}
+        Command::Placement(WindowPlacement::Windowed) => {
+            target.set_fullscreen(None);
+            target.set_maximized(false);
+            target.set_minimized(false);
+        }
+        Command::Placement(WindowPlacement::Maximized) => {
+            target.set_fullscreen(None);
+            target.set_minimized(false);
+            target.set_maximized(true);
+        }
+        Command::Placement(WindowPlacement::Fullscreen) => {
+            target.set_minimized(false);
+            target.set_maximized(false);
+            target.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+        Command::Placement(WindowPlacement::Minimized) => target.set_minimized(true),
+        Command::Visible(visible) => target.set_visible(visible),
+        Command::Title(title) => target.set_title(&title),
+        Command::Resizable(resizable) => target.set_resizable(resizable),
+        Command::CloseRequest(_) | Command::Destroy => {}
+    }
+}
+
+/// Observable projection of one window. Reads through WindowState register the current
+/// Composer as a dependent; platform observations and application-owned writes publish through State.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WindowSnapshot {
+    pub(crate) realized: bool,
+    pub(crate) focused: bool,
+    pub(crate) size: (f32, f32),
+    pub(crate) position: WindowPosition,
+    pub(crate) placement: WindowPlacement,
+    pub(crate) visible: bool,
+    pub(crate) resizable: bool,
+    pub(crate) title: String,
+}
+
+impl Default for WindowSnapshot {
+    fn default() -> Self {
+        Self {
+            realized: false,
+            focused: false,
+            size: (0.0, 0.0),
+            position: WindowPosition::Default,
+            placement: WindowPlacement::Windowed,
+            visible: false,
+            resizable: true,
+            title: String::new(),
+        }
+    }
 }
 
 /// What happens when the last window is destroyed.
@@ -333,15 +499,14 @@ impl Default for WindowSeed {
 }
 
 struct WindowCell {
-    realized: Cell<bool>,
-    focused: Cell<bool>,
-    size: Cell<(f32, f32)>,
-    position: Cell<WindowPosition>,
-    placement: Cell<WindowPlacement>,
-    visible: Cell<bool>,
-    resizable: Cell<bool>,
-    title: RefCell<String>,
-    pending: RefCell<Vec<Command>>,
+    snapshot: State<WindowSnapshot>,
+    /// Application intent, separate from the platform-observed placement in snapshot.
+    requested_placement: Cell<WindowPlacement>,
+    /// Last placement command handed to the platform, waiting for its observation.
+    awaiting_placement: Cell<Option<WindowPlacement>>,
+    /// Once an unconditional terminal command is queued, later setters are ignored.
+    terminal: Cell<bool>,
+    pending: RefCell<Vec<QueuedCommand>>,
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
     on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
@@ -352,15 +517,20 @@ struct WindowCell {
 
 impl WindowCell {
     fn new(seed: WindowSeed, realized: bool) -> Self {
+        let snapshot = WindowSnapshot {
+            realized,
+            size: seed.size,
+            placement: seed.placement,
+            visible: seed.visible,
+            resizable: seed.resizable,
+            title: seed.title,
+            ..WindowSnapshot::default()
+        };
         WindowCell {
-            realized: Cell::new(realized),
-            focused: Cell::new(false),
-            size: Cell::new(seed.size),
-            position: Cell::new(WindowPosition::Default),
-            placement: Cell::new(seed.placement),
-            visible: Cell::new(seed.visible),
-            resizable: Cell::new(seed.resizable),
-            title: RefCell::new(seed.title),
+            snapshot: State::new(snapshot),
+            requested_placement: Cell::new(seed.placement),
+            awaiting_placement: Cell::new(None),
+            terminal: Cell::new(false),
             pending: RefCell::new(Vec::new()),
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
@@ -370,7 +540,21 @@ impl WindowCell {
     }
 
     fn push(&self, command: Command) {
-        self.pending.borrow_mut().push(command);
+        if self.terminal.get() {
+            return;
+        }
+        let terminal = match command {
+            Command::Destroy => true,
+            Command::CloseRequest(_) => self.on_close_requested.borrow().is_none(),
+            _ => false,
+        };
+        if terminal {
+            self.terminal.set(true);
+        }
+        self.pending.borrow_mut().push(QueuedCommand {
+            sequence: NEXT_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            command,
+        });
         crate::runtime::state::wake_loop();
     }
 }
@@ -379,6 +563,28 @@ thread_local! {
     /// Every live window on this (the UI) thread. A `WindowId` used from another thread finds an
     /// empty table: setters become no-ops there, which is why window state is documented UI-only.
     static CELLS: RefCell<HashMap<u64, Rc<WindowCell>>> = RefCell::new(HashMap::new());
+    /// Reactive list consumed by ComposeCtx::windows().
+    static WINDOW_IDS: RefCell<Option<State<Vec<WindowId>>>> = const { RefCell::new(None) };
+}
+
+fn window_ids_state() -> State<Vec<WindowId>> {
+    WINDOW_IDS.with(|slot| {
+        if let Some(state) = slot.borrow().clone() {
+            return state;
+        }
+        let state = State::new(Vec::new());
+        *slot.borrow_mut() = Some(state.clone());
+        state
+    })
+}
+
+fn publish_window_ids() {
+    let ids = CELLS.with(|cells| {
+        let mut ids: Vec<u64> = cells.borrow().keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter().map(WindowId::new).collect()
+    });
+    window_ids_state().set(ids);
 }
 
 fn with_cell<R>(id: WindowId, f: impl FnOnce(&WindowCell) -> R) -> Option<R> {
@@ -396,6 +602,7 @@ pub(crate) fn declare(id: WindowId, seed: WindowSeed) {
             .borrow_mut()
             .insert(id.0, Rc::new(WindowCell::new(seed, false)));
     });
+    publish_window_ids();
 }
 
 /// Publish the latest content closure for a declared window. The last write before the frame
@@ -412,33 +619,120 @@ pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut Compo
 }
 
 /// Mark a declared window as created by the platform, with the values it actually has.
-pub(crate) fn realize(id: WindowId, size: (f32, f32), title: &str) {
+pub(crate) fn realize(id: WindowId, size: (f32, f32)) {
     CELLS.with(|cells| {
         let cells = cells.borrow();
         let Some(cell) = cells.get(&id.0) else {
             return;
         };
-        cell.realized.set(true);
-        cell.size.set(size);
-        *cell.title.borrow_mut() = title.to_owned();
+        cell.snapshot.update(|snapshot| {
+            snapshot.realized = true;
+            snapshot.size = size;
+        });
     });
 }
 
 /// Drop the state of a window that no longer exists.
 pub(crate) fn forget(id: WindowId) {
     CELLS.with(|cells| {
+        let cell = cells.borrow().get(&id.0).cloned();
+        if let Some(cell) = cell {
+            // Notify readers before dropping the cell so they recompose to the documented defaults.
+            cell.snapshot.set(WindowSnapshot::default());
+        }
         cells.borrow_mut().remove(&id.0);
     });
+    publish_window_ids();
+}
+
+/// Untracked application-owned visibility, for the event loop's first-frame decision.
+pub(crate) fn visible_now(id: WindowId) -> bool {
+    with_cell(id, |cell| cell.snapshot.peek().visible).unwrap_or(false)
+}
+
+/// Poll the platform-owned parts of a window's state. State deduplicates unchanged values.
+pub(crate) fn observe_platform_state(
+    window: &dyn winit::window::Window,
+    id: WindowId,
+    scale_factor: f64,
+) {
+    if id.capabilities().position
+        && let Ok(position) = window.outer_position()
+    {
+        let logical = position.to_logical::<f32>(scale_factor);
+        observed_position(id, WindowPosition::At(logical.x, logical.y));
+    }
+    if id.capabilities().placement {
+        let placement = if window.is_minimized() == Some(true) {
+            WindowPlacement::Minimized
+        } else if window.fullscreen().is_some() {
+            WindowPlacement::Fullscreen
+        } else if window.is_maximized() {
+            WindowPlacement::Maximized
+        } else {
+            WindowPlacement::Windowed
+        };
+        observed_placement(id, placement);
+    }
+    observed_focus(id, window.has_focus());
 }
 
 /// The platform reported a new inner size.
 pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
-    with_cell(id, |cell| cell.size.set(size));
+    with_cell(id, |cell| {
+        cell.snapshot.update(|snapshot| snapshot.size = size)
+    });
 }
 
-/// The platform reported a focus change.
+/// The platform reported an outer position in logical desktop coordinates.
+pub(crate) fn observed_position(id: WindowId, position: WindowPosition) {
+    with_cell(id, |cell| {
+        cell.snapshot
+            .update(|snapshot| snapshot.position = position)
+    });
+}
+
+/// The platform reported a placement change.
+pub(crate) fn observed_placement(id: WindowId, placement: WindowPlacement) {
+    with_cell(id, |cell| {
+        let previous = cell.snapshot.peek().placement;
+        let placement_pending = cell
+            .pending
+            .borrow()
+            .iter()
+            .any(|queued| matches!(queued.command, Command::Placement(_)));
+        let awaiting = cell.awaiting_placement.get();
+        cell.snapshot
+            .update(|snapshot| snapshot.placement = placement);
+        // Native chrome can supersede stale application intent, but not while an application
+        // placement command is queued or waiting for the platform's asynchronous echo.
+        if awaiting == Some(placement) {
+            cell.awaiting_placement.set(None);
+            cell.requested_placement.set(placement);
+        } else if awaiting.is_none() && !placement_pending {
+            cell.requested_placement.set(placement);
+        }
+        // The user can restore a window through native chrome. Apply geometry that was deferred
+        // while the OS owned the placement, unless the application already consumed it.
+        if previous != WindowPlacement::Windowed
+            && placement == WindowPlacement::Windowed
+            && cell.requested_placement.get() == WindowPlacement::Windowed
+        {
+            if let Some((width, height)) = cell.deferred_size.take() {
+                cell.push(Command::Size(width, height));
+            }
+            if let Some(position) = cell.deferred_position.take() {
+                cell.push(Command::Position(position));
+            }
+        }
+    });
+}
+
+/// The OS reported a keyboard-focus change.
 pub(crate) fn observed_focus(id: WindowId, focused: bool) {
-    with_cell(id, |cell| cell.focused.set(focused));
+    with_cell(id, |cell| {
+        cell.snapshot.update(|snapshot| snapshot.focused = focused)
+    });
 }
 
 /// Every live window, in creation order.
@@ -446,11 +740,7 @@ pub(crate) fn observed_focus(id: WindowId, focused: bool) {
 /// Ids are minted in declaration order and never reused, so ascending id order is creation order -
 /// which is also the order Android composites several windows into its single Activity surface.
 pub(crate) fn windows_in_creation_order() -> Vec<WindowId> {
-    CELLS.with(|cells| {
-        let mut ids: Vec<u64> = cells.borrow().keys().copied().collect();
-        ids.sort_unstable();
-        ids.into_iter().map(WindowId::new).collect()
-    })
+    window_ids_state().get()
 }
 
 /// The application's close-request notification, if it registered one.
@@ -460,7 +750,24 @@ pub(crate) fn close_handler(id: WindowId) -> Option<Rc<dyn Fn(WindowId, CloseRea
 
 /// Take the queued mutations for one window, oldest first.
 pub(crate) fn take_commands(id: WindowId) -> Vec<Command> {
-    with_cell(id, |cell| std::mem::take(&mut *cell.pending.borrow_mut())).unwrap_or_default()
+    take_queued_commands(id)
+        .into_iter()
+        .map(|queued| queued.command)
+        .collect()
+}
+
+/// Take commands with their global submission sequence.
+pub(crate) fn take_queued_commands(id: WindowId) -> Vec<QueuedCommand> {
+    with_cell(id, |cell| {
+        let queued = std::mem::take(&mut *cell.pending.borrow_mut());
+        for item in &queued {
+            if let Command::Placement(placement) = item.command {
+                cell.awaiting_placement.set(Some(placement));
+            }
+        }
+        queued
+    })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -554,8 +861,33 @@ mod tests {
     }
 
     #[test]
+    fn terminal_commands_reject_later_eager_setter_writes() {
+        let id = fresh(9_211);
+        id.state().set_title("accepted");
+        id.destroy();
+        id.state().set_title("too late");
+        id.state().set_visible(false);
+        id.state().set_resizable(false);
+        assert_eq!(id.state().title(), "accepted");
+        assert!(id.state().visible());
+        assert!(id.state().resizable());
+        assert_eq!(
+            take_commands(id),
+            vec![Command::Title("accepted".into()), Command::Destroy]
+        );
+        forget(id);
+    }
+
+    #[test]
     fn close_and_destroy_queue_their_commands() {
-        let id = fresh(9_007);
+        let id = WindowId::new(9_007);
+        declare(
+            id,
+            WindowSeed {
+                on_close_requested: Some(Rc::new(|_, _| {})),
+                ..WindowSeed::default()
+            },
+        );
         id.close();
         id.destroy();
         assert_eq!(
@@ -564,8 +896,22 @@ mod tests {
                 Command::CloseRequest(CloseReason::Command),
                 Command::Destroy
             ],
-            "close is a request, destroy is a command"
+            "a vetoable close is a request, destroy is a command"
         );
+        forget(id);
+    }
+
+    #[test]
+    fn accepted_close_rejects_later_commands_and_setters() {
+        let id = fresh(9_212);
+        id.close();
+        id.destroy();
+        id.state().set_title("too late");
+        assert_eq!(
+            take_commands(id),
+            vec![Command::CloseRequest(CloseReason::Command)]
+        );
+        assert_eq!(id.state().title(), "");
         forget(id);
     }
 
@@ -604,6 +950,214 @@ mod tests {
         assert_eq!(last_window_policy(), LastWindowPolicy::StayResident);
         set_last_window_policy(LastWindowPolicy::Exit);
         assert_eq!(last_window_policy(), LastWindowPolicy::Exit);
+    }
+
+    struct RecordingTarget {
+        calls: RefCell<Vec<&'static str>>,
+    }
+
+    impl WindowCommandTarget for RecordingTarget {
+        fn request_surface_size(&self, _: winit::dpi::Size) {
+            self.calls.borrow_mut().push("size");
+        }
+        fn set_outer_position(&self, _: winit::dpi::Position) {
+            self.calls.borrow_mut().push("position");
+        }
+        fn set_fullscreen(&self, _: Option<winit::monitor::Fullscreen>) {
+            self.calls.borrow_mut().push("fullscreen");
+        }
+        fn set_maximized(&self, _: bool) {
+            self.calls.borrow_mut().push("maximized");
+        }
+        fn set_minimized(&self, _: bool) {
+            self.calls.borrow_mut().push("minimized");
+        }
+        fn set_visible(&self, _: bool) {
+            self.calls.borrow_mut().push("visible");
+        }
+        fn set_title(&self, _: &str) {
+            self.calls.borrow_mut().push("title");
+        }
+        fn set_resizable(&self, _: bool) {
+            self.calls.borrow_mut().push("resizable");
+        }
+        fn request_redraw(&self) {
+            self.calls.borrow_mut().push("redraw");
+        }
+    }
+
+    #[test]
+    fn windowed_placement_clears_every_other_placement_in_order() {
+        let target = RecordingTarget {
+            calls: RefCell::new(Vec::new()),
+        };
+        apply_command(&target, Command::Placement(WindowPlacement::Windowed));
+        assert_eq!(
+            *target.calls.borrow(),
+            vec!["fullscreen", "maximized", "minimized"]
+        );
+    }
+
+    #[test]
+    fn commands_from_different_windows_share_submission_order() {
+        let a = fresh(9_201);
+        let b = fresh(9_202);
+        a.state().set_title("first");
+        b.state().set_size(640.0, 480.0);
+        a.state().set_visible(false);
+
+        let mut batch = Vec::new();
+        for (raw, id) in [(a.raw(), a), (b.raw(), b)] {
+            batch.extend(
+                take_queued_commands(id)
+                    .into_iter()
+                    .map(|queued| (queued.sequence, raw, queued.command)),
+            );
+        }
+        batch.sort_by_key(|(sequence, _, _)| *sequence);
+        assert_eq!(
+            batch
+                .into_iter()
+                .map(|(_, _, command)| command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::Title("first".into()),
+                Command::Size(640.0, 480.0),
+                Command::Visible(false),
+            ]
+        );
+        forget(a);
+        forget(b);
+    }
+
+    #[test]
+    fn native_restore_applies_deferred_geometry() {
+        let id = fresh(9_207);
+        observed_placement(id, WindowPlacement::Maximized);
+        id.state().set_size(800.0, 600.0);
+        id.state().set_position(WindowPosition::At(10.0, 20.0));
+        assert!(take_commands(id).is_empty());
+        observed_placement(id, WindowPlacement::Windowed);
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::Size(800.0, 600.0),
+                Command::Position(WindowPosition::At(10.0, 20.0)),
+            ]
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn stale_observation_does_not_overwrite_a_waiting_placement_request() {
+        let id = fresh(9_210);
+        id.state().set_placement(WindowPlacement::Maximized);
+        let _ = take_commands(id);
+        observed_placement(id, WindowPlacement::Windowed);
+        id.state().set_size(800.0, 600.0);
+        assert!(
+            take_commands(id).is_empty(),
+            "geometry must keep deferring until the requested placement is observed"
+        );
+        observed_placement(id, WindowPlacement::Maximized);
+        observed_placement(id, WindowPlacement::Windowed);
+        assert_eq!(take_commands(id), vec![Command::Size(800.0, 600.0)]);
+        forget(id);
+    }
+
+    #[test]
+    fn native_restore_reconciles_stale_application_intent() {
+        let id = fresh(9_209);
+        id.state().set_placement(WindowPlacement::Minimized);
+        let _ = take_commands(id);
+        observed_placement(id, WindowPlacement::Minimized);
+        id.state().set_size(800.0, 600.0);
+        observed_placement(id, WindowPlacement::Windowed);
+        assert_eq!(
+            take_commands(id),
+            vec![Command::Size(800.0, 600.0)],
+            "native restore must apply deferred geometry"
+        );
+        id.state().set_size(900.0, 700.0);
+        assert_eq!(
+            take_commands(id),
+            vec![Command::Size(900.0, 700.0)],
+            "geometry writes after native restore must no longer defer"
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn default_position_clears_a_deferred_request() {
+        let id = fresh(9_208);
+        observed_placement(id, WindowPlacement::Maximized);
+        id.state().set_position(WindowPosition::At(10.0, 20.0));
+        id.state().set_position(WindowPosition::Default);
+        observed_placement(id, WindowPlacement::Windowed);
+        assert!(take_commands(id).is_empty());
+        forget(id);
+    }
+
+    #[test]
+    fn platform_observations_update_the_snapshot() {
+        let id = fresh(9_203);
+        observed_size(id, (640.0, 480.0));
+        observed_position(id, WindowPosition::At(120.0, 80.0));
+        observed_placement(id, WindowPlacement::Maximized);
+        observed_focus(id, true);
+        assert_eq!(id.state().size(), (640.0, 480.0));
+        assert_eq!(id.state().position(), WindowPosition::At(120.0, 80.0));
+        assert_eq!(id.state().placement(), WindowPlacement::Maximized);
+        assert!(id.is_focused());
+        forget(id);
+    }
+
+    #[test]
+    fn a_tracked_window_state_read_recomposes_on_observation() {
+        let id = fresh(9_204);
+        let seen = Rc::new(Cell::new((0.0, 0.0)));
+        let mut composer = crate::runtime::composer::Composer::new();
+        let read = seen.clone();
+        let observed = id;
+        composer.compose(move |ctx| {
+            let _scope = ctx.start_scope();
+            read.set(observed.state().size());
+            ctx.end_scope();
+        });
+        observed_size(id, (700.0, 500.0));
+        let read = seen.clone();
+        let observed = id;
+        assert!(composer.recompose(move |ctx| {
+            let _scope = ctx.start_scope();
+            read.set(observed.state().size());
+            ctx.end_scope();
+        }));
+        assert_eq!(seen.get(), (700.0, 500.0));
+        forget(id);
+    }
+
+    #[test]
+    fn a_tracked_window_list_read_recomposes_on_declare_and_forget() {
+        let first = fresh(9_205);
+        let seen = Rc::new(Cell::new(0usize));
+        let mut composer = crate::runtime::composer::Composer::new();
+        let read = seen.clone();
+        composer.compose(move |ctx| {
+            let _scope = ctx.start_scope();
+            read.set(crate::runtime::composer::ComposeCtx::windows(ctx).len());
+            ctx.end_scope();
+        });
+        let second = WindowId::new(9_206);
+        declare(second, WindowSeed::default());
+        let read = seen.clone();
+        assert!(composer.recompose(move |ctx| {
+            let _scope = ctx.start_scope();
+            read.set(crate::runtime::composer::ComposeCtx::windows(ctx).len());
+            ctx.end_scope();
+        }));
+        assert_eq!(seen.get(), 2);
+        forget(second);
+        forget(first);
     }
 
     #[test]

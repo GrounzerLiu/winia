@@ -62,14 +62,47 @@ impl AppState {
             self.pending_content.push(item);
         }
 
-        // Consume the pending queue: create the windows.
+        // Create every native window hidden. The root recomposition above may also have queued
+        // commands for already-live windows, so drain every window before any first frame runs.
+        let mut initial_windows = Vec::new();
+        let mut initial_ids = std::collections::HashSet::new();
         while self.pending_content.len() > 0 {
             if crate::debug::is_shutdown() {
                 self.pending_content.clear();
                 break;
             }
             let pending = self.pending_content.remove(0);
-            self.open_window(event_loop, pending);
+            if let Some((window_id, public_id)) = self.create_hidden_window(event_loop, pending) {
+                initial_ids.insert(window_id);
+                initial_windows.push((window_id, public_id));
+            }
+        }
+        let mut batch = Vec::new();
+        for (winit_id, pw) in &self.windows {
+            if let Some(raw) = pw.created_id {
+                for queued in crate::app::window_state::take_queued_commands(
+                    crate::app::window_state::WindowId::new(raw),
+                ) {
+                    batch.push((queued.sequence, *winit_id, raw, queued.command));
+                }
+            }
+        }
+        batch.sort_by_key(|(sequence, _, _, _)| *sequence);
+        let batch = defer_initial_visibility(batch, &initial_ids);
+        self.apply_command_batch(event_loop, batch);
+        // Capture visibility after pre-realization commands but before initial content runs.
+        // Commands emitted by that first composition belong to the next frame.
+        let initial_visibility: Vec<_> = initial_windows
+            .into_iter()
+            .map(|(window_id, public_id)| {
+                let visible = public_id
+                    .map(crate::app::window_state::visible_now)
+                    .unwrap_or(true);
+                (window_id, visible)
+            })
+            .collect();
+        for (window_id, visible) in initial_visibility {
+            self.finish_initial_window(window_id, visible);
         }
         // Initial compositions run above and can queue declaration removals. Reconcile them before
         // returning to either proxy_wake_up or can_create_surfaces.
@@ -82,7 +115,14 @@ impl AppState {
         self.refresh_parent_window_id();
     }
 
-    pub(crate) fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, pending: PendingWindow) {
+    fn create_hidden_window(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        pending: PendingWindow,
+    ) -> Option<(
+        winit::window::WindowId,
+        Option<crate::app::window_state::WindowId>,
+    )> {
         let mut a = winit::window::WindowAttributes::default();
         a.window_icon = crate::assets::window_icon();
         let title = if pending.title.is_empty() {
@@ -161,26 +201,11 @@ impl AppState {
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
         pw.owner = pending.owner;
-        // A window re-opened with the same key picks up what the last one saved. `created_id` is
-        // deliberately NOT a fallback: it is minted fresh for every window, so using it would key
-        // saved state by "the Nth window ever opened" and quietly restore the wrong data. A window
-        // without a key keeps its state in memory only.
-        let memory_key = pending.saveable_key;
-        let persist_key = pending.persist_key;
-        if memory_key.is_some() || persist_key.is_some() {
-            // In-memory first (a window re-opened in this process), then whatever a previous RUN
-            // left on disk under the APPLICATION's key. Both are best-effort: a missing or corrupt
-            // file is just an empty map.
-            let restored = memory_key
-                .and_then(|key| self.saveable.remove(&key))
-                .or_else(|| persist_key.and_then(crate::runtime::saveable::persist::load_saved))
-                .unwrap_or_default();
-            pw.saveable_key = memory_key;
-            pw.persist_key = persist_key;
-            pw.composer.set_saveable_registry(
-                crate::runtime::saveable::SaveableStateRegistry::new(restored),
-            );
-        }
+        // Saveable restore belongs to the first content composition, not native creation. A
+        // window destroyed by a pre-realization command never composed content and must not publish
+        // an empty snapshot over the previous run's saved state.
+        pw.saveable_key = pending.saveable_key;
+        pw.persist_key = pending.persist_key;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.clock.frame_interval = frame_interval;
@@ -194,23 +219,53 @@ impl AppState {
         if let Some(created_id) = pw.created_id {
             pw.composer.set_created_id(created_id);
         }
-        // The declaration minted the id before the platform created anything; this is the frame the
-        // window becomes real, so the live state adopts what the platform actually chose.
-        if let Some(created_id) = pw.created_id {
-            crate::app::window_state::realize(
-                crate::app::window_state::WindowId::new(created_id),
-                (pw.width, pw.height),
-                &title,
+        self.windows.insert(window_id, pw);
+        if self.parent_window_id.is_none() {
+            self.parent_window_id = Some(window_id);
+            crate::debug::set_legacy_target(window_id.into_raw() as u64);
+        }
+        Some((
+            window_id,
+            pending
+                .created_id
+                .map(crate::app::window_state::WindowId::new),
+        ))
+    }
+
+    /// Compose and reveal a hidden window only after its pre-realization commands have been applied.
+    fn finish_initial_window(&mut self, window_id: winit::window::WindowId, visible: bool) {
+        let Some(mut pw) = self.windows.remove(&window_id) else {
+            return;
+        };
+        let sf = pw.scale_factor;
+        let public_id = pw.created_id.map(crate::app::window_state::WindowId::new);
+        if let Some(ref skia) = pw.skia_window {
+            let size = skia.surface_size().to_logical::<f32>(sf);
+            pw.width = size.width;
+            pw.height = size.height;
+            if let Some(public_id) = public_id {
+                crate::app::window_state::realize(public_id, (pw.width, pw.height));
+                crate::app::window_state::observe_platform_state(&**skia, public_id, sf);
+            }
+        }
+        if pw.saveable_key.is_some() || pw.persist_key.is_some() {
+            let restored = pw
+                .saveable_key
+                .and_then(|key| self.saveable.remove(&key))
+                .or_else(|| {
+                    pw.persist_key
+                        .and_then(crate::runtime::saveable::persist::load_saved)
+                })
+                .unwrap_or_default();
+            pw.composer.set_saveable_registry(
+                crate::runtime::saveable::SaveableStateRegistry::new(restored),
             );
         }
-        // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
         let density = crate::runtime::density::density_with_system_font_scale(sf as f32);
         crate::runtime::density::with_density(density, || {
-            // The first frame also gets the window size injected (adaptive components are correct immediately) and the reactive State attached.
-            pw.composer
-                .set_adaptive_window_size(pending.width, pending.height);
+            pw.composer.set_adaptive_window_size(pw.width, pw.height);
             let slot = &pw.window_size_state;
-            let (w0, h0) = (pending.width, pending.height);
+            let (w0, h0) = (pw.width, pw.height);
             pw.composer.compose(|ctx| {
                 let existing = slot.borrow().clone();
                 let size_state = existing.unwrap_or_else(|| {
@@ -228,7 +283,7 @@ impl AppState {
                 (pw.content)(ctx);
             });
             pw.composer
-                .layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
+                .layout(Constraints::new(0.0, pw.width, 0.0, pw.height));
             let bg = pw.theme.applied.colors.background;
             if let Some(root_idx) = pw.composer.layout_root_idx() {
                 let nodes = pw.composer.arena_nodes();
@@ -249,15 +304,13 @@ impl AppState {
                         pw.composer.render_layer(canvas);
                         canvas.restore();
                     });
-                    sw.set_visible(true);
+                    if visible {
+                        sw.set_visible(true);
+                    }
                 }
             }
         });
         self.windows.insert(window_id, pw);
-        if self.parent_window_id.is_none() {
-            self.parent_window_id = Some(window_id);
-            crate::debug::set_legacy_target(window_id.into_raw() as u64);
-        }
     }
 
     /// Keep the debug/legacy parent bound to a window that still exists.
@@ -285,6 +338,31 @@ impl AppState {
             parent
         }
     }
+}
+
+/// Visibility for a window that has not drawn its first frame is represented by its tracked
+/// request snapshot, not by an early native set_visible call.
+fn defer_initial_visibility(
+    batch: Vec<(
+        u64,
+        winit::window::WindowId,
+        u64,
+        crate::app::window_state::Command,
+    )>,
+    initial_ids: &std::collections::HashSet<winit::window::WindowId>,
+) -> Vec<(
+    u64,
+    winit::window::WindowId,
+    u64,
+    crate::app::window_state::Command,
+)> {
+    batch
+        .into_iter()
+        .filter(|(_, window_id, _, command)| {
+            !(initial_ids.contains(window_id)
+                && matches!(command, crate::app::window_state::Command::Visible(_)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -316,6 +394,40 @@ mod tests {
         pw.owner = owner;
         pw.creation_order = creation_order;
         pw
+    }
+
+    #[test]
+    fn initial_visibility_commands_wait_for_the_first_draw() {
+        let initial = test_window_id(1);
+        let existing = test_window_id(2);
+        let batch = vec![
+            (
+                1,
+                initial,
+                10,
+                crate::app::window_state::Command::Visible(true),
+            ),
+            (
+                2,
+                existing,
+                20,
+                crate::app::window_state::Command::Visible(false),
+            ),
+            (
+                3,
+                initial,
+                10,
+                crate::app::window_state::Command::Title("early".into()),
+            ),
+        ];
+        let planned = defer_initial_visibility(batch, &std::collections::HashSet::from([initial]));
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].1, existing);
+        assert_eq!(planned[1].1, initial);
+        assert!(matches!(
+            planned[1].3,
+            crate::app::window_state::Command::Title(_)
+        ));
     }
 
     #[test]

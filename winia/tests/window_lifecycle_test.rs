@@ -330,6 +330,108 @@ fn an_empty_snapshot_clears_the_previous_persisted_state() {
 }
 
 #[test]
+fn commands_queued_before_realization_apply_before_the_first_frame() {
+    let mut fixture = Fixture::spawn("initial-commands", "initial-commands");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(
+        status.is_some(),
+        "the initial-commands fixture should finish"
+    );
+    let text = fixture.text();
+    assert!(text.contains("initial-title=early title"), "{text:?}");
+    assert!(text.contains("initial-size=(640.0, 480.0)"), "{text:?}");
+    assert!(text.contains("initial-visible=false"), "{text:?}");
+    assert!(text.contains("initial-realized=true"), "{text:?}");
+}
+
+#[test]
+fn destroying_before_realization_skips_content_but_runs_on_close() {
+    let mut fixture = Fixture::spawn("initial-destroy", "initial-destroy");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(
+        status.is_some(),
+        "the initial-destroy fixture should finish"
+    );
+    let text = fixture.text();
+    assert!(text.contains("initial-on-close"), "{text:?}");
+    assert!(!text.contains("initial-content-composed"), "{text:?}");
+}
+
+#[test]
+fn a_window_title_read_recomposes_without_a_manual_refresh() {
+    let mut fixture = Fixture::spawn("reactive-title", "reactive-title");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the reactive-title fixture should finish");
+    assert!(
+        fixture.text().contains("reactive-title=reactive title"),
+        "{:?}",
+        fixture.text()
+    );
+}
+
+#[test]
+fn a_window_size_read_recomposes_without_a_manual_refresh() {
+    let mut fixture = Fixture::spawn("reactive-size", "reactive-size");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the reactive-size fixture should finish");
+    assert!(
+        fixture.text().contains("reactive-size=(560.0, 360.0)"),
+        "{:?}",
+        fixture.text()
+    );
+}
+
+#[test]
+fn an_existing_windows_command_runs_before_a_new_roots_first_frame() {
+    let mut fixture = Fixture::spawn("existing-command-new-root", "existing-command-new-root");
+    let status = fixture.wait(Duration::from_secs(10));
+    assert!(status.is_some(), "the ordering fixture should finish");
+    let text = fixture.text();
+    let closed = text.find("first-closed");
+    let composed = text.find("second-composed");
+    assert!(closed.is_some() && composed.is_some(), "{text:?}");
+    assert!(closed.unwrap() < composed.unwrap(), "{text:?}");
+}
+
+#[test]
+fn destroying_before_first_content_does_not_clear_persisted_state() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch_dir("persist-initial-destroy");
+    let out = dir.join("out.txt");
+    let mut port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+    let mut run = |mode: &str| {
+        let _ = std::fs::remove_file(&out);
+        let mut child = Command::new(fixture_exe())
+            .arg("window_lifecycle")
+            .env("WINDOW_FIXTURE_MODE", mode)
+            .env("WINDOW_FIXTURE_OUT", &out)
+            .env("WINDOW_FIXTURE_STATE", dir.join("state"))
+            .env("WINIA_DEBUG_PORT", port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn persist-initial-destroy run");
+        port += 1;
+        let status = child.wait().expect("persist-initial-destroy run");
+        assert!(status.success(), "{mode} failed: {status:?}");
+        std::fs::read_to_string(&out).unwrap_or_default()
+    };
+
+    assert!(run("persist").contains("counter=0"));
+    let destroyed = run("persist-initial-destroy");
+    assert!(destroyed.contains("initial-on-close"), "{destroyed:?}");
+    assert!(
+        !destroyed.contains("initial-content-composed"),
+        "{destroyed:?}"
+    );
+    assert!(
+        run("persist").contains("counter=1"),
+        "pre-content destruction published an empty snapshot"
+    );
+}
+
+#[test]
 fn a_keyed_window_restores_its_saved_state_across_runs() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch_dir("persist");

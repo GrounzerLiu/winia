@@ -29,7 +29,11 @@ fn append_out(text: &str) {
 
 pub fn main() {
     let mode = std::env::var("WINDOW_FIXTURE_MODE").unwrap_or_default();
-    if mode == "persist" || mode == "persist-again" || mode == "persist-clear" {
+    if mode == "persist"
+        || mode == "persist-again"
+        || mode == "persist-clear"
+        || mode == "persist-initial-destroy"
+    {
         // Persistence is opt-in; the test points this at a scratch directory.
         if let Ok(dir) = std::env::var("WINDOW_FIXTURE_STATE") {
             winia::runtime::saveable::persist::set_store(Some(
@@ -49,6 +53,9 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     let mode = mode.to_owned();
     let mode_for_handler = mode.clone();
     let mode_for_close = mode.clone();
+    let mode_for_on_close = mode.clone();
+    let declare_second = ctx.remember(|| false);
+    let trigger_second = declare_second.clone();
     let title = if mode == "empty-title" {
         ""
     } else {
@@ -64,6 +71,16 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 id.destroy();
             }
         })
+        .on_close(move || {
+            if mode_for_on_close == "initial-destroy"
+                || mode_for_on_close == "persist-initial-destroy"
+            {
+                append_out("initial-on-close\n");
+            }
+            if mode_for_on_close == "existing-command-new-root" {
+                append_out("first-closed\n");
+            }
+        })
         .build(ctx, move |ctx| {
             let id = ctx.window_id();
             match mode_for_close.as_str() {
@@ -76,6 +93,19 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "content-update" => content_update_scenario(ctx),
                 "pending-child-close" => pending_child_close_scenario(ctx, id),
                 "empty-title" => empty_title_scenario(ctx, id),
+                "initial-commands" => initial_commands_scenario(ctx, id),
+                "initial-destroy" | "persist-initial-destroy" => initial_destroy_scenario(ctx, id),
+                "reactive-title" => reactive_title_scenario(ctx, id),
+                "reactive-size" => reactive_size_scenario(ctx, id),
+                "existing-command-new-root" => {
+                    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+                    if !once.get() {
+                        once.set(true);
+                        let trigger = trigger_second.clone();
+                        winia::effect::side_effect(ctx, move || trigger.set(true));
+                    }
+                    Text::new("first").build(ctx);
+                }
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 "persist-clear" => persist_clear_scenario(ctx, id),
                 other => {
@@ -87,6 +117,70 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     if mode == "empty-title" {
         append_out(&format!("declared-title={}\n", declared_id.state().title()));
     }
+    if mode == "initial-commands" {
+        declared_id.state().set_title("early title");
+        declared_id.state().set_size(640.0, 480.0);
+        declared_id.state().set_visible(false);
+    }
+    if mode == "initial-destroy" || mode == "persist-initial-destroy" {
+        declared_id.destroy();
+    }
+    if mode == "existing-command-new-root" && declare_second.get() {
+        // Same root recomposition: the existing window's command is submitted first, then a new
+        // root window is declared. Its first frame must not jump ahead of the older command.
+        declared_id.destroy();
+        Window::new().title("second root").build(ctx, |ctx| {
+            append_out("second-composed\n");
+            Text::new("second").build(ctx);
+            std::process::exit(0);
+        });
+    }
+}
+
+fn initial_commands_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let state = id.state();
+    append_out(&format!(
+        "initial-title={}\ninitial-size={:?}\ninitial-visible={}\ninitial-realized={}\n",
+        state.title(),
+        state.size(),
+        state.visible(),
+        id.is_realized(),
+    ));
+    std::process::exit(0);
+}
+
+fn initial_destroy_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    append_out("initial-content-composed\n");
+    Text::new("unexpected").build(ctx);
+    let _ = id;
+}
+
+fn reactive_title_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let title = id.state().title();
+    if title == "reactive title" {
+        append_out("reactive-title=reactive title\n");
+        std::process::exit(0);
+    }
+    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !once.get() {
+        once.set(true);
+        winia::effect::side_effect(ctx, move || id.state().set_title("reactive title"));
+    }
+    Text::new("title").build(ctx);
+}
+
+fn reactive_size_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let size = id.state().size();
+    if (size.0 - 560.0).abs() < 1.0 && (size.1 - 360.0).abs() < 1.0 {
+        append_out("reactive-size=(560.0, 360.0)\n");
+        std::process::exit(0);
+    }
+    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !once.get() {
+        once.set(true);
+        winia::effect::side_effect(ctx, move || id.state().set_size(560.0, 360.0));
+    }
+    Text::new("size").build(ctx);
 }
 
 fn size_scenario(ctx: &mut ComposeCtx, id: WindowId) {

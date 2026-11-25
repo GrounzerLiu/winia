@@ -42,10 +42,8 @@ pub fn main() {
 #[composable]
 fn app(ctx: &mut ComposeCtx) {
     let show_second = ctx.remember(|| false);
-    let refresh = ctx.remember(|| 0u32);
     let veto_close = ctx.remember(|| false);
     let body_show = show_second.clone();
-    let body_refresh = refresh.clone();
     let body_veto = veto_close.clone();
     let handler_veto = veto_close.clone();
     Window::new()
@@ -63,10 +61,9 @@ fn app(ctx: &mut ComposeCtx) {
         })
         .build(ctx, move |ctx| {
             let show = body_show.clone();
-            let refresh = body_refresh.clone();
             let veto = body_veto.clone();
             settings::shell("Window API", ctx, move |ctx, padding| {
-                body(ctx, padding, show, refresh, veto);
+                body(ctx, padding, show, veto);
             });
         });
 
@@ -74,28 +71,24 @@ fn app(ctx: &mut ComposeCtx) {
     // multi_window = false, so it keeps one window there.
     #[cfg(not(target_os = "android"))]
     if show_second.get() {
-        second_window(ctx, show_second.clone(), refresh.clone());
+        second_window(ctx, show_second.clone());
     }
 }
 
 #[composable]
-fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>, refresh: State<u32>) {
+fn second_window(ctx: &mut ComposeCtx, show_second: State<bool>) {
     let close_show = show_second.clone();
-    let close_refresh = refresh.clone();
     let body_show = show_second.clone();
-    let body_refresh = refresh.clone();
     Window::new()
         .title("Window API demo — second window")
         .size(620.0, 480.0)
         .on_close_requested(move |_id, _reason| {
             close_show.set(false);
-            close_refresh.set(close_refresh.get() + 1);
         })
         .build(ctx, move |ctx| {
             let show = body_show.clone();
-            let refresh = body_refresh.clone();
             settings::shell("Second window", ctx, move |ctx, padding| {
-                second_body(ctx, padding, show, refresh);
+                second_body(ctx, padding, show);
             });
         });
 }
@@ -105,7 +98,6 @@ fn body(
     ctx: &mut ComposeCtx,
     scaffold: ScaffoldContentPadding,
     show_second: State<bool>,
-    refresh: State<u32>,
     veto_close: State<bool>,
 ) {
     let id = ctx.window_id();
@@ -122,9 +114,6 @@ fn body(
         let runs = runs.clone();
         winia::effect::side_effect(ctx, move || runs.set(runs.get() + 1));
     }
-
-    // Reading the tick is what refreshes the readouts after a button changes a window attribute.
-    let _ = refresh.get();
 
     let size = state.size();
     let position = state.position();
@@ -186,21 +175,15 @@ fn body(
                     Button::filled()
                         .enabled(caps.multi_window && !multi_open)
                         .on_click({
-                            clone!(show_second, refresh);
-                            move || {
-                                show_second.set(true);
-                                refresh.set(refresh.get() + 1);
-                            }
+                            clone!(show_second);
+                            move || show_second.set(true)
                         })
                         .build(ctx, |ctx| Text::new("Open second window").build(ctx));
                     Button::outlined()
                         .enabled(multi_open)
                         .on_click({
-                            clone!(show_second, refresh);
-                            move || {
-                                show_second.set(false);
-                                refresh.set(refresh.get() + 1);
-                            }
+                            clone!(show_second);
+                            move || show_second.set(false)
                         })
                         .build(ctx, |ctx| Text::new("Close second window").build(ctx));
                 });
@@ -226,42 +209,32 @@ fn body(
                 Row::new().spacing(8.0).build(ctx, |ctx| {
                     Button::filled()
                         .on_click({
-                            clone!(state, refresh);
-                            move || {
-                                state.set_title("Window API demo — retitled");
-                                refresh.set(refresh.get() + 1);
-                            }
+                            clone!(state);
+                            move || state.set_title("Window API demo — retitled")
                         })
                         .build(ctx, |ctx| Text::new("Retitle").build(ctx));
                     Button::filled_tonal()
                         .on_click({
-                            clone!(state, refresh);
-                            move || {
-                                state.set_size(size.0 + 80.0, size.1 + 40.0);
-                                refresh.set(refresh.get() + 1);
-                            }
+                            clone!(state);
+                            move || state.set_size(size.0 + 80.0, size.1 + 40.0)
                         })
                         .build(ctx, |ctx| Text::new("Grow").build(ctx));
                     Button::outlined()
                         .on_click({
-                            clone!(state, refresh);
-                            move || {
-                                state.set_resizable(!resizable);
-                                refresh.set(refresh.get() + 1);
-                            }
+                            clone!(state);
+                            move || state.set_resizable(!resizable)
                         })
                         .build(ctx, |ctx| Text::new("Toggle resizable").build(ctx));
                     Button::outlined()
                         .enabled(caps.placement)
                         .on_click({
-                            clone!(state, refresh);
+                            clone!(state);
                             move || {
                                 let next = match placement {
                                     WindowPlacement::Fullscreen => WindowPlacement::Windowed,
                                     _ => WindowPlacement::Fullscreen,
                                 };
                                 state.set_placement(next);
-                                refresh.set(refresh.get() + 1);
                             }
                         })
                         .build(ctx, |ctx| Text::new("Toggle fullscreen").build(ctx));
@@ -321,12 +294,7 @@ fn body(
 }
 
 #[composable]
-fn second_body(
-    ctx: &mut ComposeCtx,
-    scaffold: ScaffoldContentPadding,
-    show_second: State<bool>,
-    refresh: State<u32>,
-) {
+fn second_body(ctx: &mut ComposeCtx, scaffold: ScaffoldContentPadding, show_second: State<bool>) {
     let id = ctx.window_id();
     let state = id.state();
     let caps = id.capabilities();
@@ -360,11 +328,8 @@ fn second_body(
                 );
                 Button::filled()
                     .on_click({
-                        clone!(refresh, show_second);
-                        move || {
-                            show_second.set(false);
-                            refresh.set(refresh.get() + 1);
-                        }
+                        clone!(show_second);
+                        move || show_second.set(false)
                     })
                     .build(ctx, |ctx| Text::new("Close this window").build(ctx));
                 Text::new(

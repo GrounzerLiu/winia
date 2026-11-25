@@ -1,6 +1,47 @@
 use super::*;
 use crate::layout::node::ImeEdit;
 
+#[derive(Debug)]
+enum PlannedCommand {
+    Apply(crate::app::window_state::Command),
+    Notify(crate::app::window_state::CloseReason),
+    Close,
+}
+
+/// Plan one globally ordered batch without touching the platform. A terminal command closes at its
+/// submitted position and drops later commands for that window. Handler-enqueued commands are not
+/// part of this batch and therefore run on the next frame.
+fn plan_command_batch(
+    mut batch: Vec<(u64, u64, crate::app::window_state::Command)>,
+) -> Vec<(u64, u64, PlannedCommand)> {
+    use crate::app::window_state::{CloseReason, Command, WindowId};
+    batch.sort_by_key(|(sequence, _, _)| *sequence);
+    let mut closed = std::collections::HashSet::new();
+    let mut planned = Vec::with_capacity(batch.len());
+    for (sequence, raw, command) in batch {
+        if closed.contains(&raw) {
+            continue;
+        }
+        let action = match command {
+            Command::CloseRequest(reason) => {
+                if crate::app::window_state::close_handler(WindowId::new(raw)).is_some() {
+                    PlannedCommand::Notify(reason)
+                } else {
+                    closed.insert(raw);
+                    PlannedCommand::Close
+                }
+            }
+            Command::Destroy => {
+                closed.insert(raw);
+                PlannedCommand::Close
+            }
+            other => PlannedCommand::Apply(other),
+        };
+        planned.push((sequence, raw, action));
+    }
+    planned
+}
+
 impl AppState {
     /// The one close pipeline.
     ///
@@ -51,57 +92,34 @@ impl AppState {
 
     /// Apply the queued `WindowState` writes.
     ///
-    /// Runs once per frame before that frame renders, so a setter called during composition never
-    /// touches the platform window from inside the composition. Commands are applied in submission
-    /// order, one window at a time.
+    /// Runs once per frame before that frame renders. Commands from all windows share one submission
+    /// sequence; a terminal command closes at its submitted position and drops later commands for
+    /// that window. Commands enqueued by a close handler belong to the next batch.
     fn apply_window_commands(&mut self, event_loop: &dyn ActiveEventLoop) {
-        use crate::app::window_state::Command;
+        self.apply_pending_content();
+        self.observe_platform_window_states();
 
-        fn apply(window: &dyn winit::window::Window, command: crate::app::window_state::Command) {
-            use crate::app::window_state::{Command, WindowPlacement, WindowPosition};
-            match command {
-                Command::Size(width, height) => {
-                    let _ = window.request_surface_size(winit::dpi::Size::Logical(
-                        winit::dpi::LogicalSize::new(width as f64, height as f64),
-                    ));
+        let mut batch = Vec::new();
+        for (winit_id, pw) in &self.windows {
+            if let Some(raw) = pw.created_id {
+                let public_id = crate::app::window_state::WindowId::new(raw);
+                for queued in crate::app::window_state::take_queued_commands(public_id) {
+                    batch.push((queued.sequence, *winit_id, raw, queued.command));
                 }
-                Command::Position(WindowPosition::At(x, y)) => {
-                    window.set_outer_position(winit::dpi::Position::Logical(
-                        winit::dpi::LogicalPosition::new(x as f64, y as f64),
-                    ));
-                }
-                Command::Position(WindowPosition::Default) => {}
-                Command::Placement(placement) => match placement {
-                    WindowPlacement::Windowed => {
-                        window.set_fullscreen(None);
-                        window.set_maximized(false);
-                    }
-                    WindowPlacement::Maximized => window.set_maximized(true),
-                    WindowPlacement::Fullscreen => {
-                        window.set_fullscreen(Some(winit::monitor::Fullscreen::Borderless(None)));
-                    }
-                    WindowPlacement::Minimized => window.set_minimized(true),
-                },
-                Command::Visible(visible) => window.set_visible(visible),
-                Command::Title(title) => window.set_title(&title),
-                Command::Resizable(resizable) => window.set_resizable(resizable),
-                // Handled by the caller before a command reaches the platform: a close decides
-                // whether the window should exist at all, it is not a property write.
-                Command::CloseRequest(_) | Command::Destroy => {}
             }
         }
+        batch.sort_by_key(|(sequence, _, _, _)| *sequence);
+        self.apply_command_batch(event_loop, batch);
+    }
 
-        let mut to_close: Vec<winit::window::WindowId> = Vec::new();
-        let windows: Vec<(winit::window::WindowId, u64, bool)> = self
+    fn apply_pending_content(&mut self) {
+        let windows: Vec<(winit::window::WindowId, u64)> = self
             .windows
             .iter()
-            .filter_map(|(id, pw)| pw.created_id.map(|raw| (*id, raw, pw.focused_id.is_some())))
+            .filter_map(|(id, pw)| pw.created_id.map(|raw| (*id, raw)))
             .collect();
-        for (winit_id, raw, focused) in windows {
+        for (winit_id, raw) in windows {
             let public_id = crate::app::window_state::WindowId::new(raw);
-            // Focus comes from whether the window holds a focused node: this winit fork has no
-            // window-focus event, so that is the only signal the loop actually has.
-            crate::app::window_state::observed_focus(public_id, focused);
             if let Some(content) = crate::app::window_state::take_pending_content(public_id)
                 && let Some(pw) = self.windows.get_mut(&winit_id)
             {
@@ -112,45 +130,88 @@ impl AppState {
                     sw.request_redraw();
                 }
             }
-            let commands = crate::app::window_state::take_commands(public_id);
-            if commands.is_empty() {
-                continue;
-            }
-            let mut platform = Vec::new();
-            for command in commands {
-                match command {
-                    Command::CloseRequest(reason) => {
-                        // A registered handler is a veto point; without one the window closes.
-                        match crate::app::window_state::close_handler(
-                            crate::app::window_state::WindowId::new(raw),
-                        ) {
-                            Some(notify) => {
-                                notify(crate::app::window_state::WindowId::new(raw), reason)
-                            }
-                            None => to_close.push(winit_id),
-                        }
-                    }
-                    Command::Destroy => to_close.push(winit_id),
-                    other => platform.push(other),
-                }
-            }
-            if platform.is_empty() {
-                continue;
-            }
-            let Some(pw) = self.windows.get_mut(&winit_id) else {
+        }
+    }
+
+    /// Winit 0.31 has no maximize/minimize/fullscreen events. Poll the cheap platform getters once
+    /// per event-loop pass; State deduplicates unchanged observations.
+    fn observe_platform_window_states(&mut self) {
+        let windows: Vec<(winit::window::WindowId, u64, f64)> = self
+            .windows
+            .iter()
+            .filter_map(|(id, pw)| pw.created_id.map(|raw| (*id, raw, pw.scale_factor)))
+            .collect();
+        for (winit_id, raw, scale_factor) in windows {
+            let Some(pw) = self.windows.get(&winit_id) else {
                 continue;
             };
             let Some(skia) = pw.skia_window.as_ref() else {
                 continue;
             };
-            let window: &dyn winit::window::Window = &**skia;
-            for command in platform {
-                apply(window, command);
-            }
-            window.request_redraw();
+            crate::app::window_state::observe_platform_state(
+                &**skia,
+                crate::app::window_state::WindowId::new(raw),
+                scale_factor,
+            );
         }
-        for id in to_close {
-            self.close_window_now(event_loop, id);
+    }
+
+    pub(super) fn apply_command_batch(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        batch: Vec<(
+            u64,
+            winit::window::WindowId,
+            u64,
+            crate::app::window_state::Command,
+        )>,
+    ) {
+        use crate::app::window_state::Command;
+        let targets: std::collections::HashMap<u64, winit::window::WindowId> = self
+            .windows
+            .iter()
+            .filter_map(|(winit_id, pw)| pw.created_id.map(|raw| (raw, *winit_id)))
+            .collect();
+        let planned = plan_command_batch(
+            batch
+                .into_iter()
+                .map(|(sequence, _, raw, command)| (sequence, raw, command))
+                .collect(),
+        );
+        let mut redraw = std::collections::HashSet::new();
+        for (_, raw, action) in planned {
+            let Some(&winit_id) = targets.get(&raw) else {
+                continue;
+            };
+            if !self.windows.contains_key(&winit_id) {
+                continue;
+            }
+            let public_id = crate::app::window_state::WindowId::new(raw);
+            match action {
+                PlannedCommand::Apply(command) => {
+                    let Some(pw) = self.windows.get_mut(&winit_id) else {
+                        continue;
+                    };
+                    let Some(skia) = pw.skia_window.as_ref() else {
+                        continue;
+                    };
+                    crate::app::window_state::apply_command(&**skia, command);
+                    redraw.insert(winit_id);
+                }
+                PlannedCommand::Notify(reason) => {
+                    if let Some(notify) = crate::app::window_state::close_handler(public_id) {
+                        notify(public_id, reason);
+                    }
+                }
+                PlannedCommand::Close => self.close_window_now(event_loop, winit_id),
+            }
+        }
+        for winit_id in redraw {
+            if let Some(pw) = self.windows.get(&winit_id)
+                && let Some(ref skia) = pw.skia_window
+            {
+                skia.request_redraw();
+            }
         }
     }
 
@@ -746,11 +807,26 @@ impl AppState {
             // Losing the OS focus cancels whatever pointer gesture was in flight. Without this, the
             // stale down/tracker/drag_scroll survives the focus switch, and the next click can be read
             // as the tail of the old gesture (a fling lands the scroll at the end of the content).
-            WindowEvent::Focused(false) => {
-                gesture::cancel_pointer_gesture(pw);
+            WindowEvent::Focused(focused) => {
+                if let Some(raw) = pw.created_id {
+                    crate::app::window_state::observed_focus(
+                        crate::app::window_state::WindowId::new(raw),
+                        focused,
+                    );
+                }
+                if !focused {
+                    gesture::cancel_pointer_gesture(pw);
+                }
             }
             // Moving across screens: Moved fires at a high rate while dragging — debounced inside with 300 ms.
-            WindowEvent::Moved { .. } => {
+            WindowEvent::Moved(position) => {
+                if let Some(raw) = pw.created_id {
+                    let logical = position.to_logical::<f32>(pw.scale_factor);
+                    crate::app::window_state::observed_position(
+                        crate::app::window_state::WindowId::new(raw),
+                        crate::app::window_state::WindowPosition::At(logical.x, logical.y),
+                    );
+                }
                 pw.refresh_frame_interval();
             }
             WindowEvent::ThemeChanged(_) => {
@@ -759,6 +835,13 @@ impl AppState {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
+                if let (Some(raw), Some(skia)) = (pw.created_id, pw.skia_window.as_ref()) {
+                    crate::app::window_state::observe_platform_state(
+                        &**skia,
+                        crate::app::window_state::WindowId::new(raw),
+                        scale_factor,
+                    );
+                }
                 #[cfg(target_os = "android")]
                 pw.sync_android_insets();
                 // Switching monitors may change the scale — refresh the frame interval too (debounced inside the method).
@@ -1271,6 +1354,12 @@ impl AppState {
                         if let Some(s) = pw.window_size_state.borrow().as_ref() {
                             s.set((l.width, l.height));
                         }
+                        if let Some(created_id) = pw.created_id {
+                            crate::app::window_state::observed_size(
+                                crate::app::window_state::WindowId::new(created_id),
+                                (l.width, l.height),
+                            );
+                        }
                     }
                 }
                 // Advance animations (redundant with new_events — a Windows drag-resize runs a modal
@@ -1762,5 +1851,84 @@ impl AppState {
                 sw.request_redraw();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::window_state::{CloseReason, Command, WindowId, WindowSeed};
+
+    fn fresh(raw: u64) -> WindowId {
+        let id = WindowId::new(raw);
+        crate::app::window_state::declare(id, WindowSeed::default());
+        id
+    }
+
+    #[test]
+    fn destroy_drops_later_commands_at_its_submitted_position() {
+        let id = fresh(9_301);
+        let planned = plan_command_batch(vec![
+            (1, id.raw(), Command::Destroy),
+            (2, id.raw(), Command::Title("too late".into())),
+        ]);
+        assert_eq!(planned.len(), 1);
+        assert!(matches!(planned[0].2, PlannedCommand::Close));
+        crate::app::window_state::forget(id);
+    }
+
+    #[test]
+    fn accepted_close_drops_later_commands() {
+        let id = fresh(9_302);
+        let planned = plan_command_batch(vec![
+            (1, id.raw(), Command::CloseRequest(CloseReason::Command)),
+            (2, id.raw(), Command::Visible(false)),
+        ]);
+        assert_eq!(planned.len(), 1);
+        assert!(matches!(planned[0].2, PlannedCommand::Close));
+        crate::app::window_state::forget(id);
+    }
+
+    #[test]
+    fn commands_from_multiple_windows_keep_global_submission_order() {
+        let a = fresh(9_304);
+        let b = fresh(9_305);
+        let planned = plan_command_batch(vec![
+            (30, b.raw(), Command::Visible(false)),
+            (10, a.raw(), Command::Title("first".into())),
+            (20, b.raw(), Command::Resizable(false)),
+        ]);
+        assert_eq!(planned.len(), 3);
+        assert_eq!(planned[0].1, a.raw());
+        assert_eq!(planned[1].1, b.raw());
+        assert_eq!(planned[2].1, b.raw());
+        crate::app::window_state::forget(a);
+        crate::app::window_state::forget(b);
+    }
+
+    #[test]
+    fn vetoed_close_keeps_later_commands() {
+        let id = WindowId::new(9_303);
+        crate::app::window_state::declare(
+            id,
+            WindowSeed {
+                on_close_requested: Some(std::rc::Rc::new(|_, _| {})),
+                ..WindowSeed::default()
+            },
+        );
+        let planned = plan_command_batch(vec![
+            (1, id.raw(), Command::CloseRequest(CloseReason::Command)),
+            (2, id.raw(), Command::Visible(false)),
+        ]);
+        assert_eq!(planned.len(), 2);
+        assert!(matches!(
+            planned[0].2,
+            PlannedCommand::Notify(CloseReason::Command)
+        ));
+        assert!(matches!(
+            planned[1].2,
+            PlannedCommand::Apply(Command::Visible(false))
+        ));
+        crate::app::window_state::forget(id);
     }
 }

@@ -1,6 +1,6 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: implemented, rev 3, 2026-11-19. All five phases are in the tree; the only sketched method
+> Status: implemented, rev 4, 2026-11-26. All five phases are in the tree; the only sketched method
 > that stayed on another surface is `WindowId::insets`, which is still `ctx.window_insets()` inside
 > window content. Section 14 records what landed and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
@@ -175,14 +175,21 @@ no lifetime rule.
 Methods rather than public `State` fields. A public field invites a write from anywhere, which is
 how ownership ambiguity starts; a method can carry a rule.
 
-**Placement is authoritative.** `size` and `position` are the remembered windowed geometry. While
-`placement` is `Fullscreen` or `Maximized`, `set_size` and `set_position` only update that memory
-and take effect when the window returns to `Windowed`; the call logs a debug line.
+**Requested and observed placement are separate.** `set_placement` records application intent and
+queues a platform command; `placement()` reports the platform observation. `size` and `position`
+are observed windowed geometry. While either requested or observed placement is not `Windowed`,
+`set_size` and `set_position` defer the request. Returning to `Windowed` through application code
+or native chrome applies deferred geometry. `WindowPosition::Default` clears a deferred position
+request; there is no portable API to reset an already-applied position.
+
+**Reactive reads.** Every `WindowState` getter, `WindowId::is_realized`, `WindowId::is_focused`, and
+`ctx.windows()` reads a tracked snapshot. Platform observations and application-owned writes notify
+the reading Composer automatically; callers do not need a manual refresh tick.
 
 **Platform interaction.** There is no gesture-level suppression yet: a setter always queues a
-command, and the platform's next size/position observation overwrites the local projection. A future
-interaction gate must be documented here before it is implemented; the earlier claim that writes are
-dropped while the user drags an edge described intended, not actual, behaviour.
+command. Size, position, placement, and OS focus are observed back from the platform. Winit 0.31 has
+no maximize/minimize/fullscreen events, so placement and focus are polled once per event-loop pass;
+unchanged observations are deduplicated by State.
 
 ## 7. Reaching the window from content
 
@@ -275,27 +282,34 @@ set and close every removed id in the same pass.
 ## 10. The command queue
 
 ```
-during compose:   state.set_* / id.close / id.destroy  -> queued
+during compose:   state.set_* / id.close / id.destroy  -> globally sequenced
 end of compose:   declaration additions and removals    -> queued
-frame end:        drain in submission order -> apply to the platform
-                  -> consistency events queue back into the read projections
+before first frame:
+                  create hidden -> apply all pre-realization commands in global order
+                  -> compose/draw -> reveal only if the applied visibility request allows it
+frame end:        drain remaining commands in global submission order
+                  -> terminal close/destroy drops later commands for that window
+                  -> handler-enqueued commands belong to the next frame
+                  -> platform observations update tracked read projections
 ```
 
-One queue means one ordering: whether a close submitted this frame happens now or next frame is
-never a question. The overlay host already works this way (`request_back_close` and
-`flush_back_close_requests` in `winia/src/app/overlay_host.rs`), so this is an existing convention
-rather than a new mechanism.
+Commands carry a monotonic submission sequence, so batches drained from multiple windows share one
+ordering. A terminal command closes at its submitted position and drops later commands for that
+window. A close handler is a veto point; commands it enqueues are processed in the next batch. The
+overlay host already works this way (`request_back_close` and `flush_back_close_requests` in
+`winia/src/app/overlay_host.rs`), so this is an existing convention rather than a new mechanism.
 
 ## 11. One authority per attribute
 
 | Attribute | Writer | Direction |
 | --- | --- | --- |
 | existence | the declaration, or `destroy()` | application |
-| visible | `WindowState::set_visible` | application to platform |
-| placement | `WindowState::set_placement`; authoritative | application to platform |
+| visible | `WindowState::set_visible` | application request to platform |
+| placement request | `WindowState::set_placement` | application to platform |
+| placement observation | platform getters/events | platform to application, read-only |
 | size, position while `Windowed` | platform during interaction, application otherwise | split by interaction |
 | size, position in other placements | application (remembered only) | application |
-| focused | platform | platform to application, read-only |
+| focused | OS focus event and `has_focus()` | platform to application, read-only |
 | title, resizable | `WindowState` setters | application to platform |
 | persistence key | `.key(..)` at declaration | application |
 
@@ -386,18 +400,11 @@ The back pump now takes its unfocused fallback from the recorded window list, so
 Phase 5 is in the tree. A probe declared a second window behind a root `State`, opened it from a side
 effect, then cleared the state: debug-server `t` showed two windows after the open and one after the
 close, with no panic. Window-content declarations now use a pending-id set, so removing two in one
-pass closes both instead of only the last id. `mark_content_dirty` rebuilds the remaining windows after
-a sibling closes, which is what makes a close-button/label update without pointer motion. It is not redundant with
-the `State` subscription: `ctx.windows()`, `id.is_realized()` and `id.state()` are plain calls that
-subscribe to nothing, so a group reading only those keeps its first value when the `State`-driven
-recompose skips it. `tests/ui_fixtures/window_lifecycle.rs` pins that: with the rebuild removed the
-window-list label keeps the old count and `closing_a_sibling_window_reruns_the_remaining_content`
-fails. It is not
-redundant with the `State` subscription: `ctx.windows()`, `id.is_realized()` and `id.state()` are
-plain calls that subscribe to nothing, so a group that reads only those keeps its first value when
-the `State`-driven recompose skips it. `tests/ui_fixtures/window_lifecycle.rs` pins that: with the
-rebuild removed the window-list label stays at the old count and
-`closing_a_sibling_window_reruns_the_remaining_content` fails.
+pass closes both instead of only the last id. `mark_content_dirty` still rebuilds the remaining
+windows after a sibling closes so non-reactive captured labels update in the same pass. Tracked reads
+such as `ctx.windows()`, `id.is_realized()`, and `WindowState` getters now notify their readers
+independently; `closing_a_sibling_window_reruns_the_remaining_content` remains a regression for the
+whole-content rebuild path.
 
 These probes are checked in now: `tests/window_lifecycle_test.rs` drives `fixture_all
 window_lifecycle` through live size echo, close veto/accept, `LastWindowPolicy`, and state restored
@@ -409,9 +416,9 @@ Two facts found while implementing, worth remembering for future window work:
 - A composer carries two id spaces: `window_id` is the platform handle (frame clocks, focus,
   accessibility) while the declaration mints its own `created_id`. `ctx.window_id()` must report the
   latter; conflating them made the first cut look up a state table entry that did not exist.
-- This winit fork exposes no window-focus event, so `is_focused()` reports whether the window held a
-  focused node as of the last frame. That is the signal the loop actually has, and it is what the
-  back pump already uses to choose a target window.
+- This winit fork exposes `WindowEvent::Focused(bool)` and `Window::has_focus()`. `is_focused()`
+  reports OS keyboard focus; content-node focus remains a separate internal signal used by the back
+  pump and input routing.
 
 ## 15. Decisions, removed surface, rejected alternatives
 
@@ -422,7 +429,7 @@ Decisions:
 | Last-window policy | `Exit` by default, triggered only by destruction | hiding is reversible; the framework must not end a process the application did not destroy. `StayResident` for tray applications |
 | Hidden windows on exit | snapshotted | hiding means keep; losing state because a panel was collapsed an hour ago is data loss |
 | Windows created on demand | a declaration behind a state flag | one creation entry; the lifetime rule stays visible in the tree |
-| Persistence across a re-open | geometry only | a restored window needs content, which is application code; restoring the frame is the useful half |
+| Persistence across a re-open | saveable registry only; geometry persistence remains backlog | content is application code, and observed geometry is not yet persisted |
 | Naming | no `host`, no `attach` | `attach` already means attaching to a platform object (`WiniaBack.attach`); a second meaning would collide |
 
 Surface removed in rev 2, with the reason:
