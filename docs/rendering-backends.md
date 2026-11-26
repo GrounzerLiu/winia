@@ -13,12 +13,16 @@ selection layer are no longer part of the workspace. The `vulkan`/`gl` feature f
   `wgpu` dependency.
 - This Skia variant has no published prebuilt archive. The first build downloads Skia and Dawn's
   WebGPU headers and compiles from source, so it requires network access, Python, Ninja, LLVM
-  (`clang-cl`) and the platform C++ toolchain. Set `LLVM_HOME` to the LLVM installation; if the
-  installed MSVC STL is newer than the selected Clang, set `CC` and `CXX` to that `clang-cl.exe` as
-  well. On Windows the build unpacks and patches Skia inside the cargo registry source directory,
-  so `CARGO_HOME` must be writable; use a dedicated writable
-  cargo home when the shared registry cache is restricted. Keep `CARGO_HOME` and
-  `CARGO_TARGET_DIR` short on Windows: Skia's dependency tree can exceed the legacy path limit.
+  (`clang-cl`) and the platform C++ toolchain.
+- No winia-specific environment variables are required. Cargo uses its normal defaults, and rust-skia
+  detects LLVM in the standard installation locations. The following variables are optional fallbacks:
+  - `LLVM_HOME`: set it only when LLVM auto-detection fails.
+  - `CC` / `CXX`: set them to `clang-cl.exe` only when the default C++ compiler is incompatible.
+  - `CARGO_HOME`: point it at another writable directory only when the default registry cache is not
+    writable; rust-skia unpacks and patches Skia inside that source directory on Windows.
+  - `CARGO_TARGET_DIR`: optionally shorten it on Windows when the default target path makes Skia's
+    dependency tree exceed the legacy path limit.
+  - `HTTP_PROXY` / `HTTPS_PROXY`: needed only when the network requires a proxy.
 
 ## Frame lifecycle
 
