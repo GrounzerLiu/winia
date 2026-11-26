@@ -526,4 +526,3 @@ Remaining validation is primarily native/platform integration: a Windows/macOS/L
 - `D:/Projects/winia/docs/saveable.md` - saveable registry and persistence semantics.
 - `D:/Projects/winia/docs/focus.md` - content focus behavior and `FocusRequester`.
 - `D:/Projects/winia/docs/insets-and-pull-to-refresh.md` - inset consumers and controller behavior.
-
