@@ -122,6 +122,14 @@ impl PerWindow {
                 saveable.insert(key, saved);
             }
         }
+        if crate::app::window_state::WindowCapabilities::platform().multi_window
+            && let (Some(key), Some(raw)) = (self.persist_key, self.created_id)
+            && let Some(geometry) = crate::app::window_state::capture_geometry(
+                crate::app::window_state::WindowId::new(raw),
+            )
+        {
+            crate::app::window_geometry::save(key, geometry);
+        }
         // Read the registration before `on_close`: its wrapper unregisters the id, so checking after
         // the callback would always say "not created" and leave `destroy()` without a tombstone.
         let created_id = self.created_id;

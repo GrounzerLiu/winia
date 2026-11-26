@@ -33,6 +33,8 @@ pub fn main() {
         || mode == "persist-again"
         || mode == "persist-clear"
         || mode == "persist-initial-destroy"
+        || mode == "geometry-save"
+        || mode == "geometry-restore"
     {
         // Persistence is opt-in; the test points this at a scratch directory.
         if let Ok(dir) = std::env::var("WINDOW_FIXTURE_STATE") {
@@ -130,6 +132,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 }
                 "persist" | "persist-again" => persist_scenario(ctx, id),
                 "persist-clear" => persist_clear_scenario(ctx, id),
+                "geometry-save" | "geometry-restore" => geometry_scenario(ctx, id, &mode_for_close),
                 other => {
                     append_out(&format!("unknown-mode={other}\n"));
                     std::process::exit(2);
@@ -476,6 +479,39 @@ fn persist_clear_scenario(ctx: &mut ComposeCtx, id: WindowId) {
         winia::effect::side_effect(ctx, move || id.destroy());
     }
     Text::new("clear").build(ctx);
+}
+
+fn geometry_scenario(ctx: &mut ComposeCtx, id: WindowId, mode: &str) {
+    let state = id.state();
+    let position_supported = id.capabilities().position;
+    if mode == "geometry-restore" {
+        append_out(&format!(
+            "restored-size={:?}\nrestored-position={:?}\nrestored-position-supported={}\n",
+            state.size(),
+            state.position(),
+            position_supported,
+        ));
+        std::process::exit(0);
+    }
+
+    let requested = ctx.remember(|| false);
+    if !requested.get() {
+        requested.set(true);
+        state.set_size(640.0, 480.0);
+        if position_supported {
+            state.set_position(WindowPosition::At(120.0, 80.0));
+        }
+    }
+    let finished = ctx.remember(|| false);
+    if !finished.get()
+        && state.size() == (640.0, 480.0)
+        && (!position_supported || state.position() == WindowPosition::At(120.0, 80.0))
+    {
+        finished.set(true);
+        append_out("geometry-saved\n");
+        winia::effect::side_effect(ctx, move || id.destroy());
+    }
+    Text::new("geometry").build(ctx);
 }
 
 fn persist_scenario(ctx: &mut ComposeCtx, id: WindowId) {

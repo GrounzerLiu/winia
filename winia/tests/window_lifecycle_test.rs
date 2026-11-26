@@ -557,3 +557,61 @@ fn a_keyed_window_restores_its_saved_state_across_runs() {
         "second run did not restore the saved counter: {second_text:?}"
     );
 }
+
+#[test]
+fn a_keyed_window_restores_its_geometry_across_runs() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch_dir("persist-geometry");
+    let out = dir.join("out.txt");
+    let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+    let mut first = Command::new(fixture_exe())
+        .arg("window_lifecycle")
+        .env("WINDOW_FIXTURE_MODE", "geometry-save")
+        .env("WINDOW_FIXTURE_OUT", &out)
+        .env("WINDOW_FIXTURE_STATE", dir.join("state"))
+        .env("WINIA_DEBUG_PORT", port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn first geometry run");
+    let status = first.wait().expect("first geometry run");
+    assert!(status.success(), "first run failed: {status:?}");
+    let first_text = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(
+        first_text.contains("geometry-saved"),
+        "first run: {first_text:?}"
+    );
+
+    let _ = std::fs::remove_file(&out);
+    let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+    let mut second = Command::new(fixture_exe())
+        .arg("window_lifecycle")
+        .env("WINDOW_FIXTURE_MODE", "geometry-restore")
+        .env("WINDOW_FIXTURE_OUT", &out)
+        .env("WINDOW_FIXTURE_STATE", dir.join("state"))
+        .env("WINIA_DEBUG_PORT", port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn second geometry run");
+    let status = second.wait().expect("second geometry run");
+    assert!(status.success(), "second run failed: {status:?}");
+    let second_text = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(
+        second_text.contains("restored-size=(640.0, 480.0)"),
+        "second run did not restore size: {second_text:?}"
+    );
+    if second_text.contains("restored-position-supported=true") {
+        assert!(
+            second_text.contains("restored-position=At(120.0, 80.0)"),
+            "second run did not restore position: {second_text:?}"
+        );
+    } else {
+        assert!(
+            second_text.contains("restored-position=Default"),
+            "second run did not keep the platform position: {second_text:?}"
+        );
+    }
+}

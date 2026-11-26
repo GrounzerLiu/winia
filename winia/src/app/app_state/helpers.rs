@@ -118,11 +118,38 @@ impl AppState {
     fn create_hidden_window(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        pending: PendingWindow,
+        mut pending: PendingWindow,
     ) -> Option<(
         winit::window::WindowId,
         Option<crate::app::window_state::WindowId>,
     )> {
+        if crate::app::window_state::WindowCapabilities::platform().multi_window
+            && let Some(key) = pending.persist_key
+        {
+            let monitors: Vec<crate::app::window_geometry::MonitorBounds> = event_loop
+                .available_monitors()
+                .filter_map(|handle| {
+                    crate::app::window_geometry::MonitorBounds::from_handle(&handle)
+                })
+                .collect();
+            if let Some(geometry) = crate::app::window_geometry::restore(key, &monitors) {
+                pending.width = geometry.width;
+                pending.height = geometry.height;
+                pending.position = geometry
+                    .position
+                    .map(|position| {
+                        crate::app::window_state::WindowPosition::At(position.x, position.y)
+                    })
+                    .unwrap_or(crate::app::window_state::WindowPosition::Default);
+                pending.placement = geometry.placement;
+                if let Some(raw) = pending.created_id {
+                    crate::app::window_state::apply_geometry(
+                        crate::app::window_state::WindowId::new(raw),
+                        &geometry,
+                    );
+                }
+            }
+        }
         let mut a = winit::window::WindowAttributes::default();
         a.window_icon = crate::assets::window_icon();
         let title = if pending.title.is_empty() {

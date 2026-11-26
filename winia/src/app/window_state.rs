@@ -115,7 +115,8 @@ impl std::fmt::Debug for WindowId {
 }
 
 /// Where a window sits in the platform's stacking model.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WindowPlacement {
     Windowed,
     Maximized,
@@ -158,6 +159,23 @@ pub enum WindowEvent {
     InsetsChanged {
         insets: crate::window::insets::WindowInsets,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct GeometryPosition {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Versioned normal-window geometry stored under a declaration's persistence key.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct WindowGeometry {
+    pub version: u64,
+    pub width: f32,
+    pub height: f32,
+    pub position: Option<GeometryPosition>,
+    pub placement: WindowPlacement,
+    pub scale_factor: f32,
 }
 
 /// What the current platform can honour.
@@ -774,6 +792,9 @@ struct WindowCell {
     requested_placement: Cell<WindowPlacement>,
     /// Position request used to seed native creation before the platform reports an observation.
     requested_position: Cell<WindowPosition>,
+    /// Most recent windowed geometry, kept while another placement owns the native surface.
+    normal_size: Cell<(f32, f32)>,
+    normal_position: Cell<WindowPosition>,
     /// Last placement command handed to the platform, waiting for its observation.
     awaiting_placement: Cell<Option<WindowPlacement>>,
     /// Once an unconditional terminal command is queued, later setters are ignored.
@@ -816,6 +837,8 @@ impl WindowCell {
             snapshot: State::new(snapshot),
             requested_placement: Cell::new(seed.placement),
             requested_position: Cell::new(seed.position),
+            normal_size: Cell::new(seed.size),
+            normal_position: Cell::new(seed.position),
             awaiting_placement: Cell::new(None),
             terminal: Cell::new(false),
             pending: RefCell::new(Vec::new()),
@@ -913,6 +936,62 @@ pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut Compo
     with_cell(id, |cell| cell.pending_content.borrow_mut().take()).flatten()
 }
 
+/// Capture the normal-window geometry that should survive a close/reopen cycle.
+pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
+    with_cell(id, |cell| {
+        let snapshot = cell.snapshot.peek();
+        let placement = if snapshot.placement == WindowPlacement::Minimized {
+            WindowPlacement::Windowed
+        } else {
+            snapshot.placement
+        };
+        let position = match cell.normal_position.get() {
+            WindowPosition::At(x, y) => Some(GeometryPosition { x, y }),
+            WindowPosition::Default => None,
+        };
+        let (width, height) = cell.normal_size.get();
+        Some(WindowGeometry {
+            version: 1,
+            width,
+            height,
+            position,
+            placement,
+            scale_factor: snapshot.scale_factor,
+        })
+    })
+    .flatten()
+}
+
+/// Seed both the observable projection and the native-creation geometry request.
+pub(crate) fn apply_geometry(id: WindowId, geometry: &WindowGeometry) {
+    let position = geometry
+        .position
+        .map(|position| WindowPosition::At(position.x, position.y))
+        .unwrap_or(WindowPosition::Default);
+    with_cell(id, |cell| {
+        cell.snapshot.update(|snapshot| {
+            snapshot.size = (geometry.width, geometry.height);
+            snapshot.position = position;
+            snapshot.placement = geometry.placement;
+            snapshot.scale_factor = geometry.scale_factor;
+        });
+        cell.normal_size.set((geometry.width, geometry.height));
+        cell.normal_position.set(position);
+        cell.requested_position.set(position);
+        cell.requested_placement.set(geometry.placement);
+        cell.awaiting_placement.set(None);
+        if geometry.placement == WindowPlacement::Windowed {
+            cell.deferred_size.set(None);
+            cell.deferred_position.set(None);
+        } else {
+            cell.deferred_size
+                .set(Some((geometry.width, geometry.height)));
+            cell.deferred_position
+                .set((position != WindowPosition::Default).then_some(position));
+        }
+    });
+}
+
 /// Mark a declared window as created by the platform, with the values it actually has.
 pub(crate) fn realize(id: WindowId, size: (f32, f32)) {
     CELLS.with(|cells| {
@@ -988,6 +1067,9 @@ pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
             return false;
         }
         cell.snapshot.update(|snapshot| snapshot.size = size);
+        if cell.snapshot.peek().placement == WindowPlacement::Windowed {
+            cell.normal_size.set(size);
+        }
         true
     })
     .unwrap_or(false);
@@ -1010,6 +1092,9 @@ pub(crate) fn observed_position(id: WindowId, position: WindowPosition) {
         }
         cell.snapshot
             .update(|snapshot| snapshot.position = position);
+        if cell.snapshot.peek().placement == WindowPlacement::Windowed {
+            cell.normal_position.set(position);
+        }
         true
     })
     .unwrap_or(false);
@@ -1307,6 +1392,60 @@ mod tests {
         assert_eq!(
             take_commands(id),
             vec![Command::Title("updated from event".into())]
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn geometry_capture_keeps_normal_size_while_maximized() {
+        let id = WindowId::new(9_501);
+        declare(
+            id,
+            WindowSeed {
+                size: (800.0, 600.0),
+                position: WindowPosition::At(100.0, 80.0),
+                ..WindowSeed::default()
+            },
+        );
+        observed_size(id, (800.0, 600.0));
+        observed_position(id, WindowPosition::At(100.0, 80.0));
+        observed_placement(id, WindowPlacement::Maximized);
+        observed_size(id, (1920.0, 1080.0));
+        observed_position(id, WindowPosition::At(0.0, 0.0));
+
+        let geometry = capture_geometry(id).unwrap();
+        assert_eq!(geometry.width, 800.0);
+        assert_eq!(geometry.height, 600.0);
+        assert_eq!(
+            geometry.position,
+            Some(GeometryPosition { x: 100.0, y: 80.0 })
+        );
+        assert_eq!(geometry.placement, WindowPlacement::Maximized);
+        forget(id);
+    }
+
+    #[test]
+    fn geometry_restore_seeds_deferred_normal_geometry() {
+        let id = fresh(9_502);
+        let geometry = WindowGeometry {
+            version: 1,
+            width: 800.0,
+            height: 600.0,
+            position: Some(GeometryPosition { x: 120.0, y: 90.0 }),
+            placement: WindowPlacement::Maximized,
+            scale_factor: 1.5,
+        };
+        apply_geometry(id, &geometry);
+        assert_eq!(capture_geometry(id), Some(geometry));
+
+        id.state().set_placement(WindowPlacement::Windowed);
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::Placement(WindowPlacement::Windowed),
+                Command::Size(800.0, 600.0),
+                Command::Position(WindowPosition::At(120.0, 90.0)),
+            ]
         );
         forget(id);
     }

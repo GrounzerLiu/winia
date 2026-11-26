@@ -1,6 +1,6 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: implemented, rev 8, 2026-11-26. All five phases are in the tree; `WindowId::insets()`
+> Status: implemented, rev 9, 2026-11-26. All five phases are in the tree; `WindowId::insets()`
 > now exposes the same reactive controller as `ctx.window_insets()`. Section 14 records what landed
 > and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
@@ -259,6 +259,25 @@ This follows Compose Multiplatform's state-first model: the official desktop gui
 `WindowState` through `snapshotFlow` and distinguishes requests from asynchronously applied state.
 The typed callback is a winia convenience; it does not expose raw winit events or change the state
 authority rules.
+
+### 8.2 Geometry persistence
+
+A keyed window saves a versioned geometry record under the same stable persistence key as its
+content saveables. The record contains normal-window width, height, optional logical position,
+placement, and the scale factor at capture time. `Minimized` is normalized to `Windowed`, so a
+restart never reopens a minimized window. While maximized or fullscreen, the normal geometry cache
+keeps the pre-placement size and position for the eventual return to `Windowed`.
+
+Geometry is captured during window finalization and restored before native creation. The in-process
+map makes close/reopen work without a disk store; a configured `PersistStore` writes the record as an
+optional `geometry` JSON field and preserves it across content-saveable updates. Unknown schema
+versions, non-finite values, impossible sizes, and out-of-range coordinates are ignored.
+
+When monitor bounds are available, the saved rectangle is converted with its saved scale and checked
+against current physical monitor bounds. A partially visible window is clamped back on-screen; a
+fully off-screen window falls back to the platform-chosen position. Size is clamped to the target
+monitor's logical capacity. This is monitor-bound validation, not a work-area guarantee: winit does
+not expose taskbars/docks, so a restored window may overlap platform chrome.
 
 ## 9. The close pipeline
 

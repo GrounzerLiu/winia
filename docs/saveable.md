@@ -4,7 +4,7 @@
 goes with it. `remember_saveable` registers the value with a registry that lives OUTSIDE the
 composition, so it can be snapshotted before the window goes away and handed to the next one.
 
-Status: implemented and wired into the window lifecycle (in-memory, same process).
+Status: implemented and wired into the window lifecycle (in-memory, with optional disk persistence).
 
 ## API
 
@@ -65,7 +65,8 @@ manages its own locations.
 
 With a store configured, snapshots are written on both close paths and read when a window is
 created, so state survives a process restart. Without one, everything stays in memory (the default,
-and what tests want).
+and what tests want). Keyed windows also store a versioned `geometry` field in the same file; content
+saveable writes preserve that field, and geometry writes preserve the `values` map.
 
 The on-disk form is JSON with a `version` field and one tagged entry per value (`{"i":42}`,
 `{"t":"hi"}`, `{"b":true}`, `{"f":"<hex bits>"}`). `f64` is stored as its bits, not a JSON number:
@@ -94,4 +95,5 @@ What makes it safe to keep a cache-like file around:
 ## Tests
 
 `cargo test -p winia --lib runtime::saveable` — round trip across two compositions, one-shot restore,
-degradation without a registry, provider removal, and the composer-carried registry on every pass.
+degradation without a registry, provider removal, the composer-carried registry on every pass, and
+lossless merging of framework-owned geometry fields with content snapshots.

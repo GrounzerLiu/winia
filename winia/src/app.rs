@@ -620,6 +620,7 @@ mod window_theme_tests;
 mod app_state;
 mod per_window;
 mod wheel;
+mod window_geometry;
 
 pub(crate) use app_state::*;
 pub(crate) use per_window::*;

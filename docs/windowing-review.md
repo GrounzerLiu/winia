@@ -415,7 +415,7 @@ Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3
 | G6 Always-on-top/transparent/decorations | Fixed - fourth batch | Creation flags, runtime decorations/topmost, transparent clear, and Vulkan alpha selection landed |
 | G7 Size constraints | Fixed - fourth batch | Logical min/max sizes land in native attributes and runtime commands; increments remain backlog |
 | G8 Event callbacks/flows | Implemented | Typed semantic callback plus conflated `WindowId::events()` stream; close remains separate |
-| G9 Geometry persistence | Backlog | Depends on position/placement observation (D5-D6) |
+| G9 Geometry persistence | Implemented | Versioned normal geometry, close/reopen memory, optional disk restore, and monitor-bound validation |
 | G10 `DialogWindow` | Backlog | Depends on parent/modal and activation APIs |
 | G11 Content-driven size | Backlog | Reuse intrinsic measurement; define feedback-loop policy |
 
@@ -459,6 +459,15 @@ Targeted validation: `app::window` 33/33, `window_lifecycle_test` 24/24, Vulkan 
 - The Window API demo records the latest event through `on_event`.
 
 Targeted validation: `app::window` 36/36, `window_lifecycle_test` 24/24, changed-file rustfmt, `git diff --check`, and the `window_api_demo --features debug-server` check passed. An Android target check was attempted but stopped in dependencies before compiling project code because the NDK environment was not configured and the selected Skia binary URL returned 404.
+
+### G9 implementation
+
+- Keyed windows capture normal-window size, position, placement, and scale during finalization; minimized state restores as windowed.
+- Geometry uses an in-process map for close/reopen and an optional versioned `geometry` field in the keyed PersistStore file.
+- Restore happens before native creation, seeds deferred normal geometry for maximized/fullscreen windows, and validates against current monitor bounds.
+- Invalid, non-finite, oversized, off-screen, and DPI-changed records degrade safely instead of preventing startup.
+
+Targeted validation: `app::window` 45/45, PersistStore tests 16/16, `window_lifecycle_test` 25/25 including a two-process geometry restore, changed-file rustfmt, `git diff --check`, and the `window_api_demo --features debug-server` check passed.
 
 ### First-batch implementation
 

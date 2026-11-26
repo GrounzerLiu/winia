@@ -164,7 +164,7 @@ impl Window {
     ///
     /// Without one the window keeps its state in memory only: closing and re-opening it starts
     /// empty. The key has to be unique per window and stable across runs; it is hashed into the
-    /// saveable store, so renaming it discards whatever the old name saved.
+    /// saveable store and also names the window-geometry record, so renaming it discards both.
     pub fn key(mut self, key: &str) -> Self {
         self.persist_key = Some(window_state::persist_key(key));
         self

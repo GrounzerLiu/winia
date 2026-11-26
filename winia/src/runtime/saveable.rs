@@ -489,7 +489,7 @@ mod tests {
 /// Format (JSON, `version` first so a future change can reject cleanly):
 ///
 /// ```json
-/// {"version":1,"values":{"count":{"i":42},"name":{"t":"hi"},"ratio":{"f":"400921fb54442d18"}}}
+/// {"version":1,"values":{"count":{"i":42}},"geometry":{"version":1,"width":640.0}}
 /// ```
 ///
 /// `f64` is stored as the hex of its bits, not as a JSON number: JSON has no NaN or infinity, and
@@ -555,13 +555,25 @@ pub mod persist {
         /// large, corrupt - yields an empty map rather than an error: the caller cannot do anything
         /// useful with the distinction, and a fresh start is always valid.
         pub fn load(&self, key: u64) -> HashMap<String, SavedValue> {
+            let Some(root) = self.read_root(key) else {
+                return HashMap::new();
+            };
+            decode_values(&root).unwrap_or_default()
+        }
+
+        /// Read an optional framework-owned JSON field without exposing it to content saveables.
+        pub(crate) fn load_extra(&self, key: u64, name: &str) -> Option<serde_json::Value> {
+            self.read_root(key)?.get(name).cloned()
+        }
+
+        fn read_root(&self, key: u64) -> Option<serde_json::Map<String, serde_json::Value>> {
             let path = self.path_for(key);
             let meta = match std::fs::metadata(&path) {
                 Ok(meta) => meta,
-                Err(_) => return HashMap::new(),
+                Err(_) => return None,
             };
             if !meta.is_file() {
-                return HashMap::new();
+                return None;
             }
             if meta.len() > MAX_FILE_BYTES {
                 debug_log!(
@@ -569,33 +581,62 @@ pub mod persist {
                     path.display(),
                     meta.len()
                 );
-                return HashMap::new();
+                return None;
             }
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(e) => {
                     debug_log!("[saveable] unreadable {}: {e}", path.display());
-                    return HashMap::new();
+                    return None;
                 }
             };
-            match decode(&text) {
-                Some(values) => values,
-                None => {
+            let root: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(root) => root,
+                Err(_) => {
                     debug_log!("[saveable] ignoring corrupt state in {}", path.display());
-                    HashMap::new()
+                    return None;
                 }
+            };
+            let root = root.as_object()?.clone();
+            let version = root.get("version")?.as_u64()?;
+            if version != FORMAT_VERSION {
+                debug_log!(
+                    "[saveable] snapshot version {version} is not {FORMAT_VERSION}; ignoring"
+                );
+                return None;
             }
+            Some(root)
         }
 
         /// Write the snapshot for `key`. Errors are logged, never propagated: losing a restore point is
         /// not worth taking a window down.
         pub fn save(&self, key: u64, values: &HashMap<String, SavedValue>) {
+            let mut root = self.read_root(key).unwrap_or_default();
+            root.insert("version".to_string(), serde_json::json!(FORMAT_VERSION));
+            root.insert(
+                "values".to_string(),
+                serde_json::Value::Object(encode_values(values)),
+            );
+            self.write_root(key, &root);
+        }
+
+        /// Merge a framework-owned JSON field while preserving content saveables and other extras.
+        pub(crate) fn save_extra(&self, key: u64, name: &str, value: serde_json::Value) {
+            let mut root = self.read_root(key).unwrap_or_default();
+            root.insert("version".to_string(), serde_json::json!(FORMAT_VERSION));
+            root.entry("values".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            root.insert(name.to_string(), value);
+            self.write_root(key, &root);
+        }
+
+        fn write_root(&self, key: u64, root: &serde_json::Map<String, serde_json::Value>) {
             if let Err(e) = std::fs::create_dir_all(&self.dir) {
                 debug_log!("[saveable] cannot create {}: {e}", self.dir.display());
                 return;
             }
             let path = self.path_for(key);
-            let body = encode(values);
+            let body = serde_json::Value::Object(root.clone()).to_string();
             // Refuse to WRITE something the reader would refuse to read: an oversized file that is
             // silently ignored on the next run is worse than a logged skip.
             if body.len() as u64 > MAX_FILE_BYTES {
@@ -682,7 +723,9 @@ pub mod persist {
         None
     }
 
-    fn encode(values: &HashMap<String, SavedValue>) -> String {
+    fn encode_values(
+        values: &HashMap<String, SavedValue>,
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::with_capacity(values.len());
         for (key, value) in values {
             let encoded = match value {
@@ -697,16 +740,12 @@ pub mod persist {
                 map.insert(key.clone(), encoded);
             }
         }
-        serde_json::json!({ "version": FORMAT_VERSION, "values": map }).to_string()
+        map
     }
 
-    fn decode(text: &str) -> Option<HashMap<String, SavedValue>> {
-        let root: serde_json::Value = serde_json::from_str(text).ok()?;
-        let version = root.get("version")?.as_u64()?;
-        if version != FORMAT_VERSION {
-            debug_log!("[saveable] snapshot version {version} is not {FORMAT_VERSION}; ignoring");
-            return None;
-        }
+    fn decode_values(
+        root: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<HashMap<String, SavedValue>> {
         let values = root.get("values")?.as_object()?;
         let mut out = HashMap::with_capacity(values.len());
         for (key, value) in values {
@@ -815,6 +854,26 @@ pub mod persist {
             loaded.remove("ratio");
             assert_eq!(loaded.len(), 3);
             assert_eq!(store.load(7).get("ratio"), Some(&SavedValue::F64(0.5)));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn extra_fields_survive_content_snapshot_updates() {
+            let dir = temp_dir("extras");
+            let store = PersistStore::open(&dir);
+            let geometry = serde_json::json!({"version": 1, "width": 640.0});
+            store.save_extra(9, "geometry", geometry.clone());
+            assert_eq!(store.load(9), HashMap::new());
+            store.save(9, &sample());
+            assert_eq!(store.load_extra(9, "geometry"), Some(geometry.clone()));
+
+            store.save_extra(9, "another", serde_json::json!(true));
+            assert_eq!(store.load(9), sample());
+            assert_eq!(store.load_extra(9, "geometry"), Some(geometry));
+            assert_eq!(
+                store.load_extra(9, "another"),
+                Some(serde_json::json!(true))
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
 
