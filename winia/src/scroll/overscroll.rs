@@ -746,6 +746,8 @@ mod tests {
 
     #[test]
     fn a_fling_into_the_end_leaves_a_bend() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
         let effect = OverscrollEffect::new();
         let scroll = ScrollState::new();
         scroll.offset.set(100.0);
@@ -771,7 +773,14 @@ mod tests {
             1,
             crate::nested_scroll::ScrollVelocity { x: 0.0, y: 1500.0 },
         );
-        // The decay clamps on its first tick; give the animation one.
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "the fling animation was not registered"
+        );
+        // The decay reaches the boundary immediately; the damped peak eases in over 90 ms.
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        clock.advance(std::time::Duration::from_millis(16));
         crate::animation::update_animations();
         assert!(
             effect.stretch() > 0.0,
