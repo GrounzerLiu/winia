@@ -7,8 +7,8 @@ use vulkano::{
     image::{view::ImageView, ImageLayout, ImageUsage},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     swapchain::{
-        acquire_next_image, PresentMode, Surface, Swapchain, SwapchainAcquireFuture,
-        SwapchainCreateInfo, SwapchainPresentInfo,
+        acquire_next_image, CompositeAlpha, CompositeAlphas, PresentMode, Surface, Swapchain,
+        SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo,
     },
     sync::{self, GpuFuture},
     Validated, VulkanError, VulkanObject,
@@ -22,6 +22,16 @@ use skia_safe::{
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{SkiwinError, SkiwinResult};
+
+fn preferred_composite_alpha(supported: CompositeAlphas) -> CompositeAlpha {
+    if supported.contains_enum(CompositeAlpha::PreMultiplied) {
+        CompositeAlpha::PreMultiplied
+    } else if supported.contains_enum(CompositeAlpha::PostMultiplied) {
+        CompositeAlpha::PostMultiplied
+    } else {
+        CompositeAlpha::Opaque
+    }
+}
 
 pub struct VulkanRenderer {
     pub window: Arc<Box<dyn Window>>,
@@ -111,11 +121,9 @@ impl VulkanRenderer {
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
                     image_format,
                     present_mode: PresentMode::Fifo,
-                    composite_alpha: surface_capabilities
-                        .supported_composite_alpha
-                        .into_iter()
-                        .next()
-                        .unwrap_or(vulkano::swapchain::CompositeAlpha::Opaque),
+                    composite_alpha: preferred_composite_alpha(
+                        surface_capabilities.supported_composite_alpha,
+                    ),
                     ..Default::default()
                 },
             )
@@ -443,4 +451,34 @@ fn surface_for_framebuffer(
         None,
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn premultiplied_alpha_wins_when_both_modes_are_supported() {
+        let supported: CompositeAlphas = CompositeAlphas::from(CompositeAlpha::PreMultiplied)
+            | CompositeAlphas::from(CompositeAlpha::PostMultiplied);
+        assert_eq!(
+            preferred_composite_alpha(supported),
+            CompositeAlpha::PreMultiplied
+        );
+    }
+
+    #[test]
+    fn postmultiplied_alpha_is_used_when_it_is_the_only_transparent_mode() {
+        let supported: CompositeAlphas = CompositeAlphas::from(CompositeAlpha::PostMultiplied);
+        assert_eq!(
+            preferred_composite_alpha(supported),
+            CompositeAlpha::PostMultiplied
+        );
+    }
+
+    #[test]
+    fn opaque_alpha_is_used_when_no_transparent_mode_is_supported() {
+        let supported: CompositeAlphas = CompositeAlphas::from(CompositeAlpha::Opaque);
+        assert_eq!(preferred_composite_alpha(supported), CompositeAlpha::Opaque);
+    }
 }

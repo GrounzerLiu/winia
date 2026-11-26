@@ -386,7 +386,7 @@ The first batch is implemented and covered by targeted regressions; see the repa
 
 ## Repair status
 
-Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3-D6, D8), and third batch (G2, G3, declaration-owner part of G4) are implemented and covered by targeted regressions. Remaining API gaps stay backlog unless marked otherwise.
+Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3-D6, D8), third batch (G2, G3, declaration-owner part of G4), and fourth batch (G5-G7) are implemented and covered by targeted regressions. Remaining API gaps stay backlog unless marked otherwise.
 
 ### Defects
 
@@ -411,9 +411,9 @@ Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3
 | G2 Initial position/placement/visible | Fixed - third batch | Builder seeds flow through native attributes; reveal waits for first draw |
 | G3 Insets on `WindowId` | Fixed - third batch | Declaration and PerWindow share one reactive controller; destruction resets it |
 | G4 Owner/parent | Partially addressed | `WindowId::owner()` exposes declaration ownership; native parent/modal remains backlog |
-| G5 Activate/focus | Backlog | Depends on OS-focus observation (D6) |
-| G6 Always-on-top/transparent/decorations | Backlog | Decorations exist only at creation today |
-| G7 Size constraints | Backlog | Coordinate with content-driven sizing (G11) |
+| G5 Activate/focus | Fixed - fourth batch | `activate`/`request_focus` restore and focus the native window; OS focus remains separately observed |
+| G6 Always-on-top/transparent/decorations | Fixed - fourth batch | Creation flags, runtime decorations/topmost, transparent clear, and Vulkan alpha selection landed |
+| G7 Size constraints | Fixed - fourth batch | Logical min/max sizes land in native attributes and runtime commands; increments remain backlog |
 | G8 Event callbacks/flows | Backlog | Coordinate with observable state (G1) |
 | G9 Geometry persistence | Backlog | Depends on position/placement observation (D5-D6) |
 | G10 `DialogWindow` | Backlog | Depends on parent/modal and activation APIs |
@@ -439,6 +439,16 @@ Targeted validation: `window_lifecycle_test` 18/18, `window_state` 21/21, comman
 - `WindowId::owner()` exposes declaration ownership without conflating it with native parent/modal relationships.
 
 Targeted validation: `window_lifecycle_test` 23/23 and `window_state` 23/23 passed; the debug-server example check, changed-file rustfmt, and `git diff --check` also passed.
+
+### Fourth-batch implementation
+
+- `WindowId::activate` and `request_focus` queue a restore-and-focus command only when the platform capability is present; Linux Wayland reports activation and always-on-top as unsupported.
+- `Window::always_on_top` and `Window::transparent` seed native window-level/alpha state. Options are normalized at both creation entry points, and the transparent/undecorated invariant is applied after capability fallback so builder call order cannot break it.
+- `WindowState::set_decorations` and `set_always_on_top` provide capability-guarded runtime control.
+- `Window::minimum_size` / `maximum_size` and runtime setters use logical surface-size constraints; passing `None` clears an existing constraint and queues the native clear command.
+- Transparent windows clear to alpha zero, and Vulkan prefers `PreMultiplied` before `PostMultiplied` to match Skia's premultiplied output.
+
+Targeted validation: `app::window` 33/33, `window_lifecycle_test` 24/24, Vulkan composite-alpha regressions 3/3, and `window_api_demo --features debug-server` check passed. Changed-file rustfmt and `git diff --check` also passed.
 
 ### First-batch implementation
 

@@ -73,6 +73,13 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     if mode == "initial-placement" {
         builder = builder.placement(WindowPlacement::Maximized).visible(false);
     }
+    if mode == "window-properties" {
+        builder = builder
+            .always_on_top(true)
+            .transparent(true)
+            .minimum_size(320.0, 240.0)
+            .maximum_size(900.0, 700.0);
+    }
     let declared_id = builder
         .on_close_requested(move |id, reason| {
             append_out(&format!("requested={reason:?}\n"));
@@ -111,6 +118,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 }
                 "insets-share" => insets_share_scenario(ctx, id),
                 "owner-query" => owner_query_scenario(ctx, id),
+                "window-properties" => window_properties_scenario(ctx, id),
                 "existing-command-new-root" => {
                     let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
                     if !once.get() {
@@ -232,6 +240,29 @@ fn owner_query_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
         Text::new("child").build(ctx);
         std::process::exit(0);
     });
+}
+
+fn window_properties_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let state = id.state();
+    append_out(&format!(
+        "initial-top={}\ninitial-transparent={}\ninitial-decorations={}\ninitial-min={:?}\ninitial-max={:?}\n",
+        state.always_on_top(),
+        state.transparent(),
+        state.decorations(),
+        state.minimum_size(),
+        state.maximum_size(),
+    ));
+    let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
+    if !once.get() {
+        once.set(true);
+        winia::effect::side_effect(ctx, move || {
+            id.state().set_always_on_top(false);
+            id.state().set_minimum_size(Some((280.0, 220.0)));
+            id.state().set_maximum_size(Some((1000.0, 800.0)));
+            id.activate();
+        });
+    }
+    Text::new("properties").build(ctx);
 }
 
 fn size_scenario(ctx: &mut ComposeCtx, id: WindowId) {

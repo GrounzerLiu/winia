@@ -382,6 +382,24 @@ fn window_id_and_content_share_the_same_reactive_insets() {
 }
 
 #[test]
+fn builder_and_runtime_window_properties_reach_the_public_state() {
+    let mut fixture = Fixture::spawn("window-properties", "window-properties");
+    std::thread::sleep(Duration::from_millis(1_800));
+    let text = fixture.text();
+    assert!(text.contains("initial-top=true"), "{text:?}");
+    assert!(text.contains("initial-transparent=true"), "{text:?}");
+    assert!(text.contains("initial-decorations=false"), "{text:?}");
+    assert!(
+        text.contains("initial-min=Some((320.0, 240.0))"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("initial-max=Some((900.0, 700.0))"),
+        "{text:?}"
+    );
+}
+
+#[test]
 fn window_owner_is_the_declaring_window_not_the_native_parent() {
     let mut fixture = Fixture::spawn("owner-query", "owner-query");
     let status = fixture.wait(Duration::from_secs(10));

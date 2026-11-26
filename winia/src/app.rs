@@ -44,6 +44,10 @@ pub(crate) fn drag_trace_enabled() -> bool {
 pub struct WindowOptions {
     pub resizable: bool,
     pub decorations: bool,
+    pub always_on_top: bool,
+    pub transparent: bool,
+    pub minimum_size: Option<(f32, f32)>,
+    pub maximum_size: Option<(f32, f32)>,
 }
 
 impl Default for WindowOptions {
@@ -51,7 +55,70 @@ impl Default for WindowOptions {
         Self {
             resizable: true,
             decorations: true,
+            always_on_top: false,
+            transparent: false,
+            minimum_size: None,
+            maximum_size: None,
         }
+    }
+}
+
+impl WindowOptions {
+    pub(crate) fn normalize(&mut self, capabilities: crate::app::window_state::WindowCapabilities) {
+        self.always_on_top &= capabilities.always_on_top;
+        self.transparent &= capabilities.transparent;
+        self.decorations &= capabilities.decorations;
+        if self.transparent {
+            self.decorations = false;
+        }
+        if !capabilities.size_constraints {
+            self.minimum_size = None;
+            self.maximum_size = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod window_options_tests {
+    use super::WindowOptions;
+    use crate::app::window_state::WindowCapabilities;
+
+    fn capabilities(transparent: bool) -> WindowCapabilities {
+        WindowCapabilities {
+            position: false,
+            placement: false,
+            multi_window: false,
+            native_close: false,
+            activate: false,
+            always_on_top: false,
+            transparent,
+            decorations: true,
+            size_constraints: true,
+        }
+    }
+
+    #[test]
+    fn transparent_options_stay_undecorated_after_normalization() {
+        let mut options = WindowOptions {
+            transparent: true,
+            decorations: true,
+            ..WindowOptions::default()
+        };
+        options.normalize(capabilities(true));
+        assert!(options.transparent);
+        assert!(!options.decorations);
+    }
+
+    #[test]
+    fn unsupported_transparency_restores_the_requested_decorations() {
+        let mut options = WindowOptions {
+            transparent: true,
+            decorations: true,
+            ..WindowOptions::default()
+        };
+        options.normalize(capabilities(false));
+        assert!(!options.transparent);
+        assert!(options.decorations);
     }
 }
 
@@ -361,6 +428,8 @@ pub(crate) fn open_window_with_keys_owned(
     owner: Option<u64>,
     theme: Option<crate::theme::WindowTheme>,
 ) {
+    let mut options = options;
+    options.normalize(crate::app::window_state::WindowCapabilities::platform());
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow {
         width,
         height,
@@ -478,6 +547,11 @@ fn run_app_with_event_loop(
     app: impl Fn(&mut ComposeCtx) + 'static,
     platform: PlatformState,
 ) {
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::EventLoopExtWayland;
+        crate::app::window_state::set_wayland(event_loop.is_wayland());
+    }
     #[cfg(not(target_os = "android"))]
     crate::assets::init_desktop_default();
     // Own the tokio runtime: effects (LaunchedEffect, debug WS server) need

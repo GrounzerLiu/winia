@@ -14,6 +14,8 @@ use crate::runtime::state::State;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One window, for the lifetime of the process.
@@ -67,6 +69,19 @@ impl WindowId {
         WindowCapabilities::platform()
     }
 
+    /// Ask the platform to restore and focus this window. Unsupported platforms ignore it.
+    pub fn activate(self) {
+        if !self.capabilities().activate {
+            return;
+        }
+        with_cell(self, |cell| cell.push(Command::Activate));
+    }
+
+    /// Compose-style alias for `activate`.
+    pub fn request_focus(self) {
+        self.activate();
+    }
+
     /// Ask to close the window.
     ///
     /// This is a request: `on_close_requested` runs and the application may ignore it, in which
@@ -111,24 +126,50 @@ pub enum WindowPosition {
 ///
 /// Android composites every winit window into one Activity surface, so position, placement,
 /// multi-window and native close are all unavailable there; applications should branch on these
-/// flags rather than on `#[cfg]`. `title`, `decorations` and `resizable` are accepted on Android and
-/// have no effect.
+/// flags rather than on `#[cfg]`. `title` and `resizable` are accepted on Android and have no
+/// effect; unsupported chrome and state features are normalized away.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct WindowCapabilities {
     pub position: bool,
     pub placement: bool,
     pub multi_window: bool,
     pub native_close: bool,
+    pub activate: bool,
+    pub always_on_top: bool,
+    pub transparent: bool,
+    pub decorations: bool,
+    pub size_constraints: bool,
+}
+
+#[cfg(target_os = "linux")]
+static WAYLAND: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+pub(crate) fn set_wayland(wayland: bool) {
+    WAYLAND.store(wayland, Ordering::Relaxed);
 }
 
 impl WindowCapabilities {
     pub(crate) fn platform() -> Self {
         let desktop = !cfg!(target_os = "android");
+        #[cfg(target_os = "linux")]
+        let wayland = WAYLAND.load(Ordering::Relaxed);
+        #[cfg(not(target_os = "linux"))]
+        let wayland = false;
+        Self::for_backend(desktop, wayland)
+    }
+
+    fn for_backend(desktop: bool, wayland: bool) -> Self {
         WindowCapabilities {
             position: desktop,
             placement: desktop,
             multi_window: desktop,
             native_close: desktop,
+            activate: desktop && !wayland,
+            always_on_top: desktop && !wayland,
+            transparent: desktop,
+            decorations: desktop,
+            size_constraints: desktop,
         }
     }
 }
@@ -284,6 +325,104 @@ impl WindowState {
             cell.push(Command::Resizable(resizable));
         });
     }
+
+    /// Whether the window is kept above normal windows.
+    pub fn always_on_top(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().always_on_top).unwrap_or(false)
+    }
+
+    /// Request a always-on-top stacking level.
+    pub fn set_always_on_top(&self, always_on_top: bool) {
+        if !self.id.capabilities().always_on_top
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
+            return;
+        }
+        with_cell(self.id, |cell| {
+            cell.snapshot
+                .update(|snapshot| snapshot.always_on_top = always_on_top);
+            cell.push(Command::AlwaysOnTop(always_on_top));
+        });
+    }
+
+    /// Whether this window was created with a transparent native surface.
+    pub fn transparent(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().transparent).unwrap_or(false)
+    }
+
+    /// Whether the platform currently decorates the window.
+    pub fn decorations(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().decorations).unwrap_or(true)
+    }
+
+    /// Enable or disable native decorations. Transparent windows cannot be decorated.
+    pub fn set_decorations(&self, decorations: bool) {
+        if !self.id.capabilities().decorations
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
+            return;
+        }
+        if decorations && self.transparent() {
+            return;
+        }
+        with_cell(self.id, |cell| {
+            cell.snapshot
+                .update(|snapshot| snapshot.decorations = decorations);
+            cell.push(Command::Decorations(decorations));
+        });
+    }
+
+    /// Minimum requested inner size in logical pixels.
+    pub fn minimum_size(&self) -> Option<(f32, f32)> {
+        with_cell(self.id, |cell| cell.snapshot.get().minimum_size).flatten()
+    }
+
+    /// Set or clear the minimum inner size in logical pixels.
+    pub fn set_minimum_size(&self, size: Option<(f32, f32)>) {
+        let size = match size {
+            Some(size) if valid_size_constraint(&size) => Some(size),
+            None => None,
+            Some(_) => return,
+        };
+        if !self.id.capabilities().size_constraints
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
+            return;
+        }
+        with_cell(self.id, |cell| {
+            cell.snapshot
+                .update(|snapshot| snapshot.minimum_size = size);
+            cell.push(Command::MinimumSize(size));
+        });
+    }
+
+    /// Maximum requested inner size in logical pixels.
+    pub fn maximum_size(&self) -> Option<(f32, f32)> {
+        with_cell(self.id, |cell| cell.snapshot.get().maximum_size).flatten()
+    }
+
+    /// Set or clear the maximum inner size in logical pixels.
+    pub fn set_maximum_size(&self, size: Option<(f32, f32)>) {
+        let size = match size {
+            Some(size) if valid_size_constraint(&size) => Some(size),
+            None => None,
+            Some(_) => return,
+        };
+        if !self.id.capabilities().size_constraints
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
+            return;
+        }
+        with_cell(self.id, |cell| {
+            cell.snapshot
+                .update(|snapshot| snapshot.maximum_size = size);
+            cell.push(Command::MaximumSize(size));
+        });
+    }
+}
+
+fn valid_size_constraint((width, height): &(f32, f32)) -> bool {
+    width.is_finite() && height.is_finite() && *width > 0.0 && *height > 0.0
 }
 
 impl std::fmt::Debug for WindowState {
@@ -313,6 +452,11 @@ pub(crate) enum Command {
     Visible(bool),
     Title(String),
     Resizable(bool),
+    Activate,
+    AlwaysOnTop(bool),
+    Decorations(bool),
+    MinimumSize(Option<(f32, f32)>),
+    MaximumSize(Option<(f32, f32)>),
     /// Ask the application whether the window may close.
     CloseRequest(CloseReason),
     /// Close without asking.
@@ -339,6 +483,11 @@ pub(crate) trait WindowCommandTarget {
     fn set_visible(&self, visible: bool);
     fn set_title(&self, title: &str);
     fn set_resizable(&self, resizable: bool);
+    fn focus_window(&self);
+    fn set_window_level(&self, level: winit::window::WindowLevel);
+    fn set_decorations(&self, decorations: bool);
+    fn set_min_surface_size(&self, size: Option<winit::dpi::Size>);
+    fn set_max_surface_size(&self, size: Option<winit::dpi::Size>);
     fn request_redraw(&self);
 }
 
@@ -373,6 +522,26 @@ impl WindowCommandTarget for dyn winit::window::Window {
 
     fn set_resizable(&self, resizable: bool) {
         let _ = winit::window::Window::set_resizable(self, resizable);
+    }
+
+    fn focus_window(&self) {
+        winit::window::Window::focus_window(self);
+    }
+
+    fn set_window_level(&self, level: winit::window::WindowLevel) {
+        winit::window::Window::set_window_level(self, level);
+    }
+
+    fn set_decorations(&self, decorations: bool) {
+        winit::window::Window::set_decorations(self, decorations);
+    }
+
+    fn set_min_surface_size(&self, size: Option<winit::dpi::Size>) {
+        let _ = winit::window::Window::set_min_surface_size(self, size);
+    }
+
+    fn set_max_surface_size(&self, size: Option<winit::dpi::Size>) {
+        let _ = winit::window::Window::set_max_surface_size(self, size);
     }
 
     fn request_redraw(&self) {
@@ -411,6 +580,22 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
         Command::Visible(visible) => target.set_visible(visible),
         Command::Title(title) => target.set_title(&title),
         Command::Resizable(resizable) => target.set_resizable(resizable),
+        Command::Activate => {
+            target.set_minimized(false);
+            target.focus_window();
+        }
+        Command::AlwaysOnTop(always_on_top) => target.set_window_level(if always_on_top {
+            winit::window::WindowLevel::AlwaysOnTop
+        } else {
+            winit::window::WindowLevel::Normal
+        }),
+        Command::Decorations(decorations) => target.set_decorations(decorations),
+        Command::MinimumSize(size) => target.set_min_surface_size(size.map(|(width, height)| {
+            winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64))
+        })),
+        Command::MaximumSize(size) => target.set_max_surface_size(size.map(|(width, height)| {
+            winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64))
+        })),
         Command::CloseRequest(_) | Command::Destroy => {}
     }
 }
@@ -426,6 +611,11 @@ pub(crate) struct WindowSnapshot {
     pub(crate) placement: WindowPlacement,
     pub(crate) visible: bool,
     pub(crate) resizable: bool,
+    pub(crate) always_on_top: bool,
+    pub(crate) transparent: bool,
+    pub(crate) decorations: bool,
+    pub(crate) minimum_size: Option<(f32, f32)>,
+    pub(crate) maximum_size: Option<(f32, f32)>,
     pub(crate) title: String,
 }
 
@@ -439,6 +629,11 @@ impl Default for WindowSnapshot {
             placement: WindowPlacement::Windowed,
             visible: false,
             resizable: true,
+            always_on_top: false,
+            transparent: false,
+            decorations: true,
+            minimum_size: None,
+            maximum_size: None,
             title: String::new(),
         }
     }
@@ -488,6 +683,11 @@ pub(crate) struct WindowSeed {
     pub(crate) size: (f32, f32),
     pub(crate) title: String,
     pub(crate) resizable: bool,
+    pub(crate) always_on_top: bool,
+    pub(crate) transparent: bool,
+    pub(crate) decorations: bool,
+    pub(crate) minimum_size: Option<(f32, f32)>,
+    pub(crate) maximum_size: Option<(f32, f32)>,
     pub(crate) visible: bool,
     pub(crate) placement: WindowPlacement,
     pub(crate) position: WindowPosition,
@@ -506,6 +706,11 @@ impl Default for WindowSeed {
             size: (300.0, 200.0),
             title: String::new(),
             resizable: true,
+            always_on_top: false,
+            transparent: false,
+            decorations: true,
+            minimum_size: None,
+            maximum_size: None,
             visible: true,
             placement: WindowPlacement::Windowed,
             position: WindowPosition::Default,
@@ -546,6 +751,11 @@ impl WindowCell {
             position: seed.position,
             visible: seed.visible,
             resizable: seed.resizable,
+            always_on_top: seed.always_on_top,
+            transparent: seed.transparent,
+            decorations: seed.decorations,
+            minimum_size: seed.minimum_size,
+            maximum_size: seed.maximum_size,
             title: seed.title,
             ..WindowSnapshot::default()
         };
@@ -811,6 +1021,22 @@ pub(crate) fn take_queued_commands(id: WindowId) -> Vec<QueuedCommand> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn wayland_reports_focus_and_stacking_as_unsupported() {
+        let caps = WindowCapabilities::for_backend(true, true);
+        assert!(!caps.activate);
+        assert!(!caps.always_on_top);
+        assert!(caps.decorations);
+        assert!(caps.size_constraints);
+    }
+
+    #[test]
+    fn x11_reports_focus_and_stacking_as_supported() {
+        let caps = WindowCapabilities::for_backend(true, false);
+        assert!(caps.activate);
+        assert!(caps.always_on_top);
+    }
+
     fn fresh(raw: u64) -> WindowId {
         let id = WindowId::new(raw);
         declare(id, WindowSeed::default());
@@ -1018,6 +1244,21 @@ mod tests {
         fn set_resizable(&self, _: bool) {
             self.calls.borrow_mut().push("resizable");
         }
+        fn focus_window(&self) {
+            self.calls.borrow_mut().push("focus");
+        }
+        fn set_window_level(&self, _: winit::window::WindowLevel) {
+            self.calls.borrow_mut().push("level");
+        }
+        fn set_decorations(&self, _: bool) {
+            self.calls.borrow_mut().push("decorations");
+        }
+        fn set_min_surface_size(&self, _: Option<winit::dpi::Size>) {
+            self.calls.borrow_mut().push("minimum-size");
+        }
+        fn set_max_surface_size(&self, _: Option<winit::dpi::Size>) {
+            self.calls.borrow_mut().push("maximum-size");
+        }
         fn request_redraw(&self) {
             self.calls.borrow_mut().push("redraw");
         }
@@ -1033,6 +1274,77 @@ mod tests {
             *target.calls.borrow(),
             vec!["fullscreen", "maximized", "minimized"]
         );
+    }
+
+    #[test]
+    fn activate_restores_then_focuses_the_native_window() {
+        let target = RecordingTarget {
+            calls: RefCell::new(Vec::new()),
+        };
+        apply_command(&target, Command::Activate);
+        assert_eq!(*target.calls.borrow(), vec!["minimized", "focus"]);
+    }
+
+    #[test]
+    fn runtime_window_properties_queue_platform_commands() {
+        let id = fresh(9_216);
+        id.state().set_always_on_top(true);
+        id.state().set_decorations(false);
+        id.state().set_minimum_size(Some((320.0, 240.0)));
+        id.state().set_maximum_size(Some((1200.0, 900.0)));
+        assert!(id.state().always_on_top());
+        assert!(!id.state().decorations());
+        assert_eq!(id.state().minimum_size(), Some((320.0, 240.0)));
+        assert_eq!(id.state().maximum_size(), Some((1200.0, 900.0)));
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::AlwaysOnTop(true),
+                Command::Decorations(false),
+                Command::MinimumSize(Some((320.0, 240.0))),
+                Command::MaximumSize(Some((1200.0, 900.0))),
+            ]
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn runtime_size_constraints_can_be_cleared() {
+        let id = fresh(9_218);
+        id.state().set_minimum_size(Some((320.0, 240.0)));
+        id.state().set_maximum_size(Some((1200.0, 900.0)));
+        id.state().set_minimum_size(None);
+        id.state().set_maximum_size(None);
+
+        assert_eq!(id.state().minimum_size(), None);
+        assert_eq!(id.state().maximum_size(), None);
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::MinimumSize(Some((320.0, 240.0))),
+                Command::MaximumSize(Some((1200.0, 900.0))),
+                Command::MinimumSize(None),
+                Command::MaximumSize(None),
+            ]
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn transparent_windows_cannot_enable_decorations() {
+        let id = WindowId::new(9_217);
+        declare(
+            id,
+            WindowSeed {
+                transparent: true,
+                decorations: false,
+                ..WindowSeed::default()
+            },
+        );
+        id.state().set_decorations(true);
+        assert!(!id.state().decorations());
+        assert!(take_commands(id).is_empty());
+        forget(id);
     }
 
     #[test]

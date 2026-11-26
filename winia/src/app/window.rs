@@ -129,6 +129,30 @@ impl Window {
         self
     }
 
+    /// Keep the window above normal windows when the platform supports it.
+    pub fn always_on_top(mut self, always_on_top: bool) -> Self {
+        self.options.always_on_top = always_on_top;
+        self
+    }
+
+    /// Create a transparent window. Transparent windows are always undecorated.
+    pub fn transparent(mut self, transparent: bool) -> Self {
+        self.options.transparent = transparent;
+        self
+    }
+
+    /// Minimum inner size in logical pixels.
+    pub fn minimum_size(mut self, width: f32, height: f32) -> Self {
+        self.options.minimum_size = Some((width, height));
+        self
+    }
+
+    /// Maximum inner size in logical pixels.
+    pub fn maximum_size(mut self, width: f32, height: f32) -> Self {
+        self.options.maximum_size = Some((width, height));
+        self
+    }
+
     pub fn on_close(mut self, f: impl FnMut() + Send + 'static) -> Self {
         self.on_close = Some(Box::new(f));
         self
@@ -412,6 +436,8 @@ impl Window {
             // exists, so `WindowState` is usable from the very first composition. `realize` fills
             // in the values the platform actually chose.
             let caps = WindowCapabilities::platform();
+            let mut options = self.options;
+            options.normalize(caps);
             let position = if caps.position {
                 self.position
             } else {
@@ -429,7 +455,12 @@ impl Window {
                 WindowSeed {
                     size: (w, h),
                     title: title.clone(),
-                    resizable: self.options.resizable,
+                    resizable: options.resizable,
+                    always_on_top: options.always_on_top,
+                    transparent: options.transparent,
+                    decorations: options.decorations,
+                    minimum_size: options.minimum_size,
+                    maximum_size: options.maximum_size,
                     visible: self.visible,
                     placement,
                     position,
@@ -455,7 +486,7 @@ impl Window {
                 w,
                 h,
                 title,
-                self.options,
+                options,
                 None,
                 wrapped,
                 Some(id),
@@ -487,5 +518,35 @@ impl Window {
         // The handle is valid from the first frame: the id was minted above, and `is_realized()`
         // stays false until the platform creates the window.
         WindowId::new(created_id.get())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::window_state::WindowCapabilities;
+
+    #[test]
+    fn transparent_builder_is_order_independent() {
+        let caps = WindowCapabilities {
+            position: true,
+            placement: true,
+            multi_window: true,
+            native_close: true,
+            activate: true,
+            always_on_top: true,
+            transparent: true,
+            decorations: true,
+            size_constraints: true,
+        };
+        let mut transparent_first = Window::new().transparent(true).decorations(true).options;
+        let mut decorations_first = Window::new().decorations(true).transparent(true).options;
+        transparent_first.normalize(caps);
+        decorations_first.normalize(caps);
+
+        for options in [transparent_first, decorations_first] {
+            assert!(options.transparent);
+            assert!(!options.decorations);
+        }
     }
 }

@@ -13,6 +13,8 @@ pub(crate) struct PerWindow {
     pub(crate) width: f32,
     pub(crate) height: f32,
     pub(crate) scale_factor: f64,
+    /// Native surface transparency; transparent windows clear to alpha zero.
+    pub(crate) transparent: bool,
     pub(crate) focused_id: Option<u64>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
     /// Window-size state, split by scheduling semantic (see docs/state-handles.md):
@@ -156,6 +158,7 @@ impl PerWindow {
             width,
             height,
             scale_factor: 1.0,
+            transparent: false,
             focused_id: None,
             content,
             window_size_state: std::cell::RefCell::new(None),
@@ -1007,7 +1010,12 @@ impl PerWindow {
                         // every overlay at sf² and at an sf²-offset origin.
                         let cross_active = self.composer.has_cross_flights();
                         let canvas = surface.canvas();
-                        canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
+                        let clear = if self.transparent {
+                            skia_safe::Color::TRANSPARENT
+                        } else {
+                            skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b)
+                        };
+                        canvas.clear(clear);
                         canvas.save();
                         canvas.scale((sf, sf));
                         render::render_with_menu(

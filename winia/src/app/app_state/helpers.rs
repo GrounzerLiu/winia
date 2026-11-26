@@ -137,6 +137,24 @@ impl AppState {
         )));
         a.resizable = pending.options.resizable;
         a.decorations = pending.options.decorations;
+        a.window_level = if pending.options.always_on_top {
+            winit::window::WindowLevel::AlwaysOnTop
+        } else {
+            winit::window::WindowLevel::Normal
+        };
+        a.transparent = pending.options.transparent;
+        if let Some((width, height)) = pending.options.minimum_size {
+            a.min_surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+                width as f64,
+                height as f64,
+            )));
+        }
+        if let Some((width, height)) = pending.options.maximum_size {
+            a.max_surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+                width as f64,
+                height as f64,
+            )));
+        }
         let initial_position = pending
             .created_id
             .map(|raw| {
@@ -211,6 +229,7 @@ impl AppState {
                 as Box<dyn Fn(&mut ComposeCtx)>
         };
         let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
+        pw.transparent = pending.options.transparent;
         if let Some(raw) = pending.created_id {
             let insets = crate::app::window_state::WindowId::new(raw).insets();
             pw.insets = insets.clone();
@@ -320,7 +339,12 @@ impl AppState {
                     let sf2 = sf as f32;
                     sw.draw(|surface| {
                         let canvas = surface.canvas();
-                        canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
+                        let clear = if pw.transparent {
+                            skia_safe::Color::TRANSPARENT
+                        } else {
+                            skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b)
+                        };
+                        canvas.clear(clear);
                         canvas.save();
                         canvas.scale((sf2, sf2));
                         render::render_with_menu(
