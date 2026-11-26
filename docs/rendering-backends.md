@@ -24,6 +24,27 @@ selection layer are no longer part of the workspace. The `vulkan`/`gl` feature f
     dependency tree exceed the legacy path limit.
   - `HTTP_PROXY` / `HTTPS_PROXY`: needed only when the network requires a proxy.
 
+### Windows path length
+
+`clang-cl` does not declare `longPathAware`, so the `LongPathsEnabled` registry switch does not lift the
+260-character limit for it. Skia's build passes source files to `clang-cl` as paths relative to the
+build directory, and the resolved length is `target-dir` + `../` prefix + `CARGO_HOME` registry path +
+file name. With the default `%USERPROFILE%\.cargo` and a project below `%USERPROFILE%\Documents`, that
+sum lands just above 260 and the build fails with
+`GetFullPathNameA(...): The filename or extension is too long`.
+
+Keep the target directory short. The `.cargo/` directory is gitignored, so each checkout can pin its
+own value in `.cargo/config.toml` without affecting anyone else:
+
+```toml
+[build]
+target-dir = "D:\\t"
+```
+
+With a two-character target root the resolved length drops to roughly 235 characters, which compiles.
+Setting `CARGO_TARGET_DIR` as a user-wide environment variable also works but applies to every project
+on the machine; prefer the per-checkout config.
+
 ## Frame lifecycle
 
 The wgpu renderer is created lazily on the first draw, so a window destroyed before its first frame does
