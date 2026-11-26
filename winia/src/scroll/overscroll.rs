@@ -29,6 +29,8 @@ const DEFAULT_MAX_PULL: f32 = 120.0;
 const RETURN_DELAY_MS: u64 = 60;
 /// The return motion's duration.
 const RETURN_MS: u64 = 220;
+/// How long a boundary fling takes to reach its damped peak. Animating this avoids a one-frame jump.
+const FLING_PULL_MS: u64 = 90;
 
 /// Compose's `OverscrollEffect`: hoist it with `remember` and pass it to
 /// [`Modifier::overscroll`](crate::modifier::Modifier::overscroll).
@@ -101,7 +103,24 @@ impl OverscrollEffect {
     /// Bend for a fling that hit a boundary with `remaining_velocity` (VALUE space, the same sign the
     /// decay runs on: positive moves the offset toward the end).
     pub(crate) fn pull_for_velocity(&self, remaining_velocity: f32) -> f32 {
-        self.pull(remaining_velocity * Self::PULL_PER_VELOCITY)
+        let pull = remaining_velocity * Self::PULL_PER_VELOCITY;
+        if !pull.is_finite() || pull == 0.0 {
+            return pull;
+        }
+        let start = self.raw.get();
+        let target = start + pull;
+        let effect = self.clone();
+        crate::animation::push_animatable_with_velocity_and_done(
+            self.raw.clone(),
+            target,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec {
+                duration: std::time::Duration::from_millis(FLING_PULL_MS),
+                ..crate::animation::TweenSpec::default()
+            }),
+            0.0,
+            move || effect.arm_return_after(0),
+        );
+        pull
     }
 
     /// Absorb `leftover` (the delta the container could not consume) and return it: the effect takes
@@ -120,10 +139,14 @@ impl OverscrollEffect {
     }
 
     fn arm_return(&self) {
+        self.arm_return_after(RETURN_DELAY_MS);
+    }
+
+    fn arm_return_after(&self, delay_ms: u64) {
         let spec = crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec {
             duration: std::time::Duration::from_millis(RETURN_MS),
-            delay: std::time::Duration::from_millis(RETURN_DELAY_MS),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            delay: std::time::Duration::from_millis(delay_ms),
+            ..crate::animation::TweenSpec::default()
         });
         crate::animation::push_animatable(self.raw.clone(), 0.0, spec);
     }
@@ -430,6 +453,17 @@ mod tests {
             effect.stretch()
         );
 
+        let tension = effect.stretch();
+        clock.advance(std::time::Duration::from_millis(10));
+        crate::animation::update_animations();
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        let returning = effect.stretch();
+        assert!(
+            returning < tension && returning > tension * 0.9,
+            "the return eases in instead of snapping, got {returning} from {tension}"
+        );
+
         clock.advance(std::time::Duration::from_millis(400));
         crate::animation::update_animations();
         assert!(
@@ -502,31 +536,68 @@ mod tests {
     }
 
     /// A fling that dies at the end bends the content past the END (a positive pull), damped by the
-    /// same curve: a slow fling is nearly proportional, a hard one approaches the cap.
+    /// same curve: a slow fling is nearly proportional, a hard one approaches the cap. The peak is
+    /// animated over frames instead of being inserted in the boundary frame.
     #[test]
     fn a_fling_bend_follows_velocity_and_fades() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
         let effect = OverscrollEffect::new();
         effect.pull_for_velocity(2_000.0);
+        assert_eq!(effect.stretch(), 0.0, "the boundary frame must not jump");
+
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        let first = effect.stretch();
+        assert!(
+            first > 0.0 && first < 20.0,
+            "the first frame eases in, got {first}"
+        );
+
+        clock.advance(std::time::Duration::from_millis(74));
+        crate::animation::update_animations();
         let slow = effect.stretch();
         assert!(
             (slow - 120.0 * (1.0 - (-(2000.0 / 40.0) / 120.0f32).exp())).abs() < 0.5,
             "2000 px/s -> raw 50 damped, got {slow}"
         );
 
-        let hard = OverscrollEffect::new();
-        hard.pull_for_velocity(100_000.0);
+        clock.advance(std::time::Duration::from_millis(16));
+        crate::animation::update_animations();
+        let returning = effect.stretch();
         assert!(
-            hard.stretch() <= 120.0,
-            "even a huge fling stops at the cap, got {}",
-            hard.stretch()
+            returning > 0.0 && returning < slow,
+            "the peak flows straight into the return, got {returning} from {slow}"
         );
 
+        let hard = OverscrollEffect::new();
+        hard.pull_for_velocity(100_000.0);
+        assert_eq!(hard.stretch(), 0.0, "a hard fling also starts from zero");
         let back = OverscrollEffect::new();
         back.pull_for_velocity(-2_000.0);
+        assert_eq!(
+            back.stretch(),
+            0.0,
+            "the reverse bend also starts from zero"
+        );
+
+        clock.advance(std::time::Duration::from_millis(90));
+        crate::animation::update_animations();
+        assert!(
+            hard.stretch() <= 120.0,
+            "a huge fling still stops at the cap"
+        );
         assert!(
             (back.stretch() + slow).abs() < 0.5,
             "the sign follows the velocity"
         );
+
+        clock.advance(std::time::Duration::from_millis(400));
+        crate::animation::update_animations();
+        assert!(effect.stretch().abs() < 1.0);
+        assert!(hard.stretch().abs() < 1.0);
+        assert!(back.stretch().abs() < 1.0);
+        crate::animation::clear_all_animations();
     }
     /// The fling path really reaches the effect: a decay that hits the end leaves a bend.
     /// A hand-built `Column + vertical_scroll` gets the effect from the ambient factory, exactly as a
