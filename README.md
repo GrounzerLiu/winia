@@ -2,7 +2,7 @@
 
 基于 **winit + skia-safe** 的声明式跨平台 GUI 框架，架构对标 Jetpack Compose，纯 Rust 实现。
 
-声明式组合（`#[composable]` 函数 + 内容闭包）、链式 Modifier、增量重组、自研布局/动画引擎，渲染走 Skia（Vulkan/GL/CPU），无外部 UI 框架依赖。
+Declarative composition (`#[composable]` functions and content closures), chained modifiers, incremental recomposition, and an in-house layout/animation engine. Rendering uses Skia Graphite on wgpu, with no external UI framework dependency.
 
 > 默认分支：`v2`（合并主线）。项目仍在演进中，但核心功能已可用且有测试保障。
 
@@ -42,7 +42,7 @@ fn main() {
 - **Modifier**：布局（size / padding / offset / align / aspectRatio / requiredSize / 权重 / 滚动）、绘制（background / border / clip / shadow / blur / backdropBlur）、图形层（alpha / scale / rotate / rotationX/Y / cameraDistance / shadowElevation / transformOrigin / clip）、交互（clickable / focusable / hoverable / tap / double-tap / long-press / drag / key / pointer）、水波纹 `ripple`
 - **交互源**：`MutableInteractionSource` + `ComponentState`（press / focus / hover / drag），Button 状态取色与阴影
 - **动画**：Tween / Spring / Keyframes / Repeatable / Decay + `animate_*AsState` 族 + AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
-- **渲染**：Skia（Vulkan/GL/CPU）、GraphicsLayer 2D/3D 透视、HiDPI、背景模糊（即时 snapshot，对齐 Compose 语义）
+- **Rendering**: Skia Graphite/wgpu, GraphicsLayer 2D/3D transforms, HiDPI, and backdrop blur (immediate snapshots aligned with Compose semantics).
 - **调试**：`debug-server` 特性——WebSocket 调试通道（模拟点击/滚动/截图/读布局树）
 - **渲染**：`Brush` 渐变填充（线性 / 径向 / 扫描 + stops / tile 模式，`Modifier::background_brush`；见 `docs/brush.md`）
 - **无障碍**：`semantics` 语义树（role / name / state，`Modifier::semantics`）+ `accessibility` 特性——Windows UI Automation 桥，屏幕阅读器可读取并操作界面（默认关闭；见 `docs/semantics.md`）
@@ -54,6 +54,9 @@ cargo run -p winia --example counter          # 计数器 + 滚动 + 多窗口�
 cargo test -p winia --lib                     # 730 个单元/布局/渲染测试
 cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗口）
 ```
+
+The Graphite/wgpu Skia variant builds from source and needs a C++ toolchain plus LLVM/Clang. See
+[rendering-backends.md](docs/rendering-backends.md) for Windows path and `CARGO_HOME` requirements.
 
 更多示例见 `winia/examples/`（动画、组件、手势、GraphicsLayer、交互、Overlay、TextField、选区、文本与富文本等 13 个）。
 
@@ -82,13 +85,14 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [v2 设计稿](docs/v2-design-notes.md) — v1→v2 那轮的设计意图与决策记录（历史，路径已过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
 
-## Workspace 结构
+## Workspace
 
-| Crate | 说明 |
-|-------|------|
-| `winia` | UI 框架核心库（组合/布局/渲染/动画/组件） |
-| `winia-macros` | 过程宏（`#[composable]`、`#[app_root]`、`run_app!`） |
-| `skiwin` | Skia 渲染后端（Vulkan/GL/CPU） |
+| Crate | Purpose |
+|-------|---------|
+| `winia` | UI framework core: composition, layout, rendering, animation and components |
+| `winia-macros` | Procedural macros: `#[composable]`, `#[app_root]`, `run_app!` |
+| `material-shapes` | Material 3 shape geometry used by `MaterialShapes` |
+| `winia-material-symbols-*` | Optional embedded Material Symbols icon fonts |
 
 ## 开发状态
 

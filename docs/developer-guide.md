@@ -21,20 +21,19 @@ D:\Projects\winia\
 │   │   ├── modifier.rs   # Modifier 链 + FocusRequester + ScrollState
 │   │   ├── layout.rs + layout/*.rs  # 布局引擎 + 3 种布局策略
 │   │   ├── ui.rs + ui/    # Window / Button / Text / Column / Row / Stack
-│   │   ├── render.rs     # Skia 渲染管线
+│   │   ├── render.rs + render/  # Skia Graphite pipeline + wgpu window backend
 │   │   ├── animation.rs  # 动画系统
 │   │   ├── input.rs + input/focus.rs  # 焦点管理
 │   │   └── debug.rs      # DevTools HTTP 服务器（可选 feature）
 │   └── examples/counter.rs  # 主要示例
 │
-├── skiwin/           ← Skia 渲染后端（Vulkan/GL/CPU）
 └── docs/             ← 文档
 ```
 
-**核心依赖**:
-- `winit 0.31` — 窗口创建和事件循环
-- `skia-safe 0.99` — Skia 图形 API（Rust 绑定）
-- `softbuffer 0.4` — CPU 回退渲染
+**Core dependencies**:
+- `winit 0.31` — window creation and event loop.
+- `skia-safe 0.158` with `wgpu` — Skia Graphite rendering into wgpu textures.
+- `wgpu 30` — re-exported by `skia_safe::wgpu`; no separate dependency is declared.
 
 ---
 

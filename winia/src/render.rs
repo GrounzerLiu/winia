@@ -75,6 +75,7 @@ pub fn render_node_at(
 }
 
 mod backdrop;
+pub(crate) mod capture;
 mod helpers;
 mod paint;
 mod pass;
@@ -89,6 +90,9 @@ pub(crate) use selection_menu::{
     row_at as selection_menu_row_at,
 };
 mod text_field;
+mod wgpu;
+
+pub(crate) use wgpu::WgpuWindow;
 
 use pass::render_pass1;
 

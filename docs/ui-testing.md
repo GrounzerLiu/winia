@@ -1,8 +1,8 @@
 # UI 测试（界面级集成测试）
 
-通过真实运行**测试专用 fixture**（Skia 窗口 + 渲染循环；默认 Vulkan，可用 `WINIA_RENDER_BACKEND`
-固定为 gl/cpu，见 docs/rendering-backends.md），向 fixture 进程注入操作
-（点击/滚动/拖拽），从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为。
+The suite spawns real fixture processes with a Skia Graphite/wgpu window and render loop, injects
+input (click/scroll/drag), and asserts UI state from tree JSON. This verifies recomposition, layout and
+multi-window behavior through the same backend used by applications. See `docs/rendering-backends.md`.
 
 **Fixtures are separate from examples**: examples only demonstrate; the UI suite uses the scenarios
 under `tests/ui_fixtures/`, one responsibility per case (Given/When/Then). Every scenario compiles

@@ -7,7 +7,7 @@
 use skia_safe::textlayout::{FontCollection, TypefaceFontProvider};
 // `FontStyle` is used by the tests below; the module itself only needs `FontMgr`.
 #[allow(unused_imports)]
-use skia_safe::{FontMgr, FontStyle};
+use skia_safe::{Data, FontMgr, FontStyle};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -68,7 +68,10 @@ pub fn register_font_bytes(family: &str, bytes: Vec<u8>) -> Result<(), FontError
     if family.trim().is_empty() {
         return Err(FontError::EmptyFamily);
     }
-    if FontMgr::default().new_from_data(&bytes, None).is_none() {
+    if FontMgr::default()
+        .new_from_data(Data::new_copy(&bytes), None)
+        .is_none()
+    {
         return Err(FontError::InvalidFont);
     }
     let mut fonts = ASSET_FONTS
@@ -132,7 +135,7 @@ pub fn get_font_collection() -> FontCollection {
                 let Some(bytes) = bytes else {
                     continue;
                 };
-                let Some(typeface) = system.new_from_data(&bytes, None) else {
+                let Some(typeface) = system.new_from_data(Data::new_copy(&bytes), None) else {
                     log::warn!("[fonts] invalid typeface for family {}", font.family);
                     continue;
                 };

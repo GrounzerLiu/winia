@@ -261,7 +261,13 @@ fn an_existing_window_receives_the_latest_content_closure() {
 #[test]
 fn closing_a_parent_cancels_its_pending_child() {
     let mut fixture = Fixture::spawn("pending-child-close", "pending-child-close");
-    std::thread::sleep(Duration::from_millis(1_800));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !fixture.text().contains("reentrant-composed") && Instant::now() < deadline {
+        if !fixture.is_alive() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         fixture.is_alive(),
         "StayResident should keep the process alive after the parent closes"

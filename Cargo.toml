@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "winia",
     "winia-macros",
-    "skiwin",
     "material-shapes",
     "winia-material-symbols-outlined",
     "winia-material-symbols-rounded",
@@ -27,8 +26,7 @@ debug = 1
 # The Android IME bridge lives in the published winia-winit fork. The dependency key stays
 # "winit" so every existing use winit::... site keeps working unchanged.
 winit = { package = "winia-winit", version = "=0.31.0-beta.4" }
-skia-safe = "0.99.0"
-skia-bindings = "0.99.0"
+skia-safe = "0.158.0"
 material-shapes = { path = "material-shapes", version = "0.1.0", features = ["shape_util"] }
 parking_lot = "0.12"
 log = "0.4"

@@ -230,7 +230,7 @@ impl AppState {
                 .unwrap_or_else(|| "unknown".into()),
             frame_interval
         );
-        let skia_window = SkiaWindow::new(event_loop, w);
+        let skia_window = WgpuWindow::new(event_loop, w, pending.options.transparent);
         // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
         // otherwise, and unconditional at the call site so nothing here needs feature gates).
         crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);

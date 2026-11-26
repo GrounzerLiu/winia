@@ -336,5 +336,5 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 | Scrollbar ×1 | ScrollbarNode（Vertical/Horizontal/LazyScrollbar 三组件共用） | `12e179a` + 后续 `bac42eb`/`232d3e1`/`f494263`/`30da727`/`6cf0846`/`8916eb3`/`0885cce`/`6e47a19`/`da8a58b`/`465dbea`/`392011c` | fade:State 进节点 draw 期 peek（build 快照 bug）；滚轮去盲找；offset 脉冲 + 单 effect 睡醒快照；review P0 修（clamp panic/viewport get/drag_cancel）；抽 `scrollbar_build_shared`；grab 保持；边界 pulse + reverse 镜像；Lazy 适配 |
 
 生产代码 `.draw()` 匿名闭包清零验证：`grep -rn "\.draw(" winia/src` 残留仅
-测试双路对照（7 处，故意保留）+ `sw.draw`（skiwin 后端）/ `paragraph.draw`
+测试双路对照（7 处，故意保留）+ `sw.draw`（wgpu backend）/ `paragraph.draw`
 （skia 调用，非 Modifier）。全量 742 绿。

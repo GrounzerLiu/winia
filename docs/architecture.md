@@ -17,10 +17,9 @@ taken along the way, see [`v2-design-notes.md`](v2-design-notes.md) — a dated 
 | --- | --- |
 | `winia` | the framework: runtime, layout, components, renderer, app |
 | `winia-macros` | the two attribute macros (`composable`, `composable_keyed`) and the four function macros (`app_root!`, `run_app!`, `compose!`, `keyed_stmt!`) a caller uses |
-| `skiwin` | window creation and the Skia surface: Vulkan → GL → CPU/softbuffer, first that opens wins |
 | `material-shapes` | Material 3 shape geometry (the morphing used by `MaterialShapes`) |
 
-`winia` depends on the other three by path. Nothing depends on `winia`.
+`winia` depends on the other workspace crates by path. Its internal `render::WgpuWindow` owns the winit window, wgpu swapchain and Skia Graphite context; nothing depends on `winia`.
 
 ## Layers
 

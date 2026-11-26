@@ -9,7 +9,7 @@ pub(crate) struct PerWindow {
     /// The window's insets controller: platform code writes system insets here, and the
     /// composition reads the same controller through its composer.
     pub(crate) insets: crate::window::insets::WindowInsetsController,
-    pub(crate) skia_window: Option<SkiaWindow>,
+    pub(crate) skia_window: Option<WgpuWindow>,
     pub(crate) width: f32,
     pub(crate) height: f32,
     pub(crate) scale_factor: f64,
@@ -1065,8 +1065,8 @@ impl PerWindow {
                         }
                         after_draw(nodes, root_idx, surface);
                     });
-                    // The screenshot read-back happens after the flush (inside skiwin's draw), which
-                    // guarantees a genuinely presented frame.
+                    // The screenshot read-back happens after Graphite submission inside the wgpu draw,
+                    // so it captures the frame that was submitted for presentation.
                     if crate::debug::screenshot_requested(debug_window_id) {
                         if let Some((w2, h2, pixels)) = take_capture() {
                             crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);

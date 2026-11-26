@@ -1,81 +1,82 @@
-# Rendering backends
+# Rendering backend: Skia Graphite on wgpu
 
-winia draws through one of three Skia backends, all of them inside `skiwin`:
+winia renders through rust-skia's experimental Graphite `wgpu` backend. The window and swapchain
+are owned by an internal `winia::render::WgpuWindow`; the old `skiwin` crate and its Vulkan/GL/CPU
+selection layer are no longer part of the workspace. The `vulkan`/`gl` feature flags and the
+`WINIA_RENDER_BACKEND` environment variable have been removed.
 
-| Backend | What it needs | Feature | Notes |
-|---|---|---|---|
-| `vulkan` | A Vulkan loader + a driver ICD that can present to the window | `vulkan` | Default choice. Triple-buffered, `Fifo` present mode. |
-| `gl` | A driver that can give a WGL/EGL/GLES context for the window | `gl` | GPU fallback for machines with no Vulkan ICD (older drivers, some VMs). |
-| `cpu` | Nothing but a window | always on | Skia rasterises into a softbuffer surface. Slower, but it cannot fail for lack of a GPU. |
+## Versions and build requirements
 
-## Selection
+- Rust 1.88 or newer.
+- `skia-safe` 0.158.0 with the `wgpu` feature (Graphite + Dawn backend).
+- The matching `wgpu` 30 types are re-exported as `skia_safe::wgpu`; winia does not declare a second
+  `wgpu` dependency.
+- This Skia variant has no published prebuilt archive. The first build downloads Skia and Dawn's
+  WebGPU headers and compiles from source, so it requires network access, Python, Ninja, LLVM
+  (`clang-cl`) and the platform C++ toolchain. Set `LLVM_HOME` to the LLVM installation; if the
+  installed MSVC STL is newer than the selected Clang, set `CC` and `CXX` to that `clang-cl.exe` as
+  well. On Windows the build unpacks and patches Skia inside the cargo registry source directory,
+  so `CARGO_HOME` must be writable; use a dedicated writable
+  cargo home when the shared registry cache is restricted. Keep `CARGO_HOME` and
+  `CARGO_TARGET_DIR` short on Windows: Skia's dependency tree can exceed the legacy path limit.
 
-`skiwin::SkiaWindow::new` picks the backend when a window is created:
+## Frame lifecycle
 
-1. If `WINIA_RENDER_BACKEND` names a backend (`vulkan`, `gl`, `cpu`, plus `opengl` and `softbuffer`
-   as aliases), **only** that one is tried, and a failure is fatal — a pinned backend that silently
-   fell back would hide the very thing the pin was there to test.
-2. Otherwise the backends compiled into the build are tried most-capable-first: Vulkan, then GL, then
-   CPU. The first one that opens the window wins.
-3. A backend that fails is reported once per process, to `log::warn` and to stderr — the app runs
-   anyway, but a user whose machine dropped to software rendering needs to hear about it. Without a
-   logger installed (winia installs none) the stderr line is the only report, which is why it is
-   there: falling back is not silent.
+The wgpu renderer is created lazily on the first draw, so a window destroyed before its first frame does
+not allocate a GPU device or Graphite context. Resume recreates a destroyed renderer; resize before the
+first draw is folded into the initial surface size.
 
-If every backend fails, `SkiaWindow::new` panics naming each failure. There is nothing left to draw
-with, and a clear panic beats a window that never appears.
+1. Acquire the current `wgpu::SurfaceTexture`.
+2. Wrap its texture with `graphite::wgpu::surfaces::wrap_texture`.
+3. Run the existing renderer against the Skia `Surface`.
+4. Snap the recorder, insert the recording and submit it while the surface is still alive.
+5. Optionally read pixels back through `graphite::Context::read_pixels` for debug capture.
+6. Drop the per-frame Skia surface and present the frame through `wgpu::Queue::present`.
 
-`SkiaWindow::backend()` reports which one a window actually opened on.
+The recorder must outlive every per-frame Skia surface, and both Graphite objects must be dropped
+before the wgpu device and queue. `WgpuRenderer` declares fields in the required drop order. A bounded
+`ImageProvider` uploads raster and other non-Graphite images; without one, Graphite silently drops those
+draws. The cache uses LRU eviction so per-frame offscreen images do not accumulate indefinitely.
 
-```bash
-cargo run --example alert_dialog_demo                          # automatic
-WINIA_RENDER_BACKEND=cpu cargo run --example alert_dialog_demo # pin one
-```
+## Surface configuration
 
-## Feature flags
+A non-sRGB surface format is preferred when available, because Skia writes sRGB-encoded values and
+the swapchain must not encode them a second time. Transparent windows prefer `PreMultiplied` alpha,
+then `PostMultiplied`; if the surface only supports opaque composition, winia logs the fallback.
 
-`winia`'s default features are `["vulkan", "gl"]`, so a default build carries the whole fallback
-chain. `cpu` needs no feature. To build a variant deliberately:
-
-```bash
-cargo check -p winia --no-default-features                          # cpu only
-cargo check -p winia --no-default-features --features gl            # gl only
-cargo check -p winia --no-default-features --features vulkan        # vulkan only
-```
-
-Note that `skia-bindings` resolves its prebuilt archive by an **exact** feature key, and only some
-combinations are published. `winia`'s manifest pins the full Windows Skia feature set
-(`vulkan, textlayout, svg, gl, d3d`) regardless of which backends are enabled, so every configuration
-above resolves to the published archive. Checking `skiwin` on its own with a GPU feature enabled does
-not: the build finds no archive for that key and falls back to compiling Skia from source. Check the
-backend features through `winia`.
+Resize reconfigures the surface at the new physical size. `Outdated` and `Lost` surface textures
+trigger reconfiguration and skip the frame. `Timeout` and `Occluded` skip presentation. Zero-sized
+surfaces are ignored until the window becomes visible again.
 
 ## Debug capture
 
-The debug server's screenshot path (`request_capture` / `take_capture`, and through it the `px`
-command and the raw frame stream) works on all three backends. The capture is backend-neutral because
-each draw path reads back at the point where its pixels are final:
+The debug server's `request_capture` / `take_capture` path now reads the submitted Graphite surface.
+This is deliberately after `Context::submit`, so the capture represents the frame submitted for
+presentation rather than a partially recorded frame. The surface requests `COPY_SRC` when its
+capabilities allow it; platforms without that usage cannot provide pixel capture.
 
-- Vulkan and GL capture after `flush_and_submit`, so the capture is the frame that was actually
-  submitted to the presentation engine. (Reading inside the draw closure happens before the flush and
-  sees partial content.)
-- CPU captures inside the draw closure: the pixels being drawn *are* the presented frame.
+## Validation
 
-Row order needs no correction: `read_pixels` returns rows top-down whatever the surface's origin is,
-even though GL framebuffers are created `BottomLeft` and Vulkan render targets `TopLeft`. This was
-measured rather than assumed — the GL capture was checked against a desktop screenshot of the same
-window, because a flip that looks necessary for a `BottomLeft` surface puts an upright readback
-upside down.
+```bash
+cargo check -p winia --lib
+cargo test -p winia --lib render::wgpu
+cargo test -p winia --test wgpu_offscreen_test -- --ignored
+cargo test -p winia --lib render::capture -- --ignored
+cargo test -p winia --test window_lifecycle_test
+```
 
-## Known limits
+The offscreen test requires a wgpu adapter and is ignored by default so headless test runs do not
+fail for lack of a GPU. Window lifecycle and UI fixture tests exercise the real swapchain path.
 
-- The `d3d` backend is a 116-line stub in `skiwin/src/d3d.rs` and is not compiled
-  (`// mod d3d;` in `skiwin/src/lib.rs`).
-- Backend *initialisation* returns errors and falls back. Per-frame recovery does not: Vulkan
-  swapchain recreation and device-loss handling still panic in debug builds
-  (`skiwin/src/vulkan/renderer.rs`) and recover only in release. A `SkiaWindowTrait::draw` that
-  returned `Result` would be needed to lift those, which is a change to the trait every backend and
-  call site shares.
-- GL framebuffers use the default framebuffer (`fboid: 0`) with an `RGBA8` format, and the GL
-  surface's sRGB handling follows the driver's default framebuffer. Colour differences against
-  Vulkan are possible on drivers that gamma-correct the default framebuffer.
+Validated on Windows with an RTX 5060: offscreen pixels 1/1, Graphite capture 1/1, render tests 29 passed
+plus 1 ignored GPU test, font tests 2/2, `app::window` 45/45, render snapshots 42/42, window lifecycle
+25/25, and the debug-server UI suite 6/6. The all-targets check, changed-file rustfmt and
+`git diff --check` also pass.
+
+## Current limits
+
+- The upstream backend is experimental.
+- Each window currently creates its own wgpu adapter/device and Graphite context.
+- A machine without a usable wgpu adapter cannot open a window; there is no CPU/GL fallback in this
+  migration.
+- Native validation outside Windows is still pending.

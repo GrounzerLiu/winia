@@ -145,8 +145,8 @@ pub(crate) struct PendingWindow {
     pub owner: Option<u64>,
     pub theme: Option<crate::theme::WindowTheme>,
 }
-use skiwin::capture::{request_capture, take_capture};
-use skiwin::{SkiaWindow, SkiaWindowTrait};
+use crate::render::WgpuWindow;
+use crate::render::capture::{request_capture, take_capture};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -168,7 +168,7 @@ use winit::window::{ImeRequest, WindowId};
 ///
 /// The request returns a `Result`; winit's platforms treat a refused IME update as non-fatal, and
 /// there is nothing here to fall back to, so it is dropped like the shim drops it.
-pub(crate) fn set_ime_enabled(sw: &SkiaWindow, enabled: bool) {
+pub(crate) fn set_ime_enabled(sw: &WgpuWindow, enabled: bool) {
     let request = if enabled {
         ime_enable_request()
     } else {
@@ -210,7 +210,7 @@ pub(crate) enum FocusDir {
 
 /// Queries the refresh rate of the monitor the window is on and returns the frame interval (mHz:
 /// 300000 = 300 Hz). None when the query fails; the caller keeps the old value (creation falls back to 16 ms).
-fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
+fn current_frame_interval(sw: &WgpuWindow) -> Option<std::time::Duration> {
     let mhz = sw
         .current_monitor()
         .and_then(|m| m.current_video_mode())

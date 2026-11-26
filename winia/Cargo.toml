@@ -2,19 +2,16 @@
 name = "winia"
 version = "0.1.1"
 edition = "2024"
-description = "A declarative UI framework powered by Skia — Compose-inspired, pure Rust"
+rust-version = "1.88"
+description = "A declarative UI framework powered by Skia Graphite and wgpu — Compose-inspired, pure Rust"
 license = "Apache-2.0"
 repository = "https://github.com/GrounzerLiu/winia"
-keywords = ["gui", "ui", "skia", "compose"]
+keywords = ["gui", "ui", "skia", "wgpu", "compose"]
 categories = ["gui"]
 
 [features]
-# Both GPU backends are on by default so a machine without a Vulkan ICD still renders on the GPU:
-# `SkiaWindow::new` tries Vulkan, then GL, then the CPU/softbuffer path. Pin one backend with
-# `WINIA_RENDER_BACKEND=vulkan|gl|cpu` — see docs/rendering-backends.md.
-default = ["vulkan", "gl"]
-vulkan = ["skiwin/vulkan"]
-gl = ["skiwin/gl"]
+# Rendering uses Skia Graphite on wgpu. rust-skia builds this variant from source.
+default = []
 # Android GameActivity backend: the Java Activity is required for IME text events and the
 # permission-result bridge. This is the only supported Android backend.
 android-game-activity = ["winit/android-game-activity"]
@@ -35,7 +32,6 @@ material-symbols-rounded = ["dep:winia-material-symbols-rounded"]
 material-symbols-sharp = ["dep:winia-material-symbols-sharp"]
 
 [dependencies]
-skiwin = { path = "../skiwin", version = "0.1.0" }
 winia-macros = { path = "../winia-macros", version = "0.1.0" }
 winia-material-symbols-outlined = { path = "../winia-material-symbols-outlined", version = "0.1.0", optional = true }
 winia-material-symbols-rounded = { path = "../winia-material-symbols-rounded", version = "0.1.0", optional = true }
@@ -46,9 +42,8 @@ log = { workspace = true }
 thiserror = { workspace = true }
 material-shapes = { workspace = true }
 letclone = { workspace = true }
-# svg feature 所有平台启用（Icon 的 SVG 渲染依赖 skia_safe::svg——
-# 不能只在 Windows target 依赖里开，否则 Linux/macOS 编译失败）
-skia-safe = { workspace = true, features = ["svg"] }
+# SVG, text layout, WebP, and Graphite/wgpu are enabled on every platform.
+skia-safe = { workspace = true, features = ["svg", "textlayout", "webp", "wgpu"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -73,15 +68,7 @@ arboard = "3"
 # (pulled in by winit) so JavaVM/Env types are the same ones winit's AndroidApp exposes.
 jni = "0.22.4"
 ndk = "0.9"
-# Skia on Android needs text layout; the CPU/softbuffer path is enough for the first IME bring-up.
-# Add "gl"/"vulkan" here when the Android GPU backend is verified on a device.
-# webp is not used by the UI itself: it selects the published prebuilt archive that also carries
-# svg and vulkan (skia-bindings matches archives by an exact feature key). Without it, the first
-# Android build compiles Skia from source.
-skia-safe = { workspace = true, features = ["textlayout", "svg", "webp"] }
-
 [target.'cfg(target_os = "windows")'.dependencies]
-skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }
 # The UIA bridge (feature `accessibility`) and nothing else. `Win32_UI_Shell` is where
 # SetWindowSubclass lives — winit does not forward WM_GETOBJECT, so the window procedure has to be
 # hooked to answer it.
