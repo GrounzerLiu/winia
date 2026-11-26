@@ -240,11 +240,38 @@ and focus the native window without changing component focus. Unsupported featur
 away at both declarative and platform-level creation entry points; runtime setters and activation honor
 the same `WindowCapabilities`.
 
-### 8.1 Window events
+### 8.1 Windows shell windows
+
+`skip_taskbar`, `tool_window`, `no_activate`, and `app_bar` are cross-platform builder methods with a
+Windows-only implementation. Keeping the methods available everywhere lets one declaration compile
+unchanged on every target; unsupported style flags are normalized away and an app-bar request reports
+`AppBarStatus::Unsupported`. Applications that need a different fallback can branch on
+`WindowCapabilities::current()` or `WindowId::capabilities()`.
+
+```rust
+let taskbar = Window::new()
+    .title("Taskbar")
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .tool_window(true)
+    .app_bar(AppBarOptions::bottom(48.0))
+    .build(ctx, |ctx| { /* shared content */ });
+```
+
+On Windows, `skip_taskbar` uses winit's taskbar deletion support, `tool_window` adds
+`WS_EX_TOOLWINDOW`, and `no_activate` independently adds `WS_EX_NOACTIVATE`. App-bar registration
+automatically forces always-on-top, taskbar skipping, the tool-window style, and shell-owned geometry.
+`no_activate` is never forced. The backend re-applies taskbar hiding after Explorer restarts,
+re-negotiates on app-bar/DPI/display changes, and unregisters before the native window is destroyed.
+`WindowState::app_bar_status()` and `WindowEvent::AppBarStatusChanged` expose the result. App-bar
+windows do not persist ordinary window geometry.
+
+### 8.2 Window events
 
 `WindowState` remains the authoritative reactive projection. `Window::on_event` is an additive
 callback for semantic observations: `Resized`, `Moved`, `PlacementChanged`, `FocusChanged`,
-`ScaleFactorChanged`, and `InsetsChanged`. The callback runs on the UI thread after the corresponding
+`ScaleFactorChanged`, `InsetsChanged`, and `AppBarStatusChanged`. The callback runs on the UI thread after the corresponding
 state write, receives the `WindowId`, and is replaced when the declaring composition publishes a new
 closure. Repeated observations of an unchanged value do not notify.
 
@@ -361,6 +388,8 @@ overlay host already works this way (`request_back_close` and `flush_back_close_
 | focused | OS focus event and `has_focus()` | platform to application, read-only |
 | title, resizable | `WindowState` setters | application to platform |
 | always_on_top | declaration or `WindowState::set_always_on_top` | application to platform |
+| skip_taskbar, tool_window, no_activate | declaration | application at creation |
+| app_bar | declaration; shell negotiates geometry | application request, platform-owned result |
 | transparent | declaration | application at creation |
 | decorations | declaration or `WindowState::set_decorations` | application to platform |
 | minimum/maximum size | declaration or `WindowState` setters | application to platform |
@@ -372,14 +401,16 @@ the design, not documentation of it: adding a window attribute means adding a ro
 ## 12. Platform notes
 
 Desktop: `native_close` is true, so `on_close_requested` fires when the user closes a window
-from its chrome. Windows, macOS and X11 support activation and always-on-top. On Linux the actual
+from its chrome. Windows, macOS and X11 support activation and always-on-top. Only Windows reports
+`skip_taskbar`, `tool_window`, `no_activate`, and `app_bar` as supported. On Linux the actual
 winit backend is detected: Wayland reports `activate` and `always_on_top` as false because those
 winit operations are no-ops, while decorations and size constraints remain available. Applications
 should always branch on `WindowCapabilities` rather than assuming every desktop feature is present.
 
 Android: several winit windows are composited into one Activity surface in creation order, so
 there is no independent top-level window. `position`, `placement`, `multi_window`, `native_close`,
-`activate`, `always_on_top`, `transparent`, `decorations` and `size_constraints` are false there,
+`activate`, `always_on_top`, `transparent`, `decorations`, `size_constraints`, `skip_taskbar`,
+`tool_window`, `no_activate` and `app_bar` are false there,
 and `on_close_requested` never fires; applications provide their own close entry through the back
 handler (`docs/back-navigation.md`). `title` and `resizable` are accepted today and have no effect.
 

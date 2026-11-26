@@ -9,6 +9,8 @@ pub(crate) struct PerWindow {
     /// The window's insets controller: platform code writes system insets here, and the
     /// composition reads the same controller through its composer.
     pub(crate) insets: crate::window::insets::WindowInsetsController,
+    #[cfg(target_os = "windows")]
+    pub(crate) shell_window: Option<crate::app::window_shell::ShellWindow>,
     pub(crate) skia_window: Option<WgpuWindow>,
     pub(crate) width: f32,
     pub(crate) height: f32,
@@ -138,6 +140,8 @@ impl PerWindow {
         if let Some(ref mut cb) = self.on_close {
             cb();
         }
+        #[cfg(target_os = "windows")]
+        drop(self.shell_window.take());
         if let Some(ref sw) = self.skia_window {
             crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
         }
@@ -171,6 +175,8 @@ impl PerWindow {
         PerWindow {
             composer,
             insets,
+            #[cfg(target_os = "windows")]
+            shell_window: None,
             skia_window: None,
             width,
             height,

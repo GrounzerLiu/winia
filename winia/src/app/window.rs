@@ -137,6 +137,33 @@ impl Window {
         self
     }
 
+    /// Windows only: hide the window's taskbar button. Other platforms ignore the request.
+    pub fn skip_taskbar(mut self, skip_taskbar: bool) -> Self {
+        self.options.skip_taskbar = skip_taskbar;
+        self
+    }
+
+    /// Windows only: use the `WS_EX_TOOLWINDOW` tool-window style. Other platforms ignore it.
+    pub fn tool_window(mut self, tool_window: bool) -> Self {
+        self.options.tool_window = tool_window;
+        self
+    }
+
+    /// Windows only: add `WS_EX_NOACTIVATE`. Other platforms ignore the request.
+    pub fn no_activate(mut self, no_activate: bool) -> Self {
+        self.options.no_activate = no_activate;
+        self
+    }
+
+    /// Windows only: register an application desktop toolbar. Other platforms keep a normal window.
+    ///
+    /// App-bar windows are always on top, skip the taskbar, use the tool-window style, and let the
+    /// shell own their geometry. `no_activate` remains an independent choice.
+    pub fn app_bar(mut self, options: window_state::AppBarOptions) -> Self {
+        self.options.app_bar = Some(options);
+        self
+    }
+
     /// Create a transparent window. Transparent windows are always undecorated.
     pub fn transparent(mut self, transparent: bool) -> Self {
         self.options.transparent = transparent;
@@ -462,6 +489,17 @@ impl Window {
             } else {
                 WindowPlacement::Windowed
             };
+            let app_bar = caps.app_bar && options.app_bar.is_some();
+            let placement = if app_bar {
+                WindowPlacement::Windowed
+            } else {
+                placement
+            };
+            let position = if app_bar {
+                window_state::WindowPosition::Default
+            } else {
+                position
+            };
             let owner_raw = ctx.window_id().raw();
             let owner = (owner_raw != 0).then_some(WindowId::new(owner_raw));
             window_state::declare_owned(
@@ -472,6 +510,10 @@ impl Window {
                     resizable: options.resizable,
                     always_on_top: options.always_on_top,
                     transparent: options.transparent,
+                    skip_taskbar: options.skip_taskbar,
+                    tool_window: options.tool_window,
+                    no_activate: options.no_activate,
+                    app_bar: options.app_bar,
                     decorations: options.decorations,
                     minimum_size: options.minimum_size,
                     maximum_size: options.maximum_size,
@@ -551,6 +593,10 @@ mod tests {
             activate: true,
             always_on_top: true,
             transparent: true,
+            skip_taskbar: true,
+            tool_window: true,
+            no_activate: true,
+            app_bar: true,
             decorations: true,
             size_constraints: true,
         };

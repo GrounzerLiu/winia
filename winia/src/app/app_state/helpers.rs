@@ -132,7 +132,11 @@ impl AppState {
                     crate::app::window_geometry::MonitorBounds::from_handle(&handle)
                 })
                 .collect();
-            if let Some(geometry) = crate::app::window_geometry::restore(key, &monitors) {
+            let shell_owns_geometry = pending.options.app_bar.is_some()
+                && crate::app::window_state::WindowCapabilities::platform().app_bar;
+            if !shell_owns_geometry
+                && let Some(geometry) = crate::app::window_geometry::restore(key, &monitors)
+            {
                 pending.width = geometry.width;
                 pending.height = geometry.height;
                 pending.position = geometry
@@ -170,6 +174,18 @@ impl AppState {
             winit::window::WindowLevel::Normal
         };
         a.transparent = pending.options.transparent;
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::WindowAttributesWindows;
+            let existing = a.platform.take().and_then(|attributes| {
+                (attributes.as_ref() as &dyn std::any::Any)
+                    .downcast_ref::<WindowAttributesWindows>()
+                    .cloned()
+            });
+            let mut windows = existing.unwrap_or_default();
+            windows = windows.with_skip_taskbar(pending.options.skip_taskbar);
+            a.platform = Some(Box::new(windows));
+        }
         if let Some((width, height)) = pending.options.minimum_size {
             a.min_surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
                 width as f64,
@@ -234,6 +250,12 @@ impl AppState {
         // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
         // otherwise, and unconditional at the call site so nothing here needs feature gates).
         crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);
+        #[cfg(target_os = "windows")]
+        let shell_window = crate::app::window_shell::ShellWindow::configure(
+            &*skia_window,
+            pending.options,
+            pending.created_id.map(crate::app::window_state::WindowId::new),
+        );
         let content = pending
             .created_id
             .map(crate::app::window_state::WindowId::new)
@@ -282,6 +304,10 @@ impl AppState {
         pw.saveable_key = pending.saveable_key;
         pw.persist_key = pending.persist_key;
         pw.scale_factor = sf;
+        #[cfg(target_os = "windows")]
+        {
+            pw.shell_window = shell_window;
+        }
         pw.skia_window = Some(skia_window);
         pw.clock.frame_interval = frame_interval;
         // FocusRequester created by this window's initial composition is bound

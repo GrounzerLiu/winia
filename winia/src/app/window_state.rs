@@ -10,6 +10,8 @@
 //! visibility, and resizable report application-owned requests.
 
 use crate::runtime::composer::ComposeCtx;
+
+pub use super::window_shell::{AppBarEdge, AppBarError, AppBarOptions, AppBarStatus};
 use crate::runtime::state::State;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -159,6 +161,8 @@ pub enum WindowEvent {
     InsetsChanged {
         insets: crate::window::insets::WindowInsets,
     },
+    /// A Windows app-bar request changed lifecycle state.
+    AppBarStatusChanged(AppBarStatus),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -193,6 +197,10 @@ pub struct WindowCapabilities {
     pub activate: bool,
     pub always_on_top: bool,
     pub transparent: bool,
+    pub skip_taskbar: bool,
+    pub tool_window: bool,
+    pub no_activate: bool,
+    pub app_bar: bool,
     pub decorations: bool,
     pub size_constraints: bool,
 }
@@ -206,6 +214,11 @@ pub(crate) fn set_wayland(wayland: bool) {
 }
 
 impl WindowCapabilities {
+    /// Capabilities of the current platform and windowing backend.
+    pub fn current() -> Self {
+        Self::platform()
+    }
+
     pub(crate) fn platform() -> Self {
         let desktop = !cfg!(target_os = "android");
         #[cfg(target_os = "linux")]
@@ -224,6 +237,10 @@ impl WindowCapabilities {
             activate: desktop && !wayland,
             always_on_top: desktop && !wayland,
             transparent: desktop,
+            skip_taskbar: cfg!(target_os = "windows") && desktop,
+            tool_window: cfg!(target_os = "windows") && desktop,
+            no_activate: cfg!(target_os = "windows") && desktop,
+            app_bar: cfg!(target_os = "windows") && desktop,
             decorations: desktop,
             size_constraints: desktop,
         }
@@ -390,6 +407,12 @@ impl WindowState {
     /// Whether the window is kept above normal windows.
     pub fn always_on_top(&self) -> bool {
         with_cell(self.id, |cell| cell.snapshot.get().always_on_top).unwrap_or(false)
+    }
+
+    /// Current app-bar lifecycle state. Non-Windows platforms report `Unsupported` when requested.
+    pub fn app_bar_status(&self) -> AppBarStatus {
+        with_cell(self.id, |cell| cell.snapshot.get().app_bar_status)
+            .unwrap_or(AppBarStatus::Unregistered)
     }
 
     /// Request a always-on-top stacking level.
@@ -665,6 +688,7 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
 /// Composer as a dependent; platform observations and application-owned writes publish through State.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WindowSnapshot {
+    pub(crate) app_bar_status: AppBarStatus,
     pub(crate) realized: bool,
     pub(crate) focused: bool,
     pub(crate) size: (f32, f32),
@@ -675,6 +699,9 @@ pub(crate) struct WindowSnapshot {
     pub(crate) resizable: bool,
     pub(crate) always_on_top: bool,
     pub(crate) transparent: bool,
+    pub(crate) skip_taskbar: bool,
+    pub(crate) tool_window: bool,
+    pub(crate) no_activate: bool,
     pub(crate) decorations: bool,
     pub(crate) minimum_size: Option<(f32, f32)>,
     pub(crate) maximum_size: Option<(f32, f32)>,
@@ -684,6 +711,7 @@ pub(crate) struct WindowSnapshot {
 impl Default for WindowSnapshot {
     fn default() -> Self {
         Self {
+            app_bar_status: AppBarStatus::Unregistered,
             realized: false,
             focused: false,
             size: (0.0, 0.0),
@@ -694,6 +722,9 @@ impl Default for WindowSnapshot {
             resizable: true,
             always_on_top: false,
             transparent: false,
+            skip_taskbar: false,
+            tool_window: false,
+            no_activate: false,
             decorations: true,
             minimum_size: None,
             maximum_size: None,
@@ -745,11 +776,15 @@ type WindowEventHandler = Rc<dyn Fn(WindowId, WindowEvent)>;
 
 /// The values a window starts with.
 pub(crate) struct WindowSeed {
+    pub(crate) app_bar: Option<AppBarOptions>,
     pub(crate) size: (f32, f32),
     pub(crate) title: String,
     pub(crate) resizable: bool,
     pub(crate) always_on_top: bool,
     pub(crate) transparent: bool,
+    pub(crate) skip_taskbar: bool,
+    pub(crate) tool_window: bool,
+    pub(crate) no_activate: bool,
     pub(crate) decorations: bool,
     pub(crate) minimum_size: Option<(f32, f32)>,
     pub(crate) maximum_size: Option<(f32, f32)>,
@@ -769,11 +804,15 @@ pub(crate) struct WindowSeed {
 impl Default for WindowSeed {
     fn default() -> Self {
         WindowSeed {
+            app_bar: None,
             size: (300.0, 200.0),
             title: String::new(),
             resizable: true,
             always_on_top: false,
             transparent: false,
+            skip_taskbar: false,
+            tool_window: false,
+            no_activate: false,
             decorations: true,
             minimum_size: None,
             maximum_size: None,
@@ -827,6 +866,18 @@ impl WindowCell {
             resizable: seed.resizable,
             always_on_top: seed.always_on_top,
             transparent: seed.transparent,
+            skip_taskbar: seed.skip_taskbar,
+            tool_window: seed.tool_window,
+            no_activate: seed.no_activate,
+            app_bar_status: if seed.app_bar.is_some() {
+                if cfg!(target_os = "windows") {
+                    AppBarStatus::Registering
+                } else {
+                    AppBarStatus::Unsupported
+                }
+            } else {
+                AppBarStatus::Unregistered
+            },
             decorations: seed.decorations,
             minimum_size: seed.minimum_size,
             maximum_size: seed.maximum_size,
@@ -940,6 +991,12 @@ pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut Compo
 pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
     with_cell(id, |cell| {
         let snapshot = cell.snapshot.peek();
+        if matches!(
+            snapshot.app_bar_status,
+            AppBarStatus::Registering | AppBarStatus::Registered { .. }
+        ) {
+            return None;
+        }
         let placement = if snapshot.placement == WindowPlacement::Minimized {
             WindowPlacement::Windowed
         } else {
@@ -988,6 +1045,18 @@ pub(crate) fn apply_geometry(id: WindowId, geometry: &WindowGeometry) {
                 .set(Some((geometry.width, geometry.height)));
             cell.deferred_position
                 .set((position != WindowPosition::Default).then_some(position));
+        }
+    });
+}
+
+/// Publish an app-bar lifecycle observation and notify the declaration once per change.
+pub(crate) fn set_app_bar_status(id: WindowId, status: AppBarStatus) {
+    with_cell(id, |cell| {
+        let changed = cell.snapshot.get().app_bar_status != status;
+        if changed {
+            cell.snapshot
+                .update(|snapshot| snapshot.app_bar_status = status);
+            dispatch_event(id, WindowEvent::AppBarStatusChanged(status));
         }
     });
 }
@@ -1261,6 +1330,41 @@ mod tests {
         let caps = WindowCapabilities::for_backend(true, false);
         assert!(caps.activate);
         assert!(caps.always_on_top);
+    }
+
+    #[test]
+    fn app_bar_status_is_deduplicated_and_owns_geometry() {
+        let id = WindowId::new(0xA55E_6A17);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        declare(
+            id,
+            WindowSeed {
+                app_bar: Some(AppBarOptions::bottom(48.0)),
+                on_event: Some(Rc::new(move |_, event| sink.borrow_mut().push(event))),
+                ..WindowSeed::default()
+            },
+        );
+        let initial = if cfg!(target_os = "windows") {
+            AppBarStatus::Registering
+        } else {
+            AppBarStatus::Unsupported
+        };
+        assert_eq!(WindowState { id }.app_bar_status(), initial);
+        assert_eq!(capture_geometry(id).is_some(), !cfg!(target_os = "windows"));
+
+        let registered = AppBarStatus::Registered {
+            edge: AppBarEdge::Bottom,
+        };
+        set_app_bar_status(id, registered);
+        set_app_bar_status(id, registered);
+        assert_eq!(WindowState { id }.app_bar_status(), registered);
+        assert!(capture_geometry(id).is_none());
+        assert_eq!(
+            *seen.borrow(),
+            vec![WindowEvent::AppBarStatusChanged(registered)]
+        );
+        forget(id);
     }
 
     fn fresh(raw: u64) -> WindowId {

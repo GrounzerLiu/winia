@@ -15,6 +15,7 @@ use overlay_host::{
 };
 pub mod scroll;
 pub mod window;
+pub mod window_shell;
 pub mod window_state;
 
 use scroll::{
@@ -46,6 +47,10 @@ pub struct WindowOptions {
     pub decorations: bool,
     pub always_on_top: bool,
     pub transparent: bool,
+    pub skip_taskbar: bool,
+    pub tool_window: bool,
+    pub no_activate: bool,
+    pub app_bar: Option<window_shell::AppBarOptions>,
     pub minimum_size: Option<(f32, f32)>,
     pub maximum_size: Option<(f32, f32)>,
 }
@@ -57,6 +62,10 @@ impl Default for WindowOptions {
             decorations: true,
             always_on_top: false,
             transparent: false,
+            skip_taskbar: false,
+            tool_window: false,
+            no_activate: false,
+            app_bar: None,
             minimum_size: None,
             maximum_size: None,
         }
@@ -68,6 +77,20 @@ impl WindowOptions {
         self.always_on_top &= capabilities.always_on_top;
         self.transparent &= capabilities.transparent;
         self.decorations &= capabilities.decorations;
+        self.skip_taskbar &= capabilities.skip_taskbar;
+        self.tool_window &= capabilities.tool_window;
+        self.no_activate &= capabilities.no_activate;
+        if self.app_bar.is_some() {
+            if capabilities.app_bar {
+                self.always_on_top = true;
+                self.skip_taskbar = true;
+                self.tool_window = true;
+            } else {
+                self.skip_taskbar = false;
+                self.tool_window = false;
+                self.no_activate = false;
+            }
+        }
         if self.transparent {
             self.decorations = false;
         }
@@ -92,6 +115,10 @@ mod window_options_tests {
             activate: false,
             always_on_top: false,
             transparent,
+            skip_taskbar: false,
+            tool_window: false,
+            no_activate: false,
+            app_bar: false,
             decorations: true,
             size_constraints: true,
         }
@@ -107,6 +134,42 @@ mod window_options_tests {
         options.normalize(capabilities(true));
         assert!(options.transparent);
         assert!(!options.decorations);
+    }
+
+    #[test]
+    fn app_bar_forces_shell_styles_when_supported() {
+        let mut caps = capabilities(true);
+        caps.skip_taskbar = true;
+        caps.tool_window = true;
+        caps.no_activate = true;
+        caps.app_bar = true;
+        let mut options = WindowOptions {
+            app_bar: Some(crate::app::window_shell::AppBarOptions::bottom(48.0)),
+            no_activate: true,
+            ..WindowOptions::default()
+        };
+        options.normalize(caps);
+        assert!(options.always_on_top);
+        assert!(options.skip_taskbar);
+        assert!(options.tool_window);
+        assert!(options.no_activate);
+        assert!(options.app_bar.is_some());
+    }
+
+    #[test]
+    fn unsupported_app_bar_keeps_the_request_but_drops_shell_styles() {
+        let mut options = WindowOptions {
+            app_bar: Some(crate::app::window_shell::AppBarOptions::bottom(48.0)),
+            skip_taskbar: true,
+            tool_window: true,
+            no_activate: true,
+            ..WindowOptions::default()
+        };
+        options.normalize(capabilities(true));
+        assert!(options.app_bar.is_some());
+        assert!(!options.skip_taskbar);
+        assert!(!options.tool_window);
+        assert!(!options.no_activate);
     }
 
     #[test]
