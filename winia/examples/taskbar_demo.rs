@@ -54,6 +54,9 @@ fn app(ctx: &mut ComposeCtx) {
                         .font_size(12.0)
                         .color(Color::from_argb(255, 0xB8, 0xB8, 0xB8))
                         .build(ctx);
+                    Spacer::new()
+                        .modifier(Modifier::new().layout_weight(1.0))
+                        .build(ctx);
                     Button::text()
                         .on_click(move || {
                             if let Some(id) = click_id.get() {
