@@ -197,9 +197,13 @@ pub struct WindowCapabilities {
     pub activate: bool,
     pub always_on_top: bool,
     pub transparent: bool,
+    /// Windows only: whether taskbar-button hiding is supported.
     pub skip_taskbar: bool,
+    /// Windows only: whether the `WS_EX_TOOLWINDOW` style is supported.
     pub tool_window: bool,
+    /// Windows only: whether the `WS_EX_NOACTIVATE` style is supported.
     pub no_activate: bool,
+    /// Windows only: whether application desktop toolbars are supported.
     pub app_bar: bool,
     pub decorations: bool,
     pub size_constraints: bool,
@@ -259,7 +263,8 @@ pub struct WindowState {
 impl WindowState {
     fn app_bar_owns_window(&self) -> bool {
         self.id.capabilities().app_bar
-            && with_cell(self.id, |cell| cell.snapshot.peek().app_bar_requested).unwrap_or(false)
+            && with_cell(self.id, |cell| cell.snapshot.peek().app_bar_options.is_some())
+                .unwrap_or(false)
     }
 
     /// The current inner size in logical pixels.
@@ -420,6 +425,35 @@ impl WindowState {
     /// Whether the window is kept above normal windows.
     pub fn always_on_top(&self) -> bool {
         with_cell(self.id, |cell| cell.snapshot.get().always_on_top).unwrap_or(false)
+    }
+
+    /// Whether the declaration requested taskbar-button hiding.
+    ///
+    /// Windows only; other platforms normalize the request to `false`.
+    pub fn skip_taskbar(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().skip_taskbar).unwrap_or(false)
+    }
+
+    /// Whether the declaration requested the Windows tool-window style.
+    ///
+    /// Windows only; other platforms normalize the request to `false`.
+    pub fn tool_window(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().tool_window).unwrap_or(false)
+    }
+
+    /// Whether the declaration requested `WS_EX_NOACTIVATE`.
+    ///
+    /// Windows only; other platforms normalize the request to `false`.
+    pub fn no_activate(&self) -> bool {
+        with_cell(self.id, |cell| cell.snapshot.get().no_activate).unwrap_or(false)
+    }
+
+    /// The app-bar options carried by the declaration, if any.
+    ///
+    /// This is the requested configuration, not the shell-negotiated native rectangle. It remains
+    /// available on unsupported platforms so callers can explain the fallback.
+    pub fn app_bar_options(&self) -> Option<AppBarOptions> {
+        with_cell(self.id, |cell| cell.snapshot.get().app_bar_options).unwrap_or(None)
     }
 
     /// Current app-bar lifecycle state. Non-Windows platforms report `Unsupported` when requested.
@@ -705,7 +739,7 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
 /// Composer as a dependent; platform observations and application-owned writes publish through State.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WindowSnapshot {
-    pub(crate) app_bar_requested: bool,
+    pub(crate) app_bar_options: Option<AppBarOptions>,
     pub(crate) app_bar_status: AppBarStatus,
     pub(crate) realized: bool,
     pub(crate) focused: bool,
@@ -729,7 +763,7 @@ pub(crate) struct WindowSnapshot {
 impl Default for WindowSnapshot {
     fn default() -> Self {
         Self {
-            app_bar_requested: false,
+            app_bar_options: None,
             app_bar_status: AppBarStatus::Unregistered,
             realized: false,
             focused: false,
@@ -876,7 +910,7 @@ struct WindowCell {
 impl WindowCell {
     fn new(seed: WindowSeed, realized: bool) -> Self {
         let snapshot = WindowSnapshot {
-            app_bar_requested: seed.app_bar.is_some(),
+            app_bar_options: seed.app_bar,
             realized,
             size: seed.size,
             scale_factor: 1.0,
@@ -1011,7 +1045,7 @@ pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut Compo
 pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
     with_cell(id, |cell| {
         let snapshot = cell.snapshot.peek();
-        if snapshot.app_bar_requested && WindowCapabilities::platform().app_bar {
+        if snapshot.app_bar_options.is_some() && WindowCapabilities::platform().app_bar {
             return None;
         }
         let placement = if snapshot.placement == WindowPlacement::Minimized {
@@ -1039,7 +1073,7 @@ pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
 /// Seed both the observable projection and the native-creation geometry request.
 pub(crate) fn apply_geometry(id: WindowId, geometry: &WindowGeometry) {
     if WindowCapabilities::platform().app_bar
-        && with_cell(id, |cell| cell.snapshot.peek().app_bar_requested).unwrap_or(false)
+        && with_cell(id, |cell| cell.snapshot.peek().app_bar_options.is_some()).unwrap_or(false)
     {
         return;
     }
@@ -1372,6 +1406,10 @@ mod tests {
                 ..WindowSeed::default()
             },
         );
+        assert_eq!(
+            WindowState { id }.app_bar_options(),
+            Some(AppBarOptions::bottom(48.0))
+        );
         let initial = if cfg!(target_os = "windows") {
             AppBarStatus::Registering
         } else {
@@ -1455,6 +1493,10 @@ mod tests {
         assert_eq!(state.placement(), WindowPlacement::Windowed);
         assert!(!state.resizable());
         assert!(state.always_on_top());
+        assert!(state.skip_taskbar());
+        assert!(state.tool_window());
+        assert!(!state.no_activate());
+        assert_eq!(state.app_bar_options(), Some(AppBarOptions::bottom(48.0)));
         assert!(state.decorations());
         assert_eq!(state.minimum_size(), None);
         assert_eq!(state.maximum_size(), None);

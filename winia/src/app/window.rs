@@ -137,19 +137,30 @@ impl Window {
         self
     }
 
-    /// Windows only: hide the window's taskbar button. Other platforms ignore the request.
+    /// Windows only: hide the window's taskbar button.
+    ///
+    /// This is a creation-time style choice. Other platforms accept and ignore the request;
+    /// [`WindowState::skip_taskbar`](crate::app::window_state::WindowState::skip_taskbar) reports the
+    /// normalized value.
     pub fn skip_taskbar(mut self, skip_taskbar: bool) -> Self {
         self.options.skip_taskbar = skip_taskbar;
         self
     }
 
-    /// Windows only: use the `WS_EX_TOOLWINDOW` tool-window style. Other platforms ignore it.
+    /// Windows only: use the `WS_EX_TOOLWINDOW` tool-window style.
+    ///
+    /// Tool windows are excluded from the ordinary taskbar and Alt-Tab flow. This is a creation-time
+    /// style choice; other platforms accept and ignore it.
     pub fn tool_window(mut self, tool_window: bool) -> Self {
         self.options.tool_window = tool_window;
         self
     }
 
-    /// Windows only: add `WS_EX_NOACTIVATE`. Other platforms ignore the request.
+    /// Windows only: add `WS_EX_NOACTIVATE`.
+    ///
+    /// The window can be shown and clicked without becoming the foreground application. This also
+    /// prevents ordinary keyboard focus, so enable it only for auxiliary surfaces. Other platforms
+    /// accept and ignore the request.
     pub fn no_activate(mut self, no_activate: bool) -> Self {
         self.options.no_activate = no_activate;
         self
@@ -157,8 +168,11 @@ impl Window {
 
     /// Windows only: register an application desktop toolbar. Other platforms keep a normal window.
     ///
-    /// App-bar windows are always on top, skip the taskbar, use the tool-window style, and let the
-    /// shell own their geometry. `no_activate` remains an independent choice.
+    /// App-bar windows are always on top, skip the taskbar, use the tool-window style, are not
+    /// resizable, and have no minimum/maximum size constraints. The shell owns their geometry, so
+    /// conflicting runtime geometry, placement, stacking, decoration, and size writes are ignored.
+    /// `no_activate` remains an independent choice. Unsupported platforms keep a normal window and
+    /// report [`AppBarStatus::Unsupported`].
     pub fn app_bar(mut self, options: window_state::AppBarOptions) -> Self {
         self.options.app_bar = Some(options);
         self

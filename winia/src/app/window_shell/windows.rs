@@ -219,7 +219,9 @@ impl Drop for ShellWindow {
 
 impl Inner {
     fn reposition(&mut self) -> Result<bool, AppBarError> {
-        let options = self.app_bar.ok_or(AppBarError::InvalidWindowKind)?;
+        let Some(options) = self.app_bar else {
+            return Ok(false);
+        };
         if !options.is_valid() {
             return Err(AppBarError::InvalidThickness);
         }

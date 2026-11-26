@@ -267,7 +267,10 @@ to size, position, placement, resizability, stacking, decorations, and size cons
 app-bar window. The backend re-applies shell styles after winit style updates and Explorer restarts,
 re-negotiates on app-bar/DPI/display changes, unregisters while hidden or minimized, and registers again
 when shown. `WindowState::app_bar_status()` and `WindowEvent::AppBarStatusChanged` expose the result.
-App-bar windows do not persist ordinary window geometry, including after an OS-initiated close.
+`WindowState::app_bar_options()` returns the declaration's requested options, while `skip_taskbar()`,
+`tool_window()`, and `no_activate()` report the normalized style choices. `AppBarStatus` provides
+`is_registered`, `is_unsupported`, `is_failed`, and `edge` helpers; `AppBarError` implements `Display`
+and `Error`. App-bar windows do not persist ordinary window geometry, including after an OS-initiated close.
 Fullscreen-app auto-hide is not implemented in this version.
 
 ### 8.2 Window events
