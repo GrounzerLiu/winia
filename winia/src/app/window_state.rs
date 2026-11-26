@@ -257,6 +257,11 @@ pub struct WindowState {
 }
 
 impl WindowState {
+    fn app_bar_owns_window(&self) -> bool {
+        self.id.capabilities().app_bar
+            && with_cell(self.id, |cell| cell.snapshot.peek().app_bar_requested).unwrap_or(false)
+    }
+
     /// The current inner size in logical pixels.
     pub fn size(&self) -> (f32, f32) {
         with_cell(self.id, |cell| cell.snapshot.get().size).unwrap_or((0.0, 0.0))
@@ -270,7 +275,9 @@ impl WindowState {
     /// Request an inner size. Only meaningful while the window is `Windowed`: with another
     /// placement the value is remembered and applied when the window returns to `Windowed`.
     pub fn set_size(&self, width: f32, height: f32) {
-        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+        if self.app_bar_owns_window()
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
             return;
         }
         match self.geometry_placement() {
@@ -295,7 +302,9 @@ impl WindowState {
     /// Request an outer position. `Default` clears a deferred request and otherwise leaves
     /// the platform-chosen position untouched; there is no portable "reset position" API.
     pub fn set_position(&self, position: WindowPosition) {
-        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+        if self.app_bar_owns_window()
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
             return;
         }
         with_cell(self.id, |cell| cell.requested_position.set(position));
@@ -337,7 +346,9 @@ impl WindowState {
 
     /// Request a placement. Leaving `Windowed` applies any deferred size and position on return.
     pub fn set_placement(&self, placement: WindowPlacement) {
-        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+        if self.app_bar_owns_window()
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
             return;
         }
         with_cell(self.id, |cell| {
@@ -394,7 +405,9 @@ impl WindowState {
 
     /// Allow or forbid user resizing.
     pub fn set_resizable(&self, resizable: bool) {
-        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+        if self.app_bar_owns_window()
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
             return;
         }
         with_cell(self.id, |cell| {
@@ -417,7 +430,8 @@ impl WindowState {
 
     /// Request a always-on-top stacking level.
     pub fn set_always_on_top(&self, always_on_top: bool) {
-        if !self.id.capabilities().always_on_top
+        if self.app_bar_owns_window()
+            || !self.id.capabilities().always_on_top
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
         {
             return;
@@ -441,7 +455,8 @@ impl WindowState {
 
     /// Enable or disable native decorations. Transparent windows cannot be decorated.
     pub fn set_decorations(&self, decorations: bool) {
-        if !self.id.capabilities().decorations
+        if self.app_bar_owns_window()
+            || !self.id.capabilities().decorations
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
         {
             return;
@@ -468,7 +483,8 @@ impl WindowState {
             None => None,
             Some(_) => return,
         };
-        if !self.id.capabilities().size_constraints
+        if self.app_bar_owns_window()
+            || !self.id.capabilities().size_constraints
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
         {
             return;
@@ -492,7 +508,8 @@ impl WindowState {
             None => None,
             Some(_) => return,
         };
-        if !self.id.capabilities().size_constraints
+        if self.app_bar_owns_window()
+            || !self.id.capabilities().size_constraints
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
         {
             return;
@@ -688,6 +705,7 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
 /// Composer as a dependent; platform observations and application-owned writes publish through State.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WindowSnapshot {
+    pub(crate) app_bar_requested: bool,
     pub(crate) app_bar_status: AppBarStatus,
     pub(crate) realized: bool,
     pub(crate) focused: bool,
@@ -711,6 +729,7 @@ pub(crate) struct WindowSnapshot {
 impl Default for WindowSnapshot {
     fn default() -> Self {
         Self {
+            app_bar_requested: false,
             app_bar_status: AppBarStatus::Unregistered,
             realized: false,
             focused: false,
@@ -857,6 +876,7 @@ struct WindowCell {
 impl WindowCell {
     fn new(seed: WindowSeed, realized: bool) -> Self {
         let snapshot = WindowSnapshot {
+            app_bar_requested: seed.app_bar.is_some(),
             realized,
             size: seed.size,
             scale_factor: 1.0,
@@ -991,10 +1011,7 @@ pub(crate) fn take_pending_content(id: WindowId) -> Option<Box<dyn Fn(&mut Compo
 pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
     with_cell(id, |cell| {
         let snapshot = cell.snapshot.peek();
-        if matches!(
-            snapshot.app_bar_status,
-            AppBarStatus::Registering | AppBarStatus::Registered { .. }
-        ) {
+        if snapshot.app_bar_requested && WindowCapabilities::platform().app_bar {
             return None;
         }
         let placement = if snapshot.placement == WindowPlacement::Minimized {
@@ -1021,6 +1038,11 @@ pub(crate) fn capture_geometry(id: WindowId) -> Option<WindowGeometry> {
 
 /// Seed both the observable projection and the native-creation geometry request.
 pub(crate) fn apply_geometry(id: WindowId, geometry: &WindowGeometry) {
+    if WindowCapabilities::platform().app_bar
+        && with_cell(id, |cell| cell.snapshot.peek().app_bar_requested).unwrap_or(false)
+    {
+        return;
+    }
     let position = geometry
         .position
         .map(|position| WindowPosition::At(position.x, position.y))
@@ -1051,14 +1073,19 @@ pub(crate) fn apply_geometry(id: WindowId, geometry: &WindowGeometry) {
 
 /// Publish an app-bar lifecycle observation and notify the declaration once per change.
 pub(crate) fn set_app_bar_status(id: WindowId, status: AppBarStatus) {
-    with_cell(id, |cell| {
-        let changed = cell.snapshot.get().app_bar_status != status;
-        if changed {
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.get().app_bar_status == status {
+            false
+        } else {
             cell.snapshot
                 .update(|snapshot| snapshot.app_bar_status = status);
-            dispatch_event(id, WindowEvent::AppBarStatusChanged(status));
+            true
         }
-    });
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::AppBarStatusChanged(status));
+    }
 }
 
 /// Mark a declared window as created by the platform, with the values it actually has.
@@ -1360,10 +1387,78 @@ mod tests {
         set_app_bar_status(id, registered);
         assert_eq!(WindowState { id }.app_bar_status(), registered);
         assert!(capture_geometry(id).is_none());
+        set_app_bar_status(id, AppBarStatus::Unregistered);
+        assert!(capture_geometry(id).is_none());
         assert_eq!(
             *seen.borrow(),
-            vec![WindowEvent::AppBarStatusChanged(registered)]
+            vec![
+                WindowEvent::AppBarStatusChanged(registered),
+                WindowEvent::AppBarStatusChanged(AppBarStatus::Unregistered),
+            ]
         );
+        forget(id);
+    }
+
+    #[test]
+    fn app_bar_event_handler_can_declare_another_window() {
+        let id = WindowId::new(0xA55E_6A18);
+        let child = WindowId::new(0xA55E_6A19);
+        declare(
+            id,
+            WindowSeed {
+                app_bar: Some(AppBarOptions::bottom(48.0)),
+                on_event: Some(Rc::new(move |_, event| {
+                    if matches!(event, WindowEvent::AppBarStatusChanged(_)) {
+                        declare(child, WindowSeed::default());
+                    }
+                })),
+                ..WindowSeed::default()
+            },
+        );
+        set_app_bar_status(
+            id,
+            AppBarStatus::Registered {
+                edge: AppBarEdge::Bottom,
+            },
+        );
+        assert!(windows_in_creation_order().contains(&child));
+        forget(child);
+        forget(id);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn app_bar_setters_do_not_queue_conflicting_commands() {
+        let id = WindowId::new(0xA55E_6A1A);
+        declare(
+            id,
+            WindowSeed {
+                app_bar: Some(AppBarOptions::bottom(48.0)),
+                resizable: false,
+                always_on_top: true,
+                skip_taskbar: true,
+                tool_window: true,
+                ..WindowSeed::default()
+            },
+        );
+        let state = WindowState { id };
+        state.set_size(320.0, 240.0);
+        state.set_position(WindowPosition::At(10.0, 20.0));
+        state.set_placement(WindowPlacement::Fullscreen);
+        state.set_resizable(true);
+        state.set_always_on_top(false);
+        state.set_decorations(false);
+        state.set_minimum_size(Some((100.0, 100.0)));
+        state.set_maximum_size(Some((500.0, 500.0)));
+        assert_eq!(state.size(), (300.0, 200.0));
+        assert_eq!(state.position(), WindowPosition::Default);
+        assert_eq!(state.placement(), WindowPlacement::Windowed);
+        assert!(!state.resizable());
+        assert!(state.always_on_top());
+        assert!(state.decorations());
+        assert_eq!(state.minimum_size(), None);
+        assert_eq!(state.maximum_size(), None);
+        assert!(take_queued_commands(id).is_empty());
         forget(id);
     }
 

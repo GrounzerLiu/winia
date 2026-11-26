@@ -261,11 +261,14 @@ let taskbar = Window::new()
 
 On Windows, `skip_taskbar` uses winit's taskbar deletion support, `tool_window` adds
 `WS_EX_TOOLWINDOW`, and `no_activate` independently adds `WS_EX_NOACTIVATE`. App-bar registration
-automatically forces always-on-top, taskbar skipping, the tool-window style, and shell-owned geometry.
-`no_activate` is never forced. The backend re-applies taskbar hiding after Explorer restarts,
-re-negotiates on app-bar/DPI/display changes, and unregisters before the native window is destroyed.
-`WindowState::app_bar_status()` and `WindowEvent::AppBarStatusChanged` expose the result. App-bar
-windows do not persist ordinary window geometry.
+automatically forces always-on-top, taskbar skipping, the tool-window style, non-resizable geometry,
+and clears minimum/maximum size constraints. `no_activate` is never forced. Conflicting runtime writes
+to size, position, placement, resizability, stacking, decorations, and size constraints are ignored for an
+app-bar window. The backend re-applies shell styles after winit style updates and Explorer restarts,
+re-negotiates on app-bar/DPI/display changes, unregisters while hidden or minimized, and registers again
+when shown. `WindowState::app_bar_status()` and `WindowEvent::AppBarStatusChanged` expose the result.
+App-bar windows do not persist ordinary window geometry, including after an OS-initiated close.
+Fullscreen-app auto-hide is not implemented in this version.
 
 ### 8.2 Window events
 

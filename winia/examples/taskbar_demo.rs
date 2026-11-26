@@ -1,9 +1,10 @@
 //! Taskbar demo - one shared window declaration with Windows-only shell behavior.
 //!
 //! On Windows the window is an app bar, skips the taskbar, and uses the tool-window style.
-//! Other platforms accept the same builder chain and show a normal always-on-top window.
+//! Other platforms accept the same builder chain and show a normal window; always-on-top is used where supported.
 //!
 //! Run with: cargo run -p winia --example taskbar_demo
+//! Pass --hidden to verify that an app-bar request does not reserve work area before first show.
 
 use winia::components::Button;
 use winia::prelude::*;
@@ -16,6 +17,7 @@ pub fn main() {
 
 #[composable]
 fn app(ctx: &mut ComposeCtx) {
+    let hidden = std::env::args().any(|argument| argument == "--hidden");
     let taskbar_id = ctx.remember(|| None::<WindowId>);
     let status = ctx.remember(|| String::from("waiting for the platform window"));
     let body_id = taskbar_id.clone();
@@ -25,6 +27,7 @@ fn app(ctx: &mut ComposeCtx) {
     let id = Window::new()
         .title("Winia taskbar demo")
         .size(960.0, 48.0)
+        .visible(!hidden)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -71,4 +74,5 @@ fn app(ctx: &mut ComposeCtx) {
                 });
         });
     taskbar_id.set(Some(id));
+    status.set(format!("app bar: {:?}", id.state().app_bar_status()));
 }

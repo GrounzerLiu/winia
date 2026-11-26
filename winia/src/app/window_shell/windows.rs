@@ -15,9 +15,11 @@ use windows::Win32::UI::Shell::{
     SetWindowSubclass,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, RegisterWindowMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    GWL_EXSTYLE, GetWindowLongPtrW, IsIconic, IsWindowVisible, RegisterWindowMessageW,
+    SIZE_MINIMIZED, SIZE_RESTORED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_WINDOWPOSCHANGED, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WM_DPICHANGED, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_WINDOWPOSCHANGED, WS_EX_APPWINDOW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::w;
 use winit::platform::windows::WindowExtWindows;
@@ -42,6 +44,9 @@ struct Inner {
     hwnd: HWND,
     window_id: Option<WindowId>,
     skip_taskbar: bool,
+    force_no_taskbar: bool,
+    tool_window: bool,
+    no_activate: bool,
     app_bar: Option<AppBarOptions>,
     scale_factor: f64,
     appbar_registered: bool,
@@ -62,7 +67,18 @@ impl ShellWindow {
         {
             return None;
         }
-        let hwnd = hwnd_of(window)?;
+        let Some(hwnd) = hwnd_of(window) else {
+            if options.app_bar.is_some()
+                && let Some(id) = window_id
+            {
+                window_state::set_app_bar_status(
+                    id,
+                    AppBarStatus::Failed(AppBarError::ShellUnavailable),
+                );
+            }
+            log::warn!("[window-shell] the winit window has no Win32 handle");
+            return None;
+        };
         apply_extended_styles(
             hwnd,
             options.skip_taskbar || options.tool_window || options.app_bar.is_some(),
@@ -79,6 +95,11 @@ impl ShellWindow {
                 hwnd,
                 window_id,
                 skip_taskbar: options.skip_taskbar,
+                force_no_taskbar: options.skip_taskbar
+                    || options.tool_window
+                    || options.app_bar.is_some(),
+                tool_window: options.tool_window,
+                no_activate: options.no_activate,
                 app_bar: options.app_bar,
                 scale_factor: window.scale_factor(),
                 appbar_registered: false,
@@ -101,7 +122,9 @@ impl ShellWindow {
             .as_bool()
         };
         if !installed {
-            if let Some(id) = window_id {
+            if options.app_bar.is_some()
+                && let Some(id) = window_id
+            {
                 window_state::set_app_bar_status(
                     id,
                     AppBarStatus::Failed(AppBarError::ShellUnavailable),
@@ -125,7 +148,12 @@ impl ShellWindow {
         let Some(state) = self.state.as_ref() else {
             return;
         };
-        if let Some(id) = state.inner.borrow().window_id {
+        let id = state
+            .inner
+            .try_borrow()
+            .ok()
+            .and_then(|inner| inner.window_id);
+        if let Some(id) = id {
             window_state::set_app_bar_status(id, status);
         }
     }
@@ -146,7 +174,8 @@ impl ShellWindow {
         inner.in_shell_call = false;
         drop(inner);
         match result {
-            Ok(()) => self.set_status(AppBarStatus::Registered { edge }),
+            Ok(true) => self.set_status(AppBarStatus::Registered { edge }),
+            Ok(false) => self.set_status(AppBarStatus::Unregistered),
             Err(error) => self.set_status(AppBarStatus::Failed(error)),
         }
     }
@@ -158,15 +187,11 @@ impl ShellWindow {
         let Ok(mut inner) = state.inner.try_borrow_mut() else {
             return;
         };
-        if !inner.appbar_registered {
-            return;
-        }
-        inner.appbar_registered = false;
-        let mut data = app_bar_data(inner.hwnd, inner.app_bar.unwrap().edge);
-        unsafe { SHAppBarMessage(ABM_REMOVE, &mut data) };
+        let requested = inner.app_bar.is_some();
+        inner.remove_registration();
         let id = inner.window_id;
         drop(inner);
-        if let Some(id) = id {
+        if requested && let Some(id) = id {
             window_state::set_app_bar_status(id, AppBarStatus::Unregistered);
         }
     }
@@ -176,10 +201,12 @@ impl ShellWindow {
         let Some(state) = self.state.as_ref() else {
             return;
         };
-        let Ok(inner) = state.inner.try_borrow() else {
-            return;
+        let hwnd = {
+            let Ok(inner) = state.inner.try_borrow() else {
+                return;
+            };
+            inner.hwnd
         };
-        let hwnd = inner.hwnd;
         let _ = unsafe { RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID) };
     }
 }
@@ -191,10 +218,16 @@ impl Drop for ShellWindow {
 }
 
 impl Inner {
-    fn reposition(&mut self) -> Result<(), AppBarError> {
+    fn reposition(&mut self) -> Result<bool, AppBarError> {
         let options = self.app_bar.ok_or(AppBarError::InvalidWindowKind)?;
         if !options.is_valid() {
             return Err(AppBarError::InvalidThickness);
+        }
+        let visible = unsafe { IsWindowVisible(self.hwnd) }.as_bool();
+        let iconic = unsafe { IsIconic(self.hwnd) }.as_bool();
+        if !app_bar_visible(visible, iconic) {
+            self.remove_registration();
+            return Ok(false);
         }
         let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
         let mut info = MONITORINFO {
@@ -207,9 +240,7 @@ impl Inner {
         let monitor_changed =
             self.appbar_registered && self.monitor != 0 && self.monitor != monitor.0 as isize;
         if monitor_changed {
-            let mut remove = app_bar_data(self.hwnd, options.edge);
-            unsafe { SHAppBarMessage(ABM_REMOVE, &mut remove) };
-            self.appbar_registered = false;
+            self.remove_registration();
         }
         self.monitor = monitor.0 as isize;
         let mut data = app_bar_data(self.hwnd, options.edge);
@@ -223,6 +254,7 @@ impl Inner {
             AppBarEdge::Top | AppBarEdge::Bottom => info.rcMonitor.right - info.rcMonitor.left,
         };
         if extent <= 0 {
+            self.remove_registration();
             return Err(AppBarError::MonitorUnavailable);
         }
         let thickness = (options.thickness as f64 * self.scale_factor)
@@ -238,7 +270,7 @@ impl Inner {
         unsafe { SHAppBarMessage(ABM_SETPOS, &mut data) };
         let width = data.rc.right - data.rc.left;
         let height = data.rc.bottom - data.rc.top;
-        unsafe {
+        let positioned = unsafe {
             SetWindowPos(
                 self.hwnd,
                 None,
@@ -248,9 +280,23 @@ impl Inner {
                 height,
                 SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
             )
+        };
+        if positioned.is_err() {
+            self.remove_registration();
+            return Err(AppBarError::ShellUnavailable);
         }
-        .map_err(|_| AppBarError::ShellUnavailable)?;
-        Ok(())
+        Ok(true)
+    }
+
+    fn remove_registration(&mut self) {
+        if !self.appbar_registered {
+            return;
+        }
+        self.appbar_registered = false;
+        if let Some(options) = self.app_bar {
+            let mut data = app_bar_data(self.hwnd, options.edge);
+            unsafe { SHAppBarMessage(ABM_REMOVE, &mut data) };
+        }
     }
 }
 
@@ -274,6 +320,17 @@ fn apply_extended_styles(hwnd: HWND, force_no_taskbar: bool, tool_window: bool, 
     let current = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
     let styles = extended_styles(current, force_no_taskbar, tool_window, no_activate);
     unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, styles as isize) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        )
+    };
 }
 
 fn extended_styles(
@@ -320,6 +377,7 @@ unsafe extern "system" fn subclass_proc(
                 unsafe { (&*window.as_ptr()).set_skip_taskbar(true) };
             }
         }
+        reapply_styles_from_subclass(state);
         if let Ok(mut inner) = state.inner.try_borrow_mut()
             && inner.app_bar.is_some()
         {
@@ -342,7 +400,22 @@ unsafe extern "system" fn subclass_proc(
     } else if message == WM_WINDOWPOSCHANGED {
         let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
         let changed = monitor_changed(state, monitor.0 as isize);
-        if changed {
+        let needs_registration = app_bar_needs_registration(state);
+        if changed || needs_registration {
+            reposition_from_subclass(state);
+        }
+    } else if message == WM_STYLECHANGED {
+        reapply_styles_from_subclass(state);
+    } else if message == WM_SHOWWINDOW {
+        if wparam.0 != 0 {
+            reposition_from_subclass(state);
+        } else {
+            unregister_from_subclass(state);
+        }
+    } else if message == WM_SIZE {
+        if wparam.0 as u32 == SIZE_MINIMIZED {
+            unregister_from_subclass(state);
+        } else if wparam.0 as u32 == SIZE_RESTORED {
             reposition_from_subclass(state);
         }
     } else if message == WM_DESTROY {
@@ -351,11 +424,42 @@ unsafe extern "system" fn subclass_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, _lparam) }
 }
 
+fn reapply_styles_from_subclass(state: &ShellState) {
+    let Ok(mut inner) = state.inner.try_borrow_mut() else {
+        return;
+    };
+    if inner.in_shell_call {
+        return;
+    }
+    let hwnd = inner.hwnd;
+    let force_no_taskbar = inner.force_no_taskbar;
+    let tool_window = inner.tool_window;
+    let no_activate = inner.no_activate;
+    inner.in_shell_call = true;
+    drop(inner);
+    apply_extended_styles(hwnd, force_no_taskbar, tool_window, no_activate);
+    if let Ok(mut inner) = state.inner.try_borrow_mut() {
+        inner.in_shell_call = false;
+    }
+}
+
+fn app_bar_visible(visible: bool, iconic: bool) -> bool {
+    visible && !iconic
+}
+
 fn skip_taskbar_requested(state: &ShellState) -> bool {
     state
         .inner
         .try_borrow()
         .map(|inner| inner.skip_taskbar)
+        .unwrap_or(false)
+}
+
+fn app_bar_needs_registration(state: &ShellState) -> bool {
+    state
+        .inner
+        .try_borrow()
+        .map(|inner| inner.app_bar.is_some() && !inner.appbar_registered)
         .unwrap_or(false)
 }
 
@@ -377,9 +481,10 @@ fn reposition_from_subclass(state: &ShellState) {
     inner.in_shell_call = true;
     let result = inner.reposition();
     let status = match result {
-        Ok(()) => AppBarStatus::Registered {
+        Ok(true) => AppBarStatus::Registered {
             edge: inner.app_bar.unwrap().edge,
         },
+        Ok(false) => AppBarStatus::Unregistered,
         Err(error) => AppBarStatus::Failed(error),
     };
     let id = inner.window_id;
@@ -394,15 +499,11 @@ fn unregister_from_subclass(state: &ShellState) {
     let Ok(mut inner) = state.inner.try_borrow_mut() else {
         return;
     };
-    if !inner.appbar_registered {
-        return;
-    }
-    inner.appbar_registered = false;
-    let mut data = app_bar_data(inner.hwnd, inner.app_bar.unwrap().edge);
-    unsafe { SHAppBarMessage(ABM_REMOVE, &mut data) };
+    let requested = inner.app_bar.is_some();
+    inner.remove_registration();
     let id = inner.window_id;
     drop(inner);
-    if let Some(id) = id {
+    if requested && let Some(id) = id {
         window_state::set_app_bar_status(id, AppBarStatus::Unregistered);
     }
 }
@@ -429,6 +530,9 @@ mod tests {
                 hwnd: HWND(std::ptr::null_mut()),
                 window_id: None,
                 skip_taskbar: true,
+                force_no_taskbar: true,
+                tool_window: true,
+                no_activate: false,
                 app_bar: None,
                 scale_factor: 1.0,
                 appbar_registered: false,
@@ -441,6 +545,26 @@ mod tests {
         assert_eq!(state.taskbar_created, 123);
         assert!(!skip_taskbar_requested(&state));
         assert!(!monitor_changed(&state, 8));
+        reapply_styles_from_subclass(&state);
+    }
+
+    #[test]
+    fn shell_styles_survive_a_winit_style_reset() {
+        let styled = extended_styles(0x1000, true, true, true);
+        let winit_reset = (styled & !(WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0)) | WS_EX_APPWINDOW.0;
+        let restored = extended_styles(winit_reset, true, true, true);
+        assert!(restored & WS_EX_TOOLWINDOW.0 != 0);
+        assert!(restored & WS_EX_NOACTIVATE.0 != 0);
+        assert!(restored & WS_EX_APPWINDOW.0 == 0);
+        assert!(restored & 0x1000 != 0);
+    }
+
+    #[test]
+    fn app_bar_registration_requires_a_visible_non_iconic_window() {
+        assert!(app_bar_visible(true, false));
+        assert!(!app_bar_visible(false, false));
+        assert!(!app_bar_visible(true, true));
+        assert!(!app_bar_visible(false, true));
     }
 
     #[test]

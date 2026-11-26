@@ -85,6 +85,9 @@ impl WindowOptions {
                 self.always_on_top = true;
                 self.skip_taskbar = true;
                 self.tool_window = true;
+                self.resizable = false;
+                self.minimum_size = None;
+                self.maximum_size = None;
             } else {
                 self.skip_taskbar = false;
                 self.tool_window = false;
@@ -146,6 +149,8 @@ mod window_options_tests {
         let mut options = WindowOptions {
             app_bar: Some(crate::app::window_shell::AppBarOptions::bottom(48.0)),
             no_activate: true,
+            minimum_size: Some((100.0, 100.0)),
+            maximum_size: Some((500.0, 500.0)),
             ..WindowOptions::default()
         };
         options.normalize(caps);
@@ -153,6 +158,9 @@ mod window_options_tests {
         assert!(options.skip_taskbar);
         assert!(options.tool_window);
         assert!(options.no_activate);
+        assert!(!options.resizable);
+        assert_eq!(options.minimum_size, None);
+        assert_eq!(options.maximum_size, None);
         assert!(options.app_bar.is_some());
     }
 
