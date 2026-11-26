@@ -42,7 +42,7 @@ fn app(ctx: &mut ComposeCtx) {
                 .modifier(
                     Modifier::new()
                         .fill_max_size()
-                        .padding(12.0)
+                        .padding_sides(12.0, 4.0, 12.0, 4.0)
                         .background(Color::from_argb(255, 0x1E, 0x1E, 0x1E), Shape::Rectangle),
                 )
                 .build(ctx, |ctx| {
@@ -57,7 +57,9 @@ fn app(ctx: &mut ComposeCtx) {
                     Spacer::new()
                         .modifier(Modifier::new().layout_weight(1.0))
                         .build(ctx);
-                    Button::text()
+                    Button::filled()
+                        .min_size(72.0, 32.0)
+                        .content_padding((12.0, 4.0, 12.0, 4.0))
                         .on_click(move || {
                             if let Some(id) = click_id.get() {
                                 id.destroy();
