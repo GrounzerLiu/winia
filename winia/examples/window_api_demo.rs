@@ -9,6 +9,7 @@
 //!   through `WindowState::set_visible`, while `ctx.windows()` keeps reporting both declarations;
 //! - live state: size, position, placement, title, visibility and resizable, with buttons that
 //!   queue platform writes and read the next frame's echo;
+//! - events: `on_event` records the latest semantic platform observation;
 //! - close negotiation: `on_close_requested` is a notification, so the handler here vetoes by doing
 //!   nothing and records the reason in the window title;
 //! - persistence: `.key("window-api-demo")` gives the window a stable saveable key; the run counter
@@ -46,10 +47,13 @@ fn app(ctx: &mut ComposeCtx) {
     let body_show = show_second.clone();
     let body_veto = veto_close.clone();
     let handler_veto = veto_close.clone();
+    let last_event = ctx.remember(|| String::new());
+    let event_sink = last_event.clone();
     Window::new()
         .title("Window API demo")
         .size(900.0, 760.0)
         .key("window-api-demo")
+        .on_event(move |_id, event| event_sink.set(format!("{event:?}")))
         .on_close_requested(move |id, reason| {
             if handler_veto.get() {
                 // A veto: doing nothing keeps the window open. The title makes it visible.
@@ -62,8 +66,9 @@ fn app(ctx: &mut ComposeCtx) {
         .build(ctx, move |ctx| {
             let show = body_show.clone();
             let veto = body_veto.clone();
+            let event = last_event.clone();
             settings::shell("Window API", ctx, move |ctx, padding| {
-                body(ctx, padding, show, veto);
+                body(ctx, padding, show, veto, event);
             });
         });
 
@@ -99,6 +104,7 @@ fn body(
     scaffold: ScaffoldContentPadding,
     show_second: State<bool>,
     veto_close: State<bool>,
+    last_event: State<String>,
 ) {
     let id = ctx.window_id();
     let state = id.state();
@@ -156,6 +162,7 @@ fn body(
                 metric(ctx, "WindowId", format!("{}", id.raw()));
                 metric(ctx, "realized", format!("{}", id.is_realized()));
                 metric(ctx, "focused", format!("{}", id.is_focused()));
+                metric(ctx, "last event", last_event.get());
                 metric(ctx, "ctx.windows()", format!("{} window(s): {window_list}", windows.len()));
                 metric(
                     ctx,

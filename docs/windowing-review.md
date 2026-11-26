@@ -414,7 +414,7 @@ Status as of 2026-11-26: the first batch (D1, D2, D7, D9, D10), second batch (D3
 | G5 Activate/focus | Fixed - fourth batch | `activate`/`request_focus` restore and focus the native window; OS focus remains separately observed |
 | G6 Always-on-top/transparent/decorations | Fixed - fourth batch | Creation flags, runtime decorations/topmost, transparent clear, and Vulkan alpha selection landed |
 | G7 Size constraints | Fixed - fourth batch | Logical min/max sizes land in native attributes and runtime commands; increments remain backlog |
-| G8 Event callbacks/flows | Backlog | Coordinate with observable state (G1) |
+| G8 Event callbacks/flows | Implemented | Typed semantic callback plus conflated `WindowId::events()` stream; close remains separate |
 | G9 Geometry persistence | Backlog | Depends on position/placement observation (D5-D6) |
 | G10 `DialogWindow` | Backlog | Depends on parent/modal and activation APIs |
 | G11 Content-driven size | Backlog | Reuse intrinsic measurement; define feedback-loop policy |
@@ -449,6 +449,16 @@ Targeted validation: `window_lifecycle_test` 23/23 and `window_state` 23/23 pass
 - Transparent windows clear to alpha zero, and Vulkan prefers `PreMultiplied` before `PostMultiplied` to match Skia's premultiplied output.
 
 Targeted validation: `app::window` 33/33, `window_lifecycle_test` 24/24, Vulkan composite-alpha regressions 3/3, and `window_api_demo --features debug-server` check passed. Changed-file rustfmt and `git diff --check` also passed.
+
+### G8 implementation
+
+- `WindowEvent` reports semantic size, position, placement, focus, scale-factor, and inset observations after the matching state update.
+- `Window::on_event` delivers changed observations synchronously on the UI thread and publishes the latest callback on recomposition.
+- `WindowId::events()` reuses `StateChanges`: current/latest first, conflated between polls, and `None` when the window is forgotten.
+- Duplicate platform observations are suppressed; application requests emit only after the platform echo.
+- The Window API demo records the latest event through `on_event`.
+
+Targeted validation: `app::window` 36/36, `window_lifecycle_test` 24/24, changed-file rustfmt, `git diff --check`, and the `window_api_demo --features debug-server` check passed. An Android target check was attempted but stopped in dependencies before compiling project code because the NDK environment was not configured and the selected Skia binary URL returned 404.
 
 ### First-batch implementation
 
@@ -490,21 +500,11 @@ The original review was documentation-only. Subsequent repair batches ran the ta
 
 ## Existing coverage and remaining gaps
 
-- `D:/Projects/winia/winia/src/app/window_state.rs:458-510` covers queue order within a simple setter
-  batch, deferred size, and platform size echo, but not cross-command ordering or pre-realization
-  application.
-- `D:/Projects/winia/winia/tests/window_lifecycle_test.rs:116-229` covers live size echo, close
-  negotiation, last-window policy, destroy tombstones, realized parent/child cascade, and sibling
-  rebuilds.
-- `D:/Projects/winia/winia/tests/window_lifecycle_test.rs:246` covers a nonempty keyed snapshot across
-  runs, but not an empty clearing snapshot.
-- `D:/Projects/winia/winia/tests/ui_fixtures/window_lifecycle.rs:76-87` explicitly uses a separate
-  refresh tick because window-state reads are not reactive.
+- `winia/src/app/window_state.rs` unit tests cover command order, deferred geometry, platform echoes, terminal and cross-window behavior, title canonicalization, lifecycle, G5-G7 fallbacks, and G8 event deduplication/conflation.
+- `winia/tests/window_lifecycle_test.rs` covers live size echo, close negotiation, last-window policy, destroy tombstones, realized parent/child cascade, sibling rebuilds, and keyed snapshots.
+- `winia/examples/window_api_demo.rs` exercises the public state, capability, close, persistence, and event-callback surface.
 
-Missing regressions correspond directly to D1-D10: refreshed content, pending-child cancellation,
-pre-realization command timing, reactive state, position echo, placement/OS-focus echo, empty
-snapshot clearing, terminal/cross-window command order, title canonicalization, and parent
-reassignment.
+Remaining validation is primarily native/platform integration: a Windows/macOS/Linux matrix for geometry, focus, parent, and chrome behavior; Android end-to-end inset events and the single-Activity multi-window model; and the still-backlog G9-G11 APIs.
 
 ## Related reading
 

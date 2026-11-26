@@ -49,6 +49,7 @@ pub struct Window {
     options: crate::app::WindowOptions,
     on_close: Option<Box<dyn FnMut() + Send>>,
     on_close_requested: Option<std::rc::Rc<dyn Fn(WindowId, window_state::CloseReason)>>,
+    on_event: Option<std::rc::Rc<dyn Fn(WindowId, window_state::WindowEvent)>>,
     persist_key: Option<u64>,
     position: window_state::WindowPosition,
     placement: window_state::WindowPlacement,
@@ -80,6 +81,7 @@ impl Window {
             options: crate::app::WindowOptions::default(),
             on_close: None,
             on_close_requested: None,
+            on_event: None,
             persist_key: None,
             position: window_state::WindowPosition::Default,
             placement: window_state::WindowPlacement::Windowed,
@@ -178,6 +180,15 @@ impl Window {
         f: impl Fn(WindowId, window_state::CloseReason) + 'static,
     ) -> Self {
         self.on_close_requested = Some(std::rc::Rc::new(f));
+        self
+    }
+
+    /// Register a semantic window-event callback.
+    ///
+    /// The callback runs on the UI thread after the corresponding state has been updated. Only
+    /// changed observations are delivered; close requests use [`Window::on_close_requested`].
+    pub fn on_event(mut self, f: impl Fn(WindowId, window_state::WindowEvent) + 'static) -> Self {
+        self.on_event = Some(std::rc::Rc::new(f));
         self
     }
 
@@ -415,6 +426,9 @@ impl Window {
         }
 
         let wid = created_id.get();
+        if wid != 0 {
+            window_state::set_event_handler(WindowId::new(wid), self.on_event.clone());
+        }
         let destroyed = wid != 0 && DESTROYED.lock().unwrap().contains(&wid);
         // A destroyed window keeps its declaration but not its platform window; only a fresh
         // declaration (a new created_id) may create one again.
@@ -465,6 +479,7 @@ impl Window {
                     placement,
                     position,
                     on_close_requested: self.on_close_requested,
+                    on_event: self.on_event,
                 },
                 owner,
             );

@@ -64,6 +64,16 @@ impl WindowId {
         WindowState { id: self }
     }
 
+    /// Observe semantic window events outside composition.
+    ///
+    /// The first item is the most recent event, or `None` before one has been observed. Delivery is
+    /// conflated: writes between polls surface as the latest value once. Create the stream on the
+    /// UI thread, like every other `WindowId` accessor. Dropping the stream unsubscribes it.
+    pub fn events(self) -> crate::runtime::state::StateChanges<Option<WindowEvent>> {
+        with_cell(self, |cell| cell.last_event.changes())
+            .unwrap_or_else(|| State::new(None::<WindowEvent>).changes())
+    }
+
     /// What this platform can do with a window at all.
     pub fn capabilities(self) -> WindowCapabilities {
         WindowCapabilities::platform()
@@ -120,6 +130,34 @@ pub enum WindowPosition {
     Default,
     /// Logical pixels from the top-left corner of the desktop.
     At(f32, f32),
+}
+
+/// A semantic observation about a window's platform-owned state.
+///
+/// Events describe the state the platform actually applied, not a request made through
+/// [`WindowState`]. Close requests remain on the dedicated close callback.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WindowEvent {
+    Resized {
+        width: f32,
+        height: f32,
+    },
+    Moved {
+        position: WindowPosition,
+    },
+    PlacementChanged {
+        placement: WindowPlacement,
+    },
+    FocusChanged {
+        focused: bool,
+    },
+    ScaleFactorChanged {
+        scale_factor: f32,
+    },
+    InsetsChanged {
+        insets: crate::window::insets::WindowInsets,
+    },
 }
 
 /// What the current platform can honour.
@@ -187,6 +225,11 @@ impl WindowState {
     /// The current inner size in logical pixels.
     pub fn size(&self) -> (f32, f32) {
         with_cell(self.id, |cell| cell.snapshot.get().size).unwrap_or((0.0, 0.0))
+    }
+
+    /// The display scale most recently reported by the platform.
+    pub fn scale_factor(&self) -> f32 {
+        with_cell(self.id, |cell| cell.snapshot.get().scale_factor).unwrap_or(1.0)
     }
 
     /// Request an inner size. Only meaningful while the window is `Windowed`: with another
@@ -607,6 +650,7 @@ pub(crate) struct WindowSnapshot {
     pub(crate) realized: bool,
     pub(crate) focused: bool,
     pub(crate) size: (f32, f32),
+    pub(crate) scale_factor: f32,
     pub(crate) position: WindowPosition,
     pub(crate) placement: WindowPlacement,
     pub(crate) visible: bool,
@@ -625,6 +669,7 @@ impl Default for WindowSnapshot {
             realized: false,
             focused: false,
             size: (0.0, 0.0),
+            scale_factor: 1.0,
             position: WindowPosition::Default,
             placement: WindowPlacement::Windowed,
             visible: false,
@@ -678,6 +723,8 @@ pub(crate) fn persist_key(key: &str) -> u64 {
     hash
 }
 
+type WindowEventHandler = Rc<dyn Fn(WindowId, WindowEvent)>;
+
 /// The values a window starts with.
 pub(crate) struct WindowSeed {
     pub(crate) size: (f32, f32),
@@ -698,6 +745,7 @@ pub(crate) struct WindowSeed {
     /// (`destroy()`, `state().set_visible(false)`), and capturing it would require a `State` dance
     /// in the declaring scope.
     pub(crate) on_close_requested: Option<Rc<dyn Fn(WindowId, CloseReason)>>,
+    pub(crate) on_event: Option<WindowEventHandler>,
 }
 
 impl Default for WindowSeed {
@@ -715,6 +763,7 @@ impl Default for WindowSeed {
             placement: WindowPlacement::Windowed,
             position: WindowPosition::Default,
             on_close_requested: None,
+            on_event: None,
         }
     }
 }
@@ -733,6 +782,9 @@ struct WindowCell {
     deferred_size: Cell<Option<(f32, f32)>>,
     deferred_position: Cell<Option<WindowPosition>>,
     on_close_requested: RefCell<Option<Rc<dyn Fn(WindowId, CloseReason)>>>,
+    on_event: RefCell<Option<WindowEventHandler>>,
+    /// Latest semantic observation, also backing `WindowId::events()`.
+    last_event: State<Option<WindowEvent>>,
     /// Latest content published by the declaration. Consumed at the frame boundary so compose
     /// never replaces a live window's composer directly.
     pending_content: RefCell<Option<Box<dyn Fn(&mut ComposeCtx) + Send>>>,
@@ -747,6 +799,7 @@ impl WindowCell {
         let snapshot = WindowSnapshot {
             realized,
             size: seed.size,
+            scale_factor: 1.0,
             placement: seed.placement,
             position: seed.position,
             visible: seed.visible,
@@ -769,6 +822,8 @@ impl WindowCell {
             deferred_size: Cell::new(None),
             deferred_position: Cell::new(None),
             on_close_requested: RefCell::new(seed.on_close_requested),
+            on_event: RefCell::new(seed.on_event),
+            last_event: State::new(None),
             pending_content: RefCell::new(None),
             insets: crate::window::insets::WindowInsetsController::new(),
             owner: None,
@@ -879,6 +934,7 @@ pub(crate) fn forget(id: WindowId) {
         if let Some(cell) = cell {
             // Notify readers before dropping the cell so they recompose to the documented defaults.
             cell.snapshot.set(WindowSnapshot::default());
+            cell.last_event.set(None);
             cell.insets
                 .set(crate::window::insets::WindowInsets::default());
         }
@@ -903,6 +959,7 @@ pub(crate) fn observe_platform_state(
     id: WindowId,
     scale_factor: f64,
 ) {
+    observed_scale_factor(id, scale_factor);
     if id.capabilities().position
         && let Ok(position) = window.outer_position()
     {
@@ -926,22 +983,44 @@ pub(crate) fn observe_platform_state(
 
 /// The platform reported a new inner size.
 pub(crate) fn observed_size(id: WindowId, size: (f32, f32)) {
-    with_cell(id, |cell| {
-        cell.snapshot.update(|snapshot| snapshot.size = size)
-    });
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.peek().size == size {
+            return false;
+        }
+        cell.snapshot.update(|snapshot| snapshot.size = size);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(
+            id,
+            WindowEvent::Resized {
+                width: size.0,
+                height: size.1,
+            },
+        );
+    }
 }
 
 /// The platform reported an outer position in logical desktop coordinates.
 pub(crate) fn observed_position(id: WindowId, position: WindowPosition) {
-    with_cell(id, |cell| {
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.peek().position == position {
+            return false;
+        }
         cell.snapshot
-            .update(|snapshot| snapshot.position = position)
-    });
+            .update(|snapshot| snapshot.position = position);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::Moved { position });
+    }
 }
 
 /// The platform reported a placement change.
 pub(crate) fn observed_placement(id: WindowId, placement: WindowPlacement) {
-    with_cell(id, |cell| {
+    let changed = with_cell(id, |cell| {
         let previous = cell.snapshot.peek().placement;
         let placement_pending = cell
             .pending
@@ -972,14 +1051,71 @@ pub(crate) fn observed_placement(id: WindowId, placement: WindowPlacement) {
                 cell.push(Command::Position(position));
             }
         }
-    });
+        previous != placement
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::PlacementChanged { placement });
+    }
 }
 
 /// The OS reported a keyboard-focus change.
 pub(crate) fn observed_focus(id: WindowId, focused: bool) {
-    with_cell(id, |cell| {
-        cell.snapshot.update(|snapshot| snapshot.focused = focused)
-    });
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.peek().focused == focused {
+            return false;
+        }
+        cell.snapshot.update(|snapshot| snapshot.focused = focused);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::FocusChanged { focused });
+    }
+}
+
+/// The platform reported a new display scale.
+pub(crate) fn observed_scale_factor(id: WindowId, scale_factor: f64) {
+    let scale_factor = scale_factor as f32;
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.peek().scale_factor == scale_factor {
+            return false;
+        }
+        cell.snapshot
+            .update(|snapshot| snapshot.scale_factor = scale_factor);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::ScaleFactorChanged { scale_factor });
+    }
+}
+
+/// The platform reported a new system-inset configuration.
+pub(crate) fn observed_insets(id: WindowId, insets: crate::window::insets::WindowInsets) {
+    let changed = with_cell(id, |cell| {
+        if cell.insets.current() == insets {
+            return false;
+        }
+        cell.insets.set(insets);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::InsetsChanged { insets });
+    }
+}
+
+fn dispatch_event(id: WindowId, event: WindowEvent) {
+    let Some((last_event, handler)) = with_cell(id, |cell| {
+        (cell.last_event.clone(), cell.on_event.borrow().clone())
+    }) else {
+        return;
+    };
+    last_event.set(Some(event));
+    if let Some(handler) = handler {
+        handler(id, event);
+    }
 }
 
 /// Every live window, in creation order.
@@ -993,6 +1129,11 @@ pub(crate) fn windows_in_creation_order() -> Vec<WindowId> {
 /// The application's close-request notification, if it registered one.
 pub(crate) fn close_handler(id: WindowId) -> Option<Rc<dyn Fn(WindowId, CloseReason)>> {
     with_cell(id, |cell| cell.on_close_requested.borrow().clone()).flatten()
+}
+
+/// Replace the declaration's event handler. Recompositions publish the latest closure.
+pub(crate) fn set_event_handler(id: WindowId, handler: Option<WindowEventHandler>) {
+    with_cell(id, |cell| *cell.on_event.borrow_mut() = handler);
 }
 
 /// Take the queued mutations for one window, oldest first.
@@ -1041,6 +1182,133 @@ mod tests {
         let id = WindowId::new(raw);
         declare(id, WindowSeed::default());
         id
+    }
+
+    #[test]
+    fn window_events_report_only_changed_observations() {
+        use crate::window::insets::{Insets, WindowInsets};
+
+        let id = WindowId::new(9_401);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        declare(
+            id,
+            WindowSeed {
+                on_event: Some(Rc::new(move |event_id, event| {
+                    assert_eq!(event_id, id);
+                    sink.borrow_mut().push(event);
+                })),
+                ..WindowSeed::default()
+            },
+        );
+
+        observed_size(id, (640.0, 480.0));
+        observed_size(id, (640.0, 480.0));
+        observed_position(id, WindowPosition::At(10.0, 20.0));
+        observed_position(id, WindowPosition::At(10.0, 20.0));
+        observed_placement(id, WindowPlacement::Maximized);
+        observed_placement(id, WindowPlacement::Maximized);
+        observed_focus(id, true);
+        observed_focus(id, true);
+        observed_scale_factor(id, 1.5);
+        observed_scale_factor(id, 1.5);
+        let insets = WindowInsets {
+            ime: Insets::new(1.0, 2.0, 3.0, 4.0),
+            ..WindowInsets::default()
+        };
+        observed_insets(id, insets);
+        observed_insets(id, insets);
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                WindowEvent::Resized {
+                    width: 640.0,
+                    height: 480.0,
+                },
+                WindowEvent::Moved {
+                    position: WindowPosition::At(10.0, 20.0),
+                },
+                WindowEvent::PlacementChanged {
+                    placement: WindowPlacement::Maximized,
+                },
+                WindowEvent::FocusChanged { focused: true },
+                WindowEvent::ScaleFactorChanged { scale_factor: 1.5 },
+                WindowEvent::InsetsChanged { insets },
+            ]
+        );
+        assert_eq!(id.state().scale_factor(), 1.5);
+        forget(id);
+    }
+
+    #[test]
+    fn window_event_flow_conflates_writes_between_polls() {
+        use futures_util::Stream;
+        use futures_util::task::noop_waker;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        let id = fresh(9_402);
+        let mut events = id.events();
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(
+            Pin::new(&mut events).poll_next(&mut cx),
+            Poll::Ready(Some(None))
+        );
+
+        observed_size(id, (320.0, 240.0));
+        observed_size(id, (640.0, 480.0));
+        assert_eq!(
+            Pin::new(&mut events).poll_next(&mut cx),
+            Poll::Ready(Some(Some(WindowEvent::Resized {
+                width: 640.0,
+                height: 480.0,
+            })))
+        );
+        observed_size(id, (640.0, 480.0));
+        assert_eq!(Pin::new(&mut events).poll_next(&mut cx), Poll::Pending);
+
+        observed_focus(id, true);
+        assert_eq!(
+            Pin::new(&mut events).poll_next(&mut cx),
+            Poll::Ready(Some(Some(WindowEvent::FocusChanged { focused: true })))
+        );
+        forget(id);
+        assert_eq!(
+            Pin::new(&mut events).poll_next(&mut cx),
+            Poll::Ready(Some(None))
+        );
+    }
+
+    #[test]
+    fn event_handler_can_be_replaced_and_can_write_window_state() {
+        let id = fresh(9_403);
+        let first = Rc::new(RefCell::new(Vec::new()));
+        let first_sink = first.clone();
+        set_event_handler(
+            id,
+            Some(Rc::new(move |_, event| first_sink.borrow_mut().push(event))),
+        );
+        observed_focus(id, true);
+
+        set_event_handler(
+            id,
+            Some(Rc::new(move |event_id, _| {
+                event_id.state().set_title("updated from event");
+            })),
+        );
+        observed_focus(id, false);
+
+        assert_eq!(
+            *first.borrow(),
+            vec![WindowEvent::FocusChanged { focused: true }]
+        );
+        assert_eq!(
+            take_commands(id),
+            vec![Command::Title("updated from event".into())]
+        );
+        forget(id);
     }
 
     #[test]

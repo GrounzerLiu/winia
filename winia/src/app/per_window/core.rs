@@ -82,7 +82,16 @@ impl PerWindow {
             return;
         };
         match crate::platform::android::insets::read(&app) {
-            Ok(insets) => self.insets.set(insets),
+            Ok(insets) => {
+                if let Some(raw) = self.created_id {
+                    crate::app::window_state::observed_insets(
+                        crate::app::window_state::WindowId::new(raw),
+                        insets,
+                    );
+                } else {
+                    self.insets.set(insets);
+                }
+            }
             Err(err) => log::warn!("failed to read Android window insets: {err:?}"),
         }
     }

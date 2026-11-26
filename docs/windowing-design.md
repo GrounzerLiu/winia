@@ -1,6 +1,6 @@
 # Windowing design: identity, lifetime, and single-authority state
 
-> Status: implemented, rev 7, 2026-11-26. All five phases are in the tree; `WindowId::insets()`
+> Status: implemented, rev 8, 2026-11-26. All five phases are in the tree; `WindowId::insets()`
 > now exposes the same reactive controller as `ctx.window_insets()`. Section 14 records what landed
 > and how it was verified.
 > Rev 2 keeps the model from rev 1 and drops API surface that did not earn its keep: no handle
@@ -239,6 +239,26 @@ runtime `WindowState` writes. `WindowId::activate` (also `request_focus`) asks t
 and focus the native window without changing component focus. Unsupported features are normalized
 away at both declarative and platform-level creation entry points; runtime setters and activation honor
 the same `WindowCapabilities`.
+
+### 8.1 Window events
+
+`WindowState` remains the authoritative reactive projection. `Window::on_event` is an additive
+callback for semantic observations: `Resized`, `Moved`, `PlacementChanged`, `FocusChanged`,
+`ScaleFactorChanged`, and `InsetsChanged`. The callback runs on the UI thread after the corresponding
+state write, receives the `WindowId`, and is replaced when the declaring composition publishes a new
+closure. Repeated observations of an unchanged value do not notify.
+
+`WindowId::events()` exposes the same observations as a `StateChanges` stream for non-composable
+code. Create it on the UI thread, like the rest of the window API. Its first item is the latest
+event, or `None` before one arrives; delivery is conflated, so
+several writes between polls produce the latest value once. Forgetting the window publishes `None`
+before the cell is dropped. Close requests stay on `on_close_requested`, and application requests
+such as `set_size` do not emit an event until the platform reports the resulting state.
+
+This follows Compose Multiplatform's state-first model: the official desktop guide observes
+`WindowState` through `snapshotFlow` and distinguishes requests from asynchronously applied state.
+The typed callback is a winia convenience; it does not expose raw winit events or change the state
+authority rules.
 
 ## 9. The close pipeline
 
