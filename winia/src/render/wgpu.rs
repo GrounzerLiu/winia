@@ -5,7 +5,7 @@ use std::convert::AsRef;
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use skia_safe::gpu::graphite;
@@ -164,6 +164,54 @@ impl AsRef<dyn Window> for WgpuWindow {
     }
 }
 
+static GPU_INSTANCE: LazyLock<wgpu::Instance> = LazyLock::new(wgpu::Instance::default);
+
+#[derive(Clone)]
+struct GpuCore {
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+static GPU_CORE: Mutex<Option<GpuCore>> = Mutex::new(None);
+
+/// Reuse the process-wide GPU device across surfaces. Each window still owns its swapchain,
+/// Graphite context and recorder; only the expensive adapter/device initialization is shared.
+fn shared_gpu_core(
+    surface: &wgpu::Surface<'_>,
+) -> Result<(GpuCore, wgpu::SurfaceCapabilities), String> {
+    if let Some(core) = GPU_CORE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+    {
+        let capabilities = surface.get_capabilities(&core.adapter);
+        if capabilities
+            .formats
+            .iter()
+            .any(|format| color_type_for_format(*format).is_some())
+        {
+            return Ok((core, capabilities));
+        }
+    }
+
+    let adapter = block_on(GPU_INSTANCE.request_adapter(&wgpu::RequestAdapterOptions {
+        compatible_surface: Some(surface),
+        ..Default::default()
+    }))
+    .map_err(|error| format!("request_adapter: {error}"))?;
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .map_err(|error| format!("request_device: {error}"))?;
+    let core = GpuCore {
+        adapter,
+        device,
+        queue,
+    };
+    let capabilities = surface.get_capabilities(&core.adapter);
+    *GPU_CORE.lock().unwrap_or_else(|error| error.into_inner()) = Some(core.clone());
+    Ok((core, capabilities))
+}
+
 struct WgpuRenderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -176,19 +224,14 @@ struct WgpuRenderer {
 
 impl WgpuRenderer {
     fn new(window: Arc<Box<dyn Window>>, transparent: bool) -> Result<Self, String> {
-        let instance = wgpu::Instance::default();
-        let surface = instance
+        let surface = GPU_INSTANCE
             .create_surface(OwnedWindow(window.clone()))
             .map_err(|error| format!("create_surface: {error}"))?;
-        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .map_err(|error| format!("request_adapter: {error}"))?;
-        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .map_err(|error| format!("request_device: {error}"))?;
+        let (core, capabilities) = shared_gpu_core(&surface)?;
+        let device = core.device.clone();
+        let queue = core.queue.clone();
+        let adapter = core.adapter.clone();
         let size = window.surface_size();
-        let capabilities = surface.get_capabilities(&adapter);
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or_else(|| "the surface does not support the adapter".to_string())?;
