@@ -3,6 +3,8 @@ use super::*;
 // ── PerWindow ──
 
 static NEXT_WINDOW_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static FPS_LOG_ENABLED: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("WINIA_FPS_LOG").is_some());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WindowRole {
@@ -899,12 +901,14 @@ impl PerWindow {
         self.composer.set_window_id(window_id.into_raw() as u64);
         // Vsync study: render frame counter (renders per second — should be ~60 under Fifo).
         self.clock.frame_counter += 1;
-        debug_log!(
-            "[fps] render#{} compose#{} pending={}",
-            self.clock.frame_counter,
-            self.composer.compose_count(),
-            self.composer.pending_state_count()
-        );
+        if *FPS_LOG_ENABLED {
+            debug_log!(
+                "[fps] render#{} compose#{} pending={}",
+                self.clock.frame_counter,
+                self.composer.compose_count(),
+                self.composer.pending_state_count()
+            );
+        }
         // The user's "text size" setting (`Sp` scaling). winit only forwards `WM_SETTINGCHANGE` when
         // the THEME changed, so a text-size change never reaches the event loop: re-read it here,
         // throttled, and re-compose when it moved — `Sp` is resolved during composition.
