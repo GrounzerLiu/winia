@@ -1,10 +1,10 @@
 //! Backdrop demo — the Windows system backdrop request on its own.
 //!
-//! The window is created transparent and undecorated so the material has a chance to reach the
-//! client area. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back; the status line
-//! reports exactly what the platform did. Nothing else is implied: the request never changes
-//! transparency or decorations, and turning decorations back on confines the same material to the
-//! title bar.
+//! The window is created transparent and undecorated, and the content paints no background of its
+//! own: only text and controls are drawn, so the material has the whole client area to show
+//! through. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back; the status line reports
+//! exactly what the platform did. Nothing else is implied: the request never changes transparency
+//! or decorations, and turning decorations back on confines the same material to the title bar.
 //!
 //! Run with: `cargo run -p winia --example window_backdrop_demo`.
 
@@ -34,61 +34,61 @@ fn app(ctx: &mut ComposeCtx) {
             let decorations = state.decorations();
             let requested = state.backdrop();
             let status = state.backdrop_status();
-            Card::new().build(ctx, |ctx| {
-                Column::new()
-                    .spacing(12.0)
-                    .modifier(Modifier::new().padding(20.0))
-                    .build(ctx, |ctx| {
-                        Text::new("System backdrop").font_size(22.0).build(ctx);
-                        Text::new(
-                            "Each button writes DWMWA_SYSTEMBACKDROP_TYPE and reads the value \
-                             back. The request is one axis only: it does not touch transparency, \
-                             decorations, the frame, or the surface, so the material shows only \
-                             where the client area does not paint an opaque pixel.",
-                        )
-                        .font_size(14.0)
-                        .build(ctx);
-                        Row::new().spacing(8.0).build(ctx, |ctx| {
-                            for choice in [
-                                WindowBackdrop::None,
-                                WindowBackdrop::Auto,
-                                WindowBackdrop::Mica,
-                                WindowBackdrop::Acrylic,
-                                WindowBackdrop::MicaAlt,
-                            ] {
-                                Button::outlined()
-                                    .on_click({
-                                        clone!(state);
-                                        move || state.set_backdrop(choice)
-                                    })
-                                    .build(ctx, |ctx| Text::new(backdrop_label(choice)).build(ctx));
-                            }
-                        });
-                        Text::new(format!("requested {requested:?}  ·  status {status}"))
-                            .font_size(14.0)
-                            .build(ctx);
-                        Text::new(format!("backdrop capability: {}", caps.backdrop))
-                            .font_size(14.0)
-                            .build(ctx);
-                        Row::new().spacing(8.0).build(ctx, |ctx| {
-                            Text::new("Decorations").font_size(14.0).build(ctx);
-                            Switch::new(decorations)
-                                .on_checked_change({
+            // No card and no panel: anything opaque would cover the material this demo exists to
+            // show. Only the text and the controls are painted.
+            Column::new()
+                .spacing(12.0)
+                .modifier(Modifier::new().fill_max_size().padding(24.0))
+                .build(ctx, |ctx| {
+                    Text::new("System backdrop").font_size(22.0).build(ctx);
+                    Text::new(
+                        "Each button writes DWMWA_SYSTEMBACKDROP_TYPE and reads the value back. \
+                         The request is one axis only: it does not touch transparency, \
+                         decorations, the frame, or the surface, so the material shows only where \
+                         the client area does not paint an opaque pixel.",
+                    )
+                    .font_size(14.0)
+                    .build(ctx);
+                    Row::new().spacing(8.0).build(ctx, |ctx| {
+                        for choice in [
+                            WindowBackdrop::None,
+                            WindowBackdrop::Auto,
+                            WindowBackdrop::Mica,
+                            WindowBackdrop::Acrylic,
+                            WindowBackdrop::MicaAlt,
+                        ] {
+                            Button::outlined()
+                                .on_click({
                                     clone!(state);
-                                    move |on| state.set_decorations(on)
+                                    move || state.set_backdrop(choice)
                                 })
-                                .build(ctx, |_| {});
-                        });
-                        Text::new(
-                            "Transparency is a creation-time option, so this window was built \
-                             with transparent(true). With decorations off the whole-window \
-                             materials can reach the client area; switch decorations on and the \
-                             same request is confined to the title bar.",
-                        )
+                                .build(ctx, |ctx| Text::new(backdrop_label(choice)).build(ctx));
+                        }
+                    });
+                    Text::new(format!("requested {requested:?}  ·  status {status}"))
                         .font_size(14.0)
                         .build(ctx);
+                    Text::new(format!("backdrop capability: {}", caps.backdrop))
+                        .font_size(14.0)
+                        .build(ctx);
+                    Row::new().spacing(8.0).build(ctx, |ctx| {
+                        Text::new("Decorations").font_size(14.0).build(ctx);
+                        Switch::new(decorations)
+                            .on_checked_change({
+                                clone!(state);
+                                move |on| state.set_decorations(on)
+                            })
+                            .build(ctx, |_| {});
                     });
-            });
+                    Text::new(
+                        "Transparency is a creation-time option, so this window was built with \
+                         transparent(true). With decorations off the whole-window materials can \
+                         reach the client area; switch decorations on and the same request is \
+                         confined to the title bar.",
+                    )
+                    .font_size(14.0)
+                    .build(ctx);
+                });
         });
 }
 
