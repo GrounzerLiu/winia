@@ -450,7 +450,7 @@ impl DropdownMenu {
                 // emitting siblings, which is its own round"). Measured with three items in a bare
                 // composer: arena_len=6 and the root was the LAST item (9x12) — the first two were gone,
                 // and the same thing showed up in `overlay_demo` and in the UI fixture's tree.
-                content: Box::new(move |ctx| {
+                content: Arc::new(move |ctx| {
                     let mut surface = crate::components::surface::Surface::new()
                         .shape(shape)
                         .color(container_color)

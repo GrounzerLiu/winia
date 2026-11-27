@@ -407,7 +407,7 @@ impl BasicAlertDialog {
             on_dismiss,
             enter_anim: Some(OverlayAnimSpec::default_enter()),
             exit_anim: Some(OverlayAnimSpec::default_exit()),
-            content: Box::new(move |ctx| {
+            content: Arc::new(move |ctx| {
                 // Rebuilt per call: this closure is `Fn` (the overlay composes it every frame
                 // it is up), so nothing can be moved out of it.
                 //

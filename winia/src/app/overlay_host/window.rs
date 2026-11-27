@@ -8,14 +8,14 @@ use super::*;
 /// `dismiss_on_back_press = false` registers it disabled, so the event falls through to the page
 /// (Compose's behaviour: a dialog that does not consume back lets the activity handle it).
 fn wrap_overlay_content(
-    content: Box<dyn Fn(&mut ComposeCtx)>,
+    content: Arc<dyn Fn(&mut ComposeCtx)>,
     on_dismiss: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     enabled: bool,
     window_id: u64,
     overlay_id: u64,
     defers_to_content: bool,
-) -> Box<dyn Fn(&mut ComposeCtx)> {
-    Box::new(move |ctx| {
+) -> Arc<dyn Fn(&mut ComposeCtx)> {
+    Arc::new(move |ctx| {
         let callback = on_dismiss.clone();
         crate::back::overlay_back_handler(ctx, enabled, move || {
             if defers_to_content {
@@ -110,6 +110,9 @@ impl OverlayWindow {
     }
 
     pub(crate) fn restart_enter(&mut self) {
+        if self.closing {
+            return;
+        }
         let Some(progress) = self.progress.clone() else {
             return;
         };

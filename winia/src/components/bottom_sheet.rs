@@ -244,7 +244,7 @@ impl ModalBottomSheet {
             exit_anim: Some(OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(200),
             )),
-            content: Box::new(move |ctx| {
+            content: Arc::new(move |ctx| {
                 let back_state = sheet_state.clone();
                 crate::back::overlay_predictive_back_handler(
                     ctx,

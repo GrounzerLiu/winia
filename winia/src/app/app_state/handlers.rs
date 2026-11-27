@@ -372,7 +372,9 @@ impl ApplicationHandler for AppState {
             for pw in self.windows.values_mut() {
                 if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
                     pw.clock.last_request_time = now;
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 }
@@ -380,7 +382,9 @@ impl ApplicationHandler for AppState {
         } else if self.was_animating {
             // Animations just stopped: force a final frame (the request from the last set may have been skipped).
             for pw in self.windows.values_mut() {
-                if let Some(ref sw) = pw.skia_window {
+                if let Some(ref sw) = pw.skia_window
+                    && !sw.renderer_unavailable()
+                {
                     pw.clock.force_redraw = true; // Only set for a renderable window (no None left behind).
                     sw.request_redraw();
                 }
@@ -396,7 +400,9 @@ impl ApplicationHandler for AppState {
             // An owed render aligns on last_render (force_redraw is set when frame throttling skips one).
             if pw.clock.force_redraw {
                 if now.duration_since(pw.clock.last_render_time) >= pw.clock.frame_interval {
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 } else {
@@ -411,7 +417,9 @@ impl ApplicationHandler for AppState {
             if pw.composer.has_pending_states() {
                 if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
                     pw.clock.last_request_time = now;
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 } else {
@@ -1747,6 +1755,7 @@ impl AppState {
                             // without depending on that possibly-lost wake-up.
                             if crate::animation::is_animating()
                                 && let Some(ref sw) = pw.skia_window
+                                && !sw.renderer_unavailable()
                             {
                                 sw.request_redraw();
                             }
@@ -1892,6 +1901,15 @@ impl AppState {
                 }
             }
             _ => {}
+        }
+        if self.windows.get(&window_id).is_some_and(|pw| {
+            matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
+                && pw
+                    .skia_window
+                    .as_ref()
+                    .is_some_and(|surface| surface.renderer_failed())
+        }) {
+            self.fallback_native_popup_after_render_failure(event_loop, window_id);
         }
     }
 }

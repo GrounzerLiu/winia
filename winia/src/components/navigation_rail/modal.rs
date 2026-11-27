@@ -238,7 +238,7 @@ impl ModalWideNavigationRail {
                 std::time::Duration::from_millis(200),
             )),
             local_snapshot: Vec::new(),
-            content: Box::new(move |ctx| {
+            content: Arc::new(move |ctx| {
                 // The container hugs the leading edge and fills the height; its width is the layout
                 // policy's (`min(available, 360)`, the modal cap), and the shape and colour are the modal
                 // tokens rather than the plain rail's. Both the modifier and the policy are rebuilt here:

@@ -115,9 +115,17 @@ impl PopupPlacement {
                 true,
                 None,
             );
-            return (
+            let origin = (
                 placed.origin.0 + bounds_origin.0 + self.offset.0,
                 placed.origin.1 + bounds_origin.1 + self.offset.1,
+            );
+            let max_x =
+                (bounds_origin.0 + bounds_size.0 - self.content_size.0).max(bounds_origin.0);
+            let max_y =
+                (bounds_origin.1 + bounds_size.1 - self.content_size.1).max(bounds_origin.1);
+            return (
+                origin.0.clamp(bounds_origin.0, max_x),
+                origin.1.clamp(bounds_origin.1, max_y),
             );
         }
         crate::app::overlay_host::resolve_overlay_placement(
@@ -276,6 +284,24 @@ mod tests {
         .with_fit_bounds(((50.0, 100.0), (800.0, 400.0)));
 
         assert_eq!(placement.to_parent_origin(), (350.0, 194.0));
+    }
+
+    #[test]
+    fn offset_cannot_push_a_fitted_popup_outside_the_work_area() {
+        let placement = PopupPlacement::new(
+            (0.0, 0.0),
+            Some((500.0, 80.0, 200.0, 200.0)),
+            (200.0, 200.0),
+            (500.0, 80.0),
+            PopupPosition::BottomStart,
+            LayoutDirection::Ltr,
+            (300.0, 300.0),
+            true,
+            false,
+        )
+        .with_fit_bounds(((50.0, 100.0), (800.0, 400.0)));
+
+        assert_eq!(placement.to_parent_origin(), (650.0, 300.0));
     }
 
     #[test]

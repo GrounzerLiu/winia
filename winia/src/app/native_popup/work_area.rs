@@ -30,19 +30,34 @@ pub(crate) fn from_window(window: &dyn Window) -> Option<NativeWorkArea> {
     }
     let parent_origin = platform_parent_origin(window)?;
     let rect = platform_work_area(window)?;
-    if rect.width <= 0 || rect.height <= 0 {
-        return None;
-    }
+    let size = logical_rect_size(rect, scale)?;
     Some(NativeWorkArea {
         origin: (
             (rect.x - parent_origin.x) as f32 / scale as f32,
             (rect.y - parent_origin.y) as f32 / scale as f32,
         ),
-        size: (
-            rect.width as f32 / scale as f32,
-            rect.height as f32 / scale as f32,
-        ),
+        size,
     })
+}
+
+/// Measurement constraints do not require a parent-client origin. Wayland cannot report a global
+/// top-level position, but its monitor bounds still provide a safe, useful maximum popup size.
+pub(crate) fn measurement_size(window: &dyn Window) -> Option<(f32, f32)> {
+    let scale = window.scale_factor();
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    logical_rect_size(platform_work_area(window)?, scale)
+}
+
+fn logical_rect_size(rect: PhysicalRect, scale: f64) -> Option<(f32, f32)> {
+    if rect.width <= 0 || rect.height <= 0 {
+        return None;
+    }
+    Some((
+        rect.width as f32 / scale as f32,
+        rect.height as f32 / scale as f32,
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -85,4 +100,37 @@ fn monitor_bounds(window: &dyn Window) -> Option<PhysicalRect> {
         width: size.width as i32,
         height: size.height as i32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PhysicalRect, logical_rect_size};
+
+    #[test]
+    fn monitor_bounds_measure_without_a_parent_origin() {
+        assert_eq!(
+            logical_rect_size(
+                PhysicalRect {
+                    x: -1920,
+                    y: 0,
+                    width: 3840,
+                    height: 2160,
+                },
+                2.0,
+            ),
+            Some((1920.0, 1080.0))
+        );
+        assert_eq!(
+            logical_rect_size(
+                PhysicalRect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 1080,
+                },
+                1.0,
+            ),
+            None
+        );
+    }
 }

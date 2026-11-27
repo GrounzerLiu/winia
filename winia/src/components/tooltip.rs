@@ -171,7 +171,7 @@ impl Tooltip {
                 }),
                 enter_anim: None, // Tooltip 默认无进入动画
                 exit_anim: None,  // Tooltip 默认无退出动画
-                content: Box::new(content),
+                content: content.into(),
                 local_snapshot: Vec::new(),
             });
         }

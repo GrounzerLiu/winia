@@ -1052,7 +1052,9 @@ impl PerWindow {
                         request_capture();
                     }
                     let drew = sw.draw(|surface| {
-                        if first_native_draw && let Some(overlay) = self.overlay.layers.first_mut()
+                        if first_native_draw
+                            && let Some(overlay) = self.overlay.layers.first_mut()
+                            && !overlay.closing
                         {
                             overlay.restart_enter();
                         }
@@ -1109,9 +1111,17 @@ impl PerWindow {
                     if first_native_draw && drew {
                         self.native_popup_presented = true;
                     }
+                    if sw.renderer_failed() {
+                        sw.release_failed_renderer();
+                    }
+                    if !drew && sw.renderer_unavailable() {
+                        // Pending completion sends its own redraw; a terminal failure must not keep
+                        // force_redraw scheduling empty frames forever.
+                        self.clock.force_redraw = false;
+                    }
                     // The screenshot read-back happens after Graphite submission inside the wgpu draw,
                     // so it captures the frame that was submitted for presentation.
-                    if crate::debug::screenshot_requested(debug_window_id) {
+                    if drew && crate::debug::screenshot_requested(debug_window_id) {
                         if let Some((w2, h2, pixels)) = take_capture() {
                             crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);
                         }

@@ -73,7 +73,7 @@ fn an_overlay_that_stops_closing_is_shown_again() {
         on_dismiss: None,
         enter_anim: enter,
         exit_anim: exit,
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     };
     let fade = || OverlayAnimSpec::fade_only(Duration::from_millis(50));
@@ -141,7 +141,7 @@ fn escape_respects_dismiss_on_back_press() {
         on_dismiss: Some(Arc::new(|| {})),
         enter_anim: None,
         exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     };
 
@@ -205,7 +205,7 @@ fn a_dismissal_request_that_the_content_owns_does_not_start_the_hosts_fade() {
         })),
         enter_anim: None,
         exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     };
 
@@ -253,7 +253,7 @@ fn an_overlay_composer_inherits_its_windows_clock_identity() {
         on_dismiss: None,
         enter_anim: None,
         exit_anim: None,
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     };
 
@@ -307,6 +307,33 @@ fn restart_enter_resets_progress_and_schedules_the_enter_animation() {
     crate::animation::clear_all_animations();
 }
 
+#[test]
+fn restart_enter_does_not_cancel_a_closing_overlays_exit_animation() {
+    let _serial = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::animation::clear_all_animations();
+    let mut desc = back_close_desc();
+    desc.enter_anim = Some(OverlayAnimSpec::default_enter());
+    let mut overlay = OverlayWindow::new_with_composer(desc, Composer::new());
+    let progress = overlay
+        .progress
+        .clone()
+        .expect("an enter spec creates a progress channel");
+    crate::animation::cancel_animation_by_id(progress.state_id());
+    progress.as_raw().set_backchannel(0.75);
+    overlay.closing = true;
+
+    overlay.restart_enter();
+
+    assert_eq!(progress.peek(), 0.75, "the exit progress is left untouched");
+    assert!(
+        !crate::animation::has_animation_for_state(progress.state_id()),
+        "a closing overlay must not schedule a new enter animation"
+    );
+    crate::animation::clear_all_animations();
+}
+
 fn back_close_desc() -> OverlayDesc {
     OverlayDesc {
         host: crate::overlay::PopupHost::InWindow,
@@ -327,7 +354,7 @@ fn back_close_desc() -> OverlayDesc {
         on_dismiss: None,
         enter_anim: None,
         exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     }
 }
@@ -390,7 +417,7 @@ fn native_popup_descs_are_routed_to_app_state_instead_of_the_parent_layers() {
         on_dismiss: None,
         enter_anim: None,
         exit_anim: None,
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     });
 
@@ -405,10 +432,12 @@ fn native_popup_descs_are_routed_to_app_state_instead_of_the_parent_layers() {
     assert_eq!(pw.pending_native_overlays[0].anchor_slot, Some(7));
 
     let mut fallback = pw.pending_native_overlays.pop().unwrap();
+    let native_desc = fallback.clone();
     fallback.host = crate::overlay::PopupHost::InWindow;
     pw.overlay.native_popups.push(NativePopupBinding {
         id: 91,
         child: winit::window::WindowId::from_raw(2),
+        desc: native_desc,
         anchor_slot: Some(7),
         direction: None,
         position: PopupPosition::BottomStart,
@@ -428,5 +457,10 @@ fn native_popup_descs_are_routed_to_app_state_instead_of_the_parent_layers() {
     assert!(
         !pw.overlay.native_popups[0].active,
         "the old native host starts closing"
+    );
+    assert_eq!(
+        pw.overlay.native_popups[0].desc.host,
+        crate::overlay::PopupHost::Native,
+        "the binding keeps the original descriptor available for renderer-failure fallback"
     );
 }

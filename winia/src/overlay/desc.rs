@@ -20,6 +20,7 @@ pub enum PopupHost {
 
 /// Overlay descriptor — registered during composition (e.g. `Popup::build`
 /// calls `ctx.open_overlay` internally).
+#[derive(Clone)]
 pub struct OverlayDesc {
     pub(crate) id: u64,
     pub(crate) host: PopupHost,
@@ -48,7 +49,7 @@ pub struct OverlayDesc {
     pub(crate) match_anchor_width: bool,
     pub(crate) enter_anim: Option<OverlayAnimSpec>,
     pub(crate) exit_anim: Option<OverlayAnimSpec>,
-    pub(crate) content: Box<dyn Fn(&mut crate::runtime::composer::ComposeCtx)>,
+    pub(crate) content: Arc<dyn Fn(&mut crate::runtime::composer::ComposeCtx)>,
     pub(crate) local_snapshot: crate::runtime::composition_local::LocalSnapshot,
 }
 

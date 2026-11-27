@@ -15,10 +15,11 @@ use super::*;
 /// read it — which is the measure of a group that wanted a struct. The drag session, the click
 /// target, the frozen arena origins and the focus the host suspends are all about *an overlay*, not
 /// about the window; what stays on `PerWindow` is the frame.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct NativePopupBinding {
     pub(crate) id: u64,
     pub(crate) child: winit::window::WindowId,
+    pub(crate) desc: crate::overlay::OverlayDesc,
     pub(crate) anchor_slot: Option<u64>,
     pub(crate) direction: Option<crate::layout::LayoutDirection>,
     pub(crate) position: crate::overlay::PopupPosition,
@@ -120,7 +121,7 @@ pub(crate) struct OverlayWindow {
     /// Take exactly the anchor's width (see `OverlayDesc::match_anchor_width`).
     pub(crate) match_anchor_width: bool,
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
+    pub(crate) content: Arc<dyn Fn(&mut ComposeCtx)>,
     /// CompositionLocal snapshot captured at registration (inside the main tree's `provides`) —
     /// replayed on recompose (the overlay's own Composer inherits the main tree's theme/direction/typography).
     pub(crate) local_snapshot: crate::runtime::composition_local::LocalSnapshot,

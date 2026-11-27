@@ -134,7 +134,7 @@ impl Dialog {
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
-            content: Box::new(content),
+            content: Arc::new(content),
             local_snapshot: Vec::new(),
         });
     }

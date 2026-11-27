@@ -227,7 +227,7 @@ fn focus_by_node_id_can_reach_an_overlay_arena() {
         match_anchor_width: false,
         enter_anim: None,
         exit_anim: None,
-        content: Box::new(|_| {}),
+        content: Arc::new(|_| {}),
         local_snapshot: Vec::new(),
     };
     pw.overlay

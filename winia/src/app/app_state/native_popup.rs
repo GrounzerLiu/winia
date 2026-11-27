@@ -5,7 +5,7 @@ use crate::app::overlay_host::{
 };
 use crate::app::window_state::WindowCapabilities;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size};
-use winit::raw_window_handle::HasWindowHandle;
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{WindowAttributes, WindowId, WindowPositioner, WindowType};
 
 fn native_overlay_desc(mut desc: crate::overlay::OverlayDesc) -> crate::overlay::OverlayDesc {
@@ -53,6 +53,55 @@ impl AppState {
                         .iter()
                         .any(|overlay| overlay.focused_id.is_some()))
         })
+    }
+
+    pub(crate) fn fallback_native_popup_after_render_failure(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        child_id: WindowId,
+    ) {
+        let Some((parent_id, should_fallback, mut desc)) =
+            self.windows.get(&child_id).and_then(|pw| {
+                let crate::app::WindowRole::NativePopup { parent, .. } = pw.role else {
+                    return None;
+                };
+                let binding = self
+                    .windows
+                    .get(&parent)?
+                    .overlay
+                    .native_popups
+                    .iter()
+                    .find(|binding| binding.child == child_id)?;
+                let should_fallback = binding.active
+                    && !pw.overlay.layers.is_empty()
+                    && !pw
+                        .overlay
+                        .layers
+                        .first()
+                        .is_some_and(|overlay| overlay.closing);
+                Some((parent, should_fallback, binding.desc.clone()))
+            })
+        else {
+            return;
+        };
+        if let Some(parent) = self.windows.get_mut(&parent_id) {
+            parent
+                .overlay
+                .native_popups
+                .retain(|binding| binding.child != child_id);
+        }
+        self.close_window_now(event_loop, child_id);
+        if !should_fallback {
+            return;
+        }
+        desc.host = crate::overlay::PopupHost::InWindow;
+        if let Some(parent) = self.windows.get_mut(&parent_id) {
+            sync_overlay_desc(parent, desc);
+            parent.composer.mark_content_dirty();
+            if let Some(surface) = parent.skia_window.as_ref() {
+                surface.request_redraw();
+            }
+        }
     }
 
     pub(crate) fn sync_native_popups(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -150,10 +199,22 @@ impl AppState {
         });
 
         if let Some(child_id) = existing {
-            if let Some(child) = self.windows.get_mut(&child_id) {
-                sync_overlay_desc(child, native_overlay_desc(desc));
-                if let Some(window) = child.skia_window.as_ref() {
-                    window.request_redraw();
+            if self.windows.contains_key(&child_id) {
+                let native_desc = native_overlay_desc(desc.clone());
+                if let Some(child) = self.windows.get_mut(&child_id) {
+                    sync_overlay_desc(child, native_desc);
+                    if let Some(window) = child.skia_window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                if let Some(parent) = self.windows.get_mut(&parent_id)
+                    && let Some(binding) = parent
+                        .overlay
+                        .native_popups
+                        .iter_mut()
+                        .find(|binding| binding.id == desc.id)
+                {
+                    binding.desc = desc;
                 }
                 self.update_native_popup_geometry(parent_id, child_id);
                 return;
@@ -253,6 +314,7 @@ impl AppState {
         child.composer.set_window_id(window_id.into_raw() as u64);
         child.clock.frame_interval = parent.clock.frame_interval;
 
+        let fallback_desc = desc.clone();
         let overlay_id = desc.id;
         let anchor_slot = desc.anchor_slot;
         let direction = desc.direction;
@@ -273,6 +335,7 @@ impl AppState {
             parent.overlay.native_popups.push(NativePopupBinding {
                 id: overlay_id,
                 child: window_id,
+                desc: fallback_desc,
                 anchor_slot,
                 direction,
                 position,
@@ -367,13 +430,16 @@ impl AppState {
             if !overlay.dismiss_on_outside || overlay.closing {
                 continue;
             }
-            let placement =
-                popup_placement_for_binding(parent, &binding, (child.width, child.height));
-            let (left, top) = placement.to_parent_origin();
+            let Some((left, top, width, height)) = native_popup_rect(parent, child, &binding)
+            else {
+                // A Wayland popup has not been configured yet; without a trusted rect, keep it open
+                // rather than dismissing a visible popup from a stale parent-relative prediction.
+                continue;
+            };
             let inside = position.0 >= left
-                && position.0 < left + child.width
+                && position.0 < left + width
                 && position.1 >= top
-                && position.1 < top + child.height;
+                && position.1 < top + height;
             if !inside {
                 close.push((binding.child, binding.id));
             }
@@ -450,10 +516,12 @@ impl AppState {
             if window.positioner() != positioner {
                 window.set_positioner(positioner);
             }
-            let _ = window.set_outer_position(Position::Logical(LogicalPosition::new(
-                origin.0 as f64,
-                origin.1 as f64,
-            )));
+            if !uses_compositor_positioner(window) {
+                let _ = window.set_outer_position(Position::Logical(LogicalPosition::new(
+                    origin.0 as f64,
+                    origin.1 as f64,
+                )));
+            }
         }
         child.width = size.0;
         child.height = size.1;
@@ -466,9 +534,21 @@ impl AppState {
 }
 
 fn native_measurement_size(window: &dyn winit::window::Window) -> (f32, f32) {
-    crate::app::native_popup::work_area::from_window(window)
-        .map(|area| area.size)
+    crate::app::native_popup::work_area::measurement_size(window)
         .unwrap_or_else(|| parent_measurement_size(window.surface_size(), window.scale_factor()))
+}
+
+#[cfg(target_os = "linux")]
+fn uses_compositor_positioner(window: &dyn winit::window::Window) -> bool {
+    matches!(
+        window.window_handle().ok().map(|handle| handle.as_raw()),
+        Some(RawWindowHandle::Wayland(_))
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn uses_compositor_positioner(_window: &dyn winit::window::Window) -> bool {
+    false
 }
 
 fn parent_measurement_size(size: PhysicalSize<u32>, scale: f64) -> (f32, f32) {
@@ -477,6 +557,22 @@ fn parent_measurement_size(size: PhysicalSize<u32>, scale: f64) -> (f32, f32) {
     }
     let logical = size.to_logical::<f32>(scale);
     (logical.width.max(1.0), logical.height.max(1.0))
+}
+
+fn native_popup_rect(
+    parent: &PerWindow,
+    child: &PerWindow,
+    binding: &NativePopupBinding,
+) -> Option<(f32, f32, f32, f32)> {
+    let surface = child.skia_window.as_ref()?;
+    if uses_compositor_positioner(surface.window()) {
+        let position = surface.window().outer_position().ok()?;
+        let logical = position.to_logical::<f32>(parent.scale_factor);
+        return Some((logical.x, logical.y, child.width, child.height));
+    }
+    let placement = popup_placement_for_binding(parent, binding, (child.width, child.height));
+    let (left, top) = placement.to_parent_origin();
+    Some((left, top, child.width, child.height))
 }
 
 fn native_fit_bounds(parent: &PerWindow) -> Option<((f32, f32), (f32, f32))> {
