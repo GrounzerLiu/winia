@@ -6,13 +6,18 @@ use winia::prelude::*;
 
 fn main() {
     let smoke = std::env::args().any(|argument| argument == "--smoke");
+    let smoke_host = if std::env::args().any(|argument| argument == "--inwindow") {
+        PopupHost::InWindow
+    } else {
+        PopupHost::Native
+    };
     winia::run_app!(move |ctx| {
-        WiniaTheme::auto(ctx, |ctx| app(ctx, smoke));
+        WiniaTheme::auto(ctx, |ctx| app(ctx, smoke, smoke_host));
     });
 }
 
 #[composable]
-fn app(ctx: &mut ComposeCtx, smoke: bool) {
+fn app(ctx: &mut ComposeCtx, smoke: bool, smoke_host: PopupHost) {
     Window::new()
         .title("Native popup demo")
         .size(720.0, 520.0)
@@ -32,7 +37,7 @@ fn app(ctx: &mut ComposeCtx, smoke: bool) {
                 let host = host.clone();
                 winia::effect::LaunchedEffect::new(()).build(ctx, move |_| async move {
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    host.set(PopupHost::Native);
+                    host.set(smoke_host);
                     open.set(true);
                     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
                     open.set(false);
