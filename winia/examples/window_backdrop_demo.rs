@@ -1,10 +1,11 @@
 //! Backdrop demo — the Windows system backdrop request on its own.
 //!
-//! The window is created transparent and undecorated, and the content paints no background of its
-//! own: only text and controls are drawn, so the material has the whole client area to show
-//! through. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back; the status line reports
-//! exactly what the platform did. Nothing else is implied: the request never changes transparency
-//! or decorations, and turning decorations back on confines the same material to the title bar.
+//! The window is created transparent and keeps its decorations, and the content paints no
+//! background of its own: only text and controls are drawn, so the material has the client area to
+//! show through. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back; the status line
+//! reports exactly what the platform did. Nothing else is implied: the request never changes
+//! transparency or decorations, and the switch flips the decorations at runtime so both cases can
+//! be compared on the same request.
 //!
 //! Run with: `cargo run -p winia --example window_backdrop_demo`.
 
@@ -25,7 +26,6 @@ fn app(ctx: &mut ComposeCtx) {
         .title("Window backdrop demo")
         .size(760.0, 560.0)
         .transparent(true)
-        .decorations(false)
         .backdrop(WindowBackdrop::Mica)
         .build(ctx, |ctx| {
             let id = ctx.window_id();
