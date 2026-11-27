@@ -632,14 +632,6 @@ impl ApplicationHandler for AppState {
         if matches!(event, WindowEvent::Destroyed) {
             self.close_native_popup_children(event_loop, window_id);
         }
-        if let WindowEvent::PointerButton { state, .. } = &event
-            && state.is_pressed()
-            && let Some(pw) = self.windows.get(&window_id)
-            && matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
-            && let Some(surface) = pw.skia_window.as_ref()
-        {
-            let _ = surface.window().focus_window();
-        }
         if let WindowEvent::PointerButton {
             position,
             state,
@@ -659,6 +651,21 @@ impl ApplicationHandler for AppState {
                 | WindowEvent::SurfaceResized(_)
                 | WindowEvent::ScaleFactorChanged { .. }
         );
+        let native_popup_input_parent = match &event {
+            WindowEvent::PointerButton { state, .. } if !state.is_pressed() => {
+                self.windows.get(&window_id).and_then(|pw| match pw.role {
+                    crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
+                    crate::app::WindowRole::RootOrChild => None,
+                })
+            }
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..) => {
+                self.windows.get(&window_id).and_then(|pw| match pw.role {
+                    crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
+                    crate::app::WindowRole::RootOrChild => None,
+                })
+            }
+            _ => None,
+        };
         let native_popup_parent = if matches!(event, WindowEvent::RedrawRequested) {
             self.windows.get(&window_id).and_then(|pw| match pw.role {
                 crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
@@ -668,6 +675,14 @@ impl ApplicationHandler for AppState {
             None
         };
         self.dispatch_window_event(event_loop, window_id, event);
+        if let Some(parent) = native_popup_input_parent
+            && let Some(parent) = self.windows.get_mut(&parent)
+        {
+            parent.composer.mark_content_dirty();
+            if let Some(surface) = parent.skia_window.as_ref() {
+                surface.request_redraw();
+            }
+        }
         if refresh_native_positions {
             self.refresh_native_popup_positions(window_id);
         }

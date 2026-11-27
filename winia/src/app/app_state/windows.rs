@@ -78,12 +78,6 @@ impl AppState {
                     .map(|pw| pw.scale_factor as f32)
                     .unwrap_or(1.0);
                 self.dismiss_native_popups_outside(window_id, (*x / scale, *y / scale));
-                if let Some(pw) = self.windows.get(&window_id)
-                    && matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
-                    && let Some(surface) = pw.skia_window.as_ref()
-                {
-                    let _ = surface.window().focus_window();
-                }
             }
         }
         let Some(pw) = self.windows.get_mut(&window_id) else {
