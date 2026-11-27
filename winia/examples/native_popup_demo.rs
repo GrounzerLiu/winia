@@ -72,6 +72,8 @@ fn app(ctx: &mut ComposeCtx, smoke: bool, smoke_host: PopupHost) {
                         .host(current_host)
                         .anchor_slot(anchor)
                         .position(PopupPosition::BottomStart)
+                        .enter_animation(Some(OverlayAnimSpec::default_enter()))
+                        .exit_animation(Some(OverlayAnimSpec::default_exit()))
                         .on_dismiss_request(move || dismiss_for_request.set(false))
                         .build(ctx, move |ctx| {
                             let close = close.clone();
