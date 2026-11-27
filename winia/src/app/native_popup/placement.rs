@@ -5,6 +5,10 @@ use winit::window::{WindowAnchor, WindowConstraintAdjustment, WindowGravity, Win
 
 /// A platform-neutral native popup placement plan.
 ///
+/// `fit_bounds`, when present, is `(origin, size)` in parent-client logical coordinates. It is
+/// separate from `parent_size` so wide native popups can fit the monitor without changing
+/// window-aligned positions, which remain relative to the parent window.
+///
 /// `origin` is the final top-left in parent-local logical coordinates, including `offset`.
 /// `anchor_rect` is also parent-local. `parent_size` is retained so window-aligned positions,
 /// especially `Center`, can be expressed as a winit positioner without inventing an anchor.
@@ -19,6 +23,7 @@ pub(crate) struct PopupPlacement {
     pub(crate) offset: (f32, f32),
     pub(crate) fit_around_anchor: bool,
     pub(crate) match_anchor_width: bool,
+    pub(crate) fit_bounds: Option<((f32, f32), (f32, f32))>,
 }
 
 impl PopupPlacement {
@@ -44,7 +49,13 @@ impl PopupPlacement {
             offset,
             fit_around_anchor,
             match_anchor_width,
+            fit_bounds: None,
         }
+    }
+
+    pub(crate) fn with_fit_bounds(mut self, bounds: ((f32, f32), (f32, f32))) -> Self {
+        self.fit_bounds = Some(bounds);
+        self
     }
 
     /// Convert this plan into winit's parent-relative popup positioner.
@@ -89,6 +100,26 @@ impl PopupPlacement {
 
     /// Resolve the final parent-local origin with winia's placement rules.
     pub(crate) fn to_parent_origin(&self) -> (f32, f32) {
+        if self.fit_around_anchor
+            && let (Some((ax, ay, aw, ah)), Some((bounds_origin, bounds_size))) =
+                (self.anchor_rect, self.fit_bounds)
+        {
+            let shifted_anchor = (ax - bounds_origin.0, ay - bounds_origin.1, aw, ah);
+            let placed = crate::app::overlay_host::resolve_overlay_placement(
+                self.position,
+                self.direction,
+                Some(shifted_anchor),
+                self.content_size,
+                bounds_size,
+                (0.0, 0.0),
+                true,
+                None,
+            );
+            return (
+                placed.origin.0 + bounds_origin.0 + self.offset.0,
+                placed.origin.1 + bounds_origin.1 + self.offset.1,
+            );
+        }
         crate::app::overlay_host::resolve_overlay_placement(
             self.position,
             self.direction,
@@ -209,6 +240,42 @@ mod tests {
             fit_around_anchor,
             false,
         )
+    }
+
+    #[test]
+    fn wide_native_popup_uses_work_area_instead_of_parent_width() {
+        let placement = PopupPlacement::new(
+            (0.0, 0.0),
+            Some((250.0, 50.0, 40.0, 40.0)),
+            (500.0, 80.0),
+            (200.0, 200.0),
+            PopupPosition::BottomStart,
+            LayoutDirection::Ltr,
+            (0.0, 4.0),
+            true,
+            false,
+        )
+        .with_fit_bounds(((50.0, 100.0), (800.0, 400.0)));
+
+        assert_eq!(placement.to_parent_origin(), (250.0, 152.0));
+    }
+
+    #[test]
+    fn work_area_fit_clamps_when_no_anchor_edge_fits() {
+        let placement = PopupPlacement::new(
+            (0.0, 0.0),
+            Some((900.0, 150.0, 40.0, 40.0)),
+            (500.0, 80.0),
+            (200.0, 200.0),
+            PopupPosition::BottomStart,
+            LayoutDirection::Ltr,
+            (0.0, 4.0),
+            true,
+            false,
+        )
+        .with_fit_bounds(((50.0, 100.0), (800.0, 400.0)));
+
+        assert_eq!(placement.to_parent_origin(), (350.0, 194.0));
     }
 
     #[test]

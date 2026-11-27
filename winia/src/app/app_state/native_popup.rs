@@ -227,10 +227,11 @@ impl AppState {
         let surface = WgpuWindow::new(event_loop, std::sync::Arc::new(window), true);
         crate::accessibility::install(&*surface, window_id.into_raw() as u64);
 
+        let measurement_size = native_measurement_size(parent_window);
         let mut child = PerWindow::new(
             Box::new(native_popup_root),
-            parent.width,
-            parent.height,
+            measurement_size.0,
+            measurement_size.1,
             parent.theme.applied.colors,
         );
         child.skia_window = Some(surface);
@@ -400,19 +401,20 @@ impl AppState {
         else {
             return;
         };
-        let Some(parent_size) = self
-            .windows
-            .get(&parent_id)
-            .map(|parent| (parent.width, parent.height))
-        else {
+        let Some(measurement_size) = self.windows.get(&parent_id).and_then(|parent| {
+            parent
+                .skia_window
+                .as_ref()
+                .map(|surface| native_measurement_size(surface.window()))
+        }) else {
             return;
         };
         let size = {
             let Some(child) = self.windows.get_mut(&child_id) else {
                 return;
             };
-            child.width = parent_size.0;
-            child.height = parent_size.1;
+            child.width = measurement_size.0;
+            child.height = measurement_size.1;
             layout_overlays(child);
             child
                 .overlay
@@ -462,6 +464,23 @@ impl AppState {
     }
 }
 
+fn native_measurement_size(window: &dyn winit::window::Window) -> (f32, f32) {
+    crate::app::native_popup::work_area::from_window(window)
+        .map(|area| area.size)
+        .unwrap_or((
+            crate::app::native_popup::work_area::UNBOUNDED_LOGICAL_EXTENT,
+            crate::app::native_popup::work_area::UNBOUNDED_LOGICAL_EXTENT,
+        ))
+}
+
+fn native_fit_bounds(parent: &PerWindow) -> Option<((f32, f32), (f32, f32))> {
+    parent
+        .skia_window
+        .as_ref()
+        .and_then(|surface| crate::app::native_popup::work_area::from_window(surface.window()))
+        .map(|area| (area.origin, area.size))
+}
+
 fn popup_positioner(parent: &PerWindow, desc: &crate::overlay::OverlayDesc) -> WindowPositioner {
     popup_placement(
         parent,
@@ -481,7 +500,7 @@ fn popup_placement_for_binding(
     binding: &NativePopupBinding,
     content_size: (f32, f32),
 ) -> crate::app::native_popup::PopupPlacement {
-    popup_placement(
+    let placement = popup_placement(
         parent,
         binding.anchor_slot,
         binding.direction,
@@ -490,7 +509,11 @@ fn popup_placement_for_binding(
         binding.fit_around_anchor,
         binding.match_anchor_width,
         content_size,
-    )
+    );
+    match native_fit_bounds(parent) {
+        Some(bounds) => placement.with_fit_bounds(bounds),
+        None => placement,
+    }
 }
 
 fn popup_placement(
