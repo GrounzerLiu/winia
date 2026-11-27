@@ -26,12 +26,25 @@ fn app(ctx: &mut ComposeCtx) {
         .title("Window backdrop demo")
         .size(760.0, 560.0)
         .transparent(true)
+        // Windows composites a client per pixel only while the window is undecorated, and the
+        // mode is fixed at creation. Start frameless, then add the title bar afterwards so the
+        // material can still reach the client area.
+        .decorations(false)
         .backdrop(WindowBackdrop::Mica)
         .build(ctx, |ctx| {
             let id = ctx.window_id();
             let state = id.state();
             let caps = id.capabilities();
             let popup_open = ctx.remember(|| false);
+            // One-shot: enable the title bar after this first composition.
+            let decorated = ctx.remember(|| std::rc::Rc::new(std::cell::Cell::new(false))).get();
+            if !decorated.get() {
+                decorated.set(true);
+                winia::effect::side_effect(ctx, {
+                    clone!(state);
+                    move || state.set_decorations(true)
+                });
+            }
             let decorations = state.decorations();
             let requested = state.backdrop();
             let status = state.backdrop_status();
