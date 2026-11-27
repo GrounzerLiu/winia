@@ -31,6 +31,7 @@ fn app(ctx: &mut ComposeCtx) {
             let id = ctx.window_id();
             let state = id.state();
             let caps = id.capabilities();
+            let popup_open = ctx.remember(|| false);
             let decorations = state.decorations();
             let requested = state.backdrop();
             let status = state.backdrop_status();
@@ -71,6 +72,52 @@ fn app(ctx: &mut ComposeCtx) {
                     Text::new(format!("backdrop capability: {}", caps.backdrop))
                         .font_size(14.0)
                         .build(ctx);
+                    Row::new().spacing(8.0).build(ctx, |ctx| {
+                        Button::filled()
+                            .modifier(Modifier::new().test_tag("backdrop-popup-open"))
+                            .on_click({
+                                clone!(popup_open);
+                                move || popup_open.set(true)
+                            })
+                            .build(ctx, |ctx| Text::new("Open native popup").build(ctx));
+                    });
+                    let anchor = ctx.prev_sibling_slot_key();
+                    let dismiss = popup_open.clone();
+                    let close = popup_open.clone();
+                    Popup::new(popup_open.get())
+                        .host(PopupHost::Native)
+                        .anchor_slot(anchor)
+                        .position(PopupPosition::BottomStart)
+                        .enter_animation(Some(OverlayAnimSpec::default_enter()))
+                        .exit_animation(Some(OverlayAnimSpec::default_exit()))
+                        .on_dismiss_request(move || dismiss.set(false))
+                        .build(ctx, move |ctx| {
+                            let close = close.clone();
+                            let theme = WiniaTheme::colors();
+                            Column::new()
+                                .spacing(8.0)
+                                .modifier(
+                                    Modifier::new()
+                                        .width(280.0)
+                                        .background(
+                                            theme.surface_container_high,
+                                            Shape::rounded(12.0),
+                                        )
+                                        .padding(16.0),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new("Native popup").font_size(16.0).build(ctx);
+                                    Text::new(
+                                        "This content lives in a child winit popup window, so it \
+                                         can extend past the owner's client area.",
+                                    )
+                                    .font_size(13.0)
+                                    .build(ctx);
+                                    Button::filled()
+                                        .on_click(move || close.set(false))
+                                        .build(ctx, |ctx| Text::new("Close").build(ctx));
+                                });
+                        });
                     Row::new().spacing(8.0).build(ctx, |ctx| {
                         Text::new("Decorations").font_size(14.0).build(ctx);
                         Switch::new(decorations)
