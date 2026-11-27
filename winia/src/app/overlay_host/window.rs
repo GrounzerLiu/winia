@@ -109,6 +109,19 @@ impl OverlayWindow {
         }
     }
 
+    pub(crate) fn restart_enter(&mut self) {
+        let Some(progress) = self.progress.clone() else {
+            return;
+        };
+        crate::animation::cancel_animation_by_id(progress.state_id());
+        progress.as_raw().set_backchannel(0.0);
+        if let Some(spec) = &self.enter_anim {
+            crate::animation::push_animatable_handle(progress, 1.0, spec.animation_spec());
+        } else {
+            progress.as_raw().set_backchannel(1.0);
+        }
+    }
+
     fn update(&mut self, desc: crate::overlay::OverlayDesc) {
         self.host = desc.host;
         // A desc only reaches this method while its overlay is still DECLARED (a closing overlay is not

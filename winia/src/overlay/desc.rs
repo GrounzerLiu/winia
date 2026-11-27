@@ -5,6 +5,8 @@ use super::*;
 /// `InWindow` preserves Compose's default overlay behaviour. `Native` requests a child native
 /// window and transparently falls back to `InWindow` when the platform or window backend cannot
 /// honour the request. Native popups are available on Windows, macOS and Wayland.
+/// On Linux/Wayland, work-area constraints fall back to the monitor bounds when the compositor
+/// does not expose panel insets, so a popup may overlap a desktop panel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PopupHost {
     /// Compose the popup into its owner window's overlay layer.

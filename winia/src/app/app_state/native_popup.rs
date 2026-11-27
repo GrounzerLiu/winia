@@ -120,7 +120,7 @@ impl AppState {
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         parent_id: WindowId,
-        desc: crate::overlay::OverlayDesc,
+        mut desc: crate::overlay::OverlayDesc,
     ) {
         let supported = WindowCapabilities::current().native_popup
             && !desc.focus_scope
@@ -135,6 +135,7 @@ impl AppState {
                 {
                     binding.active = false;
                 }
+                desc.host = crate::overlay::PopupHost::InWindow;
                 sync_overlay_desc(parent, desc);
             }
             return;
@@ -175,8 +176,9 @@ impl AppState {
                     window.request_redraw();
                 }
             }
-            Err(desc) => {
+            Err(mut desc) => {
                 log::warn!("native popup creation failed; falling back to an in-window overlay");
+                desc.host = crate::overlay::PopupHost::InWindow;
                 if let Some(parent) = self.windows.get_mut(&parent_id) {
                     sync_overlay_desc(parent, desc);
                 }
@@ -224,7 +226,7 @@ impl AppState {
         };
         let window_id = window.id();
         let scale_factor = window.scale_factor();
-        let surface = WgpuWindow::new(event_loop, std::sync::Arc::new(window), true);
+        let surface = WgpuWindow::new_async(event_loop, std::sync::Arc::new(window), true);
         crate::accessibility::install(&*surface, window_id.into_raw() as u64);
 
         let measurement_size = native_measurement_size(parent_window);
@@ -281,11 +283,7 @@ impl AppState {
             });
         }
         self.update_native_popup_geometry(parent_id, window_id);
-        if let Some(child) = self.windows.get_mut(&window_id)
-            && let Some(surface) = child.skia_window.as_ref()
-        {
-            surface.window().set_visible(true);
-        }
+        self.sync_native_popup_visibility();
         Ok(window_id)
     }
 
@@ -319,6 +317,9 @@ impl AppState {
                 let should_show = visible && !minimized;
                 if child_window.is_visible() != Some(should_show) {
                     child_window.set_visible(should_show);
+                    if should_show {
+                        child_surface.request_redraw();
+                    }
                 }
             }
         }
@@ -467,10 +468,15 @@ impl AppState {
 fn native_measurement_size(window: &dyn winit::window::Window) -> (f32, f32) {
     crate::app::native_popup::work_area::from_window(window)
         .map(|area| area.size)
-        .unwrap_or((
-            crate::app::native_popup::work_area::UNBOUNDED_LOGICAL_EXTENT,
-            crate::app::native_popup::work_area::UNBOUNDED_LOGICAL_EXTENT,
-        ))
+        .unwrap_or_else(|| parent_measurement_size(window.surface_size(), window.scale_factor()))
+}
+
+fn parent_measurement_size(size: PhysicalSize<u32>, scale: f64) -> (f32, f32) {
+    if !scale.is_finite() || scale <= 0.0 {
+        return (1.0, 1.0);
+    }
+    let logical = size.to_logical::<f32>(scale);
+    (logical.width.max(1.0), logical.height.max(1.0))
 }
 
 fn native_fit_bounds(parent: &PerWindow) -> Option<((f32, f32), (f32, f32))> {
@@ -561,4 +567,26 @@ fn popup_placement(
         fit_around_anchor,
         match_anchor_width,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parent_measurement_size;
+    use winit::dpi::PhysicalSize;
+
+    #[test]
+    fn missing_work_area_falls_back_to_the_parent_window_size() {
+        assert_eq!(
+            parent_measurement_size(PhysicalSize::new(800, 600), 2.0),
+            (400.0, 300.0)
+        );
+        assert_eq!(
+            parent_measurement_size(PhysicalSize::new(0, 0), 1.0),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            parent_measurement_size(PhysicalSize::new(800, 600), 0.0),
+            (1.0, 1.0)
+        );
+    }
 }

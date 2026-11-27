@@ -92,6 +92,8 @@ pub(crate) struct PerWindow {
     /// Native popup descriptors waiting for AppState to create or update their child windows.
     pub(crate) pending_native_overlays: Vec<crate::overlay::OverlayDesc>,
     pub(crate) native_popup_restore_focus: bool,
+    /// True after the native popup's first successful frame; prevents restarting its enter animation.
+    pub(crate) native_popup_presented: bool,
 }
 
 impl PerWindow {
@@ -221,6 +223,7 @@ impl PerWindow {
             role: WindowRole::RootOrChild,
             pending_native_overlays: Vec::new(),
             native_popup_restore_focus: false,
+            native_popup_presented: false,
             clock: FrameClock::default(),
             modifiers: Default::default(),
             hovered_slots: std::collections::HashSet::new(),
@@ -1043,10 +1046,16 @@ impl PerWindow {
                 if let Some(ref mut sw) = self.skia_window {
                     let sf = self.scale_factor as f32;
                     let debug_window_id = window_id.into_raw() as u64;
+                    let first_native_draw = matches!(self.role, WindowRole::NativePopup { .. })
+                        && !self.native_popup_presented;
                     if crate::debug::screenshot_requested(debug_window_id) {
                         request_capture();
                     }
-                    sw.draw(|surface| {
+                    let drew = sw.draw(|surface| {
+                        if first_native_draw && let Some(overlay) = self.overlay.layers.first_mut()
+                        {
+                            overlay.restart_enter();
+                        }
                         // Draw order: main tree → overlays → main transition layer.
                         // Overlays always sit above the tree (an open dialog must
                         // not be covered by the base screen, in either mode), and
@@ -1097,6 +1106,9 @@ impl PerWindow {
                         }
                         after_draw(nodes, root_idx, surface);
                     });
+                    if first_native_draw && drew {
+                        self.native_popup_presented = true;
+                    }
                     // The screenshot read-back happens after Graphite submission inside the wgpu draw,
                     // so it captures the frame that was submitted for presentation.
                     if crate::debug::screenshot_requested(debug_window_id) {

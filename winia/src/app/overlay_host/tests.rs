@@ -279,6 +279,34 @@ fn an_overlay_composer_inherits_its_windows_clock_identity() {
     );
 }
 
+#[test]
+fn restart_enter_resets_progress_and_schedules_the_enter_animation() {
+    let _serial = crate::animation::tests::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::animation::clear_all_animations();
+    let mut desc = back_close_desc();
+    desc.enter_anim = Some(OverlayAnimSpec::default_enter());
+    let mut overlay = OverlayWindow::new_with_composer(desc, Composer::new());
+    let progress = overlay
+        .progress
+        .clone()
+        .expect("an enter spec creates a progress channel");
+    progress.as_raw().set_backchannel(1.0);
+
+    overlay.restart_enter();
+
+    assert!(
+        progress.peek() < 0.01,
+        "the visible frame starts at the enter origin"
+    );
+    assert!(
+        crate::animation::has_animation_for_state(progress.state_id()),
+        "restarting the enter also schedules the 0 to 1 motion"
+    );
+    crate::animation::clear_all_animations();
+}
+
 fn back_close_desc() -> OverlayDesc {
     OverlayDesc {
         host: crate::overlay::PopupHost::InWindow,

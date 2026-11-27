@@ -8,8 +8,6 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub(crate) const UNBOUNDED_LOGICAL_EXTENT: f32 = 65_536.0;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct NativeWorkArea {
     /// Work-area origin in parent-client logical coordinates.

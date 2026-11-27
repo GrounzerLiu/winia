@@ -5,6 +5,7 @@ use std::convert::AsRef;
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::pin;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -34,10 +35,40 @@ impl HasDisplayHandle for OwnedWindow {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RendererInitState {
+    #[default]
+    Idle,
+    Pending,
+    Ready,
+    Failed,
+}
+
+impl RendererInitState {
+    fn start_async(&mut self) -> bool {
+        if *self != Self::Idle {
+            return false;
+        }
+        *self = Self::Pending;
+        true
+    }
+
+    fn finish(&mut self, success: bool) {
+        *self = if success { Self::Ready } else { Self::Failed };
+    }
+
+    fn reset(&mut self) {
+        *self = Self::Idle;
+    }
+}
+
 pub(crate) struct WgpuWindow {
     window: Arc<Box<dyn Window>>,
     renderer: Option<WgpuRenderer>,
+    pending_renderer: Option<Receiver<Result<GpuSurface, String>>>,
     transparent: bool,
+    async_renderer: bool,
+    init_state: RendererInitState,
 }
 
 impl WgpuWindow {
@@ -46,20 +77,119 @@ impl WgpuWindow {
         window: Arc<Box<dyn Window>>,
         transparent: bool,
     ) -> Self {
-        Self {
+        Self::new_inner(window, transparent, false)
+    }
+
+    pub(crate) fn new_async(
+        _event_loop: &dyn ActiveEventLoop,
+        window: Arc<Box<dyn Window>>,
+        transparent: bool,
+    ) -> Self {
+        Self::new_inner(window, transparent, true)
+    }
+
+    fn new_inner(window: Arc<Box<dyn Window>>, transparent: bool, async_renderer: bool) -> Self {
+        let mut window = Self {
             window,
             renderer: None,
+            pending_renderer: None,
             transparent,
+            async_renderer,
+            init_state: RendererInitState::Idle,
+        };
+        if async_renderer {
+            window.start_renderer_task();
+        }
+        window
+    }
+
+    fn start_renderer_task(&mut self) {
+        if !self.init_state.start_async() {
+            return;
+        }
+        let surface = match GPU_INSTANCE.create_surface(OwnedWindow(self.window.clone())) {
+            Ok(surface) => surface,
+            Err(error) => {
+                self.init_state.finish(false);
+                log::error!("[wgpu] could not create the surface: {error}");
+                return;
+            }
+        };
+        let size = self.window.surface_size();
+        let transparent = self.transparent;
+        let redraw_window = self.window.clone();
+        let (sender, receiver) = mpsc::channel();
+        match std::thread::Builder::new()
+            .name("winia-wgpu-surface".into())
+            .spawn(move || {
+                let _ = sender.send(GpuSurface::from_surface(surface, size, transparent));
+                redraw_window.request_redraw();
+            }) {
+            Ok(_) => self.pending_renderer = Some(receiver),
+            Err(error) => {
+                self.init_state.finish(false);
+                log::error!("[wgpu] could not start surface initialization: {error}");
+            }
         }
     }
 
     fn ensure_renderer(&mut self) -> bool {
-        if self.renderer.is_none() {
-            match WgpuRenderer::new(self.window.clone(), self.transparent) {
-                Ok(renderer) => self.renderer = Some(renderer),
-                Err(error) => {
-                    log::error!("[wgpu] could not create the renderer: {error}");
+        if self.renderer.is_some() {
+            return true;
+        }
+        if self.init_state == RendererInitState::Failed {
+            return false;
+        }
+        let pending = self.pending_renderer.as_ref().map(|rx| rx.try_recv());
+        match pending {
+            Some(Ok(Ok(surface))) => {
+                self.pending_renderer = None;
+                match WgpuRenderer::from_surface(surface) {
+                    Ok(mut renderer) => {
+                        let size = self.window.surface_size();
+                        renderer.resize(size.width.max(1), size.height.max(1));
+                        self.renderer = Some(renderer);
+                        self.init_state.finish(true);
+                    }
+                    Err(error) => {
+                        self.init_state.finish(false);
+                        log::error!("[wgpu] could not create the renderer: {error}");
+                        return false;
+                    }
+                }
+            }
+            Some(Ok(Err(error))) => {
+                self.pending_renderer = None;
+                self.init_state.finish(false);
+                log::error!("[wgpu] could not create the surface: {error}");
+                return false;
+            }
+            Some(Err(TryRecvError::Empty)) => {
+                self.window.request_redraw();
+                return false;
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.pending_renderer = None;
+                self.init_state.finish(false);
+                log::error!("[wgpu] surface initialization thread disconnected");
+                return false;
+            }
+            None => {
+                if self.async_renderer {
+                    self.start_renderer_task();
+                    self.window.request_redraw();
                     return false;
+                }
+                match WgpuRenderer::new(self.window.clone(), self.transparent) {
+                    Ok(renderer) => {
+                        self.renderer = Some(renderer);
+                        self.init_state.finish(true);
+                    }
+                    Err(error) => {
+                        self.init_state.finish(false);
+                        log::error!("[wgpu] could not create the renderer: {error}");
+                        return false;
+                    }
                 }
             }
         }
@@ -72,10 +202,19 @@ impl WgpuWindow {
 
     pub(crate) fn destroy_surface(&mut self) {
         self.renderer = None;
+        self.pending_renderer = None;
+        self.init_state.reset();
     }
 
     pub(crate) fn recreate_surface(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        let _ = self.ensure_renderer();
+        self.renderer = None;
+        self.pending_renderer = None;
+        self.init_state.reset();
+        if self.async_renderer {
+            self.start_renderer_task();
+        } else {
+            let _ = self.ensure_renderer();
+        }
     }
 
     pub(crate) fn resize(&mut self) {
@@ -85,35 +224,37 @@ impl WgpuWindow {
         }
     }
 
-    pub(crate) fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) {
-        let want_capture = capture::take_capture_request();
+    pub(crate) fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) -> bool {
         if !self.ensure_renderer() {
-            return;
+            return false;
         }
         let Some(renderer) = self.renderer.as_mut() else {
             log::error!("[wgpu] draw without a surface; dropping the frame");
-            return;
+            return false;
         };
-        let frame = match renderer.surface.get_current_texture() {
+        let frame = match renderer.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 renderer.configure();
-                return;
+                return false;
             }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return false;
+            }
             wgpu::CurrentSurfaceTexture::Validation => {
                 log::error!("[wgpu] acquiring the frame failed validation");
-                return;
+                return false;
             }
         };
-        let Some(color_type) = color_type_for_format(renderer.config.format) else {
+        let Some(color_type) = color_type_for_format(renderer.gpu.config.format) else {
             log::error!(
                 "[wgpu] unsupported surface format {:?}",
-                renderer.config.format
+                renderer.gpu.config.format
             );
-            return;
+            return false;
         };
+        let want_capture = capture::take_capture_request();
         let mut surface = graphite::wgpu::surfaces::wrap_texture(
             &mut renderer.recorder,
             &frame.texture,
@@ -134,11 +275,11 @@ impl WgpuWindow {
             .insert_recording(&graphite::InsertRecordingInfo::new(&mut recording));
         if status != graphite::InsertStatus::Success {
             log::error!("[wgpu] Graphite insert_recording failed: {status:?}");
-            return;
+            return false;
         }
         if !renderer.context.submit(None) {
             log::error!("[wgpu] Graphite submit failed");
-            return;
+            return false;
         }
         if want_capture {
             capture::capture_surface(&mut renderer.context, &mut surface);
@@ -146,7 +287,8 @@ impl WgpuWindow {
         drop(surface);
         drop(recording);
         self.window.pre_present_notify();
-        renderer.queue.present(frame);
+        renderer.gpu.queue.present(frame);
+        true
     }
 }
 
@@ -207,26 +349,31 @@ fn shared_gpu_adapter(
     Ok((gpu, capabilities))
 }
 
-struct WgpuRenderer {
+struct GpuSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    // Fields drop in declaration order: recorder, then context, then the wgpu device and queue.
-    recorder: graphite::Recorder,
-    context: graphite::Context,
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
 
-impl WgpuRenderer {
+impl GpuSurface {
     fn new(window: Arc<Box<dyn Window>>, transparent: bool) -> Result<Self, String> {
         let surface = GPU_INSTANCE
             .create_surface(OwnedWindow(window.clone()))
             .map_err(|error| format!("create_surface: {error}"))?;
+        let size = window.surface_size();
+        Self::from_surface(surface, size, transparent)
+    }
+
+    fn from_surface(
+        surface: wgpu::Surface<'static>,
+        size: winit::dpi::PhysicalSize<u32>,
+        transparent: bool,
+    ) -> Result<Self, String> {
         let (gpu, capabilities) = shared_gpu_adapter(&surface)?;
         let adapter = gpu.adapter.clone();
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
             .map_err(|error| format!("request_device: {error}"))?;
-        let size = window.surface_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or_else(|| "the surface does not support the adapter".to_string())?;
@@ -270,18 +417,9 @@ impl WgpuRenderer {
             config.alpha_mode
         };
         surface.configure(&device, &config);
-        let mut context = graphite::wgpu::context_factory::make_wgpu(&device, &queue, None)
-            .ok_or_else(|| "Skia rejected the wgpu device".to_string())?;
-        let mut options = graphite::RecorderOptions::new();
-        options.set_image_provider(CachingImageProvider::default());
-        let recorder = context
-            .make_recorder(Some(&options))
-            .ok_or_else(|| "could not create a Graphite recorder".to_string())?;
         Ok(Self {
             surface,
             config,
-            recorder,
-            context,
             device,
             queue,
         })
@@ -298,6 +436,42 @@ impl WgpuRenderer {
         self.config.width = width;
         self.config.height = height;
         self.configure();
+    }
+}
+
+struct WgpuRenderer {
+    // Fields drop in declaration order: recorder, then context, then the wgpu device and queue.
+    recorder: graphite::Recorder,
+    context: graphite::Context,
+    gpu: GpuSurface,
+}
+
+impl WgpuRenderer {
+    fn new(window: Arc<Box<dyn Window>>, transparent: bool) -> Result<Self, String> {
+        Self::from_surface(GpuSurface::new(window, transparent)?)
+    }
+
+    fn from_surface(gpu: GpuSurface) -> Result<Self, String> {
+        let mut context = graphite::wgpu::context_factory::make_wgpu(&gpu.device, &gpu.queue, None)
+            .ok_or_else(|| "Skia rejected the wgpu device".to_string())?;
+        let mut options = graphite::RecorderOptions::new();
+        options.set_image_provider(CachingImageProvider::default());
+        let recorder = context
+            .make_recorder(Some(&options))
+            .ok_or_else(|| "could not create a Graphite recorder".to_string())?;
+        Ok(Self {
+            recorder,
+            context,
+            gpu,
+        })
+    }
+
+    fn configure(&self) {
+        self.gpu.configure();
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.gpu.resize(width, height);
     }
 }
 
@@ -391,5 +565,32 @@ mod tests {
             color_type_for_format(wgpu::TextureFormat::Depth32Float),
             None
         );
+    }
+
+    #[test]
+    fn async_renderer_failure_is_terminal_until_surface_recreation() {
+        let mut state = RendererInitState::Idle;
+        assert!(state.start_async());
+        assert_eq!(state, RendererInitState::Pending);
+        assert!(
+            !state.start_async(),
+            "a pending task must not be duplicated"
+        );
+
+        state.finish(false);
+        assert_eq!(state, RendererInitState::Failed);
+        assert!(
+            !state.start_async(),
+            "a failed async initialization must not retry synchronously"
+        );
+
+        state.reset();
+        assert_eq!(state, RendererInitState::Idle);
+        assert!(
+            state.start_async(),
+            "surface recreation starts a fresh task"
+        );
+        state.finish(true);
+        assert_eq!(state, RendererInitState::Ready);
     }
 }
