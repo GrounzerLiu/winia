@@ -197,6 +197,10 @@ impl Window {
     /// title bar unless the app also asks for `decorations(false)`. Platforms without transparency
     /// support drop the request, so [`WindowState::transparent`](crate::app::window_state::WindowState::transparent)
     /// then reports `false`.
+    ///
+    /// Windows composites a client area per pixel only while the window is undecorated. With
+    /// decorations the client is drawn opaque, so a background material cannot show through it;
+    /// request `decorations(false)` as well when the client itself should be transparent.
     pub fn transparent(mut self, transparent: bool) -> Self {
         self.options.transparent = transparent;
         self

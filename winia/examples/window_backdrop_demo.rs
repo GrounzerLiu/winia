@@ -82,9 +82,9 @@ fn app(ctx: &mut ComposeCtx) {
                     });
                     Text::new(
                         "Transparency is a creation-time option, so this window was built with \
-                         transparent(true). With decorations off the whole-window materials can \
-                         reach the client area; switch decorations on and the same request is \
-                         confined to the title bar.",
+                         transparent(true). Windows composites a client area per pixel only while \
+                         the window is undecorated: with decorations on, the client is drawn opaque \
+                         and the material is limited to the title bar.",
                     )
                     .font_size(14.0)
                     .build(ctx);

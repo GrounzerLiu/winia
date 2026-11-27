@@ -514,8 +514,10 @@ impl WindowState {
     ///
     /// Windows applies it through `DWMWA_SYSTEMBACKDROP_TYPE`; other platforms keep the request and
     /// report [`BackdropStatus::Unsupported`]. Nothing else changes: a whole-window material only
-    /// shows where the client area is not opaque, so request transparency and undecorated chrome
-    /// yourself when that is what you want.
+    /// shows where the client area is transparent, and Windows composites the client per pixel only
+    /// for undecorated windows, so request `decorations(false)` together with transparency when the
+    /// material should reach the client. With decorations the material is limited to the title bar,
+    /// which `WindowBackdrop::Auto` targets directly.
     pub fn set_backdrop(&self, backdrop: WindowBackdrop) {
         if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
             return;

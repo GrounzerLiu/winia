@@ -57,13 +57,48 @@ not paint opaquely. winia never decides that for you:
 
 | Request | Decorations | Client area | What shows |
 | --- | --- | --- | --- |
-| `Auto` | system title bar | opaque | material in the title bar only |
-| `Mica` / `Acrylic` / `MicaAlt` | system title bar | opaque | the client area covers the material |
-| `Mica` / `Acrylic` / `MicaAlt` | none | transparent surface, no opaque fill | the material can show through |
+| `Auto` | system title bar | opaque | material in the title bar |
+| `Mica` / `Acrylic` / `MicaAlt` | system title bar | opaque, always | the title bar only; Windows does not compose a decorated client per pixel |
+| `Mica` / `Acrylic` / `MicaAlt` | none | transparent surface, no opaque fill | the material shows through the client |
 
 The Mica guidance says the same from the other side: to show Mica in the title bar you extend into
 the non-client area and use a transparent custom title bar
 ([Mica material](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)).
+
+## Windows composites the client per pixel only without decorations
+
+This is the one Windows rule that decides whether a whole-window material can ever be visible, and it
+is a platform behaviour rather than something winia chooses.
+
+Measured on Windows 11 build 26300 with `CompositeAlphaMode::PreMultiplied` and `Bgra8Unorm`:
+
+| Window | Client area |
+| --- | --- |
+| created undecorated, stays undecorated | transparent, material visible |
+| created undecorated, decorations enabled afterwards | stays transparent |
+| created decorated | opaque (white); turning decorations off afterwards does not change it |
+
+The composition mode is fixed when the window is created, so nothing at runtime can restore a
+transparent client on a window that was created with decorations. Each of these was tried on the
+same build and left the client opaque:
+
+- calling `DwmEnableBlurBehindWindow` again with the empty-region blur behind;
+- `DwmExtendFrameIntoClientArea` with `-1` margins;
+- adding `WS_EX_LAYERED` at runtime, with and without `SWP_FRAMECHANGED`. The fill turned from white
+to black and the frame fell back to the classic (non-DWM) title bar, so the material stopped being
+drawn entirely.
+
+Upstream records the same asymmetry: winit's [PR #1011](https://github.com/rust-windowing/winit/pull/1011)
+added `WS_EX_LAYERED` for transparent decorated windows with the note that "borderless (or
+un-decorated) windows were not affected", and the Tauri maintainers answer the same class of report
+by recommending transparency only with decorations off
+([tauri#8632](https://github.com/tauri-apps/tauri/issues/8632)).
+
+Consequences for applications:
+
+- whole-window material: `decorations(false)` and `transparent(true)`;
+- material in the title bar of a decorated window: `Auto`;
+- decorated window with an opaque client: any request, but the client itself never shows material.
 
 ## Status semantics
 
