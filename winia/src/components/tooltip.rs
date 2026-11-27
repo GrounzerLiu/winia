@@ -144,6 +144,7 @@ impl Tooltip {
                 self.content.expect("Tooltip 无内容")
             };
             ctx.open_overlay(crate::overlay::OverlayDesc {
+                host: crate::overlay::PopupHost::InWindow,
                 id: id.get(),
                 direction: None,
                 anchor_slot: Some(anchor_slot),
@@ -170,7 +171,7 @@ impl Tooltip {
                 }),
                 enter_anim: None, // Tooltip 默认无进入动画
                 exit_anim: None,  // Tooltip 默认无退出动画
-                content: Box::new(content),
+                content: content.into(),
                 local_snapshot: Vec::new(),
             });
         }

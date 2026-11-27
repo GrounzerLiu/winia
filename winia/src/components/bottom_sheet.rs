@@ -205,6 +205,7 @@ impl ModalBottomSheet {
         // content 闭包也要用 on_dismiss——clone 一份（map 会 move 走原值）
         let content_dismiss = on_dismiss_req.clone();
         ctx.open_overlay(OverlayDesc {
+            host: crate::overlay::PopupHost::InWindow,
             id: id.get(),
             direction: None,
             anchor_slot: None,
@@ -243,7 +244,7 @@ impl ModalBottomSheet {
             exit_anim: Some(OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(200),
             )),
-            content: Box::new(move |ctx| {
+            content: Arc::new(move |ctx| {
                 let back_state = sheet_state.clone();
                 crate::back::overlay_predictive_back_handler(
                     ctx,

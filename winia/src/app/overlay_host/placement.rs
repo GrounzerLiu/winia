@@ -1,5 +1,60 @@
 use super::*;
 
+/// The pure geometric result of placing an overlay inside its parent window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OverlayPlacement {
+    /// Top-left of the overlay in parent-local logical coordinates, including `offset`.
+    pub(crate) origin: (f32, f32),
+    /// The resolved anchor rectangle in parent-local logical coordinates.
+    pub(crate) anchor_rect: Option<(f32, f32, f32, f32)>,
+}
+
+/// Resolve overlay placement without touching a composer, window, or animation state.
+///
+/// `anchor_slide` is the already-sampled progress of an anchor slide. Keeping it as a plain value
+/// lets the in-window host and native-popup planning share the same arithmetic without sharing
+/// their runtime state.
+pub(crate) fn resolve_overlay_placement(
+    position: crate::overlay::PopupPosition,
+    direction: crate::layout::LayoutDirection,
+    anchor: Option<(f32, f32, f32, f32)>,
+    content_size: (f32, f32),
+    window_size: (f32, f32),
+    offset: (f32, f32),
+    fit_around_anchor: bool,
+    anchor_slide: Option<f32>,
+) -> OverlayPlacement {
+    let anchored = anchor.is_some();
+    let pos = if anchored && fit_around_anchor {
+        crate::components::dropdown_menu::dropdown_menu_position(
+            anchor.expect("anchored"),
+            content_size,
+            window_size,
+            direction,
+        )
+    } else {
+        crate::overlay::resolve_popup_position(
+            position,
+            direction,
+            anchor,
+            content_size,
+            window_size,
+        )
+    };
+    let origin = if let (Some(progress), Some((ax, ay, _, _))) = (anchor_slide, anchor) {
+        (
+            crate::overlay::anchor_slide_lerp(ax, progress),
+            crate::overlay::anchor_slide_lerp(ay, progress),
+        )
+    } else {
+        pos
+    };
+    OverlayPlacement {
+        origin: (origin.0 + offset.0, origin.1 + offset.1),
+        anchor_rect: anchor,
+    }
+}
+
 pub(crate) fn layout_overlays(pw: &mut PerWindow) {
     // material3's `matchAnchorWidth` FORCES a menu's width to its anchor's (`minWidth = maxWidth =
     // menuWidth` in `exposedDropdownSize`), so those widths are needed at MEASURE time — before this pass
@@ -126,50 +181,23 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             from_node.unwrap_or(crate::layout::direction::current())
         };
 
-        // `fit_around_anchor` candidate walk (material3's `MenuPosition.kt` lists, in
-        // `dropdown_menu::dropdown_menu_position`) when there is an anchor, plain anchored placement
-        // otherwise, and window alignment when there is no anchor at all — the three cases the arithmetic
-        // has always had, now spelled once in `overlay::resolve_popup_position` for everything but the walk.
-        let pos = if anchored && ov.fit_around_anchor {
-            // material3's candidate lists: below the anchor, above it, centred on its top edge, then pinned
-            // to the nearer window edge — each taken only if the menu fits inside `MenuVerticalMargin` (48dp).
-            // winia's placement used to do the first alone, which is why a long menu hung off the bottom edge
-            // with its last rows unreachable.
-            crate::components::dropdown_menu::dropdown_menu_position(
-                (ax, ay, aw, ah),
-                size,
-                (w, h),
-                direction,
-            )
-        } else {
-            crate::overlay::resolve_popup_position(
-                ov.position,
-                direction,
-                if anchored {
-                    Some((ax, ay, aw, ah))
-                } else {
-                    None
-                },
-                size,
-                (w, h),
-            )
-        };
-        // Anchor slide: the panel starts at the anchor's corner and ends at the window's, both axes moving
-        // together — Compose's `(lerp(collapsedBounds.left, offsetX, progress),
-        // lerp(collapsedBounds.top, offsetY, progress))` with both offsets 0. Only this pass knows the
-        // anchor's coordinates, so the interpolation happens here; the caller supplies the progress reader.
-        let pos = if let (Some(slide), true) = (&ov.anchor_slide, anchored) {
-            let p = slide.progress();
-            (
-                crate::overlay::anchor_slide_lerp(ax, p),
-                crate::overlay::anchor_slide_lerp(ay, p),
-            )
-        } else {
-            pos
-        };
-        ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
+        let placement = resolve_overlay_placement(
+            ov.position,
+            direction,
+            anchored.then_some((ax, ay, aw, ah)),
+            size,
+            (w, h),
+            ov.offset,
+            ov.fit_around_anchor,
+            if anchored {
+                ov.anchor_slide.as_ref().map(|slide| slide.progress())
+            } else {
+                None
+            },
+        );
+        ov.screen_pos = placement.origin;
         // The anchor rect, for the render's transform origin (see `OverlayWindow::anchor_rect`).
-        ov.anchor_rect = anchored.then_some((ax, ay, aw, ah));
+        ov.anchor_rect = placement.anchor_rect;
         // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
         // translated by screen_pos — visuals store window-minus-origin.
         ov.composer.screen_origin = ov.screen_pos;

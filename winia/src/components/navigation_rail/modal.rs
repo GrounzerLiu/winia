@@ -201,6 +201,7 @@ impl ModalWideNavigationRail {
         // closure below runs after composition, where `direction::current()` is no longer the truth.
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         ctx.open_overlay(OverlayDesc {
+            host: crate::overlay::PopupHost::InWindow,
             id: id.get(),
             anchor_slot: None,
             // The rail knows its direction from COMPOSE time, where the composition local is still valid —
@@ -237,7 +238,7 @@ impl ModalWideNavigationRail {
                 std::time::Duration::from_millis(200),
             )),
             local_snapshot: Vec::new(),
-            content: Box::new(move |ctx| {
+            content: Arc::new(move |ctx| {
                 // The container hugs the leading edge and fills the height; its width is the layout
                 // policy's (`min(available, 360)`, the modal cap), and the shape and colour are the modal
                 // tokens rather than the plain rail's. Both the modifier and the policy are rebuilt here:

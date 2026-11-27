@@ -3,6 +3,23 @@ use super::*;
 // ── PerWindow ──
 
 static NEXT_WINDOW_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static FPS_LOG_ENABLED: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("WINIA_FPS_LOG").is_some());
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowRole {
+    RootOrChild,
+    NativePopup {
+        parent: winit::window::WindowId,
+        overlay_id: u64,
+    },
+}
+
+impl Default for WindowRole {
+    fn default() -> Self {
+        Self::RootOrChild
+    }
+}
 
 pub(crate) struct PerWindow {
     pub(crate) composer: Composer,
@@ -71,6 +88,12 @@ pub(crate) struct PerWindow {
     /// The overlay host: the layers, and the interaction state that only makes sense against
     /// them (see `OverlayHost` — the group that used to be ten fields here).
     pub(crate) overlay: OverlayHost,
+    pub(crate) role: WindowRole,
+    /// Native popup descriptors waiting for AppState to create or update their child windows.
+    pub(crate) pending_native_overlays: Vec<crate::overlay::OverlayDesc>,
+    pub(crate) native_popup_restore_focus: bool,
+    /// True after the native popup's first successful frame; prevents restarting its enter animation.
+    pub(crate) native_popup_presented: bool,
 }
 
 impl PerWindow {
@@ -197,6 +220,10 @@ impl PerWindow {
             input: GestureState::default(),
             wheel: WheelPager::default(),
             overlay: OverlayHost::default(),
+            role: WindowRole::RootOrChild,
+            pending_native_overlays: Vec::new(),
+            native_popup_restore_focus: false,
+            native_popup_presented: false,
             clock: FrameClock::default(),
             modifiers: Default::default(),
             hovered_slots: std::collections::HashSet::new(),
@@ -877,12 +904,14 @@ impl PerWindow {
         self.composer.set_window_id(window_id.into_raw() as u64);
         // Vsync study: render frame counter (renders per second — should be ~60 under Fifo).
         self.clock.frame_counter += 1;
-        debug_log!(
-            "[fps] render#{} compose#{} pending={}",
-            self.clock.frame_counter,
-            self.composer.compose_count(),
-            self.composer.pending_state_count()
-        );
+        if *FPS_LOG_ENABLED {
+            debug_log!(
+                "[fps] render#{} compose#{} pending={}",
+                self.clock.frame_counter,
+                self.composer.compose_count(),
+                self.composer.pending_state_count()
+            );
+        }
         // The user's "text size" setting (`Sp` scaling). winit only forwards `WM_SETTINGCHANGE` when
         // the THEME changed, so a text-size change never reaches the event loop: re-read it here,
         // throttled, and re-compose when it moved — `Sp` is resolved during composition.
@@ -1017,10 +1046,18 @@ impl PerWindow {
                 if let Some(ref mut sw) = self.skia_window {
                     let sf = self.scale_factor as f32;
                     let debug_window_id = window_id.into_raw() as u64;
+                    let first_native_draw = matches!(self.role, WindowRole::NativePopup { .. })
+                        && !self.native_popup_presented;
                     if crate::debug::screenshot_requested(debug_window_id) {
                         request_capture();
                     }
-                    sw.draw(|surface| {
+                    let drew = sw.draw(|surface| {
+                        if first_native_draw
+                            && let Some(overlay) = self.overlay.layers.first_mut()
+                            && !overlay.closing
+                        {
+                            overlay.restart_enter();
+                        }
                         // Draw order: main tree → overlays → main transition layer.
                         // Overlays always sit above the tree (an open dialog must
                         // not be covered by the base screen, in either mode), and
@@ -1071,9 +1108,20 @@ impl PerWindow {
                         }
                         after_draw(nodes, root_idx, surface);
                     });
+                    if first_native_draw && drew {
+                        self.native_popup_presented = true;
+                    }
+                    if sw.renderer_failed() {
+                        sw.release_failed_renderer();
+                    }
+                    if !drew && sw.renderer_unavailable() {
+                        // Pending completion sends its own redraw; a terminal failure must not keep
+                        // force_redraw scheduling empty frames forever.
+                        self.clock.force_redraw = false;
+                    }
                     // The screenshot read-back happens after Graphite submission inside the wgpu draw,
                     // so it captures the frame that was submitted for presentation.
-                    if crate::debug::screenshot_requested(debug_window_id) {
+                    if drew && crate::debug::screenshot_requested(debug_window_id) {
                         if let Some((w2, h2, pixels)) = take_capture() {
                             crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);
                         }

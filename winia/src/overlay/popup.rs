@@ -15,6 +15,7 @@ use super::*;
 /// ```
 pub struct Popup {
     pub(crate) visible: bool,
+    pub(crate) host: PopupHost,
     pub(crate) position: PopupPosition,
     pub(crate) offset: (f32, f32),
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -34,6 +35,7 @@ impl Popup {
     pub fn new(visible: bool) -> Self {
         Self {
             visible,
+            host: PopupHost::InWindow,
             position: PopupPosition::BottomLeft,
             offset: (0.0, 4.0),
             on_dismiss: None,
@@ -42,6 +44,16 @@ impl Popup {
             enter_anim: None,
             exit_anim: None,
         }
+    }
+
+    /// Select the surface that hosts this popup. The default is the owner window's overlay layer.
+    ///
+    /// `Native` requests a child native window and falls back to `InWindow` when the platform or
+    /// window backend cannot honour the request. Changing the host of an open popup recreates its
+    /// content composition; leave the host stable to preserve `remember` state.
+    pub fn host(mut self, host: PopupHost) -> Self {
+        self.host = host;
+        self
     }
 
     pub fn position(mut self, p: PopupPosition) -> Self {
@@ -117,6 +129,7 @@ impl Popup {
         let anchor = self.anchor_slot.or_else(|| ctx.prev_sibling_slot_key());
         ctx.open_overlay(crate::overlay::OverlayDesc {
             id: id.get(),
+            host: self.host,
             // Anchor = caller-supplied (see `anchor_slot`); default = last sibling
             // in the current scope — always None inside build's own scope ->
             // window alignment.
@@ -139,7 +152,7 @@ impl Popup {
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
-            content: Box::new(content),
+            content: Arc::new(content),
             local_snapshot: Vec::new(),
         });
     }

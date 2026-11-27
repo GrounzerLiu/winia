@@ -8,14 +8,14 @@ use super::*;
 /// `dismiss_on_back_press = false` registers it disabled, so the event falls through to the page
 /// (Compose's behaviour: a dialog that does not consume back lets the activity handle it).
 fn wrap_overlay_content(
-    content: Box<dyn Fn(&mut ComposeCtx)>,
+    content: Arc<dyn Fn(&mut ComposeCtx)>,
     on_dismiss: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     enabled: bool,
     window_id: u64,
     overlay_id: u64,
     defers_to_content: bool,
-) -> Box<dyn Fn(&mut ComposeCtx)> {
-    Box::new(move |ctx| {
+) -> Arc<dyn Fn(&mut ComposeCtx)> {
+    Arc::new(move |ctx| {
         let callback = on_dismiss.clone();
         crate::back::overlay_back_handler(ctx, enabled, move || {
             if defers_to_content {
@@ -46,6 +46,8 @@ impl OverlayWindow {
         );
         Self {
             id: desc.id,
+            host: desc.host,
+            surface: OverlaySurface::InWindow,
             composer,
             anchor_slot: desc.anchor_slot,
             direction: desc.direction,
@@ -107,7 +109,24 @@ impl OverlayWindow {
         }
     }
 
+    pub(crate) fn restart_enter(&mut self) {
+        if self.closing {
+            return;
+        }
+        let Some(progress) = self.progress.clone() else {
+            return;
+        };
+        crate::animation::cancel_animation_by_id(progress.state_id());
+        progress.as_raw().set_backchannel(0.0);
+        if let Some(spec) = &self.enter_anim {
+            crate::animation::push_animatable_handle(progress, 1.0, spec.animation_spec());
+        } else {
+            progress.as_raw().set_backchannel(1.0);
+        }
+    }
+
     fn update(&mut self, desc: crate::overlay::OverlayDesc) {
+        self.host = desc.host;
         // A desc only reaches this method while its overlay is still DECLARED (a closing overlay is not
         // re-registered), so the caller bringing one back — open, close, open again inside the exit fade,
         // where the id is reused — has to cancel the pending close: leaving `closing` set kept the overlay
@@ -180,70 +199,113 @@ impl OverlayWindow {
 /// build always runs `record_overlay_active`) — an active close (visible/expanded=false) → remove;
 /// a registrant that Skips (build did not run → no record this frame) → keep (the flicker root cause:
 /// the old retain mistook Skip frames for an active close).
+pub(crate) fn sync_overlay_desc(pw: &mut PerWindow, desc: crate::overlay::OverlayDesc) {
+    if matches!(pw.role, crate::app::WindowRole::NativePopup { .. }) {
+        pw.native_popup_restore_focus = false;
+    }
+    if let Some(ov) = pw.overlay.layers.iter_mut().find(|o| o.id == desc.id) {
+        // Reuse: `update` rebuilds progress when a spec flips (None↔Some) — if the new spec has an
+        // enter animation, push 0→1 (otherwise `update` already wrote 1.0 through the Backchannel to keep it visible).
+        let had_enter = ov.enter_anim.is_some();
+        ov.update(desc);
+        // ⚠ The caller just recomposed and handed us a NEW content closure, so the overlay's whole
+        // content has to run again. An overlay is a separate composer: nothing inside it can see
+        // that its closure was replaced, and a group re-enters only for state it read or
+        // parameters it declared — so content built from values the caller captured (a filtered
+        // list, a formatted string) kept what the FIRST closure captured. Marking the root alone
+        // is not enough: the caller's lambda usually sits inside wrapper groups of its own (a
+        // `Column`, a `Surface`), which declare nothing and would skip. Measured on
+        // `search_bar_demo`: the fullscreen panel and the docked dropdown both stayed on their
+        // first rows while the input field updated.
+        //
+        // Cost is bounded by how often the caller's group runs, not by this call: a screen whose
+        // main tree composes every frame re-runs the overlay content every frame too, while one
+        // that idles skips both composers. Nothing leaks across frames (`Slot::dirty` is consumed
+        // by the pass that reads it), a `LazyColumn` keeps its scroll position, and a closing
+        // overlay is not re-registered at all.
+        ov.composer.mark_content_dirty();
+        let now_has_enter = ov.enter_anim.is_some();
+        if !had_enter
+            && now_has_enter
+            && let Some(p) = ov.progress.clone()
+        {
+            let spec = ov.enter_anim.as_ref().unwrap();
+            crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
+        }
+    } else {
+        // New overlay: create it + start the enter animation (progress 0→1; no enter spec =
+        // shown instantly — but when there IS an exit spec, set progress straight to 1.0, since the exit needs 1→0).
+        // Share the main window's AdaptiveContext so the overlay reads the same window_size/density as the main window.
+        let mut composer = Composer::new();
+        #[cfg(target_os = "android")]
+        composer.set_android_app(pw.composer.android_app.clone());
+        composer.set_window_insets(pw.composer.window_insets());
+        // One back table per window: a handler registered inside a dialog must compete with
+        // the page's handlers, not be trapped in the overlay's private composer.
+        composer.set_back_dispatcher(pw.composer.back_dispatcher());
+        composer.adaptive = pw.composer.adaptive.clone();
+        // The overlay is its own composer, but it belongs to the same window: frame_clock()
+        // inside it has to wait on THIS window's frames rather than on window 0's.
+        composer.set_window_id(pw.composer.window_id());
+        // And it saves into the same place: overlay content that calls remember_saveable has to
+        // be snapshotted with the page it belongs to.
+        if let Some(registry) = pw.composer.saveable_registry() {
+            composer.set_saveable_registry(registry);
+        }
+        let enter_anim = desc.enter_anim.clone();
+        pw.overlay
+            .layers
+            .push(OverlayWindow::new_with_composer(desc, composer));
+        if let Some(p) = pw.overlay.layers.last().and_then(|o| o.progress.clone()) {
+            if let Some(spec) = &enter_anim {
+                crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
+            } else {
+                // No enter animation (but there is an exit one): show it fully at once (progress=1).
+                p.as_raw().set_backchannel(1.0);
+            }
+        }
+    }
+}
+
 pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     let descs = pw.composer.take_overlays();
     for desc in descs {
-        if let Some(ov) = pw.overlay.layers.iter_mut().find(|o| o.id == desc.id) {
-            // Reuse: `update` rebuilds progress when a spec flips (None↔Some) — if the new spec has an
-            // enter animation, push 0→1 (otherwise `update` already wrote 1.0 through the Backchannel to keep it visible).
-            let had_enter = ov.enter_anim.is_some();
-            ov.update(desc);
-            // ⚠ The caller just recomposed and handed us a NEW content closure, so the overlay's whole
-            // content has to run again. An overlay is a separate composer: nothing inside it can see
-            // that its closure was replaced, and a group re-enters only for state it read or
-            // parameters it declared — so content built from values the caller captured (a filtered
-            // list, a formatted string) kept what the FIRST closure captured. Marking the root alone
-            // is not enough: the caller's lambda usually sits inside wrapper groups of its own (a
-            // `Column`, a `Surface`), which declare nothing and would skip. Measured on
-            // `search_bar_demo`: the fullscreen panel and the docked dropdown both stayed on their
-            // first rows while the input field updated.
-            //
-            // Cost is bounded by how often the caller's group runs, not by this call: a screen whose
-            // main tree composes every frame re-runs the overlay content every frame too, while one
-            // that idles skips both composers. Nothing leaks across frames (`Slot::dirty` is consumed
-            // by the pass that reads it), a `LazyColumn` keeps its scroll position, and a closing
-            // overlay is not re-registered at all.
-            ov.composer.mark_content_dirty();
-            let now_has_enter = ov.enter_anim.is_some();
-            if !had_enter
-                && now_has_enter
-                && let Some(p) = ov.progress.clone()
+        if desc.host == crate::overlay::PopupHost::Native {
+            if let Some(binding) = pw
+                .overlay
+                .native_popups
+                .iter_mut()
+                .find(|binding| binding.id == desc.id)
             {
-                let spec = ov.enter_anim.as_ref().unwrap();
-                crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
+                binding.anchor_slot = desc.anchor_slot;
+                binding.direction = desc.direction;
+                binding.position = desc.position;
+                binding.offset = desc.offset;
+                binding.fit_around_anchor = desc.fit_around_anchor;
+                binding.match_anchor_width = desc.match_anchor_width;
+                binding.active = true;
             }
-        } else {
-            // New overlay: create it + start the enter animation (progress 0→1; no enter spec =
-            // shown instantly — but when there IS an exit spec, set progress straight to 1.0, since the exit needs 1→0).
-            // Share the main window's AdaptiveContext so the overlay reads the same window_size/density as the main window.
-            let mut composer = Composer::new();
-            #[cfg(target_os = "android")]
-            composer.set_android_app(pw.composer.android_app.clone());
-            composer.set_window_insets(pw.composer.window_insets());
-            // One back table per window: a handler registered inside a dialog must compete with
-            // the page's handlers, not be trapped in the overlay's private composer.
-            composer.set_back_dispatcher(pw.composer.back_dispatcher());
-            composer.adaptive = pw.composer.adaptive.clone();
-            // The overlay is its own composer, but it belongs to the same window: frame_clock()
-            // inside it has to wait on THIS window's frames rather than on window 0's.
-            composer.set_window_id(pw.composer.window_id());
-            // And it saves into the same place: overlay content that calls remember_saveable has to
-            // be snapshotted with the page it belongs to.
-            if let Some(registry) = pw.composer.saveable_registry() {
-                composer.set_saveable_registry(registry);
-            }
-            let enter_anim = desc.enter_anim.clone();
-            pw.overlay
+            if let Some(index) = pw
+                .overlay
                 .layers
-                .push(OverlayWindow::new_with_composer(desc, composer));
-            if let Some(p) = pw.overlay.layers.last().and_then(|o| o.progress.clone()) {
-                if let Some(spec) = &enter_anim {
-                    crate::animation::push_animatable_handle(p, 1.0, spec.animation_spec());
-                } else {
-                    // No enter animation (but there is an exit one): show it fully at once (progress=1).
-                    p.as_raw().set_backchannel(1.0);
-                }
+                .iter()
+                .position(|layer| layer.id == desc.id)
+            {
+                pw.overlay.layers[index].on_dismiss.take();
+                begin_overlay_close(pw, desc.id);
+                pw.overlay.layers.remove(index);
             }
+            pw.pending_native_overlays.push(desc);
+        } else {
+            if let Some(binding) = pw
+                .overlay
+                .native_popups
+                .iter_mut()
+                .find(|binding| binding.id == desc.id)
+            {
+                binding.active = false;
+            }
+            sync_overlay_desc(pw, desc);
         }
     }
     // Overlays recorded as active=false during composition → an active close → start the exit animation
@@ -257,7 +319,16 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
         .map(|(&id, _)| id)
         .collect();
     for id in &to_close {
-        begin_overlay_close(pw, *id);
+        if let Some(binding) = pw
+            .overlay
+            .native_popups
+            .iter_mut()
+            .find(|binding| binding.id == *id)
+        {
+            binding.active = false;
+        } else {
+            begin_overlay_close(pw, *id);
+        }
     }
     // Exit-animation completion check: closing and progress≈0 (or no animation spec) → really remove.
     finish_closing_overlays(pw);

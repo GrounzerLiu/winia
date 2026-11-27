@@ -49,17 +49,38 @@ impl AppState {
     /// application's after-the-fact callback, unregister the window and drop everything keyed by it.
     /// The native close request and `WindowId::destroy` both run this, so the hook order is the same
     /// on every path.
-    fn close_window_now(
+    pub(crate) fn close_window_now(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         window_id: winit::window::WindowId,
     ) {
+        self.close_native_popup_children(event_loop, window_id);
         let Some(pw) = self.windows.get_mut(&window_id) else {
             return;
         };
         let created_id = pw.created_id;
+        let native_role = pw.role;
+        let restore_native_focus = pw.native_popup_restore_focus;
         pw.finalize(window_id, &mut self.saveable);
         self.windows.remove(&window_id);
+        if let crate::app::WindowRole::NativePopup {
+            parent: parent_id, ..
+        } = native_role
+        {
+            let other_popup_focused = self.has_focused_native_popup(parent_id, window_id);
+            if let Some(parent) = self.windows.get_mut(&parent_id) {
+                parent
+                    .overlay
+                    .native_popups
+                    .retain(|binding| binding.child != window_id);
+                if restore_native_focus
+                    && !other_popup_focused
+                    && let Some(surface) = parent.skia_window.as_ref()
+                {
+                    let _ = surface.window().focus_window();
+                }
+            }
+        }
         if let Some(created_id) = created_id {
             crate::app::window::Window::close_owned_children(
                 &mut self.windows,
@@ -351,7 +372,9 @@ impl ApplicationHandler for AppState {
             for pw in self.windows.values_mut() {
                 if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
                     pw.clock.last_request_time = now;
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 }
@@ -359,7 +382,9 @@ impl ApplicationHandler for AppState {
         } else if self.was_animating {
             // Animations just stopped: force a final frame (the request from the last set may have been skipped).
             for pw in self.windows.values_mut() {
-                if let Some(ref sw) = pw.skia_window {
+                if let Some(ref sw) = pw.skia_window
+                    && !sw.renderer_unavailable()
+                {
                     pw.clock.force_redraw = true; // Only set for a renderable window (no None left behind).
                     sw.request_redraw();
                 }
@@ -375,7 +400,9 @@ impl ApplicationHandler for AppState {
             // An owed render aligns on last_render (force_redraw is set when frame throttling skips one).
             if pw.clock.force_redraw {
                 if now.duration_since(pw.clock.last_render_time) >= pw.clock.frame_interval {
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 } else {
@@ -390,7 +417,9 @@ impl ApplicationHandler for AppState {
             if pw.composer.has_pending_states() {
                 if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
                     pw.clock.last_request_time = now;
-                    if let Some(ref sw) = pw.skia_window {
+                    if let Some(ref sw) = pw.skia_window
+                        && !sw.renderer_unavailable()
+                    {
                         sw.request_redraw();
                     }
                 } else {
@@ -602,7 +631,73 @@ impl ApplicationHandler for AppState {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed)
+            && let Some(pw) = self.windows.get_mut(&window_id)
+            && let crate::app::WindowRole::NativePopup { overlay_id, .. } = pw.role
+        {
+            crate::app::overlay_host::begin_overlay_close(pw, overlay_id);
+        }
+        if matches!(event, WindowEvent::Destroyed) {
+            self.close_native_popup_children(event_loop, window_id);
+        }
+        if let WindowEvent::PointerButton {
+            position,
+            state,
+            button,
+            ..
+        } = &event
+            && state.is_pressed()
+            && button.clone().mouse_button() == Some(winit::event::MouseButton::Left)
+            && let Some(pw) = self.windows.get(&window_id)
+        {
+            let logical = position.to_logical::<f32>(pw.scale_factor);
+            self.dismiss_native_popups_outside(window_id, (logical.x, logical.y));
+        }
+        let refresh_native_positions = matches!(
+            &event,
+            WindowEvent::Moved(_)
+                | WindowEvent::SurfaceResized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+        );
+        let native_popup_input_parent = match &event {
+            WindowEvent::PointerButton { state, .. } if !state.is_pressed() => {
+                self.windows.get(&window_id).and_then(|pw| match pw.role {
+                    crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
+                    crate::app::WindowRole::RootOrChild => None,
+                })
+            }
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..) => {
+                self.windows.get(&window_id).and_then(|pw| match pw.role {
+                    crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
+                    crate::app::WindowRole::RootOrChild => None,
+                })
+            }
+            _ => None,
+        };
+        let native_popup_parent = if matches!(event, WindowEvent::RedrawRequested) {
+            self.windows.get(&window_id).and_then(|pw| match pw.role {
+                crate::app::WindowRole::NativePopup { parent, .. } => Some(parent),
+                crate::app::WindowRole::RootOrChild => None,
+            })
+        } else {
+            None
+        };
         self.dispatch_window_event(event_loop, window_id, event);
+        if let Some(parent) = native_popup_input_parent
+            && let Some(parent) = self.windows.get_mut(&parent)
+        {
+            parent.composer.mark_content_dirty();
+            if let Some(surface) = parent.skia_window.as_ref() {
+                surface.request_redraw();
+            }
+        }
+        if refresh_native_positions {
+            self.refresh_native_popup_positions(window_id);
+        }
+        if let Some(parent) = native_popup_parent {
+            self.refresh_native_popup_positions(parent);
+        }
+        self.sync_native_popups(event_loop);
         // A copy decided while handling the event is applied HERE: `set_clipboard` needs the event
         // loop, which only this layer holds. Same event, so the clipboard is current before the
         // next one arrives (see `crate::clipboard`).
@@ -770,16 +865,51 @@ impl AppState {
                         crate::app::window_state::WindowId::new(raw),
                         crate::app::window_state::CloseReason::User,
                     ),
-                    _ => self.close_window_now(event_loop, window_id),
+                    _ => {
+                        let keep_for_exit = !cfg!(target_os = "linux")
+                            && matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
+                            && pw
+                                .overlay
+                                .layers
+                                .iter()
+                                .any(|overlay| overlay.exit_anim.is_some());
+                        if keep_for_exit {
+                            if let Some(surface) = pw.skia_window.as_ref() {
+                                surface.request_redraw();
+                            }
+                        } else {
+                            self.close_window_now(event_loop, window_id);
+                        }
+                    }
                 }
             }
             WindowEvent::Destroyed => {
                 // The OS tore the window down itself: it still has to snapshot, run the close hook
                 // and drop the per-window registries, or a platform-initiated close loses state and
                 // leaks a frame clock.
+                let restore_native_focus = pw.native_popup_restore_focus;
                 pw.finalize(window_id, &mut self.saveable);
                 let created_id = pw.created_id;
+                let native_role = pw.role;
                 self.windows.remove(&window_id);
+                if let crate::app::WindowRole::NativePopup {
+                    parent: parent_id, ..
+                } = native_role
+                {
+                    let other_popup_focused = self.has_focused_native_popup(parent_id, window_id);
+                    if let Some(parent) = self.windows.get_mut(&parent_id) {
+                        parent
+                            .overlay
+                            .native_popups
+                            .retain(|binding| binding.child != window_id);
+                        if restore_native_focus
+                            && !other_popup_focused
+                            && let Some(surface) = parent.skia_window.as_ref()
+                        {
+                            let _ = surface.window().focus_window();
+                        }
+                    }
+                }
                 if let Some(created_id) = created_id {
                     crate::app::window::Window::close_owned_children(
                         &mut self.windows,
@@ -866,6 +996,8 @@ impl AppState {
                 // Down/Up refresh the pointer position too (wheeling right after a click without moving
                 // would otherwise use a stale last_pointer_pos and hit the wrong target).
                 pw.input.last_pos = Some(scene_pos);
+                let had_overlay_interaction =
+                    pw.overlay.click.is_some() || pw.input.arena.is_some();
                 let event_type = if state.is_pressed() {
                     crate::input::PointerEventType::Down
                 } else {
@@ -920,6 +1052,12 @@ impl AppState {
                     drag_scroll_up(pw);
                     // Release the pressed interaction (Compose's Release semantics — the clickable pressed state ends).
                     release_pressed_interaction(pw);
+                    if had_overlay_interaction {
+                        pw.composer.mark_content_dirty();
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
+                    }
                 }
                 // -- Pointer event dispatch (on Up, dispatch before clearing the capture) --
                 let nodes = pw.composer.arena_nodes();
@@ -1617,6 +1755,7 @@ impl AppState {
                             // without depending on that possibly-lost wake-up.
                             if crate::animation::is_animating()
                                 && let Some(ref sw) = pw.skia_window
+                                && !sw.renderer_unavailable()
                             {
                                 sw.request_redraw();
                             }
@@ -1762,6 +1901,15 @@ impl AppState {
                 }
             }
             _ => {}
+        }
+        if self.windows.get(&window_id).is_some_and(|pw| {
+            matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
+                && pw
+                    .skia_window
+                    .as_ref()
+                    .is_some_and(|surface| surface.renderer_failed())
+        }) {
+            self.fallback_native_popup_after_render_failure(event_loop, window_id);
         }
     }
 }

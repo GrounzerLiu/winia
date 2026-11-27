@@ -88,6 +88,14 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSScreen",
+    "NSGraphics",
+    "objc2-core-graphics",
+] }
+
 [dev-dependencies]
 # The flow operator tests drive debounce under a PAUSED clock, so they assert exact periods instead
 # of sleeping. Test builds only: tokio's `test-util` feature is what `start_paused` needs.
