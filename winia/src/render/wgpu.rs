@@ -132,12 +132,9 @@ impl WgpuWindow {
         match std::thread::Builder::new()
             .name("winia-wgpu-surface".into())
             .spawn(move || {
-                let result = GpuSurface::from_surface_cancellable(
-                    surface,
-                    size,
-                    transparent,
-                    &worker_cancel,
-                );
+                let result = catch_surface_panic(|| {
+                    GpuSurface::from_surface_cancellable(surface, size, transparent, &worker_cancel)
+                });
                 let cancelled = worker_cancel.load(Ordering::Acquire);
                 let _ = sender.send(result);
                 if !cancelled {
@@ -394,6 +391,17 @@ impl AsRef<dyn Window> for WgpuWindow {
     fn as_ref(&self) -> &dyn Window {
         self.window.as_ref().as_ref()
     }
+}
+
+fn catch_surface_panic<T>(work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("unknown panic");
+        Err(format!("surface initialization panicked: {detail}"))
+    })
 }
 
 static GPU_INSTANCE: LazyLock<wgpu::Instance> = LazyLock::new(wgpu::Instance::default);
@@ -668,6 +676,16 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worker_panic_becomes_a_surface_error_instead_of_losing_completion() {
+        let result = catch_surface_panic::<()>(|| panic!("worker boom"));
+
+        assert_eq!(
+            result,
+            Err("surface initialization panicked: worker boom".into())
+        );
+    }
 
     #[test]
     fn swapchain_formats_map_to_skia_color_types() {

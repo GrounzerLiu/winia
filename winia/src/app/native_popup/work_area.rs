@@ -65,9 +65,25 @@ fn platform_parent_origin(window: &dyn Window) -> Option<PhysicalPosition<i32>> 
     windows::client_origin(window)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn platform_parent_origin(window: &dyn Window) -> Option<PhysicalPosition<i32>> {
+    Some(add_physical_offset(
+        window.outer_position().ok()?,
+        window.surface_position(),
+    ))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn platform_parent_origin(window: &dyn Window) -> Option<PhysicalPosition<i32>> {
     window.outer_position().ok()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn add_physical_offset(
+    origin: PhysicalPosition<i32>,
+    offset: PhysicalPosition<i32>,
+) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(origin.x + offset.x, origin.y + offset.y)
 }
 
 #[cfg(target_os = "windows")]
@@ -104,7 +120,19 @@ fn monitor_bounds(window: &dyn Window) -> Option<PhysicalRect> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysicalRect, logical_rect_size};
+    use super::{PhysicalRect, add_physical_offset, logical_rect_size};
+    use winit::dpi::PhysicalPosition;
+
+    #[test]
+    fn macos_client_origin_includes_the_window_decoration_offset() {
+        assert_eq!(
+            add_physical_offset(
+                PhysicalPosition::new(100, 200),
+                PhysicalPosition::new(0, 56),
+            ),
+            PhysicalPosition::new(100, 256)
+        );
+    }
 
     #[test]
     fn monitor_bounds_measure_without_a_parent_origin() {

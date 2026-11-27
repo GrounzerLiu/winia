@@ -8,6 +8,15 @@ use winit::dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{WindowAttributes, WindowId, WindowPositioner, WindowType};
 
+fn inherit_saveable_registry(
+    parent: &crate::runtime::composer::Composer,
+    child: &mut crate::runtime::composer::Composer,
+) {
+    if let Some(registry) = parent.saveable_registry() {
+        child.set_saveable_registry(registry);
+    }
+}
+
 fn native_overlay_desc(mut desc: crate::overlay::OverlayDesc) -> crate::overlay::OverlayDesc {
     desc.anchor_slot = None;
     desc.position = crate::overlay::PopupPosition::TopLeft;
@@ -312,6 +321,7 @@ impl AppState {
             .composer
             .set_back_dispatcher(parent.composer.back_dispatcher());
         child.composer.set_window_id(window_id.into_raw() as u64);
+        inherit_saveable_registry(&parent.composer, &mut child.composer);
         child.clock.frame_interval = parent.clock.frame_interval;
 
         let fallback_desc = desc.clone();
@@ -667,7 +677,8 @@ fn popup_placement(
 
 #[cfg(test)]
 mod tests {
-    use super::parent_measurement_size;
+    use super::{inherit_saveable_registry, parent_measurement_size};
+    use crate::runtime::composer::Composer;
     use winit::dpi::PhysicalSize;
 
     #[test]
@@ -683,6 +694,24 @@ mod tests {
         assert_eq!(
             parent_measurement_size(PhysicalSize::new(800, 600), 0.0),
             (1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn native_child_inherits_the_owners_saveable_registry() {
+        let registry = crate::runtime::saveable::SaveableStateRegistry::new(Default::default());
+        let mut parent = Composer::new();
+        parent.set_saveable_registry(registry.clone());
+        let mut child = Composer::new();
+
+        inherit_saveable_registry(&parent, &mut child);
+
+        let inherited = child
+            .saveable_registry()
+            .expect("the native child uses the owner's saveable registry");
+        assert!(
+            std::sync::Arc::ptr_eq(&registry, &inherited),
+            "owner and native overlay must share the same registry, not independent copies"
         );
     }
 }
