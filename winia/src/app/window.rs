@@ -178,7 +178,12 @@ impl Window {
         self
     }
 
-    /// Create a transparent window. Transparent windows are always undecorated.
+    /// Create a window whose surface may contain alpha.
+    ///
+    /// This is independent of [`decorations`](Self::decorations): a transparent window keeps its
+    /// title bar unless the app also asks for `decorations(false)`. Platforms without transparency
+    /// support drop the request, so [`WindowState::transparent`](crate::app::window_state::WindowState::transparent)
+    /// then reports `false`.
     pub fn transparent(mut self, transparent: bool) -> Self {
         self.options.transparent = transparent;
         self
@@ -622,7 +627,7 @@ mod tests {
 
         for options in [transparent_first, decorations_first] {
             assert!(options.transparent);
-            assert!(!options.decorations);
+            assert!(options.decorations);
         }
     }
 }

@@ -495,15 +495,12 @@ impl WindowState {
         with_cell(self.id, |cell| cell.snapshot.get().decorations).unwrap_or(true)
     }
 
-    /// Enable or disable native decorations. Transparent windows cannot be decorated.
+    /// Enable or disable native decorations.
     pub fn set_decorations(&self, decorations: bool) {
         if self.app_bar_owns_window()
             || !self.id.capabilities().decorations
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
         {
-            return;
-        }
-        if decorations && self.transparent() {
             return;
         }
         with_cell(self.id, |cell| {
@@ -1999,7 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn transparent_windows_cannot_enable_decorations() {
+    fn transparent_windows_can_enable_decorations() {
         let id = WindowId::new(9_217);
         declare(
             id,
@@ -2010,8 +2007,8 @@ mod tests {
             },
         );
         id.state().set_decorations(true);
-        assert!(!id.state().decorations());
-        assert!(take_commands(id).is_empty());
+        assert!(id.state().decorations());
+        assert_eq!(take_commands(id), vec![Command::Decorations(true)]);
         forget(id);
     }
 

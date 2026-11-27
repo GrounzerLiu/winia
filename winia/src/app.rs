@@ -95,9 +95,6 @@ impl WindowOptions {
                 self.no_activate = false;
             }
         }
-        if self.transparent {
-            self.decorations = false;
-        }
         if !capabilities.size_constraints {
             self.minimum_size = None;
             self.maximum_size = None;
@@ -130,7 +127,7 @@ mod window_options_tests {
     }
 
     #[test]
-    fn transparent_options_stay_undecorated_after_normalization() {
+    fn transparent_options_keep_requested_decorations() {
         let mut options = WindowOptions {
             transparent: true,
             decorations: true,
@@ -138,7 +135,7 @@ mod window_options_tests {
         };
         options.normalize(capabilities(true));
         assert!(options.transparent);
-        assert!(!options.decorations);
+        assert!(options.decorations);
     }
 
     #[test]

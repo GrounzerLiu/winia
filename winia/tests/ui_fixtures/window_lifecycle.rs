@@ -79,6 +79,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
         builder = builder
             .always_on_top(true)
             .transparent(true)
+            .decorations(false)
             .minimum_size(320.0, 240.0)
             .maximum_size(900.0, 700.0);
     }
