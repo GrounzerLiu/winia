@@ -167,31 +167,30 @@ impl AsRef<dyn Window> for WgpuWindow {
 static GPU_INSTANCE: LazyLock<wgpu::Instance> = LazyLock::new(wgpu::Instance::default);
 
 #[derive(Clone)]
-struct GpuCore {
+struct GpuAdapter {
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
 }
 
-static GPU_CORE: Mutex<Option<GpuCore>> = Mutex::new(None);
+static GPU_ADAPTER: Mutex<Option<GpuAdapter>> = Mutex::new(None);
 
-/// Reuse the process-wide GPU device across surfaces. Each window still owns its swapchain,
-/// Graphite context and recorder; only the expensive adapter/device initialization is shared.
-fn shared_gpu_core(
+/// Reuse the process-wide instance and adapter across surfaces. Each window still owns its device,
+/// swapchain, Graphite context and recorder: Skia Graphite contexts on one shared device invalidate
+/// each other's resources when one window is closed.
+fn shared_gpu_adapter(
     surface: &wgpu::Surface<'_>,
-) -> Result<(GpuCore, wgpu::SurfaceCapabilities), String> {
-    if let Some(core) = GPU_CORE
+) -> Result<(GpuAdapter, wgpu::SurfaceCapabilities), String> {
+    if let Some(gpu) = GPU_ADAPTER
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
     {
-        let capabilities = surface.get_capabilities(&core.adapter);
+        let capabilities = surface.get_capabilities(&gpu.adapter);
         if capabilities
             .formats
             .iter()
             .any(|format| color_type_for_format(*format).is_some())
         {
-            return Ok((core, capabilities));
+            return Ok((gpu, capabilities));
         }
     }
 
@@ -200,16 +199,12 @@ fn shared_gpu_core(
         ..Default::default()
     }))
     .map_err(|error| format!("request_adapter: {error}"))?;
-    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .map_err(|error| format!("request_device: {error}"))?;
-    let core = GpuCore {
-        adapter,
-        device,
-        queue,
-    };
-    let capabilities = surface.get_capabilities(&core.adapter);
-    *GPU_CORE.lock().unwrap_or_else(|error| error.into_inner()) = Some(core.clone());
-    Ok((core, capabilities))
+    let gpu = GpuAdapter { adapter };
+    let capabilities = surface.get_capabilities(&gpu.adapter);
+    *GPU_ADAPTER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(gpu.clone());
+    Ok((gpu, capabilities))
 }
 
 struct WgpuRenderer {
@@ -227,10 +222,10 @@ impl WgpuRenderer {
         let surface = GPU_INSTANCE
             .create_surface(OwnedWindow(window.clone()))
             .map_err(|error| format!("create_surface: {error}"))?;
-        let (core, capabilities) = shared_gpu_core(&surface)?;
-        let device = core.device.clone();
-        let queue = core.queue.clone();
-        let adapter = core.adapter.clone();
+        let (gpu, capabilities) = shared_gpu_adapter(&surface)?;
+        let adapter = gpu.adapter.clone();
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .map_err(|error| format!("request_device: {error}"))?;
         let size = window.surface_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
