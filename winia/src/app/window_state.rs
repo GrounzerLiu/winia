@@ -200,7 +200,11 @@ pub struct WindowCapabilities {
     pub activate: bool,
     pub always_on_top: bool,
     pub transparent: bool,
-    /// Windows 11 build 22621 and later: whether system backdrop materials are supported.
+    /// Windows only: whether the platform exposes the system backdrop attribute.
+    ///
+    /// This is a platform capability, not a build guarantee: Windows 10 and Windows 11 before
+    /// build 22621 expose the attribute and reject the write with `E_INVALIDARG`, which
+    /// [`BackdropStatus::Rejected`](crate::app::window_backdrop::BackdropStatus::Rejected) reports.
     pub backdrop: bool,
     /// Windows only: whether taskbar-button hiding is supported.
     pub skip_taskbar: bool,
@@ -518,8 +522,14 @@ impl WindowState {
     /// for undecorated windows, so request `decorations(false)` together with transparency when the
     /// material should reach the client. With decorations the material is limited to the title bar,
     /// which `WindowBackdrop::Auto` targets directly.
+    ///
+    /// Windows app-bar windows are owned by the shell and ignore the request. On a platform that
+    /// does not implement system backdrops the request is still recorded and reported as
+    /// [`BackdropStatus::Unsupported`], so the declaration stays inspectable.
     pub fn set_backdrop(&self, backdrop: WindowBackdrop) {
-        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+        if self.app_bar_owns_window()
+            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
+        {
             return;
         }
         let supported = self.id.capabilities().backdrop;

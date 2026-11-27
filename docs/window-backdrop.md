@@ -107,11 +107,15 @@ Consequences for applications:
 | `NotRequested` | no material requested, or a previous request was cleared with `None` |
 | `Pending` | queued; the window does not exist on the platform yet |
 | `Applied` | DWM accepted the call and reads back the requested value |
+| `Unverified(hresult)` | DWM accepted the call, but the read-back failed; the value is unconfirmed |
 | `Unsupported` | the platform implements no system backdrop; the request is kept |
 | `Rejected(hresult)` | DWM refused the call; Windows 10 and Windows 11 before build 22621 return `E_INVALIDARG` |
 | `Mismatch { requested, reported }` | the call succeeded but DWM reports a different value |
 
-`Applied` confirms the attribute, not the pixels. Avalonia reports a case on Windows 11 build 26300
+`Applied` confirms the attribute, not the pixels. The read-back itself has only been verified on
+Windows 11 build 26300: where `DwmGetWindowAttribute` refuses the attribute, the write is reported
+as `Unverified` rather than as `Rejected`, because the set succeeded even though the confirmation is
+missing. Avalonia reports a case on Windows 11 build 26300
 where the framework believes the material is applied while DWM never receives it
 ([AvaloniaUI/Avalonia#22867](https://github.com/AvaloniaUI/Avalonia/issues/22867)); winia's status is
 only as truthful as the DWM read-back.
@@ -134,6 +138,10 @@ task, not a backdrop switch.
 
 ## Platform support
 
-`WindowCapabilities::backdrop` is true on Windows and false elsewhere. Other platforms keep the
-request for inspection and report `BackdropStatus::Unsupported`; no winit-side vibrancy (macOS
-`NSVisualEffectView`, Wayland blur protocols) is wired to this request.
+`WindowCapabilities::backdrop` is true on every Windows desktop window and false elsewhere. It is a
+platform claim, not a build guarantee: Windows 10 and Windows 11 before build 22621 expose the
+attribute and reject the write with `E_INVALIDARG`, which surfaces as `BackdropStatus::Rejected`.
+Other platforms keep the request for inspection and report `BackdropStatus::Unsupported`; no
+winit-side vibrancy (macOS `NSVisualEffectView`, Wayland blur protocols) is wired to this request.
+
+`set_backdrop` is ignored on Windows app-bar windows, which the shell owns.

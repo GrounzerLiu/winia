@@ -251,17 +251,16 @@ impl AppState {
         // otherwise, and unconditional at the call site so nothing here needs feature gates).
         crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);
         // Creation-time backdrop request, reported only when a declaration owns this window.
-        #[cfg(target_os = "windows")]
-        {
-            let backdrop = pending.options.backdrop;
-            if backdrop.is_material() {
-                let status = crate::app::window_backdrop::apply(&*skia_window, backdrop);
-                if let Some(raw) = pending.created_id {
-                    crate::app::window_state::set_backdrop_status(
-                        crate::app::window_state::WindowId::new(raw),
-                        status,
-                    );
-                }
+        // `apply` is cross-platform: a platform without system materials reports `Unsupported`, so
+        // this call site does not need its own target gate.
+        let backdrop = pending.options.backdrop;
+        if backdrop.is_material() {
+            let status = crate::app::window_backdrop::apply(&*skia_window, backdrop);
+            if let Some(raw) = pending.created_id {
+                crate::app::window_state::set_backdrop_status(
+                    crate::app::window_state::WindowId::new(raw),
+                    status,
+                );
             }
         }
         #[cfg(target_os = "windows")]

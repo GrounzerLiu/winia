@@ -36,10 +36,9 @@ fn app(ctx: &mut ComposeCtx) {
             let state = id.state();
             let caps = id.capabilities();
             let popup_open = ctx.remember(|| false);
-            // One-shot: enable the title bar after this first composition.
-            let decorated = ctx.remember(|| std::rc::Rc::new(std::cell::Cell::new(false))).get();
-            if !decorated.get() {
-                decorated.set(true);
+            // `side_effect` publishes on the UI thread and is idempotent; the guard keeps later
+            // compositions from queueing the decoration command again.
+            if !state.decorations() {
                 winia::effect::side_effect(ctx, {
                     clone!(state);
                     move || state.set_decorations(true)

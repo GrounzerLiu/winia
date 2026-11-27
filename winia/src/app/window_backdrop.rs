@@ -8,7 +8,9 @@
 //!
 //! [`BackdropStatus`] reports what the platform did with the request. [`BackdropStatus::Applied`]
 //! means DWM accepted the attribute and reads it back; it does not prove that material pixels were
-//! composited, only that the request is in place.
+//! composited, only that the request is in place. Where DWM refuses the read-back the write is
+//! reported as [`BackdropStatus::Unverified`], because the set itself succeeded. The read-back has
+//! only been verified on Windows 11 build 26300.
 
 use std::fmt;
 
@@ -60,13 +62,18 @@ pub enum BackdropStatus {
     /// No material was requested, or a previous request was cleared.
     #[default]
     NotRequested,
-    /// Requested, but the window does not exist on the platform yet.
+    /// Queued: the window does not exist on the platform yet, or the write has not run yet.
     Pending,
     /// DWM accepted the request and reads back the requested value.
     ///
     /// This confirms the attribute, not the pixels: whether anything is visible still depends on
     /// the window's transparency, decorations and client-area content.
     Applied,
+    /// The platform accepted the request, but reading the value back failed with this HRESULT.
+    ///
+    /// The write itself succeeded; only the confirmation is missing. Kept separate from
+    /// [`Rejected`](Self::Rejected) so a read-back failure is not mistaken for a failed request.
+    Unverified(i32),
     /// The current platform does not implement system backdrops; the request is kept for inspection.
     Unsupported,
     /// The platform rejected the request with this HRESULT.
@@ -84,10 +91,16 @@ pub enum BackdropStatus {
 }
 
 impl BackdropStatus {
-    /// Whether the request is in place on the platform.
+    /// Whether the request is in place and confirmed by the platform.
     #[must_use]
     pub const fn is_applied(self) -> bool {
         matches!(self, Self::Applied)
+    }
+
+    /// Whether the platform accepted the write but could not read the value back.
+    #[must_use]
+    pub const fn is_unverified(self) -> bool {
+        matches!(self, Self::Unverified(_))
     }
 
     /// Whether the current platform does not implement system backdrops.
@@ -109,6 +122,9 @@ impl fmt::Display for BackdropStatus {
             Self::NotRequested => f.write_str("not requested"),
             Self::Pending => f.write_str("pending"),
             Self::Applied => f.write_str("applied"),
+            Self::Unverified(hresult) => {
+                write!(f, "accepted, unverified (HRESULT {hresult:#010x})")
+            }
             Self::Unsupported => f.write_str("unsupported on this platform"),
             Self::Rejected(hresult) => write!(f, "rejected with HRESULT {hresult:#010x}"),
             Self::Mismatch {
@@ -157,6 +173,9 @@ mod tests {
         assert!(BackdropStatus::Applied.is_applied());
         assert!(!BackdropStatus::Applied.is_failed());
         assert!(BackdropStatus::Unsupported.is_unsupported());
+        assert!(BackdropStatus::Unverified(-2147024809).is_unverified());
+        assert!(!BackdropStatus::Unverified(-2147024809).is_failed());
+        assert!(!BackdropStatus::Unverified(-2147024809).is_applied());
         assert!(BackdropStatus::Rejected(-2147024809).is_failed());
         assert!(
             BackdropStatus::Mismatch {

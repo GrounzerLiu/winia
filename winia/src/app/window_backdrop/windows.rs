@@ -4,6 +4,9 @@
 //! (Windows 11 build 22621 and later), then `DwmGetWindowAttribute` to report what DWM kept. Older
 //! systems reject the call with `E_INVALIDARG`; that surfaces as [`BackdropStatus::Rejected`] rather
 //! than probing the build number through undocumented means.
+//!
+//! The read-back is treated as confirmation, not as part of the request: if DWM refuses to report
+//! the attribute the write is still reported as [`BackdropStatus::Unverified`], never as rejected.
 
 use super::{BackdropStatus, WindowBackdrop};
 use std::mem::size_of;
@@ -64,7 +67,7 @@ pub(crate) fn apply(
             requested: backdrop,
             reported,
         },
-        Err(error) => BackdropStatus::Rejected(error.code().0),
+        Err(error) => BackdropStatus::Unverified(error.code().0),
     }
 }
 
