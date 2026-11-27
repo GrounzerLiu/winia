@@ -66,6 +66,10 @@ impl WgpuWindow {
         true
     }
 
+    pub(crate) fn window(&self) -> &dyn Window {
+        &**self.window
+    }
+
     pub(crate) fn destroy_surface(&mut self) {
         self.renderer = None;
     }
@@ -141,6 +145,7 @@ impl WgpuWindow {
         }
         drop(surface);
         drop(recording);
+        self.window.pre_present_notify();
         renderer.queue.present(frame);
     }
 }

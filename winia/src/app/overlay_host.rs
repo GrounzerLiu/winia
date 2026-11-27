@@ -15,9 +15,24 @@ use super::*;
 /// read it — which is the measure of a group that wanted a struct. The drag session, the click
 /// target, the frozen arena origins and the focus the host suspends are all about *an overlay*, not
 /// about the window; what stays on `PerWindow` is the frame.
+#[derive(Clone, Copy)]
+pub(crate) struct NativePopupBinding {
+    pub(crate) id: u64,
+    pub(crate) child: winit::window::WindowId,
+    pub(crate) anchor_slot: Option<u64>,
+    pub(crate) direction: Option<crate::layout::LayoutDirection>,
+    pub(crate) position: crate::overlay::PopupPosition,
+    pub(crate) offset: (f32, f32),
+    pub(crate) fit_around_anchor: bool,
+    pub(crate) match_anchor_width: bool,
+    pub(crate) active: bool,
+}
+
 pub(crate) struct OverlayHost {
     /// Top-level popup layers (independent composition units — rendered above the main tree).
     pub(crate) layers: Vec<OverlayWindow>,
+    /// Popup overlays hosted by child native windows. The child owns the Composer and OverlayWindow.
+    pub(crate) native_popups: Vec<NativePopupBinding>,
     /// Overlay click target (recorded when down hits an overlay — up performs the click; v1 only `clickable`).
     pub(crate) click: Option<(usize, (f32, f32), u64)>,
     /// Overlay drag session (created when down hits an overlay node that has `on_drag` —
@@ -66,6 +81,7 @@ impl Default for OverlayHost {
     fn default() -> Self {
         Self {
             layers: Vec::new(),
+            native_popups: Vec::new(),
             click: None,
             drag: None,
             drag_origin: (0.0, 0.0),
@@ -78,8 +94,15 @@ impl Default for OverlayHost {
     }
 }
 
+pub(crate) enum OverlaySurface {
+    InWindow,
+    Native,
+}
+
 pub(crate) struct OverlayWindow {
     pub(crate) id: u64,
+    pub(crate) host: crate::overlay::PopupHost,
+    pub(crate) surface: OverlaySurface,
     pub(crate) composer: crate::runtime::composer::Composer,
     pub(crate) anchor_slot: Option<u64>,
     /// The direction `*Start`/`*End` positions resolve against, when the caller supplied one at compose time
@@ -184,6 +207,11 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     // Already closing (duplicate close request) → skip (guards against re-entry: restarted animation / duplicate on_dismiss).
     if pw.overlay.layers[idx].closing {
         return;
+    }
+    if matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
+        && (pw.focused_id.is_some() || pw.overlay.layers[idx].focused_id.is_some())
+    {
+        pw.native_popup_restore_focus = true;
     }
     pw.overlay.layers[idx].closing = true;
     pw.overlay.layers[idx].closing_since = Some(std::time::Instant::now());

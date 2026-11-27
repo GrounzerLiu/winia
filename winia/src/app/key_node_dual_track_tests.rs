@@ -209,6 +209,7 @@ fn focus_by_node_id_can_reach_an_overlay_arena() {
         focusable[0]
     };
     let desc = crate::overlay::OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: crate::overlay::next_overlay_id(),
         anchor_slot: None,
         direction: None,

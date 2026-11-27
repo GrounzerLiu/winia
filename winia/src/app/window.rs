@@ -613,6 +613,7 @@ mod tests {
             app_bar: true,
             decorations: true,
             size_constraints: true,
+            native_popup: true,
         };
         let mut transparent_first = Window::new().transparent(true).decorations(true).options;
         let mut decorations_first = Window::new().decorations(true).transparent(true).options;

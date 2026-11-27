@@ -44,4 +44,5 @@ mod back_routing_tests;
 
 pub(crate) use handlers::try_selection_key;
 mod helpers;
+mod native_popup;
 mod windows;

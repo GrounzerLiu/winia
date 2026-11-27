@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn popup_host_defaults_to_the_owner_window() {
+    let popup = Popup::new(true);
+    assert_eq!(popup.host, PopupHost::InWindow);
+    assert_eq!(PopupHost::default(), PopupHost::InWindow);
+    assert_eq!(popup.host(PopupHost::Native).host, PopupHost::Native);
+}
+
 /// A menu item must carry the ripple AND the "no focus ring" marker.
 ///
 /// material3's item is `clickable(..., indication = ripple(true))` and marks focus with a state layer,

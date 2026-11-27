@@ -1,9 +1,26 @@
 use super::*;
 
+/// The surface that hosts a [`crate::overlay::Popup`].
+///
+/// `InWindow` preserves Compose's default overlay behaviour. `Native` requests a child native
+/// window and transparently falls back to `InWindow` when the platform or window backend cannot
+/// honour the request. Native popups are available on Windows, macOS and Wayland.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PopupHost {
+    /// Compose the popup into its owner window's overlay layer.
+    #[default]
+    InWindow,
+    /// Host the popup in a child native window when the platform supports it.
+    ///
+    /// Changing an existing popup's host recreates its content composition.
+    Native,
+}
+
 /// Overlay descriptor — registered during composition (e.g. `Popup::build`
 /// calls `ctx.open_overlay` internally).
 pub struct OverlayDesc {
     pub(crate) id: u64,
+    pub(crate) host: PopupHost,
     pub(crate) anchor_slot: Option<u64>,
     /// The direction the `*Start`/`*End` positions resolve against. `None` keeps the existing rule: the
     /// anchor node's own resolved direction when there is one, else the root node's. A component that knows

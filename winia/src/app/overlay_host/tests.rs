@@ -1,5 +1,5 @@
-use super::OverlayWindow;
 use super::{CLOSING_DEADLINE, closing_overlay_is_done};
+use super::{NativePopupBinding, OverlayWindow};
 use crate::app::PerWindow;
 use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::runtime::composer::Composer;
@@ -55,6 +55,7 @@ fn a_closing_overlay_waits_for_its_fade_but_not_forever() {
 #[test]
 fn an_overlay_that_stops_closing_is_shown_again() {
     let desc = |enter: Option<OverlayAnimSpec>, exit: Option<OverlayAnimSpec>| OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: 7,
         anchor_slot: None,
         direction: None,
@@ -122,6 +123,7 @@ fn an_overlay_that_stops_closing_is_shown_again() {
 #[test]
 fn escape_respects_dismiss_on_back_press() {
     let desc = |dismiss_on_back_press: bool| OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: 9,
         anchor_slot: None,
         direction: None,
@@ -183,6 +185,7 @@ fn escape_respects_dismiss_on_back_press() {
 #[test]
 fn a_dismissal_request_that_the_content_owns_does_not_start_the_hosts_fade() {
     let desc = |defers: bool, called: Arc<std::sync::atomic::AtomicUsize>| OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: 11,
         anchor_slot: None,
         direction: None,
@@ -232,6 +235,7 @@ fn a_dismissal_request_that_the_content_owns_does_not_start_the_hosts_fade() {
 #[test]
 fn an_overlay_composer_inherits_its_windows_clock_identity() {
     let desc = OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: 21,
         anchor_slot: None,
         direction: None,
@@ -277,6 +281,7 @@ fn an_overlay_composer_inherits_its_windows_clock_identity() {
 
 fn back_close_desc() -> OverlayDesc {
     OverlayDesc {
+        host: crate::overlay::PopupHost::InWindow,
         id: 7,
         anchor_slot: None,
         direction: None,
@@ -332,5 +337,68 @@ fn a_close_request_from_a_dead_window_is_dropped() {
     assert!(
         !pw.overlay.layers[0].closing,
         "a stale request must not close another window's overlay"
+    );
+}
+
+#[test]
+fn native_popup_descs_are_routed_to_app_state_instead_of_the_parent_layers() {
+    let mut pw = PerWindow::new(Box::new(|_| {}), 320.0, 240.0, ThemeColors::default_light());
+    pw.composer.overlays.push(OverlayDesc {
+        host: crate::overlay::PopupHost::Native,
+        id: 91,
+        anchor_slot: Some(7),
+        direction: None,
+        position: PopupPosition::BottomStart,
+        offset: (0.0, 4.0),
+        anchor_slide: None,
+        modal: false,
+        focus_scope: false,
+        dismiss_on_outside: true,
+        dismiss_on_back_press: true,
+        dismiss_defers_to_content: false,
+        click_passthrough: false,
+        fit_around_anchor: false,
+        match_anchor_width: false,
+        on_dismiss: None,
+        enter_anim: None,
+        exit_anim: None,
+        content: Box::new(|_| {}),
+        local_snapshot: Vec::new(),
+    });
+
+    super::sync_overlays(&mut pw, true);
+
+    assert!(
+        pw.overlay.layers.is_empty(),
+        "the parent must not host native content"
+    );
+    assert_eq!(pw.pending_native_overlays.len(), 1);
+    assert_eq!(pw.pending_native_overlays[0].id, 91);
+    assert_eq!(pw.pending_native_overlays[0].anchor_slot, Some(7));
+
+    let mut fallback = pw.pending_native_overlays.pop().unwrap();
+    fallback.host = crate::overlay::PopupHost::InWindow;
+    pw.overlay.native_popups.push(NativePopupBinding {
+        id: 91,
+        child: winit::window::WindowId::from_raw(2),
+        anchor_slot: Some(7),
+        direction: None,
+        position: PopupPosition::BottomStart,
+        offset: (0.0, 4.0),
+        fit_around_anchor: false,
+        match_anchor_width: false,
+        active: true,
+    });
+    pw.composer.overlays.push(fallback);
+    super::sync_overlays(&mut pw, true);
+
+    assert_eq!(
+        pw.overlay.layers.len(),
+        1,
+        "the in-window host owns the content again"
+    );
+    assert!(
+        !pw.overlay.native_popups[0].active,
+        "the old native host starts closing"
     );
 }

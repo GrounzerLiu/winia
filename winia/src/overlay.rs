@@ -39,7 +39,7 @@ pub use anim::{
     AnchorSlide, OverlayAnimSpec, anchor_slide_lerp, overlay_reveal_clip_height,
     overlay_transform_origin,
 };
-pub use desc::OverlayDesc;
+pub use desc::{OverlayDesc, PopupHost};
 pub use dialog::Dialog;
 pub use placement::PopupPosition;
 pub use popup::Popup;

@@ -398,6 +398,7 @@ impl DropdownMenu {
             let mut exit_anim = OverlayAnimSpec::default_exit();
             exit_anim.anchor_pivot = true;
             ctx.open_overlay(crate::overlay::OverlayDesc {
+                host: crate::overlay::PopupHost::InWindow,
                 id: id.get(),
                 direction: None,
                 anchor_slot: Some(anchor_slot),

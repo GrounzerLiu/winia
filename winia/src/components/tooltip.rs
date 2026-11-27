@@ -144,6 +144,7 @@ impl Tooltip {
                 self.content.expect("Tooltip 无内容")
             };
             ctx.open_overlay(crate::overlay::OverlayDesc {
+                host: crate::overlay::PopupHost::InWindow,
                 id: id.get(),
                 direction: None,
                 anchor_slot: Some(anchor_slot),

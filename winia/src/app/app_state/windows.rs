@@ -69,11 +69,28 @@ impl AppState {
 
     /// Runs on every event batch from new_events, so an injected event is never lost.
     pub(crate) fn consume_debug_events(&mut self, window_id: WindowId) {
+        let events = debug::take_queued_events(window_id.into_raw() as u64);
+        for event in &events {
+            if let debug::DebugEvent::Click { x, y } = event {
+                let scale = self
+                    .windows
+                    .get(&window_id)
+                    .map(|pw| pw.scale_factor as f32)
+                    .unwrap_or(1.0);
+                self.dismiss_native_popups_outside(window_id, (*x / scale, *y / scale));
+                if let Some(pw) = self.windows.get(&window_id)
+                    && matches!(pw.role, crate::app::WindowRole::NativePopup { .. })
+                    && let Some(surface) = pw.skia_window.as_ref()
+                {
+                    let _ = surface.window().focus_window();
+                }
+            }
+        }
         let Some(pw) = self.windows.get_mut(&window_id) else {
             return;
         };
         let mut handled = false;
-        for evt in debug::take_queued_events(window_id.into_raw() as u64) {
+        for evt in events {
             match evt {
                 debug::DebugEvent::Click { x, y } => {
                     // Overlay first (mirroring the real pointer path, handle_pointer_down):

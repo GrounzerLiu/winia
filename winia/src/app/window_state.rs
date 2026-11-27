@@ -207,6 +207,10 @@ pub struct WindowCapabilities {
     pub app_bar: bool,
     pub decorations: bool,
     pub size_constraints: bool,
+    /// Whether native child popup windows and platform popup positioning are available.
+    ///
+    /// This is true on Windows, macOS and Linux with the Wayland backend.
+    pub native_popup: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -247,6 +251,8 @@ impl WindowCapabilities {
             app_bar: cfg!(target_os = "windows") && desktop,
             decorations: desktop,
             size_constraints: desktop,
+            native_popup: desktop
+                && (cfg!(target_os = "windows") || cfg!(target_os = "macos") || wayland),
         }
     }
 }
@@ -263,8 +269,10 @@ pub struct WindowState {
 impl WindowState {
     fn app_bar_owns_window(&self) -> bool {
         self.id.capabilities().app_bar
-            && with_cell(self.id, |cell| cell.snapshot.peek().app_bar_options.is_some())
-                .unwrap_or(false)
+            && with_cell(self.id, |cell| {
+                cell.snapshot.peek().app_bar_options.is_some()
+            })
+            .unwrap_or(false)
     }
 
     /// The current inner size in logical pixels.
@@ -1391,6 +1399,18 @@ mod tests {
         let caps = WindowCapabilities::for_backend(true, false);
         assert!(caps.activate);
         assert!(caps.always_on_top);
+    }
+
+    #[test]
+    fn native_popup_capability_tracks_the_active_backend() {
+        assert!(!WindowCapabilities::for_backend(false, false).native_popup);
+        #[cfg(target_os = "linux")]
+        {
+            assert!(WindowCapabilities::for_backend(true, true).native_popup);
+            assert!(!WindowCapabilities::for_backend(true, false).native_popup);
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        assert!(WindowCapabilities::for_backend(true, false).native_popup);
     }
 
     #[test]

@@ -297,7 +297,7 @@ pub mod prelude {
     };
     pub use crate::{app_root, composable, composable_keyed, compose, keyed_stmt, run_app};
     // The overlay runtime: a popup and a dialog.
-    pub use crate::overlay::{Dialog, OverlayAnimSpec, Popup, PopupPosition};
+    pub use crate::overlay::{Dialog, OverlayAnimSpec, Popup, PopupHost, PopupPosition};
     // …and the menu built on it, which is a component.
     pub use crate::animation::{
         Animatable, DecaySpec, animate_int_as_state, animate_value_as_state, cancel_animation,

@@ -1,6 +1,7 @@
 //! The app shell: run_app, window management and the event loop (multi-window).
 
 pub mod gesture;
+mod native_popup;
 pub mod overlay_host;
 
 use gesture::{
@@ -124,6 +125,7 @@ mod window_options_tests {
             app_bar: false,
             decorations: true,
             size_constraints: true,
+            native_popup: true,
         }
     }
 

@@ -201,6 +201,7 @@ impl ModalWideNavigationRail {
         // closure below runs after composition, where `direction::current()` is no longer the truth.
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         ctx.open_overlay(OverlayDesc {
+            host: crate::overlay::PopupHost::InWindow,
             id: id.get(),
             anchor_slot: None,
             // The rail knows its direction from COMPOSE time, where the composition local is still valid —

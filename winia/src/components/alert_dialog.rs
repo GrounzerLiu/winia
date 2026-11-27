@@ -385,6 +385,7 @@ impl BasicAlertDialog {
         let platform_default_width = self.platform_default_width;
         let user_modifier = self.modifier;
         ctx.open_overlay(OverlayDesc {
+            host: crate::overlay::PopupHost::InWindow,
             id: id.get(),
             anchor_slot: None,
             direction: None,

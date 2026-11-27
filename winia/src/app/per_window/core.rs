@@ -4,6 +4,21 @@ use super::*;
 
 static NEXT_WINDOW_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowRole {
+    RootOrChild,
+    NativePopup {
+        parent: winit::window::WindowId,
+        overlay_id: u64,
+    },
+}
+
+impl Default for WindowRole {
+    fn default() -> Self {
+        Self::RootOrChild
+    }
+}
+
 pub(crate) struct PerWindow {
     pub(crate) composer: Composer,
     /// The window's insets controller: platform code writes system insets here, and the
@@ -71,6 +86,10 @@ pub(crate) struct PerWindow {
     /// The overlay host: the layers, and the interaction state that only makes sense against
     /// them (see `OverlayHost` — the group that used to be ten fields here).
     pub(crate) overlay: OverlayHost,
+    pub(crate) role: WindowRole,
+    /// Native popup descriptors waiting for AppState to create or update their child windows.
+    pub(crate) pending_native_overlays: Vec<crate::overlay::OverlayDesc>,
+    pub(crate) native_popup_restore_focus: bool,
 }
 
 impl PerWindow {
@@ -197,6 +216,9 @@ impl PerWindow {
             input: GestureState::default(),
             wheel: WheelPager::default(),
             overlay: OverlayHost::default(),
+            role: WindowRole::RootOrChild,
+            pending_native_overlays: Vec::new(),
+            native_popup_restore_focus: false,
             clock: FrameClock::default(),
             modifiers: Default::default(),
             hovered_slots: std::collections::HashSet::new(),

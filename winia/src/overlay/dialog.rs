@@ -114,6 +114,7 @@ impl Dialog {
             return; // Closed: do not register an overlay — `sync` deletes on `active=false`.
         }
         ctx.open_overlay(crate::overlay::OverlayDesc {
+            host: crate::overlay::PopupHost::InWindow,
             id: id.get(),
             direction: None,
             anchor_slot: self.anchor_slot,
