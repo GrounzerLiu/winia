@@ -988,6 +988,8 @@ impl AppState {
                 // Down/Up refresh the pointer position too (wheeling right after a click without moving
                 // would otherwise use a stale last_pointer_pos and hit the wrong target).
                 pw.input.last_pos = Some(scene_pos);
+                let had_overlay_interaction =
+                    pw.overlay.click.is_some() || pw.input.arena.is_some();
                 let event_type = if state.is_pressed() {
                     crate::input::PointerEventType::Down
                 } else {
@@ -1042,6 +1044,12 @@ impl AppState {
                     drag_scroll_up(pw);
                     // Release the pressed interaction (Compose's Release semantics — the clickable pressed state ends).
                     release_pressed_interaction(pw);
+                    if had_overlay_interaction {
+                        pw.composer.mark_content_dirty();
+                        if let Some(ref sw) = pw.skia_window {
+                            sw.request_redraw();
+                        }
+                    }
                 }
                 // -- Pointer event dispatch (on Up, dispatch before clearing the capture) --
                 let nodes = pw.composer.arena_nodes();

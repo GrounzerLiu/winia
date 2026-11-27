@@ -108,6 +108,7 @@ impl AppState {
                         // Release the overlay's press (a synthesized event has no real up — otherwise
                         // the ripple/pressed state stays stuck until the overlay closes).
                         release_pressed_interaction(pw);
+                        pw.composer.mark_content_dirty();
                         if let Some(ref sw) = pw.skia_window {
                             sw.request_redraw();
                         }
