@@ -250,6 +250,20 @@ impl AppState {
         // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
         // otherwise, and unconditional at the call site so nothing here needs feature gates).
         crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);
+        // Creation-time backdrop request, reported only when a declaration owns this window.
+        #[cfg(target_os = "windows")]
+        {
+            let backdrop = pending.options.backdrop;
+            if backdrop.is_material() {
+                let status = crate::app::window_backdrop::apply(&*skia_window, backdrop);
+                if let Some(raw) = pending.created_id {
+                    crate::app::window_state::set_backdrop_status(
+                        crate::app::window_state::WindowId::new(raw),
+                        status,
+                    );
+                }
+            }
+        }
         #[cfg(target_os = "windows")]
         let shell_window = crate::app::window_shell::ShellWindow::configure(
             &*skia_window,

@@ -304,6 +304,7 @@ pub mod prelude {
         exponential_decay, push_decay, push_decay_vector,
     };
     pub use crate::app::window::Window;
+    pub use crate::app::window_backdrop::{BackdropStatus, WindowBackdrop};
     pub use crate::app::window_shell::{AppBarEdge, AppBarError, AppBarOptions, AppBarStatus};
     pub use crate::app::window_state::{
         CloseReason, LastWindowPolicy, WindowCapabilities, WindowEvent, WindowId, WindowPlacement,

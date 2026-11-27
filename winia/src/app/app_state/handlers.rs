@@ -216,7 +216,10 @@ impl AppState {
                     let Some(skia) = pw.skia_window.as_ref() else {
                         continue;
                     };
-                    crate::app::window_state::apply_command(&**skia, command);
+                    if let Some(status) = crate::app::window_state::apply_command(&**skia, command)
+                    {
+                        crate::app::window_state::set_backdrop_status(public_id, status);
+                    }
                     redraw.insert(winit_id);
                 }
                 PlannedCommand::Notify(reason) => {

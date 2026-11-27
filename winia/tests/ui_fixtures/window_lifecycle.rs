@@ -83,6 +83,12 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
             .minimum_size(320.0, 240.0)
             .maximum_size(900.0, 700.0);
     }
+    if mode == "window-backdrop" {
+        builder = builder
+            .backdrop(WindowBackdrop::Mica)
+            .transparent(true)
+            .decorations(false);
+    }
     let declared_id = builder
         .on_close_requested(move |id, reason| {
             append_out(&format!("requested={reason:?}\n"));
@@ -122,6 +128,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "insets-share" => insets_share_scenario(ctx, id),
                 "owner-query" => owner_query_scenario(ctx, id),
                 "window-properties" => window_properties_scenario(ctx, id),
+                "window-backdrop" => backdrop_scenario(ctx, id),
                 "existing-command-new-root" => {
                     let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
                     if !once.get() {
@@ -244,6 +251,16 @@ fn owner_query_scenario(ctx: &mut ComposeCtx, parent: WindowId) {
         Text::new("child").build(ctx);
         std::process::exit(0);
     });
+}
+
+fn backdrop_scenario(ctx: &mut ComposeCtx, id: WindowId) {
+    let state = id.state();
+    append_out(&format!(
+        "backdrop={:?}\nstatus={:?}\n",
+        state.backdrop(),
+        state.backdrop_status()
+    ));
+    Text::new("backdrop").build(ctx);
 }
 
 fn window_properties_scenario(ctx: &mut ComposeCtx, id: WindowId) {

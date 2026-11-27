@@ -287,6 +287,39 @@ fn body(
                 .build(ctx);
             });
 
+            card(ctx, "System backdrop", |ctx| {
+                Text::new(
+                    "A plain DWMWA_SYSTEMBACKDROP_TYPE request (Windows 11 build 22621 and later). \
+                     winia changes nothing else here: the title bar keeps the material in every case, \
+                     while a whole-window material only shows where the client area is not opaque.",
+                )
+                .font_size(14.0)
+                .build(ctx);
+                Row::new().spacing(8.0).build(ctx, |ctx| {
+                    for choice in [
+                        WindowBackdrop::None,
+                        WindowBackdrop::Auto,
+                        WindowBackdrop::Mica,
+                        WindowBackdrop::Acrylic,
+                        WindowBackdrop::MicaAlt,
+                    ] {
+                        Button::outlined()
+                            .on_click({
+                                clone!(state);
+                                move || state.set_backdrop(choice)
+                            })
+                            .build(ctx, |ctx| Text::new(backdrop_label(choice)).build(ctx));
+                    }
+                });
+                Text::new(format!(
+                    "requested {:?} · status {}",
+                    state.backdrop(),
+                    state.backdrop_status()
+                ))
+                .font_size(14.0)
+                .build(ctx);
+            });
+
             card(ctx, "Persistence", |ctx| {
                 metric(ctx, "saveable key", "window-api-demo".to_string());
                 metric(ctx, "runs", runs.get().to_string());
@@ -359,6 +392,16 @@ fn card(ctx: &mut ComposeCtx, title: &'static str, content: impl FnOnce(&mut Com
                 content(ctx);
             });
     });
+}
+
+fn backdrop_label(backdrop: WindowBackdrop) -> &'static str {
+    match backdrop {
+        WindowBackdrop::None => "None",
+        WindowBackdrop::Auto => "Auto",
+        WindowBackdrop::Mica => "Mica",
+        WindowBackdrop::Acrylic => "Acrylic",
+        WindowBackdrop::MicaAlt => "Mica Alt",
+    }
 }
 
 #[composable]

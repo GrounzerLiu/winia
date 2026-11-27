@@ -12,6 +12,7 @@
 use crate::runtime::composer::ComposeCtx;
 
 pub use super::window_shell::{AppBarEdge, AppBarError, AppBarOptions, AppBarStatus};
+use crate::app::window_backdrop::{BackdropStatus, WindowBackdrop};
 use crate::runtime::state::State;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -163,6 +164,8 @@ pub enum WindowEvent {
     },
     /// A Windows app-bar request changed lifecycle state.
     AppBarStatusChanged(AppBarStatus),
+    /// A system backdrop request changed state.
+    BackdropStatusChanged(BackdropStatus),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -197,6 +200,8 @@ pub struct WindowCapabilities {
     pub activate: bool,
     pub always_on_top: bool,
     pub transparent: bool,
+    /// Windows 11 build 22621 and later: whether system backdrop materials are supported.
+    pub backdrop: bool,
     /// Windows only: whether taskbar-button hiding is supported.
     pub skip_taskbar: bool,
     /// Windows only: whether the `WS_EX_TOOLWINDOW` style is supported.
@@ -245,6 +250,7 @@ impl WindowCapabilities {
             activate: desktop && !wayland,
             always_on_top: desktop && !wayland,
             transparent: desktop,
+            backdrop: cfg!(target_os = "windows") && desktop,
             skip_taskbar: cfg!(target_os = "windows") && desktop,
             tool_window: cfg!(target_os = "windows") && desktop,
             no_activate: cfg!(target_os = "windows") && desktop,
@@ -490,6 +496,50 @@ impl WindowState {
         with_cell(self.id, |cell| cell.snapshot.get().transparent).unwrap_or(false)
     }
 
+    /// The system backdrop material this window asks for.
+    ///
+    /// This is the request, not the outcome: [`WindowState::backdrop_status`] reports what the
+    /// platform did with it. The request is kept even where the platform cannot honour it.
+    pub fn backdrop(&self) -> WindowBackdrop {
+        with_cell(self.id, |cell| cell.snapshot.get().backdrop).unwrap_or(WindowBackdrop::None)
+    }
+
+    /// What the platform did with the backdrop request.
+    pub fn backdrop_status(&self) -> BackdropStatus {
+        with_cell(self.id, |cell| cell.snapshot.get().backdrop_status)
+            .unwrap_or(BackdropStatus::NotRequested)
+    }
+
+    /// Request a system backdrop material.
+    ///
+    /// Windows applies it through `DWMWA_SYSTEMBACKDROP_TYPE`; other platforms keep the request and
+    /// report [`BackdropStatus::Unsupported`]. Nothing else changes: a whole-window material only
+    /// shows where the client area is not opaque, so request transparency and undecorated chrome
+    /// yourself when that is what you want.
+    pub fn set_backdrop(&self, backdrop: WindowBackdrop) {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
+            return;
+        }
+        let supported = self.id.capabilities().backdrop;
+        with_cell(self.id, |cell| {
+            cell.snapshot
+                .update(|snapshot| snapshot.backdrop = backdrop);
+            if supported {
+                cell.push(Command::Backdrop(backdrop));
+            }
+        });
+        let pending = if backdrop.is_material() {
+            if supported {
+                BackdropStatus::Pending
+            } else {
+                BackdropStatus::Unsupported
+            }
+        } else {
+            BackdropStatus::NotRequested
+        };
+        set_backdrop_status(self.id, pending);
+    }
+
     /// Whether the platform currently decorates the window.
     pub fn decorations(&self) -> bool {
         with_cell(self.id, |cell| cell.snapshot.get().decorations).unwrap_or(true)
@@ -595,6 +645,7 @@ pub(crate) enum Command {
     Activate,
     AlwaysOnTop(bool),
     Decorations(bool),
+    Backdrop(WindowBackdrop),
     MinimumSize(Option<(f32, f32)>),
     MaximumSize(Option<(f32, f32)>),
     /// Ask the application whether the window may close.
@@ -626,6 +677,11 @@ pub(crate) trait WindowCommandTarget {
     fn focus_window(&self);
     fn set_window_level(&self, level: winit::window::WindowLevel);
     fn set_decorations(&self, decorations: bool);
+    /// Apply a backdrop request; the default reports that the platform cannot.
+    fn set_backdrop(&self, backdrop: WindowBackdrop) -> BackdropStatus {
+        let _ = backdrop;
+        BackdropStatus::Unsupported
+    }
     fn set_min_surface_size(&self, size: Option<winit::dpi::Size>);
     fn set_max_surface_size(&self, size: Option<winit::dpi::Size>);
     fn request_redraw(&self);
@@ -676,6 +732,10 @@ impl WindowCommandTarget for dyn winit::window::Window {
         winit::window::Window::set_decorations(self, decorations);
     }
 
+    fn set_backdrop(&self, backdrop: WindowBackdrop) -> BackdropStatus {
+        crate::app::window_backdrop::apply(self, backdrop)
+    }
+
     fn set_min_surface_size(&self, size: Option<winit::dpi::Size>) {
         let _ = winit::window::Window::set_min_surface_size(self, size);
     }
@@ -689,7 +749,10 @@ impl WindowCommandTarget for dyn winit::window::Window {
     }
 }
 
-pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command: Command) {
+pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(
+    target: &T,
+    command: Command,
+) -> Option<BackdropStatus> {
     use winit::monitor::Fullscreen;
     match command {
         Command::Size(width, height) => target.request_surface_size(winit::dpi::Size::Logical(
@@ -730,6 +793,7 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
             winit::window::WindowLevel::Normal
         }),
         Command::Decorations(decorations) => target.set_decorations(decorations),
+        Command::Backdrop(backdrop) => return Some(target.set_backdrop(backdrop)),
         Command::MinimumSize(size) => target.set_min_surface_size(size.map(|(width, height)| {
             winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64))
         })),
@@ -738,6 +802,7 @@ pub(crate) fn apply_command<T: WindowCommandTarget + ?Sized>(target: &T, command
         })),
         Command::CloseRequest(_) | Command::Destroy => {}
     }
+    None
 }
 
 /// Observable projection of one window. Reads through WindowState register the current
@@ -762,6 +827,8 @@ pub(crate) struct WindowSnapshot {
     pub(crate) decorations: bool,
     pub(crate) minimum_size: Option<(f32, f32)>,
     pub(crate) maximum_size: Option<(f32, f32)>,
+    pub(crate) backdrop: WindowBackdrop,
+    pub(crate) backdrop_status: BackdropStatus,
     pub(crate) title: String,
 }
 
@@ -786,6 +853,8 @@ impl Default for WindowSnapshot {
             decorations: true,
             minimum_size: None,
             maximum_size: None,
+            backdrop: WindowBackdrop::None,
+            backdrop_status: BackdropStatus::NotRequested,
             title: String::new(),
         }
     }
@@ -855,6 +924,7 @@ pub(crate) struct WindowSeed {
     /// The window id is passed in because the handler almost always acts on its own window
     /// (`destroy()`, `state().set_visible(false)`), and capturing it would require a `State` dance
     /// in the declaring scope.
+    pub(crate) backdrop: WindowBackdrop,
     pub(crate) on_close_requested: Option<Rc<dyn Fn(WindowId, CloseReason)>>,
     pub(crate) on_event: Option<WindowEventHandler>,
 }
@@ -877,6 +947,7 @@ impl Default for WindowSeed {
             visible: true,
             placement: WindowPlacement::Windowed,
             position: WindowPosition::Default,
+            backdrop: WindowBackdrop::None,
             on_close_requested: None,
             on_event: None,
         }
@@ -925,6 +996,16 @@ impl WindowCell {
             resizable: seed.resizable,
             always_on_top: seed.always_on_top,
             transparent: seed.transparent,
+            backdrop: seed.backdrop,
+            backdrop_status: if seed.backdrop.is_material() {
+                if cfg!(target_os = "windows") {
+                    BackdropStatus::Pending
+                } else {
+                    BackdropStatus::Unsupported
+                }
+            } else {
+                BackdropStatus::NotRequested
+            },
             skip_taskbar: seed.skip_taskbar,
             tool_window: seed.tool_window,
             no_activate: seed.no_activate,
@@ -1124,6 +1205,23 @@ pub(crate) fn set_app_bar_status(id: WindowId, status: AppBarStatus) {
     .unwrap_or(false);
     if changed {
         dispatch_event(id, WindowEvent::AppBarStatusChanged(status));
+    }
+}
+
+/// Publish a backdrop observation and notify the declaration once per change.
+pub(crate) fn set_backdrop_status(id: WindowId, status: BackdropStatus) {
+    let changed = with_cell(id, |cell| {
+        if cell.snapshot.get().backdrop_status == status {
+            false
+        } else {
+            cell.snapshot
+                .update(|snapshot| snapshot.backdrop_status = status);
+            true
+        }
+    })
+    .unwrap_or(false);
+    if changed {
+        dispatch_event(id, WindowEvent::BackdropStatusChanged(status));
     }
 }
 
@@ -2009,6 +2107,96 @@ mod tests {
         id.state().set_decorations(true);
         assert!(id.state().decorations());
         assert_eq!(take_commands(id), vec![Command::Decorations(true)]);
+        forget(id);
+    }
+
+    #[test]
+    fn a_declared_backdrop_reaches_the_snapshot() {
+        let id = WindowId::new(9_218);
+        declare(
+            id,
+            WindowSeed {
+                backdrop: WindowBackdrop::Mica,
+                ..WindowSeed::default()
+            },
+        );
+        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
+        assert_eq!(
+            id.state().backdrop_status(),
+            if cfg!(target_os = "windows") {
+                BackdropStatus::Pending
+            } else {
+                BackdropStatus::Unsupported
+            }
+        );
+        forget(id);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_backdrop_requests_queue_in_submission_order() {
+        let id = fresh(9_219);
+        id.state().set_backdrop(WindowBackdrop::MicaAlt);
+        id.state().set_decorations(false);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::MicaAlt);
+        assert_eq!(
+            take_commands(id),
+            vec![
+                Command::Backdrop(WindowBackdrop::MicaAlt),
+                Command::Decorations(false),
+            ]
+        );
+        assert_eq!(id.state().backdrop_status(), BackdropStatus::Pending);
+        forget(id);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn runtime_backdrop_requests_stay_unsupported_elsewhere() {
+        let id = fresh(9_219);
+        id.state().set_backdrop(WindowBackdrop::Mica);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
+        assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
+        assert!(take_commands(id).is_empty());
+        forget(id);
+    }
+
+    #[test]
+    fn clearing_a_backdrop_request_reports_no_material() {
+        let id = fresh(9_221);
+        id.state().set_backdrop(WindowBackdrop::Acrylic);
+        let _ = take_commands(id);
+        id.state().set_backdrop(WindowBackdrop::None);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::None);
+        assert_eq!(id.state().backdrop_status(), BackdropStatus::NotRequested);
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            take_commands(id),
+            vec![Command::Backdrop(WindowBackdrop::None)]
+        );
+        forget(id);
+    }
+
+    #[test]
+    fn backdrop_status_changes_reach_the_event_stream() {
+        let id = WindowId::new(9_220);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        declare(
+            id,
+            WindowSeed {
+                on_event: Some(Rc::new(move |_, event| sink.borrow_mut().push(event))),
+                ..WindowSeed::default()
+            },
+        );
+        set_backdrop_status(id, BackdropStatus::Applied);
+        set_backdrop_status(id, BackdropStatus::Applied);
+        assert_eq!(id.state().backdrop_status(), BackdropStatus::Applied);
+        assert_eq!(seen.borrow().len(), 1);
+        assert!(matches!(
+            seen.borrow()[0],
+            WindowEvent::BackdropStatusChanged(BackdropStatus::Applied)
+        ));
         forget(id);
     }
 

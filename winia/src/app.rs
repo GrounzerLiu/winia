@@ -16,8 +16,11 @@ use overlay_host::{
 };
 pub mod scroll;
 pub mod window;
+pub mod window_backdrop;
 pub mod window_shell;
 pub mod window_state;
+
+use self::window_backdrop::WindowBackdrop;
 
 use scroll::{
     DragScroll, dispatch_nested_scroll_delta, dispatch_nested_scroll_fling, find_scroll_target,
@@ -48,6 +51,8 @@ pub struct WindowOptions {
     pub decorations: bool,
     pub always_on_top: bool,
     pub transparent: bool,
+    /// System backdrop material request; see [`window_backdrop`] for the platform rules.
+    pub backdrop: WindowBackdrop,
     pub skip_taskbar: bool,
     pub tool_window: bool,
     pub no_activate: bool,
@@ -63,6 +68,7 @@ impl Default for WindowOptions {
             decorations: true,
             always_on_top: false,
             transparent: false,
+            backdrop: WindowBackdrop::None,
             skip_taskbar: false,
             tool_window: false,
             no_activate: false,
@@ -116,6 +122,7 @@ mod window_options_tests {
             activate: false,
             always_on_top: false,
             transparent,
+            backdrop: true,
             skip_taskbar: false,
             tool_window: false,
             no_activate: false,
@@ -136,6 +143,24 @@ mod window_options_tests {
         options.normalize(capabilities(true));
         assert!(options.transparent);
         assert!(options.decorations);
+    }
+
+    #[test]
+    fn normalization_keeps_the_backdrop_request() {
+        use crate::app::window_backdrop::WindowBackdrop;
+
+        let mut options = WindowOptions {
+            backdrop: WindowBackdrop::Mica,
+            ..WindowOptions::default()
+        };
+        options.normalize(capabilities(true));
+        assert_eq!(options.backdrop, WindowBackdrop::Mica);
+
+        // The request is application intent, so a platform that cannot honour it still sees it.
+        let mut caps = capabilities(true);
+        caps.backdrop = false;
+        options.normalize(caps);
+        assert_eq!(options.backdrop, WindowBackdrop::Mica);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::app;
+use crate::app::window_backdrop::WindowBackdrop;
 use crate::app::window_state::{self, WindowId, WindowPlacement, WindowSeed};
 use crate::composable;
 use crate::prelude::*;
@@ -128,6 +129,18 @@ impl Window {
     /// Whether the window keeps its title bar and border.
     pub fn decorations(mut self, decorations: bool) -> Self {
         self.options.decorations = decorations;
+        self
+    }
+
+    /// Request a system backdrop material; Windows 11 maps it onto Mica, Acrylic and their variants.
+    ///
+    /// This is a plain request. winia does not change transparency, decorations, or the rendering
+    /// surface for it, and a whole-window material only shows where the client area does not paint
+    /// an opaque pixel: combine it with [`transparent`](Self::transparent)`(true)` and
+    /// [`decorations`](Self::decorations)`(false)` when that is what you want. The outcome is
+    /// reported by [`WindowState::backdrop_status`](crate::app::window_state::WindowState::backdrop_status).
+    pub fn backdrop(mut self, backdrop: WindowBackdrop) -> Self {
+        self.options.backdrop = backdrop;
         self
     }
 
@@ -529,6 +542,7 @@ impl Window {
                     resizable: options.resizable,
                     always_on_top: options.always_on_top,
                     transparent: options.transparent,
+                    backdrop: options.backdrop,
                     skip_taskbar: options.skip_taskbar,
                     tool_window: options.tool_window,
                     no_activate: options.no_activate,
@@ -612,6 +626,7 @@ mod tests {
             activate: true,
             always_on_top: true,
             transparent: true,
+            backdrop: true,
             skip_taskbar: true,
             tool_window: true,
             no_activate: true,
@@ -629,5 +644,18 @@ mod tests {
             assert!(options.transparent);
             assert!(options.decorations);
         }
+    }
+
+    #[test]
+    fn the_backdrop_builder_only_records_the_request() {
+        use crate::app::window_backdrop::WindowBackdrop;
+
+        let options = Window::new()
+            .backdrop(WindowBackdrop::Acrylic)
+            .decorations(true)
+            .options;
+        assert_eq!(options.backdrop, WindowBackdrop::Acrylic);
+        assert!(options.decorations);
+        assert!(!options.transparent);
     }
 }
