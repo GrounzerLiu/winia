@@ -120,14 +120,25 @@ where the framework believes the material is applied while DWM never receives it
 ([AvaloniaUI/Avalonia#22867](https://github.com/AvaloniaUI/Avalonia/issues/22867)); winia's status is
 only as truthful as the DWM read-back.
 
-## Known rendering prerequisite
+## Where the client area gets its alpha
 
-Client-area transparency needs a surface that can carry alpha. The same community reference lists
-the rule that a flip-model swapchain from `CreateSwapChainForHwnd` is always opaque, and that a
-composition swapchain with `DXGI_ALPHA_MODE_PREMULTIPLIED` is required instead. winia's current
-wgpu surface path is unchanged by this feature, so a whole-window material may still not appear in
-the client area even with `transparent(true)` and `decorations(false)`. That is a separate rendering
-task, not a backdrop switch.
+Client-area transparency needs a surface that can carry alpha, and the community reference warns
+that a flip-model swapchain from `CreateSwapChainForHwnd` is always opaque, so a composition
+swapchain with `DXGI_ALPHA_MODE_PREMULTIPLIED` would be required instead. Measured against this
+checkout on Windows 11 build 26300, the current wgpu surface path does carry that alpha: a window
+created undecorated with `transparent(true)` shows the material in its client area.
+
+| Sample point | Window shown | Window hidden |
+| --- | --- | --- |
+| background 1 | 35, 30, 34 | 23, 23, 35 |
+| background 2 | 40, 29, 29 | 17, 17, 27 |
+
+With `Acrylic` the same client samples a uniform 84, 84, 84 while the background behind it varies
+(42, 27, 33 / 32, 32, 32 / 38, 28, 33): that is the material, not the desktop showing through.
+
+What stays true is the other half of the rule: a window created *with* decorations keeps an opaque
+client (white in the same probe), so the material only reaches the client of a window that started
+undecorated. That is the creation-order limitation above, not a swapchain limitation.
 
 ## Switching at runtime
 

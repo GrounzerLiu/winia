@@ -51,7 +51,7 @@ impl Color {
         a: 255,
     };
 
-    pub fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
+    pub const fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
         Color { r, g, b, a }
     }
 
