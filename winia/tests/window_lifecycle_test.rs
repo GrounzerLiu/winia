@@ -388,9 +388,8 @@ fn window_id_and_content_share_the_same_reactive_insets() {
 }
 
 #[cfg(target_os = "windows")]
-#[test]
-fn a_declared_backdrop_reaches_the_platform() {
-    let mut fixture = Fixture::spawn("window-backdrop", "window-backdrop");
+fn assert_declared_backdrop_reaches_the_platform(mode: &str, expected: &str) {
+    let mut fixture = Fixture::spawn(mode, mode);
     // `Rejected(-2147024809)` is E_INVALIDARG, the documented answer from Windows 10 and Windows
     // 11 before build 22621: the platform exposes the attribute but has no material to show. Any
     // other rejection still fails the assertion below.
@@ -398,11 +397,23 @@ fn a_declared_backdrop_reaches_the_platform() {
     let text = fixture.wait_for_text(Duration::from_secs(10), |text| {
         text.contains("status=Applied") || text.contains(UNSUPPORTED_BUILD)
     });
-    assert!(text.contains("backdrop=Mica"), "{text:?}");
+    assert!(text.contains(&format!("backdrop={expected}")), "{text:?}");
     if text.contains(UNSUPPORTED_BUILD) {
         return;
     }
     assert!(text.contains("status=Applied"), "{text:?}");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn a_declared_backdrop_reaches_the_platform() {
+    assert_declared_backdrop_reaches_the_platform("window-backdrop", "Mica");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn the_system_backdrop_reaches_the_platform() {
+    assert_declared_backdrop_reaches_the_platform("window-backdrop-system", "System");
 }
 
 #[test]

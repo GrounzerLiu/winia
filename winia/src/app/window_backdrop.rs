@@ -7,9 +7,9 @@
 //! for those itself.
 //!
 //! [`BackdropStatus`] reports what the platform did with the request. [`BackdropStatus::Applied`]
-//! means the platform accepted it; on Windows DWM also reads the attribute back. macOS and Wayland
-//! have no read-back through winit, so there it means the call was delivered, not that pixels were
-//! confirmed. Where DWM refuses the read-back the write is reported as
+//! means the request was delivered to the platform API; on Windows DWM also reads the attribute
+//! back. macOS and Wayland have no read-back through winit, so there it means the call was delivered,
+//! not that pixels were confirmed. Where DWM refuses the read-back the write is reported as
 //! [`BackdropStatus::Unverified`], because the set itself succeeded. The read-back has only been
 //! verified on Windows 11 build 26300.
 
@@ -65,10 +65,10 @@ pub enum BackdropStatus {
     NotRequested,
     /// Queued: the window does not exist on the platform yet, or the write has not run yet.
     Pending,
-    /// The platform accepted the request.
+    /// The request was delivered to the platform API.
     ///
     /// On Windows DWM also reads the value back. macOS and Wayland have no read-back through
-    /// winit, so there this means the call was delivered, not that pixels were confirmed. Whether
+    /// winit, so there this does not confirm that the compositor applied a visible effect. Whether
     /// anything is visible still depends on transparency, decorations and client-area content.
     Applied,
     /// The platform accepted the request, but reading the value back failed with this HRESULT.
@@ -94,7 +94,7 @@ pub enum BackdropStatus {
 }
 
 impl BackdropStatus {
-    /// Whether the platform accepted the request.
+    /// Whether the request was delivered to the platform API.
     #[must_use]
     pub const fn is_applied(self) -> bool {
         matches!(self, Self::Applied)
@@ -128,7 +128,7 @@ impl fmt::Display for BackdropStatus {
             Self::Unverified(hresult) => {
                 write!(f, "accepted, unverified (HRESULT {hresult:#010x})")
             }
-            Self::Unsupported => f.write_str("unsupported on this platform"),
+            Self::Unsupported => f.write_str("unsupported on this platform or for this request"),
             Self::Rejected(hresult) => write!(f, "rejected with HRESULT {hresult:#010x}"),
             Self::Mismatch {
                 requested,

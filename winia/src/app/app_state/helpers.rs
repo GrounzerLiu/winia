@@ -254,10 +254,17 @@ impl AppState {
         // `apply` is cross-platform: a platform without system materials reports `Unsupported`, so
         // this call site does not need its own target gate.
         let backdrop = pending.options.backdrop;
-        // App-bar windows are owned by the shell, and `set_backdrop` ignores them for the same
-        // reason; the creation path has to agree.
-        if backdrop.is_material() && pending.options.app_bar.is_none() {
-            let status = crate::app::window_backdrop::apply(&*skia_window, backdrop);
+        // Only a supported app-bar is shell-owned. An unsupported app-bar request is an ordinary
+        // window, so its backdrop still applies. Shell-owned windows keep the request but report a
+        // terminal Unsupported status instead of staying Pending forever.
+        let capabilities = crate::app::window_state::WindowCapabilities::platform();
+        if backdrop.is_material() {
+            let status =
+                if capabilities.supports_backdrop_request(pending.options.app_bar.is_some()) {
+                    crate::app::window_backdrop::apply(&*skia_window, backdrop)
+                } else {
+                    crate::app::window_backdrop::BackdropStatus::Unsupported
+                };
             if let Some(raw) = pending.created_id {
                 crate::app::window_state::set_backdrop_status(
                     crate::app::window_state::WindowId::new(raw),
@@ -269,7 +276,9 @@ impl AppState {
         let shell_window = crate::app::window_shell::ShellWindow::configure(
             &*skia_window,
             pending.options,
-            pending.created_id.map(crate::app::window_state::WindowId::new),
+            pending
+                .created_id
+                .map(crate::app::window_state::WindowId::new),
         );
         let content = pending
             .created_id

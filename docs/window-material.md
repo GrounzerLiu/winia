@@ -1,7 +1,8 @@
 # Window materials across platforms
 
-Status: implemented. Windows is verified locally. macOS and Wayland call winit's existing blur API,
-but those target-specific branches are not compiled or run in this Windows environment.
+Status: implemented. Windows is verified locally. The winia dispatch and winit call site are
+compiled on Windows; winit's AppKit/Wayland backend implementations and their runtime behaviour are
+not built or run here.
 
 ## Public API
 
@@ -55,9 +56,10 @@ the status still means the request was delivered, not that pixels were confirmed
 
 ## Status
 
-`Applied` means the platform accepted the request. Windows additionally reads the DWM value back
-and can report `Mismatch` or `Unverified`. macOS and Wayland have no read-back through winit, so
-there `Applied` means the call was delivered, not that the final pixels were verified.
+`Applied` means the request was delivered to the platform API. Windows additionally reads the
+DWM value back and can report `Mismatch` or `Unverified`. macOS and Wayland have no read-back through
+winit, and a Wayland compositor without a blur manager may ignore the request, so `Applied` does not
+confirm a visible effect there.
 
 `Unsupported` means either the platform has no backend or the request does not match that
 platform. The request remains visible through `WindowState::backdrop()`.
@@ -86,15 +88,17 @@ The in-window substitute is [popup-blur.md](popup-blur.md).
 - `AppKit` and `Wayland` call `Window::set_blur`;
 - every other handle reports `NotRequested` for `None` and `Unsupported` for a material.
 
-Only the DWM module is `#[cfg(target_os = "windows")]`. Public call sites need no `cfg`.
+The DWM module and the Win32 dispatch arm are `#[cfg(target_os = "windows")]`. The AppKit and
+Wayland arms call the cross-platform `Window::set_blur` trait method and are type-checked here. Public
+call sites need no `cfg`.
 
 ## Verification
 
 | Platform | Verification | Local status |
 | --- | --- | --- |
 | Windows | fixture status, pixel probes, screenshots | verified |
-| macOS | build and run over light and dark desktops | source-aligned with winit; not built here |
-| Wayland | run under KDE or an `ext-background-effect` compositor | source-aligned with winit; not built here |
+| macOS | build and run over light and dark desktops | winia call site compiled; winit backend/runtime not built here |
+| Wayland | run under KDE or an `ext-background-effect` compositor | winia call site compiled; winit backend/runtime not built here |
 
-The repository has no cross-platform CI. A first build on macOS or Linux may need a small import or
-type fix in the target-specific branch; behaviour there remains unverified until it runs.
+The repository has no cross-platform CI. No target-specific winia branch remains uncompiled; what
+remains unverified is winit's platform backend implementation and the resulting runtime behaviour.

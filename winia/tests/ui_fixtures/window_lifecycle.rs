@@ -83,9 +83,14 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
             .minimum_size(320.0, 240.0)
             .maximum_size(900.0, 700.0);
     }
-    if mode == "window-backdrop" {
+    if mode == "window-backdrop" || mode == "window-backdrop-system" {
+        let backdrop = if mode == "window-backdrop-system" {
+            WindowBackdrop::System
+        } else {
+            WindowBackdrop::Mica
+        };
         builder = builder
-            .backdrop(WindowBackdrop::Mica)
+            .backdrop(backdrop)
             .transparent(true)
             .decorations(false);
     }
@@ -128,7 +133,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
                 "insets-share" => insets_share_scenario(ctx, id),
                 "owner-query" => owner_query_scenario(ctx, id),
                 "window-properties" => window_properties_scenario(ctx, id),
-                "window-backdrop" => backdrop_scenario(ctx, id),
+                "window-backdrop" | "window-backdrop-system" => backdrop_scenario(ctx, id),
                 "existing-command-new-root" => {
                     let once = ctx.remember(|| Rc::new(Cell::new(false))).get();
                     if !once.get() {

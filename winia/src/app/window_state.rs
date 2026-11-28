@@ -246,6 +246,11 @@ impl WindowCapabilities {
         Self::for_backend(desktop, wayland)
     }
 
+    pub(crate) fn supports_backdrop_request(&self, app_bar_requested: bool) -> bool {
+        let app_bar_owned = app_bar_requested && self.app_bar;
+        !app_bar_owned && self.backdrop
+    }
+
     fn for_backend(desktop: bool, wayland: bool) -> Self {
         WindowCapabilities {
             position: desktop,
@@ -518,24 +523,30 @@ impl WindowState {
 
     /// Request a system backdrop material.
     ///
-    /// Windows applies it through `DWMWA_SYSTEMBACKDROP_TYPE`; other platforms keep the request and
-    /// report [`BackdropStatus::Unsupported`]. Nothing else changes: a whole-window material only
-    /// shows where the client area is transparent, and Windows composites the client per pixel only
-    /// for undecorated windows, so request `decorations(false)` together with transparency when the
-    /// material should reach the client. With decorations the material is limited to the title bar.
+    /// [`WindowBackdrop::System`] uses DWM on Windows and winit blur on macOS and Wayland.
+    /// [`WindowBackdrop::Mica`], [`WindowBackdrop::Acrylic`] and [`WindowBackdrop::MicaAlt`] are
+    /// Windows-only and report [`BackdropStatus::Unsupported`] elsewhere. Nothing else changes: a
+    /// whole-window material only shows where the client area is transparent, and Windows composites
+    /// the client per pixel only for undecorated windows, so request `decorations(false)` together
+    /// with transparency when the material should reach the client. With decorations the material is
+    /// limited to the title bar.
     ///
-    /// [`WindowBackdrop::System`] selects the platform default; [`WindowBackdrop::Mica`],
-    /// [`WindowBackdrop::Acrylic`] and [`WindowBackdrop::MicaAlt`] are Windows-only and report
-    /// [`BackdropStatus::Unsupported`] elsewhere. Windows app-bar windows are owned by the shell and
-    /// ignore the request. On a platform without a backdrop backend the request is still recorded
-    /// and reported as [`BackdropStatus::Unsupported`], so the declaration stays inspectable.
+    /// A shell-owned Windows app-bar keeps the request but reports [`BackdropStatus::Unsupported`].
+    /// An app-bar request on a platform without app-bar support is an ordinary window and applies the
+    /// backdrop normally. On a platform without a backdrop backend the request is still recorded and
+    /// reported as [`BackdropStatus::Unsupported`], so the declaration stays inspectable.
     pub fn set_backdrop(&self, backdrop: WindowBackdrop) {
-        if self.app_bar_owns_window()
-            || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
-        {
+        if with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true) {
             return;
         }
-        let supported = self.id.capabilities().backdrop;
+        let app_bar_requested = with_cell(self.id, |cell| {
+            cell.snapshot.peek().app_bar_options.is_some()
+        })
+        .unwrap_or(false);
+        let supported = self
+            .id
+            .capabilities()
+            .supports_backdrop_request(app_bar_requested);
         with_cell(self.id, |cell| {
             cell.snapshot
                 .update(|snapshot| snapshot.backdrop = backdrop);
@@ -1000,6 +1011,7 @@ struct WindowCell {
 
 impl WindowCell {
     fn new(seed: WindowSeed, realized: bool) -> Self {
+        let capabilities = WindowCapabilities::platform();
         let snapshot = WindowSnapshot {
             app_bar_options: seed.app_bar,
             realized,
@@ -1013,7 +1025,7 @@ impl WindowCell {
             transparent: seed.transparent,
             backdrop: seed.backdrop,
             backdrop_status: if seed.backdrop.is_material() {
-                if WindowCapabilities::platform().backdrop {
+                if capabilities.supports_backdrop_request(seed.app_bar.is_some()) {
                     BackdropStatus::Pending
                 } else {
                     BackdropStatus::Unsupported
@@ -1025,7 +1037,7 @@ impl WindowCell {
             tool_window: seed.tool_window,
             no_activate: seed.no_activate,
             app_bar_status: if seed.app_bar.is_some() {
-                if cfg!(target_os = "windows") {
+                if capabilities.app_bar {
                     AppBarStatus::Registering
                 } else {
                     AppBarStatus::Unsupported
@@ -1641,6 +1653,20 @@ mod tests {
     }
 
     #[test]
+    fn backdrop_support_accounts_for_shell_ownership() {
+        let mut capabilities = WindowCapabilities::for_backend(true, false);
+        capabilities.backdrop = true;
+        capabilities.app_bar = true;
+        assert!(!capabilities.supports_backdrop_request(true));
+
+        capabilities.app_bar = false;
+        assert!(capabilities.supports_backdrop_request(true));
+
+        capabilities.backdrop = false;
+        assert!(!capabilities.supports_backdrop_request(false));
+    }
+
+    #[test]
     fn backdrop_capability_tracks_the_platform_backend() {
         assert!(WindowCapabilities::for_backend(true, true).backdrop);
         assert_eq!(
@@ -2154,6 +2180,56 @@ mod tests {
                 BackdropStatus::Unsupported
             }
         );
+        forget(id);
+    }
+
+    #[test]
+    fn app_bar_backdrop_status_matches_shell_ownership() {
+        let id = WindowId::new(9_222);
+        declare(
+            id,
+            WindowSeed {
+                app_bar: Some(AppBarOptions::bottom(48.0)),
+                backdrop: WindowBackdrop::System,
+                ..WindowSeed::default()
+            },
+        );
+        let capabilities = WindowCapabilities::platform();
+        let expected = if capabilities.app_bar {
+            BackdropStatus::Unsupported
+        } else if capabilities.backdrop {
+            BackdropStatus::Pending
+        } else {
+            BackdropStatus::Unsupported
+        };
+        assert_eq!(id.state().backdrop(), WindowBackdrop::System);
+        assert_eq!(id.state().backdrop_status(), expected);
+        forget(id);
+    }
+
+    #[test]
+    fn runtime_app_bar_backdrop_request_is_terminal_or_queued_by_ownership() {
+        let id = WindowId::new(9_223);
+        declare(
+            id,
+            WindowSeed {
+                app_bar: Some(AppBarOptions::bottom(48.0)),
+                ..WindowSeed::default()
+            },
+        );
+        id.state().set_backdrop(WindowBackdrop::System);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::System);
+        let capabilities = WindowCapabilities::platform();
+        if capabilities.app_bar || !capabilities.backdrop {
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
+            assert!(take_commands(id).is_empty());
+        } else {
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Pending);
+            assert_eq!(
+                take_commands(id),
+                vec![Command::Backdrop(WindowBackdrop::System)]
+            );
+        }
         forget(id);
     }
 

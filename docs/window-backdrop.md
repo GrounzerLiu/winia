@@ -111,9 +111,13 @@ wgpu surface path carried alpha on Windows 11 build 26300:
 
 ## Runtime switching and platform support
 
-- `set_backdrop` queues the write; status moves through `Pending` to the result.
+- On a window with a backdrop backend that is not shell-owned, `set_backdrop` queues the write
+  and status moves through `Pending` to the result. Without a backend it reports `Unsupported`
+  directly; a shell-owned app-bar keeps the request and reports `Unsupported` without queuing.
 - Changing decorations or transparency later does not re-apply the material.
 - `set_backdrop(WindowBackdrop::None)` clears it.
 - `WindowCapabilities::backdrop` is true on Windows, macOS and Wayland. Named Windows materials
   report `Unsupported` on macOS and Wayland; `System` uses winit's blur there.
-- Windows app-bar windows ignore backdrop requests on both the builder and runtime paths.
+- A supported Windows app-bar is shell-owned: builder and runtime backdrop requests are kept
+  for inspection but report `Unsupported`. An app-bar request on another platform is an ordinary
+  window, so `System` applies normally.
