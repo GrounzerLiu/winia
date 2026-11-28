@@ -85,7 +85,10 @@ fn app(ctx: &mut ComposeCtx) {
                                 .build(ctx, |ctx| Text::new(backdrop_label(choice)).build(ctx));
                         }
                     });
-                    Text::new(format!("requested {requested:?}  ·  status {status}"))
+                    Text::new(format!(
+                        "requested {}  ·  status {status}",
+                        backdrop_label(requested)
+                    ))
                         .font_size(14.0)
                         .build(ctx);
                     Text::new(format!("backdrop capability: {}", caps.backdrop))
