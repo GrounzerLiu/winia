@@ -24,8 +24,8 @@ pub enum WindowBackdrop {
 }
 
 pub enum WindowsBackdrop { Auto, Mica, Acrylic, MicaAlt }
-pub enum MacOsBackdrop { System, Sidebar, HudWindow, FullScreenUi, ToolTip, ContentBackground,
-                         UnderWindowBackground, UnderPageBackground }
+pub enum MacOsBackdrop { FullScreenUi, HudWindow, Menu, Popover, Sidebar, Selection, Titlebar,
+                         HeaderView, ToolTip, UnderWindowBackground }
 ```
 
 Why per-platform sub-enums instead of one flat list: a Windows-only material cannot be named on a
@@ -47,6 +47,10 @@ tint, and `Window::set_blur(true)` is the whole request.
 Windows keeps the measured behaviour documented in [window-backdrop.md](window-backdrop.md): DWM
 paints the material behind the window, the client shows it only for a window created undecorated,
 and the value is read back through `DwmGetWindowAttribute`.
+
+`MacOsBackdrop` mirrors `winit_appkit::BlurMaterial` one-to-one, so the macOS backend is a
+conversion instead of a second taxonomy; that enum is `#[non_exhaustive]`, and a variant winia does
+not know reports `Unsupported` rather than substituting a different material.
 
 macOS uses winit's own surface rather than Objective-C in winia:
 

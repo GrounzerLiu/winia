@@ -64,27 +64,34 @@ pub enum WindowsBackdrop {
 
 /// The macOS `NSVisualEffectView` materials.
 ///
-/// The variant set is fixed here so applications can name their intent today; the backend lands with
-/// a macOS build to verify against winit's material enum. Until then every variant reports
-/// [`BackdropStatus::Unsupported`].
+/// Mirrors `winit_appkit::BlurMaterial` one-to-one, so the backend is a plain conversion rather than
+/// a second taxonomy. winit marks that enum `#[non_exhaustive]`: a variant winia does not know maps
+/// to [`BackdropStatus::Unsupported`] instead of silently falling back to some other material.
+///
+/// Nothing is applied until a macOS backend lands; every variant reports `Unsupported` today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MacOsBackdrop {
-    /// The appearance-driven system material.
-    System,
-    /// Behind a sidebar.
-    Sidebar,
-    /// Behind heads-up-display panels.
-    HudWindow,
-    /// Behind full-screen UI.
+    /// `NSVisualEffectMaterialFullScreenUI`: the least tinted material, closest to a plain blur.
+    /// winit's default.
     FullScreenUi,
-    /// Behind tooltips.
+    /// `NSVisualEffectMaterialHUDWindow`.
+    HudWindow,
+    /// `NSVisualEffectMaterialMenu`.
+    Menu,
+    /// `NSVisualEffectMaterialPopover`.
+    Popover,
+    /// `NSVisualEffectMaterialSidebar`.
+    Sidebar,
+    /// `NSVisualEffectMaterialSelection`.
+    Selection,
+    /// `NSVisualEffectMaterialTitlebar`.
+    Titlebar,
+    /// `NSVisualEffectMaterialHeaderView`.
+    HeaderView,
+    /// `NSVisualEffectMaterialToolTip`.
     ToolTip,
-    /// Behind content areas that follow the window background.
-    ContentBackground,
-    /// Behind the window, matching the desktop behind it.
+    /// `NSVisualEffectMaterialUnderWindowBackground`.
     UnderWindowBackground,
-    /// Behind the page area of a document window.
-    UnderPageBackground,
 }
 
 impl WindowBackdrop {
