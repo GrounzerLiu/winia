@@ -85,7 +85,7 @@ fn window(ctx: &mut ComposeCtx, mode: &str) {
     }
     if mode == "window-backdrop" {
         builder = builder
-            .backdrop(WindowBackdrop::Mica)
+            .backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica))
             .transparent(true)
             .decorations(false);
     }

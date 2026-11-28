@@ -7,14 +7,14 @@ hands.
 
 ```rust
 Window::new()
-    .backdrop(WindowBackdrop::Mica)
+    .backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica))
     .transparent(true)
     .decorations(false)
     .build(ctx, |ctx| { /* content */ });
 ```
 
 ```rust
-id.state().set_backdrop(WindowBackdrop::Acrylic);
+id.state().set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::Acrylic));
 let status = id.state().backdrop_status();
 ```
 
@@ -43,10 +43,10 @@ Does not:
 | `WindowBackdrop` | `DWM_SYSTEMBACKDROP_TYPE` | Documented placement |
 | --- | --- | --- |
 | `None` | `DWMSBT_NONE` (1) | nowhere |
-| `Auto` | `DWMSBT_AUTO` (0) | just behind the default Win32 title bar |
-| `Mica` | `DWMSBT_MAINWINDOW` (2) | behind the entire window bounds |
-| `Acrylic` | `DWMSBT_TRANSIENTWINDOW` (3) | behind the entire window bounds |
-| `MicaAlt` | `DWMSBT_TABBEDWINDOW` (4) | behind the entire window bounds |
+| `Windows(WindowsBackdrop::Auto)` | `DWMSBT_AUTO` (0) | just behind the default Win32 title bar |
+| `Windows(WindowsBackdrop::Mica)` | `DWMSBT_MAINWINDOW` (2) | behind the entire window bounds |
+| `Windows(WindowsBackdrop::Acrylic)` | `DWMSBT_TRANSIENTWINDOW` (3) | behind the entire window bounds |
+| `Windows(WindowsBackdrop::MicaAlt)` | `DWMSBT_TABBEDWINDOW` (4) | behind the entire window bounds |
 
 Source: [DWM_SYSTEMBACKDROP_TYPE](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type).
 
@@ -146,6 +146,8 @@ undecorated. That is the creation-order limitation above, not a swapchain limita
 - Changing `decorations` or `transparent` later does not re-apply the material: DWM keeps the
   attribute it accepted.
 - `set_backdrop(WindowBackdrop::None)` clears the attribute (`DWMSBT_NONE`).
+- `WindowBackdrop::MacOs` and `WindowBackdrop::Wayland` name the other platforms' mechanisms; see
+  [window-material.md](window-material.md). They report `Unsupported` until those backends land.
 
 ## Platform support
 

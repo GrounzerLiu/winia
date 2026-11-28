@@ -521,7 +521,7 @@ impl WindowState {
     /// shows where the client area is transparent, and Windows composites the client per pixel only
     /// for undecorated windows, so request `decorations(false)` together with transparency when the
     /// material should reach the client. With decorations the material is limited to the title bar,
-    /// which `WindowBackdrop::Auto` targets directly.
+    /// which `WindowBackdrop::Windows(WindowsBackdrop::Auto)` targets directly.
     ///
     /// Windows app-bar windows are owned by the shell and ignore the request. On a platform that
     /// does not implement system backdrops the request is still recorded and reported as
@@ -1491,6 +1491,7 @@ pub(crate) fn take_queued_commands(id: WindowId) -> Vec<QueuedCommand> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::window_backdrop::WindowsBackdrop;
 
     #[test]
     fn wayland_reports_focus_and_stacking_as_unsupported() {
@@ -2128,11 +2129,14 @@ mod tests {
         declare(
             id,
             WindowSeed {
-                backdrop: WindowBackdrop::Mica,
+                backdrop: WindowBackdrop::Windows(WindowsBackdrop::Mica),
                 ..WindowSeed::default()
             },
         );
-        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
+        assert_eq!(
+            id.state().backdrop(),
+            WindowBackdrop::Windows(WindowsBackdrop::Mica)
+        );
         assert_eq!(
             id.state().backdrop_status(),
             if cfg!(target_os = "windows") {
@@ -2148,13 +2152,17 @@ mod tests {
     #[test]
     fn runtime_backdrop_requests_queue_in_submission_order() {
         let id = fresh(9_219);
-        id.state().set_backdrop(WindowBackdrop::MicaAlt);
+        id.state()
+            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::MicaAlt));
         id.state().set_decorations(false);
-        assert_eq!(id.state().backdrop(), WindowBackdrop::MicaAlt);
+        assert_eq!(
+            id.state().backdrop(),
+            WindowBackdrop::Windows(WindowsBackdrop::MicaAlt)
+        );
         assert_eq!(
             take_commands(id),
             vec![
-                Command::Backdrop(WindowBackdrop::MicaAlt),
+                Command::Backdrop(WindowBackdrop::Windows(WindowsBackdrop::MicaAlt)),
                 Command::Decorations(false),
             ]
         );
@@ -2166,8 +2174,12 @@ mod tests {
     #[test]
     fn runtime_backdrop_requests_stay_unsupported_elsewhere() {
         let id = fresh(9_219);
-        id.state().set_backdrop(WindowBackdrop::Mica);
-        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
+        id.state()
+            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica));
+        assert_eq!(
+            id.state().backdrop(),
+            WindowBackdrop::Windows(WindowsBackdrop::Mica)
+        );
         assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
         assert!(take_commands(id).is_empty());
         forget(id);
@@ -2176,7 +2188,8 @@ mod tests {
     #[test]
     fn clearing_a_backdrop_request_reports_no_material() {
         let id = fresh(9_221);
-        id.state().set_backdrop(WindowBackdrop::Acrylic);
+        id.state()
+            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::Acrylic));
         let _ = take_commands(id);
         id.state().set_backdrop(WindowBackdrop::None);
         assert_eq!(id.state().backdrop(), WindowBackdrop::None);

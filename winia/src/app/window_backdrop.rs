@@ -19,25 +19,39 @@ pub(crate) mod windows;
 
 /// A system-drawn backdrop material.
 ///
-/// The variants map onto `DWM_SYSTEMBACKDROP_TYPE`, keeping the documented placement:
-///
-/// | Variant | Windows value | Where the system draws it |
-/// | --- | --- | --- |
-/// | [`None`](Self::None) | `DWMSBT_NONE` | nowhere |
-/// | [`Auto`](Self::Auto) | `DWMSBT_AUTO` | just behind the default Win32 title bar |
-/// | [`Mica`](Self::Mica) | `DWMSBT_MAINWINDOW` | behind the entire window bounds |
-/// | [`Acrylic`](Self::Acrylic) | `DWMSBT_TRANSIENTWINDOW` | behind the entire window bounds |
-/// | [`MicaAlt`](Self::MicaAlt) | `DWMSBT_TABBEDWINDOW` | behind the entire window bounds |
+/// Every variant compiles on every platform; a request that names another platform's material, or
+/// a platform winia has no backend for yet, is kept and reported as
+/// [`BackdropStatus::Unsupported`].
 ///
 /// A whole-window material only shows where the client area does not paint an opaque pixel, so it
 /// normally needs [`Window::transparent`](crate::app::window::Window::transparent) together with
 /// [`Window::decorations`](crate::app::window::Window::decorations)`(false)`. winia does not apply
 /// either of them for you, and both are independent requests.
+///
+/// See `docs/window-material.md` for the cross-platform mapping and what each backend can promise.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WindowBackdrop {
     /// No system backdrop material.
     #[default]
     None,
+    /// Windows 11 DWM system backdrop.
+    Windows(WindowsBackdrop),
+    /// macOS `NSVisualEffectView` vibrancy. No backend yet: reported as `Unsupported`.
+    MacOs(MacOsBackdrop),
+    /// Wayland blur protocol. No backend yet: reported as `Unsupported`.
+    Wayland,
+}
+
+/// The Windows 11 DWM materials, mapped onto `DWM_SYSTEMBACKDROP_TYPE`:
+///
+/// | Variant | Windows value | Where the system draws it |
+/// | --- | --- | --- |
+/// | [`Auto`](Self::Auto) | `DWMSBT_AUTO` | just behind the default Win32 title bar |
+/// | [`Mica`](Self::Mica) | `DWMSBT_MAINWINDOW` | behind the entire window bounds |
+/// | [`Acrylic`](Self::Acrylic) | `DWMSBT_TRANSIENTWINDOW` | behind the entire window bounds |
+/// | [`MicaAlt`](Self::MicaAlt) | `DWMSBT_TABBEDWINDOW` | behind the entire window bounds |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WindowsBackdrop {
     /// Let the system decide; documented as a material just behind the default Win32 title bar.
     Auto,
     /// Mica behind the entire window bounds.
@@ -46,6 +60,31 @@ pub enum WindowBackdrop {
     Acrylic,
     /// Mica Alt behind the entire window bounds.
     MicaAlt,
+}
+
+/// The macOS `NSVisualEffectView` materials.
+///
+/// The variant set is fixed here so applications can name their intent today; the backend lands with
+/// a macOS build to verify against winit's material enum. Until then every variant reports
+/// [`BackdropStatus::Unsupported`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MacOsBackdrop {
+    /// The appearance-driven system material.
+    System,
+    /// Behind a sidebar.
+    Sidebar,
+    /// Behind heads-up-display panels.
+    HudWindow,
+    /// Behind full-screen UI.
+    FullScreenUi,
+    /// Behind tooltips.
+    ToolTip,
+    /// Behind content areas that follow the window background.
+    ContentBackground,
+    /// Behind the window, matching the desktop behind it.
+    UnderWindowBackground,
+    /// Behind the page area of a document window.
+    UnderPageBackground,
 }
 
 impl WindowBackdrop {
@@ -144,7 +183,12 @@ pub(crate) fn apply(
 ) -> BackdropStatus {
     #[cfg(target_os = "windows")]
     {
-        windows::apply(window, backdrop)
+        match backdrop {
+            WindowBackdrop::None => windows::apply(window, None),
+            WindowBackdrop::Windows(material) => windows::apply(window, Some(material)),
+            // The mechanism exists on Windows, but only for DWM materials.
+            WindowBackdrop::MacOs(_) | WindowBackdrop::Wayland => BackdropStatus::Unsupported,
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -179,7 +223,7 @@ mod tests {
         assert!(BackdropStatus::Rejected(-2147024809).is_failed());
         assert!(
             BackdropStatus::Mismatch {
-                requested: WindowBackdrop::Mica,
+                requested: WindowBackdrop::Windows(WindowsBackdrop::Mica),
                 reported: 0,
             }
             .is_failed()
@@ -189,10 +233,19 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn every_variant_maps_to_its_documented_dwm_value() {
-        assert_eq!(windows::dwm_value(WindowBackdrop::None), 1);
-        assert_eq!(windows::dwm_value(WindowBackdrop::Auto), 0);
-        assert_eq!(windows::dwm_value(WindowBackdrop::Mica), 2);
-        assert_eq!(windows::dwm_value(WindowBackdrop::Acrylic), 3);
-        assert_eq!(windows::dwm_value(WindowBackdrop::MicaAlt), 4);
+        use WindowsBackdrop::*;
+
+        assert_eq!(windows::dwm_value(None), 1);
+        assert_eq!(windows::dwm_value(Some(Auto)), 0);
+        assert_eq!(windows::dwm_value(Some(Mica)), 2);
+        assert_eq!(windows::dwm_value(Some(Acrylic)), 3);
+        assert_eq!(windows::dwm_value(Some(MicaAlt)), 4);
+    }
+
+    #[test]
+    fn a_request_for_another_platform_is_still_a_material_request() {
+        assert!(WindowBackdrop::MacOs(MacOsBackdrop::Sidebar).is_material());
+        assert!(WindowBackdrop::Wayland.is_material());
+        assert!(WindowBackdrop::Windows(WindowsBackdrop::Mica).is_material());
     }
 }

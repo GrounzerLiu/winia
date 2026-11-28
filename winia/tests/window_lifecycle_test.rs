@@ -398,7 +398,7 @@ fn a_declared_backdrop_reaches_the_platform() {
     let text = fixture.wait_for_text(Duration::from_secs(10), |text| {
         text.contains("status=Applied") || text.contains(UNSUPPORTED_BUILD)
     });
-    assert!(text.contains("backdrop=Mica"), "{text:?}");
+    assert!(text.contains("backdrop=Windows(Mica)"), "{text:?}");
     if text.contains(UNSUPPORTED_BUILD) {
         return;
     }

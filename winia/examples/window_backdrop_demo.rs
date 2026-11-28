@@ -31,7 +31,7 @@ fn app(ctx: &mut ComposeCtx) {
         // mode is fixed at creation. Start frameless, then add the title bar afterwards so the
         // material can still reach the client area.
         .decorations(false)
-        .backdrop(WindowBackdrop::Mica)
+        .backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica))
         .build(ctx, |ctx| {
             let id = ctx.window_id();
             let state = id.state();
@@ -72,10 +72,10 @@ fn app(ctx: &mut ComposeCtx) {
                     Row::new().spacing(8.0).build(ctx, |ctx| {
                         for choice in [
                             WindowBackdrop::None,
-                            WindowBackdrop::Auto,
-                            WindowBackdrop::Mica,
-                            WindowBackdrop::Acrylic,
-                            WindowBackdrop::MicaAlt,
+                            WindowBackdrop::Windows(WindowsBackdrop::Auto),
+                            WindowBackdrop::Windows(WindowsBackdrop::Mica),
+                            WindowBackdrop::Windows(WindowsBackdrop::Acrylic),
+                            WindowBackdrop::Windows(WindowsBackdrop::MicaAlt),
                         ] {
                             Button::outlined()
                                 .on_click({
@@ -162,9 +162,11 @@ fn app(ctx: &mut ComposeCtx) {
 fn backdrop_label(backdrop: WindowBackdrop) -> &'static str {
     match backdrop {
         WindowBackdrop::None => "None",
-        WindowBackdrop::Auto => "Auto",
-        WindowBackdrop::Mica => "Mica",
-        WindowBackdrop::Acrylic => "Acrylic",
-        WindowBackdrop::MicaAlt => "Mica Alt",
+        WindowBackdrop::Windows(WindowsBackdrop::Auto) => "Auto",
+        WindowBackdrop::Windows(WindowsBackdrop::Mica) => "Mica",
+        WindowBackdrop::Windows(WindowsBackdrop::Acrylic) => "Acrylic",
+        WindowBackdrop::Windows(WindowsBackdrop::MicaAlt) => "Mica Alt",
+        WindowBackdrop::MacOs(_) => "macOS material",
+        WindowBackdrop::Wayland => "Wayland blur",
     }
 }
