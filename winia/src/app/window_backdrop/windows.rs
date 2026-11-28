@@ -8,38 +8,33 @@
 //! The read-back is treated as confirmation, not as part of the request: if DWM refuses to report
 //! the attribute the write is still reported as [`BackdropStatus::Unverified`], never as rejected.
 
-use super::{BackdropStatus, WindowBackdrop, WindowsBackdrop};
+use super::{BackdropStatus, WindowBackdrop};
 use std::mem::size_of;
 use windows::Win32::Graphics::Dwm::{
-    DWMSBT_AUTO, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
+    DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
     DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute, DwmSetWindowAttribute,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// The `DWM_SYSTEMBACKDROP_TYPE` value a request stands for; `None` clears the attribute.
-pub(crate) const fn dwm_value(backdrop: Option<WindowsBackdrop>) -> i32 {
+pub(crate) const fn dwm_value(backdrop: WindowBackdrop) -> i32 {
     match backdrop {
-        None => DWMSBT_NONE.0,
-        Some(WindowsBackdrop::Auto) => DWMSBT_AUTO.0,
-        Some(WindowsBackdrop::Mica) => DWMSBT_MAINWINDOW.0,
-        Some(WindowsBackdrop::Acrylic) => DWMSBT_TRANSIENTWINDOW.0,
-        Some(WindowsBackdrop::MicaAlt) => DWMSBT_TABBEDWINDOW.0,
+        WindowBackdrop::None => DWMSBT_NONE.0,
+        WindowBackdrop::System | WindowBackdrop::Mica => DWMSBT_MAINWINDOW.0,
+        WindowBackdrop::Acrylic => DWMSBT_TRANSIENTWINDOW.0,
+        WindowBackdrop::MicaAlt => DWMSBT_TABBEDWINDOW.0,
     }
 }
 
 /// Set the backdrop attribute on `window` and report what DWM kept.
 pub(crate) fn apply(
     window: &dyn winit::window::Window,
-    backdrop: Option<WindowsBackdrop>,
+    backdrop: WindowBackdrop,
 ) -> BackdropStatus {
     let Some(hwnd) = hwnd_of(window) else {
         // Android composites into one Activity surface and never reaches this module; a window
         // that has no Win32 handle cannot carry a DWM attribute either.
         return BackdropStatus::Unsupported;
-    };
-    let request = match backdrop {
-        Some(material) => WindowBackdrop::Windows(material),
-        None => WindowBackdrop::None,
     };
     let requested = dwm_value(backdrop);
     let set = unsafe {
@@ -53,7 +48,7 @@ pub(crate) fn apply(
     if let Err(error) = set {
         return BackdropStatus::Rejected(error.code().0);
     }
-    if backdrop.is_none() {
+    if !backdrop.is_material() {
         return BackdropStatus::NotRequested;
     }
     let mut reported = i32::MIN;
@@ -68,7 +63,7 @@ pub(crate) fn apply(
     match read {
         Ok(()) if reported == requested => BackdropStatus::Applied,
         Ok(()) => BackdropStatus::Mismatch {
-            requested: request,
+            requested: backdrop,
             reported,
         },
         Err(error) => BackdropStatus::Unverified(error.code().0),

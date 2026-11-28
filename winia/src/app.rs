@@ -147,26 +147,20 @@ mod window_options_tests {
 
     #[test]
     fn normalization_keeps_the_backdrop_request() {
-        use crate::app::window_backdrop::{WindowBackdrop, WindowsBackdrop};
+        use crate::app::window_backdrop::WindowBackdrop;
 
         let mut options = WindowOptions {
-            backdrop: WindowBackdrop::Windows(WindowsBackdrop::Mica),
+            backdrop: WindowBackdrop::Mica,
             ..WindowOptions::default()
         };
         options.normalize(capabilities(true));
-        assert_eq!(
-            options.backdrop,
-            WindowBackdrop::Windows(WindowsBackdrop::Mica)
-        );
+        assert_eq!(options.backdrop, WindowBackdrop::Mica);
 
         // The request is application intent, so a platform that cannot honour it still sees it.
         let mut caps = capabilities(true);
         caps.backdrop = false;
         options.normalize(caps);
-        assert_eq!(
-            options.backdrop,
-            WindowBackdrop::Windows(WindowsBackdrop::Mica)
-        );
+        assert_eq!(options.backdrop, WindowBackdrop::Mica);
     }
 
     #[test]

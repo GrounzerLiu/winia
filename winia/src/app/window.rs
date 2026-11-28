@@ -134,9 +134,11 @@ impl Window {
 
     /// Request a system backdrop material.
     ///
-    /// `WindowBackdrop::Windows` maps onto the Windows 11 DWM materials; `MacOs` and `Wayland` name
-    /// the other platforms' mechanisms and report `Unsupported` until their backends land. See
-    /// `docs/window-material.md`.
+    /// [`WindowBackdrop::System`](crate::app::window_backdrop::WindowBackdrop::System) selects the
+    /// platform default. [`WindowBackdrop::Mica`](crate::app::window_backdrop::WindowBackdrop::Mica),
+    /// [`Acrylic`](crate::app::window_backdrop::WindowBackdrop::Acrylic) and
+    /// [`MicaAlt`](crate::app::window_backdrop::WindowBackdrop::MicaAlt) are explicit Windows DWM
+    /// requests and report `Unsupported` elsewhere. See `docs/window-material.md`.
     ///
     /// This is a plain request. winia does not change transparency, decorations, or the rendering
     /// surface for it, and a whole-window material only shows where the client area does not paint
@@ -658,16 +660,11 @@ mod tests {
     fn the_backdrop_builder_only_records_the_request() {
         use crate::app::window_backdrop::WindowBackdrop;
 
-        use crate::app::window_backdrop::WindowsBackdrop;
-
         let options = Window::new()
-            .backdrop(WindowBackdrop::Windows(WindowsBackdrop::Acrylic))
+            .backdrop(WindowBackdrop::Acrylic)
             .decorations(true)
             .options;
-        assert_eq!(
-            options.backdrop,
-            WindowBackdrop::Windows(WindowsBackdrop::Acrylic)
-        );
+        assert_eq!(options.backdrop, WindowBackdrop::Acrylic);
         assert!(options.decorations);
         assert!(!options.transparent);
     }

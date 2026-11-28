@@ -1,4 +1,4 @@
-//! Backdrop demo — the Windows system backdrop request on its own.
+//! Backdrop demo — the platform default material and the explicit Windows DWM materials.
 //!
 //! The window is created transparent and undecorated — the only client Windows composites per
 //! pixel — and the title bar is added after the first composition, which keeps that mode. The
@@ -31,7 +31,7 @@ fn app(ctx: &mut ComposeCtx) {
         // mode is fixed at creation. Start frameless, then add the title bar afterwards so the
         // material can still reach the client area.
         .decorations(false)
-        .backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica))
+        .backdrop(WindowBackdrop::System)
         .build(ctx, |ctx| {
             let id = ctx.window_id();
             let state = id.state();
@@ -62,20 +62,20 @@ fn app(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new("System backdrop").font_size(22.0).build(ctx);
                     Text::new(
-                        "Each button writes DWMWA_SYSTEMBACKDROP_TYPE and reads the value back. \
-                         The request is one axis only: it does not touch transparency, \
-                         decorations, the frame, or the surface, so the material shows only where \
-                         the client area does not paint an opaque pixel.",
+                        "System selects the platform default; the named materials are Windows \
+                         DWM requests. The request is one axis only: it does not touch \
+                         transparency, decorations, the frame, or the surface, so the material shows \
+                         only where the client area does not paint an opaque pixel.",
                     )
                     .font_size(14.0)
                     .build(ctx);
                     Row::new().spacing(8.0).build(ctx, |ctx| {
                         for choice in [
                             WindowBackdrop::None,
-                            WindowBackdrop::Windows(WindowsBackdrop::Auto),
-                            WindowBackdrop::Windows(WindowsBackdrop::Mica),
-                            WindowBackdrop::Windows(WindowsBackdrop::Acrylic),
-                            WindowBackdrop::Windows(WindowsBackdrop::MicaAlt),
+                            WindowBackdrop::System,
+                            WindowBackdrop::Mica,
+                            WindowBackdrop::Acrylic,
+                            WindowBackdrop::MicaAlt,
                         ] {
                             Button::outlined()
                                 .on_click({
@@ -165,11 +165,9 @@ fn app(ctx: &mut ComposeCtx) {
 fn backdrop_label(backdrop: WindowBackdrop) -> &'static str {
     match backdrop {
         WindowBackdrop::None => "None",
-        WindowBackdrop::Windows(WindowsBackdrop::Auto) => "Auto",
-        WindowBackdrop::Windows(WindowsBackdrop::Mica) => "Mica",
-        WindowBackdrop::Windows(WindowsBackdrop::Acrylic) => "Acrylic",
-        WindowBackdrop::Windows(WindowsBackdrop::MicaAlt) => "Mica Alt",
-        WindowBackdrop::MacOs(_) => "macOS material",
-        WindowBackdrop::Wayland => "Wayland blur",
+        WindowBackdrop::System => "System",
+        WindowBackdrop::Mica => "Mica",
+        WindowBackdrop::Acrylic => "Acrylic",
+        WindowBackdrop::MicaAlt => "Mica Alt",
     }
 }

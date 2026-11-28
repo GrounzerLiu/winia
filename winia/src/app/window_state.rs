@@ -200,11 +200,12 @@ pub struct WindowCapabilities {
     pub activate: bool,
     pub always_on_top: bool,
     pub transparent: bool,
-    /// Windows only: whether the platform exposes the system backdrop attribute.
+    /// Whether the running platform has a system-material backend.
     ///
-    /// This is a platform capability, not a build guarantee: Windows 10 and Windows 11 before
-    /// build 22621 expose the attribute and reject the write with `E_INVALIDARG`, which
+    /// True on Windows, macOS and the Wayland backend. On Windows this is not a build guarantee:
+    /// Windows 10 and Windows 11 before build 22621 reject the DWM write with `E_INVALIDARG`, which
     /// [`BackdropStatus::Rejected`](crate::app::window_backdrop::BackdropStatus::Rejected) reports.
+    /// On Wayland the compositor may still lack a blur protocol; winit then ignores the request.
     pub backdrop: bool,
     /// Windows only: whether taskbar-button hiding is supported.
     pub skip_taskbar: bool,
@@ -254,7 +255,8 @@ impl WindowCapabilities {
             activate: desktop && !wayland,
             always_on_top: desktop && !wayland,
             transparent: desktop,
-            backdrop: cfg!(target_os = "windows") && desktop,
+            backdrop: desktop
+                && (cfg!(target_os = "windows") || cfg!(target_os = "macos") || wayland),
             skip_taskbar: cfg!(target_os = "windows") && desktop,
             tool_window: cfg!(target_os = "windows") && desktop,
             no_activate: cfg!(target_os = "windows") && desktop,
@@ -520,12 +522,13 @@ impl WindowState {
     /// report [`BackdropStatus::Unsupported`]. Nothing else changes: a whole-window material only
     /// shows where the client area is transparent, and Windows composites the client per pixel only
     /// for undecorated windows, so request `decorations(false)` together with transparency when the
-    /// material should reach the client. With decorations the material is limited to the title bar,
-    /// which `WindowBackdrop::Windows(WindowsBackdrop::Auto)` targets directly.
+    /// material should reach the client. With decorations the material is limited to the title bar.
     ///
-    /// Windows app-bar windows are owned by the shell and ignore the request. On a platform that
-    /// does not implement system backdrops the request is still recorded and reported as
-    /// [`BackdropStatus::Unsupported`], so the declaration stays inspectable.
+    /// [`WindowBackdrop::System`] selects the platform default; [`WindowBackdrop::Mica`],
+    /// [`WindowBackdrop::Acrylic`] and [`WindowBackdrop::MicaAlt`] are Windows-only and report
+    /// [`BackdropStatus::Unsupported`] elsewhere. Windows app-bar windows are owned by the shell and
+    /// ignore the request. On a platform without a backdrop backend the request is still recorded
+    /// and reported as [`BackdropStatus::Unsupported`], so the declaration stays inspectable.
     pub fn set_backdrop(&self, backdrop: WindowBackdrop) {
         if self.app_bar_owns_window()
             || with_cell(self.id, |cell| cell.terminal.get()).unwrap_or(true)
@@ -1010,7 +1013,7 @@ impl WindowCell {
             transparent: seed.transparent,
             backdrop: seed.backdrop,
             backdrop_status: if seed.backdrop.is_material() {
-                if cfg!(target_os = "windows") {
+                if WindowCapabilities::platform().backdrop {
                     BackdropStatus::Pending
                 } else {
                     BackdropStatus::Unsupported
@@ -1491,7 +1494,6 @@ pub(crate) fn take_queued_commands(id: WindowId) -> Vec<QueuedCommand> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::window_backdrop::WindowsBackdrop;
 
     #[test]
     fn wayland_reports_focus_and_stacking_as_unsupported() {
@@ -1636,6 +1638,16 @@ mod tests {
         let id = WindowId::new(raw);
         declare(id, WindowSeed::default());
         id
+    }
+
+    #[test]
+    fn backdrop_capability_tracks_the_platform_backend() {
+        assert!(WindowCapabilities::for_backend(true, true).backdrop);
+        assert_eq!(
+            WindowCapabilities::for_backend(true, false).backdrop,
+            cfg!(target_os = "windows") || cfg!(target_os = "macos")
+        );
+        assert!(!WindowCapabilities::for_backend(false, true).backdrop);
     }
 
     #[test]
@@ -2129,17 +2141,14 @@ mod tests {
         declare(
             id,
             WindowSeed {
-                backdrop: WindowBackdrop::Windows(WindowsBackdrop::Mica),
+                backdrop: WindowBackdrop::Mica,
                 ..WindowSeed::default()
             },
         );
-        assert_eq!(
-            id.state().backdrop(),
-            WindowBackdrop::Windows(WindowsBackdrop::Mica)
-        );
+        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
         assert_eq!(
             id.state().backdrop_status(),
-            if cfg!(target_os = "windows") {
+            if WindowCapabilities::platform().backdrop {
                 BackdropStatus::Pending
             } else {
                 BackdropStatus::Unsupported
@@ -2152,17 +2161,13 @@ mod tests {
     #[test]
     fn runtime_backdrop_requests_queue_in_submission_order() {
         let id = fresh(9_219);
-        id.state()
-            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::MicaAlt));
+        id.state().set_backdrop(WindowBackdrop::MicaAlt);
         id.state().set_decorations(false);
-        assert_eq!(
-            id.state().backdrop(),
-            WindowBackdrop::Windows(WindowsBackdrop::MicaAlt)
-        );
+        assert_eq!(id.state().backdrop(), WindowBackdrop::MicaAlt);
         assert_eq!(
             take_commands(id),
             vec![
-                Command::Backdrop(WindowBackdrop::Windows(WindowsBackdrop::MicaAlt)),
+                Command::Backdrop(WindowBackdrop::MicaAlt),
                 Command::Decorations(false),
             ]
         );
@@ -2170,26 +2175,49 @@ mod tests {
         forget(id);
     }
 
+    #[test]
+    fn system_is_queued_on_platforms_with_a_backdrop_backend() {
+        let id = fresh(9_219);
+        id.state().set_backdrop(WindowBackdrop::System);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::System);
+        if WindowCapabilities::platform().backdrop {
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Pending);
+            assert_eq!(
+                take_commands(id),
+                vec![Command::Backdrop(WindowBackdrop::System)]
+            );
+        } else {
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
+            assert!(take_commands(id).is_empty());
+        }
+        forget(id);
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn runtime_backdrop_requests_stay_unsupported_elsewhere() {
+    fn named_windows_materials_are_kept_and_queued_where_a_backend_exists() {
         let id = fresh(9_219);
-        id.state()
-            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::Mica));
-        assert_eq!(
-            id.state().backdrop(),
-            WindowBackdrop::Windows(WindowsBackdrop::Mica)
-        );
-        assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
-        assert!(take_commands(id).is_empty());
+        id.state().set_backdrop(WindowBackdrop::Mica);
+        assert_eq!(id.state().backdrop(), WindowBackdrop::Mica);
+        if WindowCapabilities::platform().backdrop {
+            // macOS and Wayland have a blur backend, so the request is queued; the backend then
+            // reports Unsupported because Mica is a Windows-only material.
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Pending);
+            assert_eq!(
+                take_commands(id),
+                vec![Command::Backdrop(WindowBackdrop::Mica)]
+            );
+        } else {
+            assert_eq!(id.state().backdrop_status(), BackdropStatus::Unsupported);
+            assert!(take_commands(id).is_empty());
+        }
         forget(id);
     }
 
     #[test]
     fn clearing_a_backdrop_request_reports_no_material() {
         let id = fresh(9_221);
-        id.state()
-            .set_backdrop(WindowBackdrop::Windows(WindowsBackdrop::Acrylic));
+        id.state().set_backdrop(WindowBackdrop::Acrylic);
         let _ = take_commands(id);
         id.state().set_backdrop(WindowBackdrop::None);
         assert_eq!(id.state().backdrop(), WindowBackdrop::None);

@@ -1,112 +1,100 @@
 # Window materials across platforms
 
-Status: design. Windows is implemented; macOS and Wayland are specified but not implemented, because
-neither can be compiled or run in this environment (see *Verification*).
+Status: implemented. Windows is verified locally. macOS and Wayland call winit's existing blur API,
+but those target-specific branches are not compiled or run in this Windows environment.
 
-## Goal
-
-One window option that asks each platform for its **own** material, with three properties the
-Windows-only `WindowBackdrop` already keeps:
-
-1. one request maps onto one platform fact, with no implicit coupling to `transparent` or
-   `decorations`;
-2. the outcome is reported as a status that can be wrong only in the direction the platform allows;
-3. a request that the running platform cannot honour is kept and reported, never silently rewritten.
-
-## API
+## Public API
 
 ```rust
 pub enum WindowBackdrop {
     None,
-    Windows(WindowsBackdrop),
-    MacOs(MacOsBackdrop),
-    Wayland,
+    System,
+    Mica,
+    Acrylic,
+    MicaAlt,
 }
-
-pub enum WindowsBackdrop { Auto, Mica, Acrylic, MicaAlt }
-pub enum MacOsBackdrop { FullScreenUi, HudWindow, Menu, Popover, Sidebar, Selection, Titlebar,
-                         HeaderView, ToolTip, UnderWindowBackground }
 ```
 
-Why per-platform sub-enums instead of one flat list: a Windows-only material cannot be named on a
-Mac by accident. The request either names the running platform's enum or it does not, and the
-mismatch is reported as `Unsupported` instead of quietly doing nothing.
+`System` is the cross-platform default. The named materials are explicit Windows DWM requests.
+There is no `standard()`, no platform wrapper enum, and no duplicated macOS material enum:
+`System` already means "use this platform's default", while macOS keeps winit's default
+`FullScreenUI` material.
 
-`WindowBackdrop::Wayland` carries no payload on purpose: the protocol decides the radius and the
-tint, and `Window::set_blur(true)` is the whole request.
+```rust
+Window::new().backdrop(WindowBackdrop::System);
+Window::new().backdrop(WindowBackdrop::Acrylic); // Windows only
+```
 
 ## Mapping
 
-| Request | Windows 11 22621+ | macOS | Wayland |
-| --- | --- | --- | --- |
-| `None` | `DWMSBT_NONE` | `set_blur(false)` | `set_blur(false)` |
-| `Windows(..)` | `DWMWA_SYSTEMBACKDROP_TYPE` | `Unsupported` | `Unsupported` |
-| `MacOs(..)` | `Unsupported` | `NSVisualEffectView` material | `Unsupported` |
-| `Wayland` | `Unsupported` | `Unsupported` | `set_blur(true)` |
+| Request | Windows 11 22621+ | macOS | Wayland | X11 / Android / iOS |
+| --- | --- | --- | --- | --- |
+| `None` | `DWMSBT_NONE` | `set_blur(false)` | `set_blur(false)` | `NotRequested` |
+| `System` | `DWMSBT_MAINWINDOW` (Mica) | `set_blur(true)` | `set_blur(true)` | `Unsupported` |
+| `Mica` | `DWMSBT_MAINWINDOW` | `Unsupported` | `Unsupported` | `Unsupported` |
+| `Acrylic` | `DWMSBT_TRANSIENTWINDOW` | `Unsupported` | `Unsupported` | `Unsupported` |
+| `MicaAlt` | `DWMSBT_TABBEDWINDOW` | `Unsupported` | `Unsupported` | `Unsupported` |
 
-Windows keeps the measured behaviour documented in [window-backdrop.md](window-backdrop.md): DWM
-paints the material behind the window, the client shows it only for a window created undecorated,
-and the value is read back through `DwmGetWindowAttribute`.
+## Backends
 
-`MacOsBackdrop` mirrors `winit_appkit::BlurMaterial` one-to-one, so the macOS backend is a
-conversion instead of a second taxonomy; that enum is `#[non_exhaustive]`, and a variant winia does
-not know reports `Unsupported` rather than substituting a different material.
+**Windows.** winit's `set_blur` is an empty function on this platform, so winia calls
+`DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` and reads the value back with
+`DwmGetWindowAttribute`. `System` and `Mica` both map to `DWMSBT_MAINWINDOW`.
 
-macOS uses winit's own surface rather than Objective-C in winia:
+**macOS.** `System` calls `Window::set_blur(true)`, which makes winit place its default
+`NSVisualEffectView` material behind the window contents. `None` calls `set_blur(false)`. Named
+Windows materials are not converted to a different macOS material; they report `Unsupported`.
 
-- at creation, `WindowAttributes::with_blur(true)` together with
-  `WindowAttributesMacOS::with_blur_material(material)`;
-- at runtime, `Window::set_blur(bool)` together with `WindowExtMacOS::set_blur_material(material)`.
+**Wayland.** `System` calls `Window::set_blur(true)`. winit uses
+`ext_background_effect_manager_v1` or `org_kde_kwin_blur_manager` when the compositor advertises
+one. The compositor owns the radius and tint. If it has no blur protocol, winit ignores the call;
+the status still means the request was delivered, not that pixels were confirmed.
 
-winit renders the material as a sibling behind the window's `contentView`, tinted and following the
-window appearance. The `private-apple-apis` Cargo feature switches it to `CGSSetWindowBackgroundBlurRadius`,
-which is untinted, fixed radius, and can cause App Store rejection — winia does not enable it.
-
-Wayland uses `Window::set_blur(bool)`, which winit implements only when the compositor advertises
-`org_kde_kwin_blur_manager` or `ext_background_effect_manager_v1`. There is no radius or tint to
-carry.
+**X11, Android and iOS.** No system-material backend is wired, so material requests report
+`Unsupported` and `None` reports `NotRequested`.
 
 ## Status
 
-`BackdropStatus` keeps its variants and gains one distinction: `Mismatch` is Windows-only, because
-only Windows has a documented read-back. macOS and Wayland report `Applied` when the call returned
-without error; there is no way to confirm pixels there, and the doc says so instead of pretending
-otherwise.
+`Applied` means the platform accepted the request. Windows additionally reads the DWM value back
+and can report `Mismatch` or `Unverified`. macOS and Wayland have no read-back through winit, so
+there `Applied` means the call was delivered, not that the final pixels were verified.
 
-`Unsupported` covers both "this platform has no such mechanism" and "the platform has it but winia
-has no backend yet". In both cases the request is kept and `WindowState::backdrop()` still reports
-what was asked for; which platforms are in which group is documented rather than encoded in the
-status.
+`Unsupported` means either the platform has no backend or the request does not match that
+platform. The request remains visible through `WindowState::backdrop()`.
 
-## Capabilities and events
+## Capabilities
 
-`WindowCapabilities::backdrop` means *the running platform has an implemented backend*. It is false on
-macOS and Wayland until their backends land, even though `WindowBackdrop` can name them; the doc
-keeps the request visible through `WindowState::backdrop()` either way.
+`WindowCapabilities::backdrop` is true on Windows, macOS and the Wayland backend. It is false on
+X11, Android and iOS. On Wayland it describes the backend, not a guarantee that the running
+compositor implements a blur protocol.
 
-`WindowEvent::BackdropStatusChanged` is unchanged.
+## Independence and popups
 
-## Popups
+The material request never changes `transparent`, `decorations`, the frame, or the rendering
+surface. A whole-window material is visible only where the client does not paint an opaque pixel;
+on Windows that requires a window created undecorated. See [window-backdrop.md](window-backdrop.md).
 
-Not offered. Measured on Windows 11 build 26300: `DWMWA_SYSTEMBACKDROP_TYPE` is accepted on a
-`WS_POPUP` window, but DWM paints a flat fill instead of the material and drops the window's
-per-pixel alpha, so a transparent popup becomes an opaque block. The in-window substitute is
-[popup-blur.md](popup-blur.md).
+Popup windows do not expose this API. Measured on Windows 11 build 26300, DWM accepts
+`DWMWA_SYSTEMBACKDROP_TYPE` on a `WS_POPUP` window but paints a flat fill and drops per-pixel alpha.
+The in-window substitute is [popup-blur.md](popup-blur.md).
+
+## Implementation shape
+
+`window_backdrop::apply` dispatches on `RawWindowHandle`:
+
+- `Win32` calls `window_backdrop::windows`;
+- `AppKit` and `Wayland` call `Window::set_blur`;
+- every other handle reports `NotRequested` for `None` and `Unsupported` for a material.
+
+Only the DWM module is `#[cfg(target_os = "windows")]`. Public call sites need no `cfg`.
 
 ## Verification
 
-| Platform | How it can be verified | Available here |
+| Platform | Verification | Local status |
 | --- | --- | --- |
-| Windows | fixture scenario reads the status, screenshots and pixel probes | yes |
-| macOS | build and run the example, screenshot a window over a light and a dark desktop | no |
-| Wayland | `wayland-info` for the protocol, then run under KDE or a compositor with `ext-background-effect` | no |
+| Windows | fixture status, pixel probes, screenshots | verified |
+| macOS | build and run over light and dark desktops | source-aligned with winit; not built here |
+| Wayland | run under KDE or an `ext-background-effect` compositor | source-aligned with winit; not built here |
 
-Backend code that cannot be compiled here is not landed: a macOS-only branch that never type-checks
-is not a feature, it is a guess. The API shape above is landable now because every variant compiles
-on every platform and reports `Unsupported` where no backend exists.
-
-## Migration
-
-`WindowBackdrop::Mica` becomes `WindowBackdrop::Windows(WindowsBackdrop::Mica)`. The enum and the
-status type keep their names, so `Window::backdrop`, `WindowState::backdrop`, `set_backdrop`,
-`backdrop_status` and `WindowEvent::BackdropStatusChanged` are unchanged.
+The repository has no cross-platform CI. A first build on macOS or Linux may need a small import or
+type fix in the target-specific branch; behaviour there remains unverified until it runs.
