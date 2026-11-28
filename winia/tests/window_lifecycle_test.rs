@@ -391,7 +391,9 @@ fn window_id_and_content_share_the_same_reactive_insets() {
 #[test]
 fn a_declared_backdrop_reaches_the_platform() {
     let mut fixture = Fixture::spawn("window-backdrop", "window-backdrop");
-    let text = fixture.wait_for_text(Duration::from_secs(10), |text| text.contains("status=Applied"));
+    let text = fixture.wait_for_text(Duration::from_secs(10), |text| {
+        text.contains("status=Applied")
+    });
     assert!(text.contains("backdrop=Mica"), "{text:?}");
 }
 

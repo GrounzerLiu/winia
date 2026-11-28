@@ -254,7 +254,9 @@ impl AppState {
         // `apply` is cross-platform: a platform without system materials reports `Unsupported`, so
         // this call site does not need its own target gate.
         let backdrop = pending.options.backdrop;
-        if backdrop.is_material() {
+        // App-bar windows are owned by the shell, and `set_backdrop` ignores them for the same
+        // reason; the creation path has to agree.
+        if backdrop.is_material() && pending.options.app_bar.is_none() {
             let status = crate::app::window_backdrop::apply(&*skia_window, backdrop);
             if let Some(raw) = pending.created_id {
                 crate::app::window_state::set_backdrop_status(

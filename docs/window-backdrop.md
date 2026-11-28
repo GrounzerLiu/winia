@@ -105,7 +105,7 @@ Consequences for applications:
 | Status | Meaning |
 | --- | --- |
 | `NotRequested` | no material requested, or a previous request was cleared with `None` |
-| `Pending` | queued; the window does not exist on the platform yet |
+| `Pending` | queued: the window does not exist yet, or the write has not run yet |
 | `Applied` | DWM accepted the call and reads back the requested value |
 | `Unverified(hresult)` | DWM accepted the call, but the read-back failed; the value is unconfirmed |
 | `Unsupported` | the platform implements no system backdrop; the request is kept |
@@ -144,4 +144,5 @@ attribute and reject the write with `E_INVALIDARG`, which surfaces as `BackdropS
 Other platforms keep the request for inspection and report `BackdropStatus::Unsupported`; no
 winit-side vibrancy (macOS `NSVisualEffectView`, Wayland blur protocols) is wired to this request.
 
-`set_backdrop` is ignored on Windows app-bar windows, which the shell owns.
+Backdrop requests are ignored on Windows app-bar windows, which the shell owns — both the
+builder option and `set_backdrop`.

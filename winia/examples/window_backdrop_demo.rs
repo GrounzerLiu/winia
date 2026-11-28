@@ -1,11 +1,12 @@
 //! Backdrop demo — the Windows system backdrop request on its own.
 //!
-//! The window is created transparent and keeps its decorations, and the content paints no
-//! background of its own: only text and controls are drawn, so the material has the client area to
-//! show through. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back; the status line
-//! reports exactly what the platform did. Nothing else is implied: the request never changes
-//! transparency or decorations, and the switch flips the decorations at runtime so both cases can
-//! be compared on the same request.
+//! The window is created transparent and undecorated — the only client Windows composites per
+//! pixel — and the title bar is added after the first composition, which keeps that mode. The
+//! content paints no background of its own: only text and controls are drawn, so the material has
+//! the client area to show through. The buttons write `DWMWA_SYSTEMBACKDROP_TYPE` and read it back;
+//! the status line reports exactly what the platform did. Nothing else is implied: the request never
+//! changes transparency or decorations, and the switch flips the decorations at runtime so both
+//! cases can be compared on the same request.
 //!
 //! Run with: `cargo run -p winia --example window_backdrop_demo`.
 
@@ -36,12 +37,18 @@ fn app(ctx: &mut ComposeCtx) {
             let state = id.state();
             let caps = id.capabilities();
             let popup_open = ctx.remember(|| false);
-            // `side_effect` publishes on the UI thread and is idempotent; the guard keeps later
-            // compositions from queueing the decoration command again.
-            if !state.decorations() {
-                winia::effect::side_effect(ctx, {
-                    clone!(state);
-                    move || state.set_decorations(true)
+            // One-shot: add the title bar after the first composition, so the client keeps the
+            // per-pixel alpha Windows decided at creation. The flag is set inside the effect (after
+            // composition, on the UI thread) so this never fights the Decorations switch below.
+            let decorated = ctx
+                .remember(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+                .get();
+            if !decorated.load(std::sync::atomic::Ordering::Relaxed) {
+                let decorated = decorated.clone();
+                let state = state.clone();
+                winia::effect::side_effect(ctx, move || {
+                    decorated.store(true, std::sync::atomic::Ordering::Relaxed);
+                    state.set_decorations(true);
                 });
             }
             let decorations = state.decorations();
@@ -141,9 +148,10 @@ fn app(ctx: &mut ComposeCtx) {
                     });
                     Text::new(
                         "Transparency is a creation-time option, so this window was built with \
-                         transparent(true). Windows composites a client area per pixel only while \
-                         the window is undecorated: with decorations on, the client is drawn opaque \
-                         and the material is limited to the title bar.",
+                         transparent(true) and undecorated, then the title bar is added after the \
+                         first composition. Windows fixes the client compositing mode at creation: a \
+                         window created with decorations keeps an opaque client for its whole life, \
+                         while a frameless one keeps per-pixel alpha even after the title bar appears.",
                     )
                     .font_size(14.0)
                     .build(ctx);
